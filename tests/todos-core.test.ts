@@ -7,7 +7,7 @@ import {
   formatTodoDueAt,
   formatTodoDueAtLocal,
   isTodoOverdue,
-  todoAddLanding,
+  todoLandingFilters,
   todoCompletionStamps,
   todoCreateSchema,
   todoListFilterSchema,
@@ -204,7 +204,7 @@ describe("formatTodoDueAtLocal", () => {
   });
 });
 
-describe("todoAddLanding", () => {
+describe("todoLandingFilters", () => {
   const now = new Date("2026-08-20T12:00:00.000Z");
   const past = "2026-08-19T12:00:00.000Z";
   const future = "2026-08-21T12:00:00.000Z";
@@ -220,47 +220,104 @@ describe("todoAddLanding", () => {
   });
 
   it("keeps the view when it already holds the new row", () => {
-    expect(todoAddLanding(created(null), view("open"), now)).toBeNull();
-    expect(todoAddLanding(created(future), view("open"), now)).toBeNull();
+    expect(todoLandingFilters(created(null), view("open"), now)).toBeNull();
+    expect(todoLandingFilters(created(future), view("open"), now)).toBeNull();
     // Added already late, while looking at Overdue: it lands right there.
-    expect(todoAddLanding(created(past), view("overdue"), now)).toBeNull();
+    expect(todoLandingFilters(created(past), view("overdue"), now)).toBeNull();
     // Filtered to one teammate, and the new to-do is theirs.
-    expect(todoAddLanding(created(null, "emp-1"), view("open", "emp-1"), now)).toBeNull();
+    expect(todoLandingFilters(created(null, "emp-1"), view("open", "emp-1"), now)).toBeNull();
   });
 
   it("moves to Open when the chip could never show it", () => {
     // Done can never hold a new to-do: nothing is created checked off.
-    expect(todoAddLanding(created(null), view("done"), now)).toEqual(view("open"));
-    expect(todoAddLanding(created(past), view("done"), now)).toEqual(view("open"));
+    expect(todoLandingFilters(created(null), view("done"), now)).toEqual(view("open"));
+    expect(todoLandingFilters(created(past), view("done"), now)).toEqual(view("open"));
     // Overdue only holds it once the due date has passed, so a to-do with
     // no due date, or one due later, would silently vanish from view.
-    expect(todoAddLanding(created(null), view("overdue"), now)).toEqual(view("open"));
-    expect(todoAddLanding(created(future), view("overdue"), now)).toEqual(view("open"));
+    expect(todoLandingFilters(created(null), view("overdue"), now)).toEqual(view("open"));
+    expect(todoLandingFilters(created(future), view("overdue"), now)).toEqual(view("open"));
   });
 
   it("clears an assignee filter that hides the new row, chip untouched", () => {
     // Quick-add has its own assignee control, so the row can belong to
     // someone other than the teammate the list is filtered to.
-    expect(todoAddLanding(created(null, "emp-2"), view("open", "emp-1"), now)).toEqual(
+    expect(todoLandingFilters(created(null, "emp-2"), view("open", "emp-1"), now)).toEqual(
       view("open", "")
     );
     // Unassigned counts as "not that teammate" too.
-    expect(todoAddLanding(created(null, null), view("open", "emp-1"), now)).toEqual(view("open", ""));
+    expect(todoLandingFilters(created(null, null), view("open", "emp-1"), now)).toEqual(view("open", ""));
     // The chip still holds it, so only the assignee filter is relaxed.
-    expect(todoAddLanding(created(past, "emp-2"), view("overdue", "emp-1"), now)).toEqual(
+    expect(todoLandingFilters(created(past, "emp-2"), view("overdue", "emp-1"), now)).toEqual(
       view("overdue", "")
     );
   });
 
   it("relaxes only what hides the row, and both when both do", () => {
     // Chip is wrong, assignee filter matches: the filter is kept.
-    expect(todoAddLanding(created(null, "emp-1"), view("done", "emp-1"), now)).toEqual(
+    expect(todoLandingFilters(created(null, "emp-1"), view("done", "emp-1"), now)).toEqual(
       view("open", "emp-1")
     );
     // Both wrong: Open, all teammates.
-    expect(todoAddLanding(created(future, "emp-2"), view("done", "emp-1"), now)).toEqual(
+    expect(todoLandingFilters(created(future, "emp-2"), view("done", "emp-1"), now)).toEqual(
       view("open", "")
     );
+  });
+
+  // The editor pushes an EXISTING row out of view by changing the row
+  // instead of the filters. Same rule, same guarantee: the answer is always
+  // a view that shows the saved row, never the empty list that reads as a
+  // failed save.
+  describe("after an edit is saved", () => {
+    /** A stored row: completion state matters here, unlike a fresh create. */
+    const saved = (over: Partial<Pick<Todo, "dueAt" | "completedAt" | "assigneeEmployeeId">>) => ({
+      dueAt: null,
+      completedAt: null,
+      assigneeEmployeeId: null,
+      ...over
+    });
+
+    it("reassigning to a teammate outside the filter clears that filter", () => {
+      // Filtered to emp-1, the row is handed to emp-2: without this the row
+      // just vanished when the modal closed.
+      expect(
+        todoLandingFilters(saved({ assigneeEmployeeId: "emp-2" }), view("open", "emp-1"), now)
+      ).toEqual(view("open", ""));
+      // Handing it to nobody hides it from that filter just the same.
+      expect(
+        todoLandingFilters(saved({ assigneeEmployeeId: null }), view("open", "emp-1"), now)
+      ).toEqual(view("open", ""));
+    });
+
+    it("pushing the due date out of Overdue moves the chip to Open", () => {
+      expect(todoLandingFilters(saved({ dueAt: future }), view("overdue"), now)).toEqual(
+        view("open")
+      );
+      // Clearing the due date entirely also leaves Overdue.
+      expect(todoLandingFilters(saved({ dueAt: null }), view("overdue"), now)).toEqual(view("open"));
+    });
+
+    it("a completed row lands on Done, never on Open", () => {
+      // Reached when the row was checked off (here or by someone else) and
+      // then edited: Open would be just as empty as the chip it left.
+      expect(
+        todoLandingFilters(saved({ completedAt: past, dueAt: past }), view("overdue"), now)
+      ).toEqual(view("done"));
+      expect(
+        todoLandingFilters(
+          saved({ completedAt: past, assigneeEmployeeId: "emp-2" }),
+          view("open", "emp-1"),
+          now
+        )
+      ).toEqual(view("done", ""));
+    });
+
+    it("an edit that changes nothing about visibility keeps the view", () => {
+      // A title-only save under a filter that still matches: stay put.
+      expect(
+        todoLandingFilters(saved({ assigneeEmployeeId: "emp-1", dueAt: past }), view("overdue", "emp-1"), now)
+      ).toBeNull();
+      expect(todoLandingFilters(saved({ completedAt: past }), view("done"), now)).toBeNull();
+    });
   });
 });
 

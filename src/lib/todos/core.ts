@@ -144,24 +144,29 @@ export type TodoListFilters = {
 };
 
 /**
- * Which filters actually show a just-created to-do. `null` means the view
- * on screen already holds it, so it only needs a reload.
+ * Which filters actually show a to-do the user just wrote, whether they
+ * created it or saved an edit to it. `null` means the view on screen already
+ * holds it, so it only needs a reload.
  *
- * Quick-add is offered under every chip and carries its own assignee
- * control, but a new to-do is always OPEN (nothing is created checked off)
- * and belongs to whoever the form named. So Done can never show it, Overdue
- * shows it only when its due date is already past, and an assignee filter
- * naming someone else hides it whatever the chip says. Reloading in place
- * there clears the form and changes nothing on screen, which reads as a
- * failed save and invites the user to add the same to-do twice.
+ * Both write paths hide rows the same way. Quick-add is offered under every
+ * chip and carries its own assignee control, so a new to-do (always OPEN,
+ * belonging to whoever the form named) can be created straight out of view:
+ * Done can never show it, Overdue only once its due date has passed, and an
+ * assignee filter naming someone else hides it whatever the chip says. The
+ * editor does it by changing the row instead of the filters: reassigning a
+ * to-do to another teammate, or pushing its due date into the future while
+ * Overdue is selected, drops it out of the list being looked at. Either way
+ * the panel closes the form, the list does not change (or the row vanishes),
+ * and that reads as a failed save, which invites the user to do it again.
  *
- * Only the control that actually hides the row is relaxed: the chip becomes
- * Open (which covers every not-completed row, overdue ones included) and the
- * assignee filter clears to all teammates, each only when it has to. A
- * manager filtered to one teammate who adds another to-do for that same
- * teammate keeps their filter.
+ * Only the control that actually hides the row is relaxed. The chip becomes
+ * the one that always holds this row: Done when it is completed, otherwise
+ * Open, which covers every not-completed row including overdue ones. The
+ * assignee filter clears to all teammates. Each moves only when it has to,
+ * so a manager filtered to one teammate who edits that teammate's to-do
+ * keeps their filter.
  */
-export function todoAddLanding(
+export function todoLandingFilters(
   todo: Pick<Todo, "dueAt" | "completedAt" | "assigneeEmployeeId">,
   current: TodoListFilters,
   now: Date = new Date()
@@ -171,7 +176,7 @@ export function todoAddLanding(
     current.assigneeEmployeeId === "" || todo.assigneeEmployeeId === current.assigneeEmployeeId;
   if (statusHolds && assigneeHolds) return null;
   return {
-    status: statusHolds ? current.status : "open",
+    status: statusHolds ? current.status : todo.completedAt !== null ? "done" : "open",
     assigneeEmployeeId: assigneeHolds ? current.assigneeEmployeeId : ""
   };
 }

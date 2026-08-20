@@ -24,7 +24,7 @@ import {
   applyTodoCompletion,
   formatTodoDueAtLocal,
   isTodoOverdue,
-  todoAddLanding,
+  todoLandingFilters,
   type Todo,
   type TodoListFilters,
   type TodoListView,
@@ -45,12 +45,39 @@ async function readEnvelope<T>(res: Response): Promise<T> {
 type RosterOption = { id: string; name: string };
 type DealOption = { id: string; title: string };
 
-/** Each filter chip's label key, so the chips and the "added, showing X"
+/** Each filter chip's label key, so the chips and the "showing X"
  * confirmation always name a chip the same way. */
 const CHIP_LABEL_KEY: Record<TodoStatusFilter, "filterOpen" | "filterOverdue" | "filterDone"> = {
   open: "filterOpen",
   overdue: "filterOverdue",
   done: "filterDone"
+};
+
+/**
+ * The four shapes a write confirmation can take: the row is in the list
+ * being looked at, or the chip moved, or the assignee filter cleared, or
+ * both. Creating and saving use the same four, with the same wording after
+ * the verb, so the two paths never describe one outcome two ways.
+ */
+type WriteNoticeKeys = {
+  here: "addedHere" | "savedHere";
+  status: "addedShowingStatus" | "savedShowingStatus";
+  assignee: "addedShowingAssignee" | "savedShowingAssignee";
+  both: "addedShowingBoth" | "savedShowingBoth";
+};
+
+const ADDED_NOTICE: WriteNoticeKeys = {
+  here: "addedHere",
+  status: "addedShowingStatus",
+  assignee: "addedShowingAssignee",
+  both: "addedShowingBoth"
+};
+
+const SAVED_NOTICE: WriteNoticeKeys = {
+  here: "savedHere",
+  status: "savedShowingStatus",
+  assignee: "savedShowingAssignee",
+  both: "savedShowingBoth"
 };
 
 /** ISO instant → the viewer-local "Tue, Aug 25, 2:00 PM" for row labels and
@@ -96,8 +123,8 @@ export function TodosPanel({
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  /** Confirmation for the last successful quick-add, so a save is always
-   * acknowledged even when the new row lands under a different chip. */
+  /** Confirmation for the last successful write, add or edit, so a save is
+   * always acknowledged even when the row lands under different filters. */
   const [addedNotice, setAddedNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -199,31 +226,34 @@ export function TodosPanel({
   );
 
   /**
-   * A successful quick-add must always show something. The new row is
-   * always open and belongs to whoever the form named, so Done (and
-   * Overdue, for a to-do that is not late yet), or an assignee filter
-   * naming someone else, would reload a view that cannot contain it: the
-   * form clears, nothing changes on screen, and that reads as a failed
-   * save. Move to the filters that DO hold it, and say which ones.
+   * What both write paths do once the server has the row: land the user
+   * somewhere the row is actually visible, and say where that is.
+   *
+   * Quick-add can create a to-do straight out of the current view (a new
+   * row is always open, and carries whatever assignee the form named), and
+   * the editor can push an existing row out of it (reassign it, or move its
+   * due date so Overdue no longer holds it). Either way, reloading the
+   * filters already on screen shows nothing new, or shows the row
+   * disappearing, and both read as a failed save.
    */
-  const handleAdded = useCallback(
-    (created: Todo) => {
-      // Live filters, not the ones captured when the create started: the
-      // user may have switched chips while the request was in flight.
+  const settleAfterWrite = useCallback(
+    (row: Todo, notice: WriteNoticeKeys) => {
+      // Live filters, not the ones captured when the request started: the
+      // user may have switched chips while it was in flight.
       const current = filtersRef.current;
-      const landing = todoAddLanding(created, current);
+      const landing = todoLandingFilters(row, current);
       const movedStatus = landing !== null && landing.status !== current.status;
       const movedAssignee =
         landing !== null && landing.assigneeEmployeeId !== current.assigneeEmployeeId;
 
       if (movedStatus && movedAssignee) {
-        setAddedNotice(t("addedShowingBoth", { filter: t(CHIP_LABEL_KEY[landing.status]) }));
+        setAddedNotice(t(notice.both, { filter: t(CHIP_LABEL_KEY[landing.status]) }));
       } else if (movedStatus) {
-        setAddedNotice(t("addedShowingStatus", { filter: t(CHIP_LABEL_KEY[landing.status]) }));
+        setAddedNotice(t(notice.status, { filter: t(CHIP_LABEL_KEY[landing.status]) }));
       } else if (movedAssignee) {
-        setAddedNotice(t("addedShowingAssignee"));
+        setAddedNotice(t(notice.assignee));
       } else {
-        setAddedNotice(t("addedHere"));
+        setAddedNotice(t(notice.here));
       }
 
       if (movedStatus || movedAssignee) {
@@ -236,10 +266,23 @@ export function TodosPanel({
         return;
       }
       // Nothing moved, so nothing else will refetch, and the list on screen
-      // may have been loaded before this row was inserted.
+      // may have been loaded before this write landed.
       void load(current);
     },
     [load, t]
+  );
+
+  const handleAdded = useCallback(
+    (created: Todo) => settleAfterWrite(created, ADDED_NOTICE),
+    [settleAfterWrite]
+  );
+
+  const handleSaved = useCallback(
+    (saved: Todo) => {
+      setEditing(null);
+      settleAfterWrite(saved, SAVED_NOTICE);
+    },
+    [settleAfterWrite]
   );
 
   const chips: { id: TodoStatusFilter; label: string }[] = [
@@ -467,8 +510,12 @@ export function TodosPanel({
           employees={employees}
           dealOptions={dealOptions}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={handleSaved}
+          onDeleted={() => {
+            // A delete needs no landing: the row is gone on purpose, and the
+            // confirm dialog already said so.
             setEditing(null);
+            setAddedNotice(null);
             void load({ status, assigneeEmployeeId: assigneeFilter });
           }}
         />
@@ -726,14 +773,19 @@ function TodoEditorModal({
   employees,
   dealOptions,
   onClose,
-  onSaved
+  onSaved,
+  onDeleted
 }: {
   businessId: string;
   todo: TodoWithRefs;
   employees: RosterOption[];
   dealOptions: DealOption[];
   onClose: () => void;
-  onSaved: () => void;
+  /** Handed the row the server actually stored, so the panel can land the
+   * user on filters that still show it after a reassignment or a due-date
+   * change. */
+  onSaved: (saved: Todo) => void;
+  onDeleted: () => void;
 }) {
   const t = useTranslations("dashboard.todos");
   const [title, setTitle] = useState(todo.title);
@@ -760,7 +812,7 @@ function TodoEditorModal({
     setBusy(true);
     setFormError(null);
     try {
-      await fetch(
+      const data = await fetch(
         `/api/dashboard/todos/${encodeURIComponent(todo.id)}?businessId=${encodeURIComponent(businessId)}`,
         {
           method: "PATCH",
@@ -774,8 +826,8 @@ function TodoEditorModal({
             dealId: dealId || null
           })
         }
-      ).then((r) => readEnvelope<unknown>(r));
-      onSaved();
+      ).then((r) => readEnvelope<{ todo: Todo }>(r));
+      onSaved(data.todo);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : t("updateFailed"));
     } finally {
@@ -792,7 +844,7 @@ function TodoEditorModal({
         `/api/dashboard/todos/${encodeURIComponent(todo.id)}?businessId=${encodeURIComponent(businessId)}`,
         { method: "DELETE", headers: { "Content-Type": "application/json" } }
       ).then((r) => readEnvelope<unknown>(r));
-      onSaved();
+      onDeleted();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : t("deleteFailed"));
     } finally {
