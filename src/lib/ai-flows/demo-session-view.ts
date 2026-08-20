@@ -124,7 +124,13 @@ export const DEMO_REMOVE_WARNING =
   "Removing a step only edits the recording. Whatever that click already did on the site stays done.";
 export const DEMO_GONE_MESSAGE =
   "The live session ended (it expired, or the browser service restarted). Anything already done on the site stays done, and your recorded steps are kept. Start again to continue from the page as it is now.";
-export const DEMO_ACTION_CAP_MESSAGE = `A step can hold ${MAX_DEMO_ACTIONS} actions, and this recording is full. Finish it, or remove a step you do not need.`;
+/**
+ * The cap counts what the SESSION really did, not what the recording still
+ * lists, so removing a row cannot free a slot: that click already happened on
+ * the site. Saying otherwise sent owners deleting rows and hitting the same
+ * refusal with no way forward.
+ */
+export const DEMO_ACTION_CAP_MESSAGE = `This demonstration has already done ${MAX_DEMO_ACTIONS} things on the site, which is the most one step can hold. Removing a recorded row does not free one up, because that click really happened. Save what you have, or cancel and start over.`;
 
 /**
  * Translate recorded actions into what the step editor stores. The editor's

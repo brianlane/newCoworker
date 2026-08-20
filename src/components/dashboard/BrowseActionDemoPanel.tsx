@@ -99,6 +99,8 @@ export function BrowseActionDemoPanel({
   const [demoId, setDemoId] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnState | null>(null);
   const [recorded, setRecorded] = useState<DemoRecordedAction[]>([]);
+  /** What the SIDECAR has performed this session; never decreases. */
+  const [executedCount, setExecutedCount] = useState(0);
   const [removedMidList, setRemovedMidList] = useState(false);
   const [gone, setGone] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
@@ -110,12 +112,20 @@ export function BrowseActionDemoPanel({
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   const live = demoId !== null && !gone;
-  const atCap = recorded.length >= MAX_DEMO_ACTIONS;
+  /**
+   * The cap that stops further acts belongs to the SESSION, not the
+   * recording: the sidecar counts what it actually performed on the site, and
+   * removing a row from the recording cannot un-perform a click. Reading the
+   * local list here would tell an owner they had room, then hand them
+   * `action_cap` on the next click with no way out but starting over.
+   */
+  const atCap = executedCount >= MAX_DEMO_ACTIONS;
 
   const reset = () => {
     setDemoId(null);
     setTurn(null);
     setRecorded([]);
+    setExecutedCount(0);
     setRemovedMidList(false);
     setGone(false);
     setPendingConfirm(null);
@@ -184,9 +194,23 @@ export function BrowseActionDemoPanel({
       }
       const data = json.data;
       if (data.outcome === "recorded" && data.recorded) {
+        const justRecorded = data.recorded;
         setPendingConfirm(null);
-        setRecorded((prev) => [...prev, data.recorded!]);
-        setFillDrafts({});
+        setRecorded((prev) => [...prev, justRecorded]);
+        setExecutedCount((prev) =>
+          typeof data.actionsCount === "number" ? data.actionsCount : prev + 1
+        );
+        // Clear ONLY the box that was just sent. Teaching a form means
+        // staging text in several boxes and submitting them in order, so
+        // wiping the whole map would blank the ones still waiting, losing
+        // text the page never touched.
+        if (justRecorded.kind === "fill_selector" || justRecorded.kind === "fill_placeholder") {
+          setFillDrafts((prev) => {
+            const next = { ...prev };
+            delete next[justRecorded.target];
+            return next;
+          });
+        }
         setTurn({
           finalUrl: data.finalUrl ?? "",
           digest: data.digest ?? { controls: [], links: [], headings: [] },
@@ -225,6 +249,10 @@ export function BrowseActionDemoPanel({
         setDemoId(null);
         setPendingConfirm(null);
       } else if (data.outcome === "action_cap") {
+        // The session is full even if the local list looks shorter (rows can
+        // be removed, clicks cannot). Pin the local counter to the cap so the
+        // controls disable instead of inviting another refused click.
+        setExecutedCount(MAX_DEMO_ACTIONS);
         setError(DEMO_ACTION_CAP_MESSAGE);
       } else {
         setError("That did not go through.");
@@ -552,6 +580,12 @@ export function BrowseActionDemoPanel({
               <p className="text-[11px] font-semibold text-parchment/70">
                 Recorded so far: {recorded.length} of {MAX_DEMO_ACTIONS}
               </p>
+              {executedCount > recorded.length && (
+                <p className="text-[11px] leading-snug text-parchment/40">
+                  This session has done {executedCount} thing{executedCount === 1 ? "" : "s"} on the
+                  site. That is what the limit counts, since a removed row was still really done.
+                </p>
+              )}
               {recorded.length === 0 && (
                 <p className="text-[11px] text-parchment/40">
                   Nothing yet. Everything you do on the page above lands here.

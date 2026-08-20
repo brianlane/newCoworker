@@ -98,5 +98,10 @@ describe("the honesty copy", () => {
     expect(DEMO_REMOVE_WARNING).toContain("stays done");
     expect(DEMO_GONE_MESSAGE).toContain("recorded steps are kept");
     expect(DEMO_ACTION_CAP_MESSAGE).toContain(String(MAX_DEMO_ACTIONS));
+    // The cap counts what the SESSION performed, so the message must not
+    // offer removing a row as a way to make room: that click already
+    // happened, and the next act would be refused identically.
+    expect(DEMO_ACTION_CAP_MESSAGE).toContain("does not free one up");
+    expect(DEMO_ACTION_CAP_MESSAGE).toContain("start over");
   });
 });
