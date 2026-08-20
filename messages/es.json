@@ -2047,7 +2047,7 @@
       "saveFailed": "No se pudo guardar"
     },
     "leadAssignment": {
-      "soloHint": "Mientras seas la única persona del equipo, los nuevos leads van directo a ti. Esta opción entra en efecto cuando agregues un empleado."
+      "soloHint": "Mientras seas la única persona del equipo, los nuevos leads van directo a ti esté esto activado o no. Activarlo además marca cada lead como asignado a ti en el panel de inmediato."
     },
     "employeeAvailability": {
       "ownerBadge": "Propietario",

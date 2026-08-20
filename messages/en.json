@@ -2047,7 +2047,7 @@
       "saveFailed": "Save failed"
     },
     "leadAssignment": {
-      "soloHint": "While you are the only one on the roster, new leads go straight to you. This setting takes effect once you add an employee."
+      "soloHint": "While you are the only one on the roster, new leads go straight to you whether this is on or off. Turning it on also marks each lead as assigned to you in the dashboard right away."
     },
     "employeeAvailability": {
       "ownerBadge": "Owner",
