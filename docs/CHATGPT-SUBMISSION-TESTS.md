@@ -8,6 +8,40 @@ described below. Build the sandbox first.
 
 ## The sandbox
 
+> **v1.0.0 was rejected on 2026-08-19.** The reason given: "We're unable to
+> complete your sign-in or OAuth flow. Please ensure valid, working credentials
+> are included and that they include no additional setup or verification to
+> access your service."
+>
+> The cause was not the OAuth code, which verifies end to end. There was **no
+> sandbox tenant at all**, so the Testing step's credentials field was empty
+> and the reviewer had nothing to sign in with. Build the sandbox BEFORE
+> filling the form, not after.
+
+### Build it with the script
+
+```bash
+npx tsx debug/openai-reviewer-setup.ts            # dry run
+npx tsx debug/openai-reviewer-setup.ts --apply
+```
+
+Idempotent, and it rotates both passwords on every `--apply`, so a rerun always
+prints known-good credentials. It creates the owner login, a staff login on the
+same business (the only thing that makes the reviewer test plan's permission
+step a demonstration rather than a claim), the `Cedar Street Dental (demo)`
+business in America/Phoenix, and the exact contacts, text thread and call
+summary the five test cases name.
+
+The credentials print to the terminal once. They go in the password manager and
+the submission form, never in this repo.
+
+Two things the script cannot do for you, both printed in its closing notes:
+connect a calendar (test case 4 returns nothing without one), and decide what
+number test case 5 should text. The seeded contacts use the reserved
+`+1 555 01XX` fictional range, which the carrier rejects, so the send fails as
+seeded.
+
+
 OpenAI's wording is strict and each clause is a rejection if missed: test
 credentials "must work immediately with no additional setup required. No
 account creation or 2FA is permitted", and it must be "a dedicated demo or test
