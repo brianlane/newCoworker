@@ -95,6 +95,19 @@ export type OfferRouting = {
   /** Roster name for `claimed_by`. Same lifecycle. */
   claimed_name?: string;
   /**
+   * WHEN the claim landed, epoch ms. Stamped alongside `claimed_by` at every
+   * site that sets it: the worker's claim finalization ("1" consumed), the
+   * auto-assign and owner-assign hard assignments, and the dashboard claim
+   * helper (src/lib/leads/claim-stamp.ts). Cleared with `claimed_by` on an
+   * unclaim ("86") so a later re-claim gets a fresh stamp. Read by
+   * employee-performance analytics as the REAL claim moment; runs from
+   * before this field exist without it and the analytics fall back to an
+   * approximation, so absence means "legacy run", never "not claimed".
+   * NOTE: unrelated to the `ai_flow_runs.claimed_at` COLUMN, which is the
+   * worker's queue lease, not the lead claim.
+   */
+  claimed_at_ms?: number;
+  /**
    * Rewind target: the route_to_team step index, stamped by the worker when
    * it parks the run (offer out / owner fallback). Cleared: worker when
    * finalizing a claim. A fresh late claim/yank REQUIRES it (it's where the
@@ -231,7 +244,8 @@ const NUMBER_FIELDS = [
   "step_index",
   "route_step_index",
   "owner_nudges",
-  "offer_deadline_ms"
+  "offer_deadline_ms",
+  "claimed_at_ms"
 ] as const;
 const LAST_EVENTS: readonly string[] = ["claim", "reject", "timeout", "unclaim"];
 

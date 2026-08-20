@@ -1,20 +1,25 @@
 /**
- * Lead-source reporting (the FUB accountability story), derived entirely
- * from signals other features already write, no new stamping:
+ * Lead-source reporting (the FUB accountability story).
  *
- *   - CHANNELS: `contacts.last_channel` (sms / voice / messenger /
- *     instagram / webchat …), where the relationship lives today;
- *   - SOURCE TAGS: `contacts.tags`, the platform's actual source-stamping
- *     mechanism (intake flows tag their leads via update_contact, pipeline
- *     stages are tags, imports carry tags).
+ * The PRIMARY grouping names the real origin: `contacts.lead_source`, the
+ * label stamped fill-only when an AiFlow first files the lead ("Clever",
+ * "HomeLight Referral"), the column that exists precisely to answer "who
+ * sent us this person". Contacts that predate the column, or that no flow
+ * filed, fall back to `contacts.last_channel` (sms / voice / messenger /
+ * webchat ...), where the relationship lives, so the primary table is
+ * always as specific as the data allows and never emptier than before.
+ *
+ * SOURCE TAGS stay as the secondary view: `contacts.tags` is the platform's
+ * owner-visible stamping mechanism (intake flows tag their leads via
+ * update_contact, pipeline stages are tags, imports carry tags).
  *
  * For each group over the trailing window's NEW customer contacts:
  *   - newContacts, rows created in the window;
  *   - engaged, of those, how many have interacted at least once;
  *   - claimed, of those, how many a roster member owns.
  *
- * A contact with neither a channel nor any tag counts as UNTRACKED, that
- * number is the honest residue of intake paths with no source signal
+ * A contact with no lead_source, no channel and no tag counts as UNTRACKED,
+ * that number is the honest residue of intake paths with no source signal
  * (manual adds, bare CSV imports), surfaced rather than hidden so owners
  * know how much of their funnel is dark.
  */
@@ -26,7 +31,7 @@ import { contactChannelLabel } from "@/lib/customer-memory/channel-label";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type LeadSourceRow = {
-  /** Display label: the channel name or the tag (first-seen casing). */
+  /** Display label: the lead_source / channel name or the tag (first-seen casing). */
   label: string;
   newContacts: number;
   engaged: number;
@@ -36,10 +41,10 @@ export type LeadSourceRow = {
 export type LeadSourceOverview = {
   /** New customer contacts created in the window. */
   totalNewContacts: number;
-  /** New contacts with no channel and no tags, no source signal at all. */
+  /** New contacts with no lead_source, no channel and no tags, no source signal at all. */
   untracked: number;
-  /** By last_channel, largest first. */
-  channels: LeadSourceRow[];
+  /** By lead_source (falling back to last_channel), largest first. */
+  sources: LeadSourceRow[];
   /** By tag (a contact counts once per tag it carries), largest first. */
   tags: LeadSourceRow[];
   windowDays: number;
@@ -54,19 +59,20 @@ export const LEAD_SOURCE_TAG_LIMIT = 12;
 export const LEAD_SOURCE_SCAN_LIMIT = 5000;
 
 export type LeadSourceContact = {
+  lead_source: string | null;
   last_channel: string | null;
   tags: string[] | null;
   owner_employee_id: string | null;
   total_interaction_count: number;
 };
 
-/** Pure: fold scanned rows into the channel/tag breakdowns. */
+/** Pure: fold scanned rows into the source/tag breakdowns. */
 export function buildLeadSourceOverview(
   rows: LeadSourceContact[],
   opts: { windowDays: number; clipped: boolean }
 ): LeadSourceOverview {
   type Bucket = { label: string; newContacts: number; engaged: number; claimed: number };
-  const channels = new Map<string, Bucket>();
+  const sources = new Map<string, Bucket>();
   const tags = new Map<string, Bucket>();
   let untracked = 0;
 
@@ -80,11 +86,13 @@ export function buildLeadSourceOverview(
   };
 
   for (const row of rows) {
-    // Group on the DISPLAY form: `label` is rendered straight into the card,
-    // and a stored value like booking_page would otherwise reach an owner as
-    // a leaked column value. Tags are owner-authored and pass through as-is,
+    // The specific origin wins. lead_source is flow-authored display text
+    // ("Clever"), already meant for owner eyes, so it passes through as-is;
+    // only the channel FALLBACK goes through the display-label map, where a
+    // stored value like booking_page would otherwise reach an owner as a
+    // leaked column value. Tags are owner-authored and pass through as-is,
     // so an underscore someone deliberately typed into a tag survives.
-    const channelLabel = contactChannelLabel(row.last_channel);
+    const sourceLabel = row.lead_source?.trim() || contactChannelLabel(row.last_channel);
     // Case-insensitive dedupe PER CONTACT: a row carrying "VIP" and "vip"
     // is one contact in that tag's bucket, never two, otherwise a tag's
     // counts could exceed the window total.
@@ -93,9 +101,9 @@ export function buildLeadSourceOverview(
       const tag = raw.trim();
       if (tag && !rowTags.has(tag.toLowerCase())) rowTags.set(tag.toLowerCase(), tag);
     }
-    if (channelLabel) bump(channels, channelLabel, row);
+    if (sourceLabel) bump(sources, sourceLabel, row);
     for (const tag of rowTags.values()) bump(tags, tag, row);
-    if (!channelLabel && rowTags.size === 0) untracked += 1;
+    if (!sourceLabel && rowTags.size === 0) untracked += 1;
   }
 
   const byVolume = (a: Bucket, b: Bucket) =>
@@ -103,7 +111,7 @@ export function buildLeadSourceOverview(
   return {
     totalNewContacts: rows.length,
     untracked,
-    channels: [...channels.values()].sort(byVolume),
+    sources: [...sources.values()].sort(byVolume),
     tags: [...tags.values()].sort(byVolume).slice(0, LEAD_SOURCE_TAG_LIMIT),
     windowDays: opts.windowDays,
     clipped: opts.clipped
@@ -128,7 +136,7 @@ export async function getLeadSourceOverview(
 
   const { data, error } = await db
     .from("contacts")
-    .select("last_channel, tags, owner_employee_id, total_interaction_count")
+    .select("lead_source, last_channel, tags, owner_employee_id, total_interaction_count")
     .eq("business_id", businessId)
     .eq("type", "customer")
     .gte("created_at", since)

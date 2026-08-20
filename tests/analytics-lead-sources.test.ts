@@ -16,12 +16,15 @@ vi.mock("@/lib/supabase/server", () => ({
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
- * Lead-source reporting: new customer contacts in the window, grouped by
- * last_channel and by tag, with engaged/claimed counts per group and an
- * honest "untracked" residue for rows carrying no source signal at all.
+ * Lead-source reporting: new customer contacts in the window, grouped
+ * primarily by lead_source (the "Clever" label a flow stamps at filing
+ * time) with last_channel as the fallback, secondarily by tag, with
+ * engaged/claimed counts per group and an honest "untracked" residue for
+ * rows carrying no source signal at all.
  */
 
 const row = (over: Partial<LeadSourceContact> = {}): LeadSourceContact => ({
+  lead_source: null,
   last_channel: "sms",
   tags: ["New Lead"],
   owner_employee_id: null,
@@ -30,7 +33,7 @@ const row = (over: Partial<LeadSourceContact> = {}): LeadSourceContact => ({
 });
 
 describe("buildLeadSourceOverview", () => {
-  it("groups by channel and by tag with engaged/claimed counts", () => {
+  it("groups by source (channel fallback) and by tag with engaged/claimed counts", () => {
     const overview = buildLeadSourceOverview(
       [
         row(),
@@ -40,7 +43,7 @@ describe("buildLeadSourceOverview", () => {
       { windowDays: 30, clipped: false }
     );
     expect(overview.totalNewContacts).toBe(3);
-    expect(overview.channels).toEqual([
+    expect(overview.sources).toEqual([
       { label: "sms", newContacts: 2, engaged: 2, claimed: 1 },
       { label: "voice", newContacts: 1, engaged: 0, claimed: 0 }
     ]);
@@ -48,6 +51,41 @@ describe("buildLeadSourceOverview", () => {
       { label: "New Lead", newContacts: 2, engaged: 2, claimed: 1 }
     ]);
     expect(overview.untracked).toBe(0);
+  });
+
+  it("prefers lead_source over the channel and merges it case-insensitively", () => {
+    const overview = buildLeadSourceOverview(
+      [
+        row({ lead_source: "Clever", last_channel: "sms" }),
+        // Same source, different casing and stray whitespace: one bucket,
+        // first-seen casing. The channel is ignored once a source names it.
+        row({ lead_source: "clever ", last_channel: "voice", owner_employee_id: "emp-1" }),
+        // No lead_source: falls back to the channel label.
+        row({ lead_source: null, last_channel: "sms" }),
+        // Whitespace-only lead_source is no source at all.
+        row({ lead_source: "   ", last_channel: "voice", total_interaction_count: 0 })
+      ],
+      { windowDays: 30, clipped: false }
+    );
+    expect(overview.sources).toEqual([
+      { label: "Clever", newContacts: 2, engaged: 2, claimed: 1 },
+      { label: "sms", newContacts: 1, engaged: 1, claimed: 0 },
+      { label: "voice", newContacts: 1, engaged: 0, claimed: 0 }
+    ]);
+  });
+
+  it("a lead_source alone is a signal: never untracked, even with no channel or tags", () => {
+    const overview = buildLeadSourceOverview(
+      [
+        row({ lead_source: "HomeLight", last_channel: null, tags: [] }),
+        row({ lead_source: null, last_channel: null, tags: [] })
+      ],
+      { windowDays: 30, clipped: false }
+    );
+    expect(overview.untracked).toBe(1);
+    expect(overview.sources).toEqual([
+      { label: "HomeLight", newContacts: 1, engaged: 1, claimed: 0 }
+    ]);
   });
 
   it("labels the channel for owners (booking_page reads as words, tags stay raw)", () => {
@@ -58,7 +96,7 @@ describe("buildLeadSourceOverview", () => {
       ],
       { windowDays: 30, clipped: false }
     );
-    expect(overview.channels).toEqual([
+    expect(overview.sources).toEqual([
       { label: "booking page", newContacts: 2, engaged: 2, claimed: 0 }
     ]);
     // Owner-authored tags are not channel values: an underscore someone
@@ -96,7 +134,7 @@ describe("buildLeadSourceOverview", () => {
       { windowDays: 30, clipped: false }
     );
     expect(overview.untracked).toBe(2);
-    expect(overview.channels).toEqual([]);
+    expect(overview.sources).toEqual([]);
     expect(overview.tags).toEqual([{ label: "Referral", newContacts: 1, engaged: 1, claimed: 0 }]);
   });
 
@@ -157,6 +195,9 @@ describe("getLeadSourceOverview", () => {
     expect(calls.some((c) => c.name === "eq" && c.args[0] === "type" && c.args[1] === "customer")).toBe(
       true
     );
+    // The real source column rides along in the scan.
+    const select = calls.find((c) => c.name === "select")!;
+    expect(select.args[0]).toContain("lead_source");
     // UTC day-aligned window start, the same boundary every other analytics
     // card on the page uses.
     const gte = calls.find((c) => c.name === "gte")!;

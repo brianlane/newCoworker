@@ -21,6 +21,7 @@ describe("parseRouting", () => {
       offered_log: ["+15550001111", "+15550002222"],
       tried: ["+15550001111"],
       claimed_by: "+15550002222",
+      claimed_at_ms: 1_754_000_000_000,
       step_index: 3,
       route_step_index: 3,
       last_event: "claim",
@@ -38,6 +39,7 @@ describe("parseRouting", () => {
     const parsed = parseRouting({
       offered: 42,
       claimed_by: { nested: true },
+      claimed_at_ms: "1754000000000",
       route_step_id: 7,
       step_index: "3",
       tried: "not-an-array",
@@ -51,6 +53,8 @@ describe("parseRouting", () => {
     });
     expect(parsed.offered).toBeUndefined();
     expect(parsed.claimed_by).toBeUndefined();
+    // A stringified claim stamp is malformed: the claim clock is epoch ms.
+    expect(parsed.claimed_at_ms).toBeUndefined();
     expect(parsed.route_step_id).toBeUndefined();
     expect(parsed.step_index).toBeUndefined();
     expect(parsed.tried).toBeUndefined();

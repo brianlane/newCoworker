@@ -26,6 +26,11 @@ export const ACTIVE_RUN_STATUSES = [
 
 const E164_RE = /^\+[1-9]\d{6,15}$/;
 
+/** Strict E.164 check, the same shape `taskLeadPhone` accepts. */
+export function isLeadE164(value: string): boolean {
+  return E164_RE.test(value);
+}
+
 /**
  * The phone identifying a run's LEAD: the extracted `lead_phone` var when an
  * extraction produced one, else the triggering sender. Mirrors the worker's
@@ -38,13 +43,13 @@ export function taskLeadPhone(context: Record<string, unknown>): string | null {
     vars && typeof vars === "object" && !Array.isArray(vars)
       ? (vars as Record<string, unknown>).lead_phone
       : undefined;
-  if (typeof fromVars === "string" && E164_RE.test(fromVars.trim())) return fromVars.trim();
+  if (typeof fromVars === "string" && isLeadE164(fromVars.trim())) return fromVars.trim();
   const trigger = context.trigger;
   const from =
     trigger && typeof trigger === "object" && !Array.isArray(trigger)
       ? (trigger as Record<string, unknown>).from
       : undefined;
-  if (typeof from === "string" && E164_RE.test(from.trim())) return from.trim();
+  if (typeof from === "string" && isLeadE164(from.trim())) return from.trim();
   return null;
 }
 

@@ -2106,6 +2106,20 @@
       "lastDays": "Last {days} days",
       "lastDaysAll": "Last {days} days (all)"
     },
+    "analytics": {
+      "sources": {
+        "bySource": "By source",
+        "byTag": "By tag",
+        "sourceExplainer": "Source names who sent the lead (Clever, HomeLight), stamped when a flow files the contact. Leads without a named source show the channel they arrived on.",
+        "timeToClaimHeader": "Time to claim",
+        "timeToClaimShort": "Claim",
+        "noTouchHeader": "No touch in 48h",
+        "noTouchShort": "No touch",
+        "noTouchTooltip": "Claims where the lead got no platform-visible touch within 48 hours: no forwarded call, no outbound text, and no logged email.",
+        "noTouchFootnote": "\"No touch in 48h\" counts platform-visible touches only. A teammate calling or texting from their personal cell is invisible to the platform, so it does not count here.",
+        "claimClockFootnote": "~ marks medians that still include runs from before claim-time stamping; those approximate run start to claim settle."
+      }
+    },
     "activityBadge": {
       "aiflow": "AiFlow",
       "call": "Call",

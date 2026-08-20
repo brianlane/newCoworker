@@ -8785,6 +8785,7 @@ async function routeToTeamStep(
     delete routing.offer_deadline_ms;
     delete routing.claimed_by;
     delete routing.claimed_name;
+    delete routing.claimed_at_ms;
     delete routing.late_claimed;
     delete routing.claim_timeframe;
     scope.vars.claimed_agent = "none";
@@ -8851,6 +8852,11 @@ async function routeToTeamStep(
       typeof routing.claim_timeframe === "string" ? routing.claim_timeframe.trim() : "";
     routing.claimed_by = claimedBy;
     routing.claimed_name = claimedName;
+    // The claim's real timestamp (see the routing contract): the webhook
+    // requeues a consumed "1" immediately, so finalization time IS the claim
+    // moment to within a worker cycle. Analytics read this instead of
+    // approximating from run timestamps.
+    routing.claimed_at_ms = Date.now();
     // Engine-provided var so LATER steps can gate on "a teammate accepted" via
     // `when: { var: "claimed_agent", notEquals: "none" }`. Mirrors routing into
     // scope.vars (which `when` guards read). Name preferred, phone as fallback.
@@ -9196,6 +9202,10 @@ async function routeToTeamStep(
       // fairness holds exactly as in offer mode.
       routing.claimed_by = agent.phone;
       routing.claimed_name = agent.name;
+      // Hard assignment IS the claim in this mode, so it carries the claim
+      // timestamp too (near run start by construction, which is the truth:
+      // nobody spent time deciding).
+      routing.claimed_at_ms = Date.now();
       routing.auto_assigned = true;
       // Rewind target for a retroactive "86" unclaim: the webhook re-opens a
       // claimed-and-finished run at route_step_index, which offer mode stamps
@@ -10418,6 +10428,9 @@ async function finalizeOwnerAssigned(
 ): Promise<StepOutcome> {
   routing.claimed_by = owner.phone;
   routing.claimed_name = owner.name;
+  // Same claim-timestamp rule as every other claimed_by writer (see the
+  // routing contract): assignment time is the claim time.
+  routing.claimed_at_ms = Date.now();
   routing.owner_assigned = true;
   routing.route_step_index = stepIndex;
   scope.vars.claimed_agent = owner.name || owner.phone;
