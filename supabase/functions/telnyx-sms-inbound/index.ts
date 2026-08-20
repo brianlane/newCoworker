@@ -78,6 +78,10 @@ import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
+import {
+  DUPLICATE_DELIVERY_WINDOW_MS,
+  isDuplicateDelivery
+} from "../_shared/sms_auto_responder.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
 import { kickAiFlowWorker, wantsImmediateStart } from "../_shared/ai_flows/worker_kick.ts";
 import { parseRouting, type OfferRouting } from "../_shared/ai_flows/routing.ts";
@@ -4204,6 +4208,78 @@ serve(async (req: Request) => {
         reply: staffReplyEnabled,
         forward: staffForwardEnabled
       });
+    }
+
+    // Duplicate-delivery guard: the same text from the same sender arriving
+    // again inside DUPLICATE_DELIVERY_WINDOW_MS is a transport duplicate
+    // (carrier or app double-send with distinct Telnyx message AND event
+    // ids, so the event-id unique index below cannot catch it; Amy Laidlaw
+    // 2026-08-19: two copies of a lead's question 412ms apart each drew a
+    // reply AND re-ran trigger evaluation). The earlier copy already ran
+    // this whole path (wait resume, response stop, goal events, lifecycle,
+    // flow enqueue), so the duplicate must not re-run ANY of it: persist a
+    // suppressed done-state audit row so the thread still shows what
+    // arrived, and stop. Same-event redeliveries are excluded so they keep
+    // flowing to the insert's 23505 handling below. Best-effort: a lookup
+    // failure fails open to normal processing, where the worker's own
+    // duplicate check still suppresses the reply; it cannot un-enqueue
+    // flows, which is why this guard sits ahead of evaluateAndEnqueueAiFlows.
+    if (from) {
+      try {
+        const dupCheckNowMs = Date.now();
+        const { data: dupRows, error: dupErr } = await supabase
+          .from("sms_inbound_jobs")
+          .select("id, created_at, telnyx_event_id, payload")
+          .eq("business_id", businessId)
+          .eq("customer_e164", from)
+          .neq("telnyx_event_id", eventId)
+          .gte("created_at", new Date(dupCheckNowMs - DUPLICATE_DELIVERY_WINDOW_MS).toISOString())
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .limit(8);
+        if (dupErr) throw dupErr;
+        // The incoming copy has no row yet, so it carries no id and any
+        // equal-millisecond stored row counts as earlier.
+        const incoming = { text: inboundSmsBody(payload), atMs: dupCheckNowMs };
+        const dup = (dupRows ?? [])
+          .map((r) => {
+            const env = r.payload as { data?: { payload?: Record<string, unknown> } };
+            return {
+              id: r.id as string,
+              atMs: Date.parse(r.created_at as string),
+              text: inboundSmsBody(env?.data?.payload ?? {}),
+              eventId: (r.telnyx_event_id as string | null) ?? null
+            };
+          })
+          .find((r) => isDuplicateDelivery(r, incoming));
+        if (dup) {
+          const { error: dupJobErr } = await supabase.from("sms_inbound_jobs").insert({
+            business_id: businessId,
+            telnyx_event_id: eventId,
+            payload: envelope as unknown as Record<string, unknown>,
+            status: "done",
+            suppress_reply: true,
+            customer_e164: from,
+            outbound_idempotency_key: crypto.randomUUID(),
+            channel: inboundChannel
+          });
+          if (dupJobErr && (dupJobErr as { code?: string }).code !== "23505") {
+            console.error("duplicate inbound persist", dupJobErr);
+          }
+          await telemetryRecord(supabase, "sms_inbound_duplicate_suppressed", {
+            business_id: businessId,
+            event_id: eventId,
+            duplicate_of_event_id: dup.eventId,
+            gap_ms: dupCheckNowMs - dup.atMs
+          });
+          return new Response(JSON.stringify({ ok: true, path: "duplicate_suppressed" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      } catch (e) {
+        console.error("duplicate delivery check", e);
+      }
     }
 
     // wait_for_reply resume: if a flow run is parked waiting for THIS sender's
