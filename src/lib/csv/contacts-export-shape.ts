@@ -52,6 +52,14 @@ export type SelectedContactExportRow = {
  * owner selected and what an external tool needs), except when the row has
  * no name at all and the list fell back to showing the key itself: then the
  * cell stays blank rather than duplicating the phone column.
+ *
+ * The type cell is different: the list's `type` may be the owner/employee
+ * IDENTITY overlay resolved at read time from the roster, not the stored
+ * classification, and the importer writes any non-blank type cell into the
+ * stored column. Exporting the overlay would let a re-import freeze
+ * "owner"/"employee" into data that outlives the roster, so those two
+ * values export as a blank cell (blank means "leave as is" on import) and
+ * the stored classifications pass through.
  */
 export function selectedContactsCsv(rows: SelectedContactExportRow[]): string {
   return serializeCsv([
@@ -59,7 +67,7 @@ export function selectedContactsCsv(rows: SelectedContactExportRow[]): string {
     ...rows.map((r) => [
       r.e164,
       r.name === r.label ? "" : r.name,
-      r.type,
+      r.type === "owner" || r.type === "employee" ? "" : r.type,
       "",
       "",
       "",

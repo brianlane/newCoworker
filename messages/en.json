@@ -1751,7 +1751,7 @@
       "confirmAddTag": "Add the tag \"{tag}\" to {count, plural, one {# contact} other {# contacts}}? Adding a tag can start automations (AiFlows) for every selected contact.",
       "confirmRemoveTag": "Remove the tag \"{tag}\" from {count, plural, one {# contact} other {# contacts}}?",
       "confirmAssignOwner": "Assign {name} as the owner of {count, plural, one {# contact} other {# contacts}}?",
-      "requestFailed": "The request failed. Try again.",
+      "requestFailed": "The request did not complete. Retrying is safe: contacts already updated are skipped.",
       "resultSummary": "{updated} updated, {failed} failed",
       "moreFailures": "and {count, plural, one {# more failure} other {# more failures}}"
     },

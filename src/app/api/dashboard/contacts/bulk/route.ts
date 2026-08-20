@@ -28,6 +28,12 @@ import { classifyContactKey } from "../../../../../../supabase/functions/_shared
 
 export const dynamic = "force-dynamic";
 
+// A full-size batch is 200 sequential per-contact writes, each of which may
+// also enqueue automation runs; the platform default duration would cut a
+// big batch off mid-apply. Same budget as the CSV import route, which
+// applies up to 2000 rows the same row-by-row way.
+export const maxDuration = 300;
+
 // One request can write up to BULK_MAX_CONTACTS contacts, so the budget sits
 // well under the per-contact editor's 20/min-per-contact allowance.
 const WRITE_RATE = { interval: 60 * 1000, maxRequests: 10 };

@@ -79,6 +79,20 @@ describe("selectedContactsCsv", () => {
     expect(parsed.rows[0].name).toBe("Sam Okoye");
   });
 
+  it("blanks the type cell for the owner/employee identity overlays", () => {
+    // The list resolves those two from the roster at read time; a re-import
+    // must not freeze them into the stored classification.
+    const parsed = parseCsv(
+      selectedContactsCsv([
+        row({ type: "owner" }),
+        row({ e164: "+15550002222", label: "+15550002222", type: "employee" })
+      ])
+    );
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.rows[0].type).toBe("");
+    expect(parsed.rows[1].type).toBe("");
+  });
+
   it("quotes cells that carry commas so names round-trip", () => {
     const parsed = parseCsv(selectedContactsCsv([row({ name: "Doe, Jane", tags: [] })]));
     if (!parsed.ok) throw new Error(parsed.error);
