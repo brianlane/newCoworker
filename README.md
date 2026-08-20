@@ -2029,6 +2029,20 @@ Disabled meetings are left off the picker for the same reason. Hidden ones are
 NOT: hidden only keeps a type off the page's own menu, and it still books
 through its direct link, which is exactly what outreach sends.
 
+The picker appears when naming a meeting could produce a DIFFERENT link than
+not naming one, which is not the same as "more than one meeting". One VISIBLE
+meeting means the page already is that meeting, so there is nothing to choose.
+One HIDDEN meeting is the opposite: the page shows an empty chooser and only a
+direct link reaches the meeting at all.
+
+The stored id carries a FOREIGN KEY, so unlike the mailbox pin an id deleted
+while the panel sat open fails the upsert itself. `saveProspectingSettings`
+therefore resolves it every time: switching ON with a gone or disabled meeting
+is refused out loud (silently reverting to "let them choose" would change what
+the owner's emails say without telling them), while switching OFF drops it to
+null. The kill switch outranks a stale preference, and it is the one write that
+must never be blocked by a form error.
+
 ### Which mailbox cold email leaves from
 
 Prospecting sends through the owner's connected Gmail or Outlook mailbox. With

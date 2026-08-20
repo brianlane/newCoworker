@@ -659,12 +659,51 @@ describe("which meeting the outreach CTA offers", () => {
     getOutreachSettingsSpy.mockResolvedValue(settingsRow());
     const view = await loadProspectingView(BIZ, {} as never);
     expect(view.meetings).toEqual([
-      { id: "m1", name: "Discovery Call", durationMinutes: 60 },
-      { id: "m2", name: "Secret Call", durationMinutes: 15 }
+      { id: "m1", name: "Discovery Call", durationMinutes: 60, hidden: false },
+      { id: "m2", name: "Secret Call", durationMinutes: 15, hidden: true }
     ]);
   });
 
+  it("never lets a deleted meeting block the kill switch", async () => {
+    // This column carries a FOREIGN KEY, so an id deleted while the panel sat
+    // open fails the upsert itself. Unchecked, turning outreach OFF would start
+    // failing because of a meeting that no longer exists, and off is the one
+    // write that must never be blocked by a form error.
+    listMeetingTypesSpy.mockResolvedValue([]);
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", bookingMeetingTypeId: "m-gone" }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: null }),
+      expect.anything()
+    );
+  });
+
+  it("says so out loud when switching ON with a meeting that is gone or disabled", async () => {
+    // Silently swapping the owner's named meeting back to "let them choose"
+    // would change what their emails say without telling them.
+    listMeetingTypesSpy.mockResolvedValue([]);
+    await expect(
+      saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m-gone" }), {} as never)
+    ).rejects.toThrow(/not available any more/);
+
+    // Disabled counts as gone: a direct link to a disabled type shows the
+    // visitor "not available", so it is not a usable CTA.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Retired", duration_minutes: 30, enabled: false, hidden: false }
+    ]);
+    await expect(
+      saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m1" }), {} as never)
+    ).rejects.toThrow(/not available any more/);
+  });
+
   it("stores the chosen meeting, and null when they should choose", async () => {
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery Call", duration_minutes: 60, enabled: true, hidden: false }
+    ]);
     await saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m1" }), {} as never);
     expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
       BIZ,

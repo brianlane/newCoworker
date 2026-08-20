@@ -89,7 +89,7 @@ export type ProspectingView = {
    * Meetings the CTA can link straight to. Empty when the tenant books through
    * Calendly or has no booking page, where the choice does not apply.
    */
-  meetings: Array<{ id: string; name: string; durationMinutes: number }>;
+  meetings: Array<{ id: string; name: string; durationMinutes: number; hidden: boolean }>;
 };
 
 /** The two tier-derived gates the panel needs, resolved from one lookup. */
@@ -157,7 +157,12 @@ export async function loadProspectingView(
     mailboxes,
     meetings: meetingTypes
       .filter((t) => t.enabled)
-      .map((t) => ({ id: t.id, name: t.name, durationMinutes: t.duration_minutes }))
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        durationMinutes: t.duration_minutes,
+        hidden: t.hidden
+      }))
   };
 }
 
@@ -311,6 +316,31 @@ export async function saveProspectingSettings(
     }
   }
 
+  // The chosen meeting, checked the same way and for a sharper reason: this
+  // column carries a FOREIGN KEY, so an id deleted while the panel sat open
+  // fails the upsert itself. Unchecked, that would break the one write this
+  // function promises never to block, and turning outreach off would start
+  // failing because of a meeting that no longer exists.
+  //
+  // Hence the split. Switching ON says so out loud, because silently swapping
+  // the owner's named meeting back to "let them choose" changes what their
+  // emails say without telling them. Switching OFF drops it to null instead:
+  // the kill switch outranks a stale preference, and null is what the send
+  // path falls back to anyway.
+  let bookingMeetingTypeId: string | null = input.bookingMeetingTypeId.trim() || null;
+  if (bookingMeetingTypeId) {
+    const types = await listMeetingTypes(businessId, db);
+    const live = types.some((t) => t.id === bookingMeetingTypeId && t.enabled);
+    if (!live) {
+      if (strict) {
+        throw new ProspectingSettingsError(
+          "That meeting is not available any more. Pick another one, or let them choose."
+        );
+      }
+      bookingMeetingTypeId = null;
+    }
+  }
+
   return upsertOutreachSettings(
     businessId,
     {
@@ -325,7 +355,7 @@ export async function saveProspectingSettings(
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null,
       from_connection_id: fromConnectionId || null,
-      booking_meeting_type_id: input.bookingMeetingTypeId.trim() || null
+      booking_meeting_type_id: bookingMeetingTypeId
     },
     db
   );

@@ -90,7 +90,7 @@ type View = {
   /** Mailboxes cold email may leave from. Empty means none is connected. */
   mailboxes: Array<{ id: string; label: string; email: string | null }>;
   /** Meetings the CTA can link straight to. Empty when the choice does not apply. */
-  meetings: Array<{ id: string; name: string; durationMinutes: number }>;
+  meetings: Array<{ id: string; name: string; durationMinutes: number; hidden: boolean }>;
 };
 
 const inputClass =
@@ -409,6 +409,15 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   /** Real mailboxes, excluding the leading "Automatic" entry (id ""). */
   const connectedMailboxCount = (view?.mailboxes ?? []).filter((m) => m.id !== "").length;
   /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
+  /**
+   * Whether naming a meeting can change the link. More than one enabled
+   * meeting, or exactly one that is hidden (the page would show an empty
+   * chooser rather than that meeting).
+   */
+  const meetingChoiceMatters =
+    (view?.meetings.length ?? 0) > 1 ||
+    ((view?.meetings.length ?? 0) === 1 && Boolean(view?.meetings[0]?.hidden));
+  /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
   const pinnedMailboxGone = Boolean(
     form.from_connection_id && !(view?.mailboxes ?? []).some((m) => m.id === form.from_connection_id)
   );
@@ -574,9 +583,15 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         {/* Which meeting the CTA links to. The page's own chooser asks "what
             would you like to book?", which is a fair question for someone who
             arrived on purpose and a bad one for a stranger who has read one
-            paragraph. Only shown when there is more than one meeting: with a
-            single one the page IS that meeting. */}
-        {view && view.meetings.length > 1 ? (
+            paragraph.
+
+            Shown when naming a meeting could produce a different link than
+            not naming one. With one VISIBLE meeting the page already is that
+            meeting, so there is nothing to choose. With one HIDDEN meeting
+            there is: hidden keeps a type off the page's menu, so the page is
+            the empty chooser and only a direct link reaches the meeting at
+            all, which is precisely what hidden types are for. */}
+        {view && meetingChoiceMatters ? (
           <div>
             <label className={labelClass} htmlFor="prospecting-meeting">
               {t("fields.bookingMeeting")}
