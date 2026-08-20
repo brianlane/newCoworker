@@ -13,6 +13,7 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { CsvImportExport } from "@/components/dashboard/CsvImportExport";
+import { FubImport } from "@/components/dashboard/FubImport";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,7 @@ export default async function ImportExportPage() {
         </p>
       </div>
       <CsvImportExport businessId={business.id} />
+      <FubImport businessId={business.id} />
     </div>
   );
 }

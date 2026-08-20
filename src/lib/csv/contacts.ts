@@ -38,14 +38,11 @@ import {
   type CustomerMemoryRow,
   type SmsReplyMode
 } from "@/lib/customer-memory/types";
-import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
-import { escapeLikeLiteral } from "@/lib/privacy/deletion";
+import { upsertContactIdentity } from "@/lib/contacts/identity";
 import {
-  contactAliasOrFilter,
   contactKeyEmail,
-  emailContactKey,
-  isEmailContactKey
+  emailContactKey
 } from "../../../supabase/functions/_shared/contact_key";
 import { parseCsv, serializeCsv } from "./csv";
 import { CONTACTS_EXPORT_HEADERS } from "./contacts-export-shape";
@@ -260,130 +257,28 @@ export async function importContactsCsv(
         ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
         ...(pinned ? { pinned_md: pinned } : {})
       };
-      // Alias-aware update-by-phone so a merged-away number updates the
-      // surviving profile instead of recreating the one the owner just merged.
-      const applyUpdate = async (): Promise<boolean> => {
-        const lookup = db.from("contacts").select("id").eq("business_id", businessId);
-        const aliasFilter = contactAliasOrFilter(phone);
-        const { data: existing, error: selErr } = await (aliasFilter
-          ? lookup.or(aliasFilter)
-          : lookup.eq("customer_e164", phone)
-        ).maybeSingle();
-        if (selErr) throw new Error(selErr.message);
-        if (!existing) return false;
-        const { error: updErr } = await db.from("contacts").update(patch).eq("id", existing.id);
-        if (updErr) throw new Error(updErr.message);
-        return true;
-      };
 
-      const insertRow = async () =>
-        db.from("contacts").insert({
-          business_id: businessId,
-          customer_e164: phone,
+      // The alias-aware update / email-fold / create decision lives in the
+      // shared identity core (upsertContactIdentity), which the Follow Up
+      // Boss importer reuses; this caller only owns the row shapes and the
+      // created-contact event.
+      const result = await upsertContactIdentity(db, businessId, {
+        key: phone,
+        email: rowEmail || null,
+        patch,
+        insert: {
           display_name: name || null,
           ...(name ? { name_source: "manual" } : {}),
           email: rowEmail || null,
           ...(type ? { type: type as ContactType } : {}),
           ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
           pinned_md: pinned || null
-        });
+        },
+        declaredType: type
+      });
 
-      // Email cross-conflict (ported from BizBlasts' CustomerLinker): the
-      // row's phone is unknown, but its email already identifies exactly one
-      // existing CUSTOMER profile → same person, second number. Strict
-      // guards: exactly one email match, both sides classified customer (a
-      // row that re-types the contact is a signal they are NOT the same
-      // person). Race-free by construction: the number is inserted as a
-      // BARE row FIRST (the primary-key conflict arbitrates any concurrent
-      // inbound auto-create, and a bare row means the merge can't
-      // double-apply CSV content), then the CSV cells land on the SURVIVOR,
-      // and only then the battle-tested merge_customer_memories RPC folds
-      // the temp row in, locking both rows, recording the number in
-      // alias_e164s, and deleting the temp row. Ordering matters: every
-      // failure before the merge aborts cleanly (the bare temp row is a
-      // harmless standalone contact a re-import updates), so there is no
-      // half-merged state the summary can't describe.
-      const tryEmailFold = async (): Promise<
-        "no_match" | "raced" | "folded" | "created_unfolded"
-      > => {
-        if (!rowEmail) return "no_match";
-        if (type && type !== "customer") return "no_match";
-        const { data: matches, error: matchErr } = await db
-          .from("contacts")
-          .select("id, customer_e164, type")
-          .eq("business_id", businessId)
-          .ilike("email", escapeLikeLiteral(rowEmail))
-          .limit(2);
-        if (matchErr) throw new Error(matchErr.message);
-        const rows = (matches ?? []) as Array<{
-          id: string;
-          customer_e164: string;
-          type: string;
-        }>;
-        if (rows.length !== 1 || rows[0].type !== "customer") return "no_match";
-
-        // An EMAIL-keyed row has no second number to fold in: the address IS
-        // its identity, and the match already carries that address. So this is
-        // not a merge, it is the same contact reached the same way. Patch them
-        // and stop, rather than creating a second row for one person.
-        // (applyUpdate ran first and missed, so the match is a different,
-        // phone-keyed contact who gave us this address earlier.)
-        if (isEmailContactKey(phone)) {
-          const { error: patchOnlyErr } = await db
-            .from("contacts")
-            .update(patch)
-            .eq("id", rows[0].id);
-          if (patchOnlyErr) throw new Error(patchOnlyErr.message);
-          return "folded";
-        }
-
-        const { error: insErr } = await db.from("contacts").insert({
-          business_id: businessId,
-          customer_e164: phone
-        });
-        if (insErr) {
-          if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
-          return "raced";
-        }
-        // CSV cells are deliberate owner edits, apply to the survivor
-        // BEFORE the merge so a patch failure aborts the fold cleanly. On
-        // that failure the bare temp row is removed again: leaving it would
-        // make a RE-IMPORT of the row take the plain phone-update path
-        // (the number now "exists") and silently skip the email fold forever.
-        const { error: patchErr } = await db.from("contacts").update(patch).eq("id", rows[0].id);
-        if (patchErr) {
-          const { error: undoErr } = await db
-            .from("contacts")
-            .delete()
-            .eq("business_id", businessId)
-            .eq("customer_e164", phone);
-          if (undoErr) {
-            // Both the patch and the undo failed, surface both so the owner
-            // knows the number now exists as a bare contact.
-            throw new Error(`${patchErr.message} (temp row cleanup also failed: ${undoErr.message})`);
-          }
-          throw new Error(patchErr.message);
-        }
-        const { error: mergeErr } = await db.rpc("merge_customer_memories", {
-          p_business_id: businessId,
-          p_from_e164: phone,
-          p_into_e164: rows[0].customer_e164
-        });
-        if (mergeErr) {
-          // The fold target changed under us (deleted/merged mid-import),
-          // promote the bare temp row to a full standalone contact instead.
-          const { error: promoteErr } = await db
-            .from("contacts")
-            .update(patch)
-            .eq("business_id", businessId)
-            .eq("customer_e164", phone);
-          if (promoteErr) throw new Error(promoteErr.message);
-          return "created_unfolded";
-        }
-        return "folded";
-      };
-
-      const fireCreated = async () => {
+      if (result.kind === "created") {
+        summary.created += 1;
         // contact_created triggers: an import-created contact may start
         // flows watching for new contacts (drip pacing spaces bulk
         // enrollments out). Best-effort inside fireContactEvent, a
@@ -399,44 +294,8 @@ export async function importContactsCsv(
           },
           dedupeKey: `ce:created:${phone}:${Date.now()}`
         });
-      };
-
-      const retryAsUpdate = async () => {
-        // Raced by a concurrent auto-create (inbound SMS/call) between the
-        // lookup and the insert: the profile exists now, so apply the row's
-        // fields as an update rather than dropping them.
-        if (await applyUpdate()) {
-          summary.updated += 1;
-        } else {
-          // The racing row vanished again (e.g. concurrent delete/merge),
-          // report it instead of silently losing the row's data.
-          throw new Error(
-            `A concurrent change kept ${phone} from being saved; re-import this row.`
-          );
-        }
-      };
-
-      if (await applyUpdate()) {
-        summary.updated += 1;
       } else {
-        const fold = await tryEmailFold();
-        if (fold === "folded") {
-          summary.updated += 1;
-        } else if (fold === "created_unfolded") {
-          summary.created += 1;
-          await fireCreated();
-        } else if (fold === "raced") {
-          await retryAsUpdate();
-        } else {
-          const { error: insErr } = await insertRow();
-          if (insErr) {
-            if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
-            await retryAsUpdate();
-          } else {
-            summary.created += 1;
-            await fireCreated();
-          }
-        }
+        summary.updated += 1;
       }
     } catch (e) {
       summary.errors.push({
