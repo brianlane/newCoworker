@@ -1792,6 +1792,28 @@ untouched.
 `tests/tenant-dossiers.test.ts` fails if a tenant-named script exists without
 a mention here, so adding a one-shot means adding a line.
 
+## Demonstration mode is live on this box (Aug 20 2026)
+
+Her render sidecar carries the `/demo/*` paths (PRs #1550, #1554, #1555,
+#1559), so a browse step on this account can be taught by doing the workflow
+once instead of hand-writing selectors. Verified live on the box that day,
+READ-ONLY, with no action performed on any portal:
+
+- Public page: a click on a screenshot pixel resolved to `click_text("Learn
+  more")`, verified back to that element, executed, and the page navigated.
+  That is the whole loop, proven.
+- Her Clever login: a session opened with the stored "Clever" credentials and
+  landed on her real signed-in dashboard (Needs Action, Clever Offers), with
+  the announcement modal that `dismissBlockingOverlays` exists for sitting
+  over it. Zero acts were sent, and the session was stopped.
+- A stale demoId answers `unknown_demo`; a box without the paths 404s, which
+  the dashboard reports as "not updated yet".
+
+Worth knowing before demonstrating on this account: every click is REAL.
+Prefer a record whose update does not matter, and note that the four labels
+here ("Clever", "HomeLight", "Referral Exchange", "Realtor.com") are the same
+logins the flows already use many times a day.
+
 ## History
 
 Notable PRs: #936, #927, #913, #911 (HomeLight), #877 / #876 / #854 (dynamic
