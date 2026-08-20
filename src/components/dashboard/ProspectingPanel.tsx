@@ -408,7 +408,6 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   const postalRequired = view?.postalAddressRequired !== false;
   /** Real mailboxes, excluding the leading "Automatic" entry (id ""). */
   const connectedMailboxCount = (view?.mailboxes ?? []).filter((m) => m.id !== "").length;
-  /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
   /**
    * Whether naming a meeting can change the link. More than one enabled
    * meeting, or exactly one that is hidden (the page would show an empty
@@ -417,6 +416,16 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   const meetingChoiceMatters =
     (view?.meetings.length ?? 0) > 1 ||
     ((view?.meetings.length ?? 0) === 1 && Boolean(view?.meetings[0]?.hidden));
+  /**
+   * A named meeting that is no longer on offer. Exactly the mailbox trap one
+   * field down: gating the control on "is there a choice worth making" strands
+   * the stale id, the form keeps submitting it, the save is refused, and
+   * nothing on the page can change it.
+   */
+  const pinnedMeetingGone = Boolean(
+    form.booking_meeting_type_id &&
+      !(view?.meetings ?? []).some((m) => m.id === form.booking_meeting_type_id)
+  );
   /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
   const pinnedMailboxGone = Boolean(
     form.from_connection_id && !(view?.mailboxes ?? []).some((m) => m.id === form.from_connection_id)
@@ -591,7 +600,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             there is: hidden keeps a type off the page's menu, so the page is
             the empty chooser and only a direct link reaches the meeting at
             all, which is precisely what hidden types are for. */}
-        {view && meetingChoiceMatters ? (
+        {view && (meetingChoiceMatters || pinnedMeetingGone) ? (
           <div>
             <label className={labelClass} htmlFor="prospecting-meeting">
               {t("fields.bookingMeeting")}
@@ -602,6 +611,15 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
               value={form.booking_meeting_type_id ?? ""}
               onChange={(e) => edit({ booking_meeting_type_id: e.target.value })}
             >
+              {/* The stale pick gets a real option, so the control shows what
+                  is actually stored. Without it the browser would display
+                  "Let them choose" while state still held the dead id, and an
+                  owner who thought they had cleared it would submit it again. */}
+              {pinnedMeetingGone ? (
+                <option value={form.booking_meeting_type_id ?? ""}>
+                  {t("bookingMeetingGoneOption")}
+                </option>
+              ) : null}
               <option value="">{t("bookingMeetingChooser")}</option>
               {view.meetings.map((m) => (
                 <option key={m.id} value={m.id}>

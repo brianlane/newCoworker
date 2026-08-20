@@ -2560,7 +2560,8 @@
         "searchTerms": "Agrega al menos un tipo de negocio que buscar.",
         "cities": "Agrega al menos una ciudad donde buscar.",
         "mailbox": "Conecta el buzón desde el que se debe enviar tu prospección, en la página de Integraciones. Los borradores se seguirán acumulando hasta que lo hagas, y no podrá salir nada.",
-        "mailboxGone": "El buzón que elegiste para enviar ya no está conectado. Elige otro en Enviar desde, o elige Automático. No podrá salir nada hasta que lo hagas."
+        "mailboxGone": "El buzón que elegiste para enviar ya no está conectado. Elige otro en Enviar desde, o elige Automático. No podrá salir nada hasta que lo hagas.",
+        "meetingGone": "La reunión que ofrecían tus correos ya no está disponible, así que el enlace de reserva volvió a tu página de reservas. Elige otra en Qué reunión ofrece el correo, o deja que elijan ellos."
       },
       "stats": {
         "discovered": "Encontrados",
@@ -2646,7 +2647,8 @@
       "fromMailboxGoneOption": "El buzón que elegiste (ya no está conectado)",
       "bookingMeetingChooser": "Que elijan ellos",
       "bookingMeetingOption": "{name} ({minutes} min)",
-      "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte."
+      "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte.",
+      "bookingMeetingGoneOption": "La reunión que elegiste (ya no está disponible)"
     }
   },
   "admin": {

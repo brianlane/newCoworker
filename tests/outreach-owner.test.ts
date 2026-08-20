@@ -700,6 +700,33 @@ describe("which meeting the outreach CTA offers", () => {
     ).rejects.toThrow(/not available any more/);
   });
 
+  it("flags a named meeting that is gone, so the silent fallback is not silent", async () => {
+    // Milder than a stale mailbox pin (outreach keeps sending, the CTA just
+    // falls back to the chooser page) but worth saying: otherwise the emails
+    // quietly stop offering the meeting the owner picked, and every save is
+    // refused until the pick is changed.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery", duration_minutes: 60, enabled: true, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ booking_meeting_type_id: "m-gone" }));
+    expect((await loadProspectingView(BIZ, {} as never)).blockers).toContain("meetingGone");
+
+    // A disabled type counts as gone, matching what the send path does with it.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery", duration_minutes: 60, enabled: false, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ booking_meeting_type_id: "m1" }));
+    expect((await loadProspectingView(BIZ, {} as never)).blockers).toContain("meetingGone");
+  });
+
+  it("says nothing when the meeting still resolves, or when none is named", () => {
+    expect(
+      describeBlockers(settingsRow() as never, { pinnedMeetingAvailable: true })
+    ).not.toContain("meetingGone");
+    // Defaults to fine, so a caller that never looked cannot invent one.
+    expect(describeBlockers(settingsRow() as never, {})).not.toContain("meetingGone");
+  });
+
   it("stores the chosen meeting, and null when they should choose", async () => {
     listMeetingTypesSpy.mockResolvedValue([
       { id: "m1", name: "Discovery Call", duration_minutes: 60, enabled: true, hidden: false }

@@ -2035,6 +2035,16 @@ meeting means the page already is that meeting, so there is nothing to choose.
 One HIDDEN meeting is the opposite: the page shows an empty chooser and only a
 direct link reaches the meeting at all.
 
+A named meeting that goes away needs the SAME escape hatch as a stale mailbox
+pin, and for the same reason: gating the control on "is there a choice worth
+making" strands the stored id, the form keeps submitting it, the save is
+refused, and nothing on the page can change it. The picker therefore renders
+whenever the pick does not resolve, with an explicit option for the dead id, and
+a `meetingGone` blocker says what happened. That blocker is milder than
+`mailboxGone` (outreach keeps sending, the CTA just falls back to the chooser
+page) but it is not silent, because otherwise the emails quietly stop offering
+the meeting the owner picked.
+
 The stored id carries a FOREIGN KEY, so unlike the mailbox pin an id deleted
 while the panel sat open fails the upsert itself. `saveProspectingSettings`
 therefore resolves it every time: switching ON with a gone or disabled meeting

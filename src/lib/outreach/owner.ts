@@ -150,7 +150,10 @@ export async function loadProspectingView(
       mailboxConnected: mailboxes.length > 0,
       pinnedMailboxConnected:
         !settings?.from_connection_id ||
-        mailboxes.some((m) => m.id === settings.from_connection_id)
+        mailboxes.some((m) => m.id === settings.from_connection_id),
+      pinnedMeetingAvailable:
+        !settings?.booking_meeting_type_id ||
+        meetingTypes.some((t) => t.id === settings.booking_meeting_type_id && t.enabled)
     }),
     tierAllowed: gates.tierAllowed,
     postalAddressRequired: gates.postalAddressRequired,
@@ -180,6 +183,7 @@ export function describeBlockers(
     postalAddressRequired?: boolean;
     mailboxConnected?: boolean;
     pinnedMailboxConnected?: boolean;
+    pinnedMeetingAvailable?: boolean;
   } = {}
 ): string[] {
   if (!settings) return [];
@@ -199,6 +203,11 @@ export function describeBlockers(
   // Named separately because the fix is different: pick another mailbox, or
   // choose Automatic. Defaults to fine, like the gate above it.
   if (env.pinnedMailboxConnected === false) blockers.push("mailboxGone");
+  // Milder than the mailbox one: outreach keeps sending, the CTA just falls
+  // back to the chooser page. Said anyway, because otherwise the emails quietly
+  // stop offering the meeting the owner picked, and because every save is
+  // refused until the pick is changed. Defaults to fine.
+  if (env.pinnedMeetingAvailable === false) blockers.push("meetingGone");
   // Defaults to required, so every caller that has not resolved a tier keeps
   // the old, stricter behavior.
   if (env.postalAddressRequired !== false && !settings.postal_address?.trim()) {
