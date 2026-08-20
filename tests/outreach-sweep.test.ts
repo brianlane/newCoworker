@@ -92,6 +92,7 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     queued_at: null,
     sent_at: null,
     nudged_at: null,
+    contacted_stage_at: null,
     replied_at: null,
     created_at: "2026-07-27T14:00:00Z",
     updated_at: "2026-07-27T15:00:00Z",
@@ -2237,6 +2238,58 @@ describe("the Contacted stage (an emailed prospect is not a new lead)", () => {
     );
   });
 
+  it("stamps what it handled, so the queue drains instead of re-reading the same rows", async () => {
+    // Without the marker this phase can only read "recently emailed", which is
+    // a window it cannot work through: a tenant near the 200/day ceiling has
+    // more prospects in the window than one pass may read, the same rows come
+    // back every pass, and everything behind them ages out still in New Lead.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-done" })])
+    });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-done",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("leaves the one racing case unstamped, so a later pass retries it", async () => {
+    // The contact does not exist YET: the outreach flow files it about a minute
+    // after the send. Stamping that would abandon the prospect in New Lead for
+    // good, which is the exact bug this phase exists to fix.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-early" })])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).not.toHaveBeenCalled();
+  });
+
+  it("never lets the list read stop the mail either", async () => {
+    // The per-prospect catch does not cover this one: the query runs before the
+    // loop, and the phase runs before the send.
+    stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect()] : []
+      ),
+      listProspectsContactedSince: vi.fn(async () => {
+        throw new Error("read exploded");
+      })
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.errors).toEqual([]);
+    expect(result.sent).toBe(1);
+    expect(result.notes).toContainEqual({
+      businessId: BIZ,
+      note: "could not move emailed prospects to Contacted: read exploded"
+    });
+  });
+
   it("never lets an unmovable board stop the mail", async () => {
     // The sweep's job is sending. A stage that will not move is a cosmetic
     // problem and must not become an outage.
@@ -2262,7 +2315,7 @@ describe("the Contacted stage (an emailed prospect is not a new lead)", () => {
       expect(result.errors).toEqual([]);
       expect(result.notes).toContainEqual({
         businessId: BIZ,
-        note: "could not move acmehvac.com to Contacted: board exploded"
+        note: "could not move emailed prospects to Contacted: board exploded"
       });
       expect(result.sent).toBe(1);
     }

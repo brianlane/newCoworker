@@ -2025,18 +2025,29 @@ send would tag nothing at all. So `reconcileContactedForBusiness` runs as a
 phase of the NEXT sweep pass, over everything emailed in the last
 `CONTACTED_RECONCILE_DAYS` (3), capped at `CONTACTED_RECONCILE_LIMIT` (100).
 
-Three properties make that safe to repeat every pass:
-`applyLifecycleStage` is forward-only, so a prospect already at Contacted costs
-one read and no write and one who has replied is never dragged back; the stage
-must exist, so a tenant who renamed the column gets nothing rather than junk;
-and it BACKFILLS, which is what makes it a fix for sends that already happened
-rather than only for future ones.
+`outreach_prospects.contacted_stage_at` is what lets the phase DRAIN, and it is
+not optional bookkeeping. Reading "recently emailed" alone is a window the phase
+cannot work through: a tenant near the 200/day cap has more prospects in the
+window than one pass may read, the same rows come back every pass, and
+everything behind them ages out still sitting in New Lead, which is the board
+lie the phase exists to fix. The column is stamped for every outcome EXCEPT
+"no contact yet", the one case that is a race rather than an answer, so a
+prospect whose contact the flow has not filed yet is retried next pass while
+everything settled stops being read at all.
+
+Three more properties make it safe to repeat: `applyLifecycleStage` is
+forward-only, so a prospect already at Contacted costs one read and no write and
+one who has replied is never dragged back; the stage must exist, so a tenant who
+renamed the column gets nothing rather than junk; and it BACKFILLS, which is what
+makes it a fix for sends that already happened rather than only for future ones.
 
 It runs before the auto-only gate, since a manual tenant sends with the Send
 button and their board deserves the same truth, and outside the window and cap,
-since reading and tagging is not sending. Its failures are caught per prospect
-and recorded as notes: the phase runs before the send, so an exception escaping
-it would stop the mail, and the board is cosmetic while the mail is the job.
+since reading and tagging is not sending. The WHOLE phase is wrapped, the list
+read included and not just the per-prospect move: it runs before the send, so
+anything that escapes stops the mail, and the query can throw exactly as the
+move can. Failures are recorded as notes. The board is cosmetic; the mail is the
+job.
 
 Only prospects with a PHONE reach the board at all. The CRM is phone-keyed, so
 one discovered with just an address files no contact and appears nowhere in

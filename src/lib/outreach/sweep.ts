@@ -545,28 +545,44 @@ async function reconcileContactedForBusiness(
   const since = new Date(
     r.now.getTime() - CONTACTED_RECONCILE_DAYS * 24 * 60 * 60 * 1000
   ).toISOString();
-  const contacted = await listProspectsContactedSince(
-    settings.business_id,
-    since,
-    CONTACTED_RECONCILE_LIMIT,
-    r.db
-  );
-  for (const prospect of contacted) {
-    // Best-effort per prospect, and it has to be REAL best-effort: this phase
-    // runs before the send, so an exception here would abort the pass and stop
-    // the mail. The board is cosmetic; the mail is the job.
-    try {
-      await r.fireLifecycleStage(settings.business_id, prospect.phone, "contacted", {
-        dedupeSuffix: prospect.id
-      });
-    } catch (err) {
-      result.notes.push({
-        businessId: settings.business_id,
-        note: `could not move ${prospect.domain} to Contacted: ${
-          err instanceof Error ? err.message : String(err)
-        }`.slice(0, 200)
-      });
+  // The WHOLE phase is wrapped, not just the per-prospect move. It runs before
+  // the send, so anything that escapes stops the mail, and the list read is as
+  // able to throw as the move is. The board is cosmetic; the mail is the job.
+  try {
+    const contacted = await listProspectsContactedSince(
+      settings.business_id,
+      since,
+      CONTACTED_RECONCILE_LIMIT,
+      r.db
+    );
+    for (const prospect of contacted) {
+      const outcome = await r.fireLifecycleStage(
+        settings.business_id,
+        prospect.phone,
+        "contacted",
+        { dedupeSuffix: prospect.id }
+      );
+      // Stamped for everything EXCEPT "no contact yet". That one case is the
+      // race this phase exists for: the outreach flow files the contact about a
+      // minute after the send, so leaving it null retries on the next pass.
+      // Every other outcome is final (moved, already past it, no such stage,
+      // a teammate, the feature switched off) and stamping it keeps the row
+      // out of a queue it would otherwise clog.
+      if (outcome === "no_contact") continue;
+      await patchProspect(
+        settings.business_id,
+        prospect.id,
+        { contacted_stage_at: r.now.toISOString() },
+        r.db
+      );
     }
+  } catch (err) {
+    result.notes.push({
+      businessId: settings.business_id,
+      note: `could not move emailed prospects to Contacted: ${
+        err instanceof Error ? err.message : String(err)
+      }`.slice(0, 200)
+    });
   }
 }
 

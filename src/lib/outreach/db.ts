@@ -95,6 +95,8 @@ export type OutreachProspectRow = {
   sent_at: string | null;
   /** One follow-up per prospect, ever; this stamp is what enforces it. */
   nudged_at: string | null;
+  /** When the board was moved to Contacted. Null means not yet. */
+  contacted_stage_at: string | null;
   replied_at: string | null;
   created_at: string;
   updated_at: string;
@@ -364,11 +366,19 @@ const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"]
 const BLANK_VERTICAL_FILTER = "vertical.is.null,vertical.eq.";
 
 /**
- * Prospects emailed since `sinceIso` that carry a phone number.
+ * Prospects emailed since `sinceIso` whose board move has not landed yet.
  *
- * Feeds the sweep's reconcile phase. Phone-bearing only because the CRM is
- * phone-keyed: a prospect discovered with just an address files no contact, so
- * there is nothing on the board to move.
+ * Feeds the sweep's reconcile phase, and the `contacted_stage_at is null`
+ * filter is what lets that phase DRAIN. Reading "recently emailed" alone is a
+ * window it cannot work through: a tenant near the 200/day ceiling has more
+ * prospects in the window than one pass may read, the same rows come back every
+ * time, and everything behind them ages out still sitting in New Lead.
+ *
+ * Oldest first, so the queue is worked front to back rather than the newest
+ * arrivals starving the rest.
+ *
+ * Phone-bearing only because the CRM is phone-keyed: a prospect discovered with
+ * just an address files no contact, so there is nothing on the board to move.
  */
 export async function listProspectsContactedSince(
   businessId: string,
@@ -382,8 +392,9 @@ export async function listProspectsContactedSince(
     .select()
     .eq("business_id", businessId)
     .gte("sent_at", sinceIso)
+    .is("contacted_stage_at", null)
     .not("phone", "is", null)
-    .order("sent_at", { ascending: false })
+    .order("sent_at", { ascending: true })
     .limit(limit);
   if (error) throw new Error(`listProspectsContactedSince: ${error.message}`);
   return (data ?? []) as OutreachProspectRow[];
@@ -555,6 +566,7 @@ export type OutreachProspectPatch = Partial<
     | "sent_at"
     | "nudged_at"
     | "replied_at"
+    | "contacted_stage_at"
   >
 >;
 

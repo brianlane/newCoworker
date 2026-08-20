@@ -607,6 +607,13 @@ describe("listProspectsContactedSince (who the board should show as Contacted)",
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
     expect(c.gte).toHaveBeenCalledWith("sent_at", SINCE);
     expect(c.not).toHaveBeenCalledWith("phone", "is", null);
+    // The marker is what lets the phase DRAIN. Reading "recently emailed"
+    // alone returns the same rows every pass, so anything behind the limit
+    // ages out still sitting in New Lead.
+    expect(c.is).toHaveBeenCalledWith("contacted_stage_at", null);
+    // Oldest first, so the queue is worked front to back rather than the
+    // newest arrivals starving the rest.
+    expect(c.order).toHaveBeenCalledWith("sent_at", { ascending: true });
     // Bounded: this runs every pass, so it must never become a scan.
     expect(c.limit).toHaveBeenCalledWith(100);
 
