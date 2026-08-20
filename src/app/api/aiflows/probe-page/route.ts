@@ -22,6 +22,14 @@ import {
   browseActionAllowedForBusiness
 } from "@/lib/plans/browse-action";
 
+/**
+ * The platform budget must EXCEED `probePageControls`'s own 90s abort, or a
+ * page picker pointed at a cold box plus a fresh portal login is cut short
+ * and reads as "the page could not be opened". Found alongside the same
+ * omission on the demonstration routes (Bugbot, PR #1554).
+ */
+export const maxDuration = 120;
+
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   url: z.string().min(1).max(2000),

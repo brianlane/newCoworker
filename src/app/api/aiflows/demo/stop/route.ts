@@ -11,6 +11,14 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { stopBrowseDemo, type DemoStopFailure } from "@/lib/ai-flows/demo-session";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
+/**
+ * Same rule as its siblings: the platform budget exceeds the lib's 120s
+ * abort so the answer is structured rather than a cut connection. Stopping
+ * is fast (close a page, release a context), but a box that has gone
+ * unreachable is exactly when this is called and exactly when it hangs.
+ */
+export const maxDuration = 150;
+
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   demoId: z.string().uuid()

@@ -21,6 +21,16 @@ import {
   browseActionAllowedForBusiness
 } from "@/lib/plans/browse-action";
 
+/**
+ * The platform budget must EXCEED the lib's own 120s abort. This one matters
+ * most of the three: the sidecar performs the interaction FOR REAL, so a
+ * request cut short by the platform leaves a click that happened on the
+ * vendor's page, was never recorded, and was reported to the owner as a
+ * failure to reach the browser service. The lib's own abort must be what
+ * fires first, so the answer is always a structured one.
+ */
+export const maxDuration = 150;
+
 /** The engine kinds a demo may send directly (no click_text_while_present:
  * a demo turn is one interaction, never a bounded loop). */
 const STANDARD_KINDS = [

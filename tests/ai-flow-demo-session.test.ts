@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   actBrowseDemo,
@@ -34,6 +35,35 @@ afterEach(() => {
   delete process.env.AIFLOW_RENDER_URL_TEMPLATE;
   delete process.env.AIFLOW_RENDER_TOKEN;
   vi.restoreAllMocks();
+});
+
+/**
+ * Every browse route that waits on the render sidecar must give the PLATFORM
+ * a longer budget than the lib gives itself, or the request is cut before the
+ * lib's own abort can answer.
+ *
+ * Bugbot found this on the demonstration routes (PR #1554) and it was true of
+ * the two older ones as well. It matters most on /demo/act: the sidecar
+ * performs the interaction FOR REAL, so a platform cut leaves a click that
+ * happened on the vendor's page, was never recorded, and was reported to the
+ * owner as a failure to reach the service. The lib's abort must always be
+ * what fires first.
+ */
+describe("the browse routes' duration budgets", () => {
+  const ROUTES: { path: string; libTimeoutMs: number }[] = [
+    { path: "src/app/api/aiflows/demo/start/route.ts", libTimeoutMs: 120_000 },
+    { path: "src/app/api/aiflows/demo/act/route.ts", libTimeoutMs: 120_000 },
+    { path: "src/app/api/aiflows/demo/stop/route.ts", libTimeoutMs: 120_000 },
+    { path: "src/app/api/aiflows/check-actions/route.ts", libTimeoutMs: 120_000 },
+    { path: "src/app/api/aiflows/probe-page/route.ts", libTimeoutMs: 90_000 }
+  ];
+
+  it.each(ROUTES)("$path outlasts its lib abort", ({ path, libTimeoutMs }) => {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    const declared = /export const maxDuration = (\d+)/.exec(source)?.[1];
+    expect(declared, `${path} declares no maxDuration`).toBeTruthy();
+    expect(Number(declared) * 1000).toBeGreaterThan(libTimeoutMs);
+  });
 });
 
 describe("startBrowseDemo", () => {

@@ -21,6 +21,17 @@ import {
 } from "@/lib/plans/browse-action";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
+/**
+ * The platform budget must EXCEED the lib's own 120s abort, or the request is
+ * cut before `startBrowseDemo` can answer and the owner is told the browser
+ * service could not be reached while a live, logged-in sidecar session sits
+ * there with a demoId nobody received, unstoppable until the idle sweep
+ * reclaims it. Opening a page behind a fresh portal login is the slowest
+ * thing this feature does (page load, login form, resolve, re-navigate,
+ * settle), so it gets the headroom rather than the default.
+ */
+export const maxDuration = 150;
+
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   url: z.string().min(1).max(2000),
