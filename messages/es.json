@@ -1733,6 +1733,28 @@
     "confirmEmail": "Confirmar correo"
   },
   "dashboard": {
+    "bulk": {
+      "selectAllVisible": "Seleccionar todo lo visible ({count})",
+      "selectContact": "Seleccionar a {name}",
+      "selectedCount": "{count, plural, one {# contacto seleccionado} other {# contactos seleccionados}}",
+      "addTag": "Agregar etiqueta",
+      "removeTag": "Quitar etiqueta",
+      "assignOwner": "Asignar responsable",
+      "exportCsv": "Exportar CSV",
+      "clearSelection": "Limpiar selección",
+      "tagPlaceholder": "Nombre de la etiqueta",
+      "apply": "Aplicar",
+      "applying": "Aplicando…",
+      "addTagHint": "Agregar una etiqueta puede iniciar automatizaciones (AiFlows).",
+      "chooseTag": "Elige una etiqueta",
+      "chooseOwner": "Elige un empleado",
+      "confirmAddTag": "¿Agregar la etiqueta \"{tag}\" a {count, plural, one {# contacto} other {# contactos}}? Agregar una etiqueta puede iniciar automatizaciones (AiFlows) para cada contacto seleccionado.",
+      "confirmRemoveTag": "¿Quitar la etiqueta \"{tag}\" de {count, plural, one {# contacto} other {# contactos}}?",
+      "confirmAssignOwner": "¿Asignar a {name} como responsable de {count, plural, one {# contacto} other {# contactos}}?",
+      "requestFailed": "La solicitud no se completó. Reintentar es seguro: los contactos ya actualizados se omiten.",
+      "resultSummary": "{updated} actualizados, {failed} fallidos",
+      "moreFailures": "y {count, plural, one {# fallo más} other {# fallos más}}"
+    },
     "companion": {
       "launcher": {
         "open": "Pregunta a la IA",
