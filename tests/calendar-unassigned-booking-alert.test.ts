@@ -683,6 +683,24 @@ describe("the employee audience", () => {
     expect(sendSms).not.toHaveBeenCalled();
   });
 
+  it("skips teammates who already got this booking's claim invite", async () => {
+    // A broadcast booking texts its invitees "Reply 1 to take it"; the FYI
+    // leg re-texting them would be a second message about one appointment.
+    prefs({ booking_alert_audience: "employees" });
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    const out = await maybeAlertUnassignedBooking(
+      BIZ,
+      { ...INPUT, employeesAlreadyInvited: ["+15555550101"] },
+      {
+        client: fakeDb({ contacts: NO_CONTACT }),
+        listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
+        sendSms
+      }
+    );
+    expect(out).toBe("sent_employees_only");
+    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+15555550102"]);
+  });
+
   it("names the holder when the booking is owned", async () => {
     prefs({ booking_alert_audience: "employees" });
     vi.mocked(getTeamMember).mockResolvedValue({ name: "Dave Lane" } as never);

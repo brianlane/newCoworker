@@ -29,7 +29,7 @@ vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn() }));
 vi.mock("@/lib/db/implicit-contact-owner", () => ({ resolveImplicitContactOwner: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-import { GET } from "@/app/api/dashboard/booking-page/route";
+import { GET, PATCH } from "@/app/api/dashboard/booking-page/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -109,6 +109,17 @@ describe("GET /api/dashboard/booking-page", () => {
   it("answers implicitOwner null for a real team", async () => {
     const res = await get();
     expect(await res.json()).toMatchObject({ data: { implicitOwner: null } });
+  });
+
+  it("accepts the broadcast assignment mode on PATCH", async () => {
+    const res = await PATCH(
+      new Request(`${BASE}?businessId=${BIZ}`, {
+        method: "PATCH",
+        body: JSON.stringify({ assignmentMode: "broadcast" })
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(mockUpsert).toHaveBeenCalledWith(BIZ, { assignmentMode: "broadcast" });
   });
 
   it("answers with the page as the ensure pass left it", async () => {

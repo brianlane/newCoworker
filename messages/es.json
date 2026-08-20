@@ -1889,6 +1889,7 @@
       "assignSubtitle": "La disponibilidad sigue tu respuesta, para no ofrecer horarios que tu equipo no pueda cubrir.",
       "assignModeLabel": "Las reservas van a",
       "assignModeAny": "El negocio (nadie en particular)",
+      "assignModeBroadcast": "Difundir al equipo (quien responda 1 primero se la queda)",
       "assignModeRoundRobin": "Repartir en el equipo",
       "assignModeFixed": "Una persona",
       "assignEmployeeLabel": "Persona",

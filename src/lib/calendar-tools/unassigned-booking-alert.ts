@@ -72,6 +72,12 @@ export type UnassignedBookingAlertInput = {
    * answers is who shows up to THIS meeting.
    */
   bookingAssigneeMemberId?: string | null;
+  /**
+   * Phones already texted a broadcast claim invite for THIS booking. The
+   * employee leg skips them: the invite is their notification, and one
+   * booking must never text the same teammate twice.
+   */
+  employeesAlreadyInvited?: string[];
   /** Context a person needs in order to actually show up. */
   durationMinutes?: number | null;
   joinUrl?: string | null;
@@ -208,6 +214,7 @@ async function textEmployees(
     summary: string;
     assigneeName: string | null;
     attendeePhone: string | null;
+    alreadyInvited?: string[];
     listMembers?: typeof listTeamMembers;
     sendSms?: (businessId: string, toE164: string, body: string) => Promise<void>;
   }
@@ -215,7 +222,7 @@ async function textEmployees(
   if (audience === "owner") return 0;
   const list = input.listMembers ?? listTeamMembers;
   const roster = (await list(businessId, db)) as unknown as BookingAlertMember[];
-  const { members } = resolveBookingAlertRecipients(
+  const { members: eligible } = resolveBookingAlertRecipients(
     audience,
     prefs?.booking_alert_member_ids ?? null,
     roster,
@@ -223,6 +230,10 @@ async function textEmployees(
     // prefs row and "+16026951142" on the roster compare equal.
     coerceOwnerPhoneToE164(prefs?.phone_number ?? null)
   );
+  // A teammate who already got this booking's claim invite has been told;
+  // the FYI would be a second text about the same appointment.
+  const invited = new Set(input.alreadyInvited ?? []);
+  const members = eligible.filter((m) => !invited.has(m.phone_e164));
   if (members.length === 0) return 0;
 
   const body = buildBookingAlertSms({
@@ -351,6 +362,7 @@ export async function maybeAlertUnassignedBooking(
       summary: input.summary,
       assigneeName,
       attendeePhone: input.attendeePhone,
+      alreadyInvited: input.employeesAlreadyInvited,
       listMembers: deps.listMembers,
       sendSms: deps.sendSms
     });

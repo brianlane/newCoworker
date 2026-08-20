@@ -38,7 +38,7 @@ export type BookingPageRow = {
   reminder_email_hours: number;
   /** Hours before the start for the SMS reminder; 0 disables just that one. */
   reminder_sms_hours: number;
-  /** 'any' | 'round_robin' | 'fixed'; see booking-page/assignment.ts. */
+  /** 'any' | 'round_robin' | 'fixed' | 'broadcast'; see booking-page/assignment.ts. */
   assignment_mode: string;
   /** The employee a 'fixed' page books; null otherwise. */
   employee_id: string | null;
@@ -224,7 +224,7 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   }
   if (
     patch.assignmentMode !== undefined &&
-    !["any", "round_robin", "fixed"].includes(patch.assignmentMode)
+    !["any", "round_robin", "fixed", "broadcast"].includes(patch.assignmentMode)
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }
@@ -730,6 +730,28 @@ export async function stampAssigneeIfUnset(
     // from a no-op and only then advance the round-robin tiebreak.
     .select("id");
   if (error) throw new Error(`stampAssigneeIfUnset: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Stamp a booking's assignee by its dedupe-ledger row id, only when nobody
+ * holds it yet. The AI door and the broadcast "1" claim both land here: the
+ * compare-and-swap on null means a duplicate model turn, a raced claim, or
+ * a stale reply can never reassign work already on somebody's calendar.
+ */
+export async function stampAssigneeByClaimId(
+  claimId: string,
+  memberId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ assignee_member_id: memberId })
+    .eq("id", claimId)
+    .is("assignee_member_id", null)
+    .select("id");
+  if (error) throw new Error(`stampAssigneeByClaimId: ${error.message}`);
   return (data ?? []).length > 0;
 }
 

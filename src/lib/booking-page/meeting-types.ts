@@ -170,7 +170,7 @@ function validatePatch(patch: MeetingTypePatch): void {
   if (
     patch.assignmentMode !== undefined &&
     patch.assignmentMode !== null &&
-    !["any", "round_robin", "fixed"].includes(patch.assignmentMode)
+    !["any", "round_robin", "fixed", "broadcast"].includes(patch.assignmentMode)
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }

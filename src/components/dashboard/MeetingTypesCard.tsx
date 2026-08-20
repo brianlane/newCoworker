@@ -347,6 +347,9 @@ export function MeetingTypesCard({
                       >
                         <option value="inherit">{t("meetingAssignInherit")}</option>
                         <option value="any">{t("assignModeAny")}</option>
+                        <option value="broadcast" disabled={roster.length === 0}>
+                          {t("assignModeBroadcast")}
+                        </option>
                         <option value="round_robin" disabled={roster.length === 0}>
                           {t("assignModeRoundRobin")}
                         </option>

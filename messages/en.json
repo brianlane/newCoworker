@@ -1889,6 +1889,7 @@
       "assignSubtitle": "Availability follows your answer, so nobody is offered a time your team cannot cover.",
       "assignModeLabel": "Bookings go to",
       "assignModeAny": "The business (no one in particular)",
+      "assignModeBroadcast": "Broadcast to the team (first to reply 1 takes it)",
       "assignModeRoundRobin": "Share across the team",
       "assignModeFixed": "One person",
       "assignEmployeeLabel": "Person",
