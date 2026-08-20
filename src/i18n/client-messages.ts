@@ -93,6 +93,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.integrationsZoom",
       "dashboard.leadAssignment",
       "dashboard.nav",
+      "dashboard.notes",
       "dashboard.pages",
       "dashboard.phoneDeliverability",
       "dashboard.planCard",

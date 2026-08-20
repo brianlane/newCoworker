@@ -15,7 +15,7 @@ export const ACTIVITY_BADGE: Record<
   {
     label: string;
     labelKey: string;
-    variant: "online" | "pending" | "neutral" | "success" | "urgent";
+    variant: "online" | "pending" | "neutral" | "success" | "urgent" | "info";
   }
 > = {
   aiflow: { label: "AiFlow", labelKey: "aiflow", variant: "success" },
@@ -26,5 +26,6 @@ export const ACTIVITY_BADGE: Record<
   email_outbound: { label: "Email out", labelKey: "emailOutbound", variant: "neutral" },
   chat: { label: "Chat", labelKey: "chat", variant: "neutral" },
   customer: { label: "Customer", labelKey: "customer", variant: "pending" },
-  alert: { label: "Alert", labelKey: "alert", variant: "urgent" }
+  alert: { label: "Alert", labelKey: "alert", variant: "urgent" },
+  note: { label: "Note", labelKey: "note", variant: "info" }
 };

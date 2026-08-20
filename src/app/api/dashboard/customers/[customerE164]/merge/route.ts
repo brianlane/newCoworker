@@ -20,6 +20,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { getCustomerMemory, mergeCustomerMemories } from "@/lib/customer-memory/db";
+import { repointContactNoteIds, repointContactNotes } from "@/lib/notes/db";
 
 export const dynamic = "force-dynamic";
 
@@ -106,11 +107,26 @@ export async function POST(
       );
     }
 
-    const memory = await mergeCustomerMemories(
-      businessId,
-      source.customer_e164,
-      target.customer_e164
-    );
+    // Carry the team's authored notes to the survivor BEFORE the RPC deletes
+    // the source row: the notes FK is ON DELETE SET NULL (the
+    // business_documents pattern), so without this they would silently
+    // orphan. The RPC re-points linked documents itself; notes are re-pointed
+    // here, and if the merge then fails, exactly the moved ids are put back
+    // so both profiles return to their pre-merge state.
+    const movedNoteIds = await repointContactNotes(businessId, source.id, target.id);
+    let memory;
+    try {
+      memory = await mergeCustomerMemories(
+        businessId,
+        source.customer_e164,
+        target.customer_e164
+      );
+    } catch (err) {
+      await repointContactNoteIds(businessId, movedNoteIds, source.id).catch(() => {
+        // Best-effort: the merge failure is the error worth surfacing.
+      });
+      throw err;
+    }
 
     return successResponse({ memory });
   } catch (err) {

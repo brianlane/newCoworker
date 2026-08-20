@@ -130,6 +130,8 @@ const EXEMPT: Record<string, string> = {
   ai_flow_team_members: "the business's own roster",
   business_documents: "owner document store",
   business_members: "team membership",
+  contact_notes:
+    "team-authored notes about a contact: owner work product, the business_documents boundary. Erasure severs the person key (deleting the person's contact row SET-NULLs contact_id, and the dashboard profile delete removes the rows outright); what remains is free-text owner content with no person columns",
   contact_segments: "saved list definitions (name + filter), not person rows",
   dashboard_chat_activity: "owner dashboard chat",
   dashboard_chat_jobs: "owner dashboard chat",
