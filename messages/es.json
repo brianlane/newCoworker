@@ -2606,7 +2606,7 @@
         "postalAddress": "Nombre del negocio, calle, ciudad, código postal"
       },
       "postalHelp": "La ley lo exige en el correo de marketing, y por eso la prospección no se puede encender sin ella.",
-      "capHelp": "De 10 a 25 al día protege la reputación de tu correo. Los seguimientos también cuentan aquí.",
+      "capHelp": "10 a 25 al día protege la reputación de tu correo. Los seguimientos también cuentan. Súbelo cuando quieras; nada aquí es un límite de la plataforma.",
       "windowHelp": "Mañanas de días laborables en tu zona horaria. Nunca se envía nada el fin de semana.",
       "actions": {
         "turnOff": "Apagar",
@@ -2658,13 +2658,14 @@
       "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte.",
       "bookingMeetingGoneOption": "La reunión que elegiste (ya no está disponible)",
       "sendAllHelp": "Envía {count} hoy y se detiene. El límite diario es lo que protege la reputación de tu correo, así que esto lo respeta.",
-      "sendAllCapSpent": "El límite de hoy ya se usó. El resto sale en la próxima pasada.",
+      "sendAllCapSpent": "El límite de hoy ya se usó. El resto sale en la próxima pasada, o sube Correos por día arriba y guarda.",
       "sendAllConfirm": "¿Enviar {count} de tus {waiting} borradores en espera ahora? Es todo lo que permite el límite de hoy. Salen de inmediato, no en tu franja habitual de la mañana.",
       "sendAllProgress": "Enviando: {sent} hasta ahora.",
       "sentAll": "Se enviaron {count}. No queda nada en espera.",
       "sentAllCapped": "Se enviaron {count}, el límite de hoy. Quedan {left} borradores en cola para la próxima pasada.",
       "sentAllStalled": "Se enviaron {count} y se detuvo: el siguiente lote no pudo salir. Quedan {left} borradores en espera. Revisa tu buzón conectado e inténtalo de nuevo.",
-      "sendAllUnsaved": "Guarda o descarta tus cambios primero, o Enviar todos mandaría el texto anterior en su lugar."
+      "sendAllUnsaved": "Guarda o descarta tus cambios primero, o Enviar todos mandaría el texto anterior en su lugar.",
+      "capSpentTitle": "El límite de envíos de hoy ya se usó. Sube Correos por día arriba, o espera la próxima pasada."
     }
   },
   "admin": {

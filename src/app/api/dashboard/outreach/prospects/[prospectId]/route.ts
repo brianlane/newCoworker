@@ -54,7 +54,10 @@ const bodySchema = z.object({
 const SEND_FAILURE_MESSAGE: Record<string, string> = {
   not_found: "That prospect is no longer in your list.",
   not_drafted: "That draft has already been sent, skipped, or is missing its text.",
-  cap_reached: "You have reached today's send limit. Try again tomorrow, or raise the cap.",
+  // Names the control that fixes it. "Raise the cap" is only useful advice if
+  // the owner knows the cap is theirs, adjustable, and on this very page.
+  cap_reached:
+    "You have reached today's send limit. The rest go out on the next pass, or raise Emails per day above and save.",
   not_configured: "Finish setting up Prospecting first.",
   tier_blocked: PROSPECTING_UPGRADE_MESSAGE,
   no_mailbox:

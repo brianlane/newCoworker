@@ -2606,7 +2606,7 @@
         "postalAddress": "Business name, street, town, postcode"
       },
       "postalHelp": "Required by law in marketing email, and it is why outreach cannot be switched on without one.",
-      "capHelp": "10 to 25 a day protects your email reputation. Follow-ups count towards this too.",
+      "capHelp": "10 to 25 a day protects your email reputation. Follow-ups count towards this too. Raise it whenever you want; nothing here is a platform limit.",
       "windowHelp": "Weekday mornings in your timezone. Nothing is ever sent at the weekend.",
       "actions": {
         "turnOff": "Turn off",
@@ -2658,13 +2658,14 @@
       "bookingMeetingHelp": "The booking link goes straight to this meeting. Let them choose sends them to your booking page to pick, which is one more decision for someone who has only just heard of you.",
       "bookingMeetingGoneOption": "The meeting you picked (no longer available)",
       "sendAllHelp": "Sends {count} today, then stops. The daily limit is what protects your email reputation, so this respects it.",
-      "sendAllCapSpent": "Today's limit is spent. The rest go out on the next pass.",
+      "sendAllCapSpent": "Today's limit is spent. The rest go out on the next pass, or raise Emails per day above and save.",
       "sendAllConfirm": "Send {count} of your {waiting} waiting drafts now? That is all today's limit allows. They go out immediately, not in your usual morning window.",
       "sendAllProgress": "Sending: {sent} so far.",
       "sentAll": "Sent {count}. Nothing is left waiting.",
       "sentAllCapped": "Sent {count}, which is today's limit. {left} drafts stay queued for the next pass.",
       "sentAllStalled": "Sent {count}, then stopped: the next batch could not go out. {left} drafts are still waiting. Check your connected mailbox and try again.",
-      "sendAllUnsaved": "Save or discard your draft edits first, or Send all would send the old wording over them."
+      "sendAllUnsaved": "Save or discard your draft edits first, or Send all would send the old wording over them.",
+      "capSpentTitle": "Today's send limit is spent. Raise Emails per day above, or wait for the next pass."
     }
   },
   "admin": {

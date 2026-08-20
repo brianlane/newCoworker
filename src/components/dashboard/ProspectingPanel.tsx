@@ -1003,9 +1003,23 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                     </Button>
                     {/* Send is blocked while an edit is unsaved: the server
                         would send the stored draft, and the owner would watch
-                        their rewrite go out as the old text. */}
+                        their rewrite go out as the old text.
+
+                        Blocked on a spent cap too, for consistency with Send
+                        all above it. The server refuses either way, so leaving
+                        this one live only bought a click that always failed,
+                        and two controls for the same action disagreeing about
+                        whether it is available reads as a bug in whichever one
+                        the owner tried second. The reason travels with it. */}
                     <Button
-                      disabled={busyId === item.id || bulkRunning || sendAllRunning || Boolean(drafts[item.id])}
+                      title={sendAllowanceLeft <= 0 ? t("capSpentTitle") : undefined}
+                      disabled={
+                        busyId === item.id ||
+                        bulkRunning ||
+                        sendAllRunning ||
+                        sendAllowanceLeft <= 0 ||
+                        Boolean(drafts[item.id])
+                      }
                       onClick={() => void act(item.id, "send")}
                     >
                       {t("actions.send")}
