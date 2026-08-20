@@ -138,6 +138,17 @@ export function BrowseActionDemoPanel({
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [acceptedExpect, setAcceptedExpect] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  /**
+   * Bumped by every edit to the recording. A suggestion names a step by
+   * INDEX, so a reply that lands after the list moved underneath it would
+   * point at the wrong row, and accepting a chip would rewrite a value the
+   * owner never meant to touch. `fetchSuggestions` captures this and drops
+   * its own answer when it no longer matches.
+   */
+  const recordingEditsRef = useRef(0);
+  const noteRecordingEdit = () => {
+    recordingEditsRef.current += 1;
+  };
 
   const live = demoId !== null && !gone;
   /**
@@ -162,6 +173,7 @@ export function BrowseActionDemoPanel({
     setDemoId(null);
     setTurn(null);
     setRecorded([]);
+    noteRecordingEdit();
     setExecutedCount(0);
     setRemovedMidList(false);
     setGone(false);
@@ -242,6 +254,7 @@ export function BrowseActionDemoPanel({
         const justRecorded = data.recorded;
         setPendingConfirm(null);
         setRecorded((prev) => [...prev, justRecorded]);
+        noteRecordingEdit();
         setExecutedCount((prev) =>
           typeof data.actionsCount === "number" ? data.actionsCount : prev + 1
         );
@@ -359,6 +372,11 @@ export function BrowseActionDemoPanel({
   const fetchSuggestions = async () => {
     setSuggestBusy(true);
     setError(null);
+    // The recording this answer will describe. Suggestions name a step by
+    // index, and the owner can keep demonstrating, removing or undoing while
+    // the model thinks, so an answer that arrives after the list moved is
+    // about a list that no longer exists.
+    const askedAt = recordingEditsRef.current;
     try {
       const res = await fetch("/api/aiflows/demo/suggest", {
         method: "POST",
@@ -375,6 +393,12 @@ export function BrowseActionDemoPanel({
         data?: { suggestions: DemoSuggestions };
         error?: { message: string };
       };
+      // Dropped rather than applied to the wrong rows. Accepting a chip whose
+      // index moved would rewrite a value the owner never pointed at.
+      if (recordingEditsRef.current !== askedAt) {
+        setNotice("The recording changed while we were looking, so ask again for suggestions.");
+        return;
+      }
       if (json.ok && json.data) {
         setSuggestions(json.data.suggestions);
         setAcceptedExpect(false);
@@ -385,7 +409,9 @@ export function BrowseActionDemoPanel({
         setError(json.error?.message ?? "Suggestions could not be generated this time.");
       }
     } catch {
-      setError("Suggestions could not be generated this time.");
+      if (recordingEditsRef.current === askedAt) {
+        setError("Suggestions could not be generated this time.");
+      }
     } finally {
       setSuggestBusy(false);
     }
@@ -393,6 +419,7 @@ export function BrowseActionDemoPanel({
 
   const acceptFill = (index: number, placeholder: string) => {
     setRecorded((prev) => prev.map((a, i) => (i === index ? { ...a, value: placeholder } : a)));
+    noteRecordingEdit();
     setSuggestions((prev) =>
       prev ? { ...prev, fills: prev.fills.filter((f) => f.index !== index) } : prev
     );
@@ -689,6 +716,7 @@ export function BrowseActionDemoPanel({
                     onClick={() => {
                       if (i < recorded.length - 1) setRemovedMidList(true);
                       setRecorded((prev) => prev.filter((_, xi) => xi !== i));
+                      noteRecordingEdit();
                       // Suggestions point at indexes, which just shifted.
                       setSuggestions(null);
                     }}
@@ -709,6 +737,7 @@ export function BrowseActionDemoPanel({
                   <button
                     onClick={() => {
                       setRecorded((prev) => prev.slice(0, -1));
+                      noteRecordingEdit();
                       setSuggestions(null);
                     }}
                     disabled={busy}

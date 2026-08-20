@@ -8,10 +8,13 @@ vi.mock("@/lib/logger", () => ({
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import {
+  DEMO_SUGGEST_MAX_OUTPUT_TOKENS,
   DEMO_SUGGEST_MAX_VARS,
   DEMO_SUGGEST_PAGE_TEXT_MAX,
+  DEMO_SUGGEST_THINKING_LEVEL,
   suggestDemoRefinements
 } from "@/lib/ai-flows/demo-suggest";
+import { FLOW_COMPILE_THINKING_LEVEL } from "@/lib/ai-flows/compile-service";
 import type { DemoRecordedAction } from "@/lib/ai-flows/demo-session-view";
 
 const meter = vi.mocked(meterGeminiSpendForBusiness);
@@ -92,6 +95,29 @@ describe("suggestDemoRefinements", () => {
     // Every AI prompt carries the no-em-dash line.
     expect(params.systemInstruction.toLowerCase()).toContain("em dash");
     expect(meter).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let hidden thinking eat the whole output budget", async () => {
+    // Gemini 3 spends thinking tokens against maxOutputTokens, which is why
+    // the COMPILER pairs high thinking with a 32k cap. This reply is a few
+    // indexes and one phrase, so borrowing the compiler's high level under a
+    // small cap would return empty text, and an empty reply fails closed:
+    // "Suggest improvements" would quietly do nothing every time.
+    expect(DEMO_SUGGEST_THINKING_LEVEL).not.toBe(FLOW_COMPILE_THINKING_LEVEL);
+    expect(DEMO_SUGGEST_THINKING_LEVEL).toBe("low");
+    expect(DEMO_SUGGEST_MAX_OUTPUT_TOKENS).toBeGreaterThanOrEqual(8000);
+
+    const generate = generateReturning({ fills: [] });
+    await suggestDemoRefinements(
+      { businessId: BIZ, actions: ACTIONS, varsInScope: SCOPE, afterPageText: PAGE },
+      { generate }
+    );
+    const params = (generate as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      thinkingLevel: string;
+      maxOutputTokens: number;
+    };
+    expect(params.thinkingLevel).toBe(DEMO_SUGGEST_THINKING_LEVEL);
+    expect(params.maxOutputTokens).toBe(DEMO_SUGGEST_MAX_OUTPUT_TOKENS);
   });
 
   it("names the empty-scope and empty-page cases in the prompt", async () => {

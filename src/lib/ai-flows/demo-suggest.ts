@@ -22,7 +22,7 @@ import {
   type GeminiUsage
 } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
-import { flowCompileModel, FLOW_COMPILE_THINKING_LEVEL } from "@/lib/ai-flows/compile-service";
+import { flowCompileModel } from "@/lib/ai-flows/compile-service";
 import type { DemoRecordedAction } from "@/lib/ai-flows/demo-session-view";
 import { logger } from "@/lib/logger";
 import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
@@ -50,6 +50,22 @@ export type DemoSuggestDeps = {
   /** Injectable model call (tests). */
   generate?: typeof geminiGenerateTextDetailed;
 };
+
+/**
+ * Reasoning budget and output cap for this call, deliberately NOT the
+ * compiler's pair.
+ *
+ * Gemini 3 spends hidden thinking tokens against `maxOutputTokens`, which is
+ * why the compiler pairs `high` thinking with a 32k cap. This reply is a
+ * handful of indexes and one short phrase, so a 2k cap with `high` thinking
+ * would let the thinking eat the whole budget and return empty text, and an
+ * empty reply fails closed: "Suggest improvements" would quietly do nothing
+ * on the default model. A modest reasoning level suits the task (read a
+ * recording, match literals against a supplied list), and the cap is raised
+ * well past what the answer needs so thinking cannot starve it either way.
+ */
+export const DEMO_SUGGEST_THINKING_LEVEL = "low" as const;
+export const DEMO_SUGGEST_MAX_OUTPUT_TOKENS = 8000;
 
 /** Bounds on what rides into the prompt. */
 export const DEMO_SUGGEST_MAX_VARS = 80;
@@ -157,9 +173,9 @@ export async function suggestDemoRefinements(
       systemInstruction: SUGGEST_SYSTEM_PROMPT,
       userText,
       temperature: 0,
-      maxOutputTokens: 2000,
+      maxOutputTokens: DEMO_SUGGEST_MAX_OUTPUT_TOKENS,
       responseMimeType: "application/json",
-      thinkingLevel: FLOW_COMPILE_THINKING_LEVEL
+      thinkingLevel: DEMO_SUGGEST_THINKING_LEVEL
     }));
   } catch (err) {
     // Empty replies (thinking-only output) are still billed; meter them
