@@ -222,9 +222,16 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
     const run = latest.get(sweep);
 
     if (!run) {
+      if (sweep === WATCHDOG_SWEEP) continue;
       // Not enough recorded history to distinguish "stopped" from "we only
-      // started watching an hour ago".
-      if (sweep === WATCHDOG_SWEEP || ledgerAgeMinutes < maxGapMinutes) continue;
+      // started watching an hour ago". Still remembered as missing: a night
+      // that never evaluated a sweep must not hand tomorrow positive-looking
+      // evidence it was fine, or the night after a ledger prune would grace
+      // (mute) a sweep that has been dead all along.
+      if (ledgerAgeMinutes < maxGapMinutes) {
+        missingSweeps.push(sweep);
+        continue;
+      }
       // First-night grace for a sweep with no row at all: a new daily sweep
       // merged after its UTC slot cannot have run yet. Grace requires
       // POSITIVE evidence it was not missing yesterday; an unreadable

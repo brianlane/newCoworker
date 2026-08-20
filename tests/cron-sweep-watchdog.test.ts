@@ -414,6 +414,28 @@ describe("new-sweep first-night grace", () => {
     expect(result.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
   });
 
+  it("remembers youth-skipped sweeps as missing, so a pruned ledger cannot grant grace", () => {
+    // Night after a prune: the ledger is younger than every gap, so absentees
+    // are not paged. But storing missing: [] would hand the NEXT night
+    // positive-looking evidence they were fine, and grace would mute a sweep
+    // that has been dead since before the prune. The youth-skip must land in
+    // the memory as missing.
+    const young = minutesBefore(5);
+    const nightOne = evaluate(runsWithout(), [], young, null, []);
+    expect(nightOne.findings).toEqual([]);
+    expect(nightOne.missingSweeps).toContain(sweep);
+    // Night two, ledger old enough: yesterday's memory denies the grace.
+    const nightTwo = evaluate(
+      runsWithout(),
+      [],
+      minutesBefore(60 * 24 * 30),
+      null,
+      nightOne.missingSweeps
+    );
+    expect(nightTwo.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
+    expect(nightTwo.graced).toEqual([]);
+  });
+
   it("never graces a sweep that HAS history and stopped", () => {
     const runs = healthyFleet().map((r) =>
       r.sweep === sweep ? run({ sweep, finished_at: minutesBefore(3000) }) : r
