@@ -27,6 +27,17 @@ import {
 } from "@/lib/todos/core";
 import type { TodoWithRefs } from "@/lib/todos/db";
 
+/** Whether a row (still) belongs under the active status chip; mirrors the
+ * server-side predicates in src/lib/todos/db.ts listTodos. */
+function matchesStatusChip(
+  todo: Pick<Todo, "dueAt" | "completedAt">,
+  status: TodoStatusFilter
+): boolean {
+  if (status === "done") return todo.completedAt !== null;
+  if (status === "overdue") return todo.completedAt === null && isTodoOverdue(todo);
+  return todo.completedAt === null;
+}
+
 type ApiEnvelope<T> = { ok: boolean; data?: T; error?: { message?: string } };
 
 async function readEnvelope<T>(res: Response): Promise<T> {
@@ -92,8 +103,12 @@ export function TodosPanel({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editing, setEditing] = useState<TodoWithRefs | null>(null);
+  /** Monotonic fetch counter: only the LATEST load may write state, so a
+   * slow earlier response can never overwrite a newer filter's list. */
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
     try {
@@ -102,13 +117,15 @@ export function TodosPanel({
       const data = await fetch(`/api/dashboard/todos?${params.toString()}`, {
         cache: "no-store"
       }).then((r) => readEnvelope<{ todos: TodoWithRefs[]; employees: RosterOption[] }>(r));
+      if (seq !== loadSeq.current) return;
       setTodos(data.todos);
       setEmployees(data.employees);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(e instanceof Error ? e.message : t("loadFailed"));
       setTodos(null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [businessId, status, assigneeFilter, t]);
 
@@ -140,9 +157,16 @@ export function TodosPanel({
             body: JSON.stringify({ completed: todo.completedAt === null })
           }
         ).then((r) => readEnvelope<{ todo: Todo }>(r));
-        // Merge: the PATCH response carries no resolved refs, keep the row's.
+        // Merge the authoritative row (the PATCH response carries no
+        // resolved refs, keep the row's), then drop it when it no longer
+        // belongs under the active chip: a checked-off row must leave the
+        // Open and Overdue lists, an unchecked one must leave Done.
         setTodos((ts) =>
-          ts ? ts.map((x) => (x.id === todo.id ? { ...x, ...data.todo } : x)) : ts
+          ts
+            ? ts
+                .map((x) => (x.id === todo.id ? { ...x, ...data.todo } : x))
+                .filter((x) => x.id !== todo.id || matchesStatusChip(x, status))
+            : ts
         );
       } catch (e) {
         setActionError(e instanceof Error ? e.message : t("updateFailed"));
@@ -150,7 +174,7 @@ export function TodosPanel({
         setBusyId(null);
       }
     },
-    [businessId, t]
+    [businessId, status, t]
   );
 
   const chips: { id: TodoStatusFilter; label: string }[] = [
@@ -160,9 +184,20 @@ export function TodosPanel({
   ];
 
   if (error) {
+    // The retry control lives right on the error card: without it a failed
+    // first load stranded the panel until the user left and came back.
     return (
       <Card>
-        <p className="text-sm text-spark-orange">{error}</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-spark-orange">{error}</p>
+          <button
+            onClick={() => void load()}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/60 hover:text-parchment"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            {t("refresh")}
+          </button>
+        </div>
       </Card>
     );
   }
