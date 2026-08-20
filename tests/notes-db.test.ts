@@ -187,10 +187,9 @@ describe("repointContactNotes", () => {
       "n1",
       "n2"
     ]);
-    expect(c.update).toHaveBeenCalledWith({
-      contact_id: "target-contact",
-      updated_at: expect.any(String)
-    });
+    // Moving a note is not editing it: updated_at (the "(edited)" marker's
+    // source) must stay untouched.
+    expect(c.update).toHaveBeenCalledWith({ contact_id: "target-contact" });
     expect(c.eq).toHaveBeenCalledWith("contact_id", CONTACT);
     // No deleted_at filter: soft-deleted notes move with the person.
     expect(c.is).not.toHaveBeenCalled();
@@ -219,10 +218,8 @@ describe("repointContactNoteIds", () => {
   it("moves exactly the given ids (explicit client)", async () => {
     const c = chain({ data: null, error: null });
     await repointContactNoteIds(BIZ, ["n1", "n2"], CONTACT, makeDb(c));
-    expect(c.update).toHaveBeenCalledWith({
-      contact_id: CONTACT,
-      updated_at: expect.any(String)
-    });
+    // Same updated_at discipline as the forward re-point.
+    expect(c.update).toHaveBeenCalledWith({ contact_id: CONTACT });
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
     expect(c.in).toHaveBeenCalledWith("id", ["n1", "n2"]);
   });

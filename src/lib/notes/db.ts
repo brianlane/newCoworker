@@ -162,6 +162,10 @@ export async function softDeleteContactNote(
  * moved note ids so a failed merge can move exactly those rows back
  * ({@link repointContactNoteIds}) without touching notes the target already
  * had.
+ *
+ * Deliberately does NOT bump `updated_at`: that stamp means "the author
+ * edited the body" (the panel renders an "(edited)" marker off it), and a
+ * merge changes where the note hangs, not what it says.
  */
 export async function repointContactNotes(
   businessId: string,
@@ -172,7 +176,7 @@ export async function repointContactNotes(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("contact_notes")
-    .update({ contact_id: toContactId, updated_at: new Date().toISOString() })
+    .update({ contact_id: toContactId })
     .eq("business_id", businessId)
     .eq("contact_id", fromContactId)
     .select("id");
@@ -184,7 +188,8 @@ export async function repointContactNotes(
  * Move a specific set of notes onto `toContactId`: the compensation half of
  * {@link repointContactNotes} when the merge RPC fails after the re-point.
  * Id-scoped so it can never drag along notes that always belonged to the
- * other profile. No-op on an empty id list.
+ * other profile. No-op on an empty id list. Like the forward re-point, it
+ * leaves `updated_at` alone: moving a note is not editing it.
  */
 export async function repointContactNoteIds(
   businessId: string,
@@ -196,7 +201,7 @@ export async function repointContactNoteIds(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
     .from("contact_notes")
-    .update({ contact_id: toContactId, updated_at: new Date().toISOString() })
+    .update({ contact_id: toContactId })
     .eq("business_id", businessId)
     .in("id", noteIds);
   if (error) throw new Error(`repointContactNoteIds: ${error.message}`);
