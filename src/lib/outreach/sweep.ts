@@ -31,7 +31,7 @@ import {
   postalAddressRequiredForTier,
   prospectingAllowedForTier
 } from "@/lib/plans/prospecting";
-import { schedulingLink } from "@/lib/booking-page/prompt-line";
+import { outreachSchedulingLink } from "@/lib/booking-page/prompt-line";
 import {
   sendFromMailboxConnection,
   sendFromOwnerMailbox,
@@ -146,7 +146,7 @@ export type OutreachSweepDeps = {
   resolveEmailConnectionImpl?: typeof resolveEmailConnection;
   rememberThreadImpl?: typeof rememberSentThread;
   getBusinessImpl?: typeof getBusiness;
-  schedulingLinkImpl?: typeof schedulingLink;
+  schedulingLinkImpl?: typeof outreachSchedulingLink;
   processFlowEventImpl?: typeof processWebhookFlowEvent;
   recordEmailLogImpl?: typeof recordOutreachEmailLog;
 };
@@ -166,7 +166,7 @@ type Resolved = {
   resolveEmailConnection: typeof resolveEmailConnection;
   rememberThread: typeof rememberSentThread;
   getBusiness: typeof getBusiness;
-  schedulingLink: typeof schedulingLink;
+  schedulingLink: typeof outreachSchedulingLink;
   processFlowEvent: typeof processWebhookFlowEvent;
   recordEmailLog: typeof recordOutreachEmailLog;
 };
@@ -187,7 +187,7 @@ async function resolveDeps(deps: OutreachSweepDeps): Promise<Resolved> {
     resolveEmailConnection: deps.resolveEmailConnectionImpl ?? resolveEmailConnection,
     rememberThread: deps.rememberThreadImpl ?? rememberSentThread,
     getBusiness: deps.getBusinessImpl ?? getBusiness,
-    schedulingLink: deps.schedulingLinkImpl ?? schedulingLink,
+    schedulingLink: deps.schedulingLinkImpl ?? outreachSchedulingLink,
     processFlowEvent: deps.processFlowEventImpl ?? processWebhookFlowEvent,
     recordEmailLog: deps.recordEmailLogImpl ?? recordOutreachEmailLog
   };
@@ -257,7 +257,11 @@ async function resolveTenant(
   }
   const valueProp = settings.value_prop?.trim() ?? "";
   if (!valueProp) return { missing: "no value proposition configured", blockedBy: "config" };
-  const link = await r.schedulingLink(settings.business_id).catch(() => null);
+  // The outreach-specific link: straight to the meeting the owner named,
+  // rather than the page's "what would you like to book?" chooser.
+  const link = await r
+    .schedulingLink(settings.business_id, settings.booking_meeting_type_id)
+    .catch(() => null);
   return {
     tenant: {
       name: business.name.trim(),

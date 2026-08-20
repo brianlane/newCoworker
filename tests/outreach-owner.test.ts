@@ -51,6 +51,10 @@ const listOutreachSendFromOptionsSpy = vi.fn(async () => [
   { id: "", label: "Automatic", email: null as string | null },
   { id: "conn-a", label: "Gmail: sales@acme.test", email: "sales@acme.test" }
 ]);
+const listMeetingTypesSpy = vi.fn(async () => [] as unknown[]);
+vi.mock("@/lib/booking-page/meeting-types", () => ({
+  listMeetingTypes: (...a: unknown[]) => listMeetingTypesSpy(...(a as []))
+}));
 vi.mock("@/lib/email/mailbox-options", () => ({
   listOutreachSendFromOptions: (...a: unknown[]) => listOutreachSendFromOptionsSpy(...(a as []))
 }));
@@ -101,6 +105,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
     send_window_start_hour: 8,
     send_window_end_hour: 11,
     from_connection_id: null,
+    booking_meeting_type_id: null,
     postal_address: "1 Example Plaza",
     value_prop: "We answer every call.",
     sender_name: "Brian",
@@ -114,6 +119,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
 function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSettingsInput {
   return {
     fromConnectionId: "",
+    bookingMeetingTypeId: "",
     mode: "auto",
     searchTerms: ["hvac"],
     cities: ["Phoenix"],
@@ -520,7 +526,10 @@ describe("defaultProspectingSettings", () => {
       senderName: "",
       // Empty means "whichever mailbox is connected", which is what the sweep
       // did before there was a choice to make.
-      fromConnectionId: ""
+      fromConnectionId: "",
+      // Empty links the booking page and lets them choose, which is what the
+      // CTA did before a meeting could be named.
+      bookingMeetingTypeId: ""
     });
   });
 });
@@ -631,6 +640,42 @@ describe("the mailbox cold email leaves from", () => {
     expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
       BIZ,
       expect.objectContaining({ from_connection_id: null }),
+      expect.anything()
+    );
+  });
+});
+
+describe("which meeting the outreach CTA offers", () => {
+  it("lists the enabled meetings, and leaves the disabled ones off", async () => {
+    // A disabled type's direct link shows the visitor "not available", so
+    // offering it here would be offering a dead CTA. Hidden types DO appear:
+    // hidden only keeps a type off the page's own menu, and it still books
+    // through its direct link, which is exactly what outreach sends.
+    listMeetingTypesSpy.mockResolvedValueOnce([
+      { id: "m1", name: "Discovery Call", duration_minutes: 60, enabled: true, hidden: false },
+      { id: "m2", name: "Secret Call", duration_minutes: 15, enabled: true, hidden: true },
+      { id: "m3", name: "Retired Call", duration_minutes: 30, enabled: false, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow());
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.meetings).toEqual([
+      { id: "m1", name: "Discovery Call", durationMinutes: 60 },
+      { id: "m2", name: "Secret Call", durationMinutes: 15 }
+    ]);
+  });
+
+  it("stores the chosen meeting, and null when they should choose", async () => {
+    await saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m1" }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: "m1" }),
+      expect.anything()
+    );
+
+    await saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "  " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: null }),
       expect.anything()
     );
   });

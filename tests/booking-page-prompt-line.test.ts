@@ -24,6 +24,7 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: 
 import {
   bookingLinkPromptLine,
   formatBookingLinkPromptLine,
+  outreachSchedulingLink,
   publicBookingLink,
   schedulingLink
 } from "@/lib/booking-page/prompt-line";
@@ -392,5 +393,77 @@ describe("bookingLinkPromptLine", () => {
 
     mockPage.mockRejectedValue("string blast");
     expect(await bookingLinkPromptLine(BIZ)).toBeNull();
+  });
+});
+
+describe("outreachSchedulingLink (a cold email names the meeting)", () => {
+  const DISCOVERY = meeting("Discovery Call", {
+    id: "m-discovery",
+    slug: "discovery-call",
+    duration_minutes: 60
+  });
+  const SUPPORT = meeting("Support Call", { id: "m-support", slug: "support-call" });
+
+  it("links straight to the chosen meeting instead of the chooser page", async () => {
+    // The page's chooser asks "what would you like to book?", which is a fair
+    // question for someone who arrived on purpose and a bad one for a stranger
+    // who has read one paragraph about missed calls.
+    mockTypes.mockResolvedValue([DISCOVERY, SUPPORT]);
+    expect(await outreachSchedulingLink(BIZ, "m-discovery")).toEqual({
+      url: "https://www.newcoworker.com/book/new-coworker/discovery-call",
+      title: "Discovery Call",
+      meetings: [{ name: "Discovery Call", durationMinutes: 60 }],
+      kind: "booking_page"
+    });
+  });
+
+  it("falls back to the page rather than a dead link, in every way it can come apart", async () => {
+    // A cold email carrying the chooser link is worse than one naming a
+    // meeting. A cold email carrying a link that says "not available" is worse
+    // than both, so every one of these degrades to the page.
+    mockTypes.mockResolvedValue([DISCOVERY, SUPPORT]);
+    const page = await schedulingLink(BIZ);
+
+    // No choice made: the behavior every existing tenant keeps.
+    expect(await outreachSchedulingLink(BIZ, null)).toEqual(page);
+    // Chosen, then deleted in Bookings.
+    expect(await outreachSchedulingLink(BIZ, "m-gone")).toEqual(page);
+    // Chosen, then switched off. Re-checked here rather than trusted from the
+    // stored id, because a direct link to a disabled type fails closed.
+    // Compared against the page link as it stands NOW, not the snapshot above:
+    // disabling a meeting also changes what the page itself offers, and the
+    // fallback is "whatever the page link is", not "whatever it used to be".
+    mockTypes.mockResolvedValue([
+      meeting("Discovery Call", {
+        id: "m-discovery",
+        slug: "discovery-call",
+        duration_minutes: 60,
+        enabled: false
+      }),
+      SUPPORT
+    ]);
+    expect(await outreachSchedulingLink(BIZ, "m-discovery")).toEqual(await schedulingLink(BIZ));
+  });
+
+  it("leaves a Calendly tenant's URL alone, and stays null when there is no link at all", async () => {
+    // Calendly event types are not ours to deep link, and the URL it hands
+    // back is already one specific event.
+    mockConn.mockResolvedValue({ provider: "calendly" } as never);
+    mockCalendly.mockResolvedValue({
+      eventType: {
+        schedulingUrl: "https://calendly.com/nc/intro",
+        name: "Intro",
+        duration: 30
+      }
+    } as never);
+    mockTypes.mockResolvedValue([DISCOVERY]);
+    expect(await outreachSchedulingLink(BIZ, "m-discovery")).toMatchObject({
+      url: "https://calendly.com/nc/intro",
+      kind: "calendly"
+    });
+
+    // Vagaro: no link is held at all, and no link beats an invented one.
+    mockConn.mockResolvedValue({ provider: "vagaro" } as never);
+    expect(await outreachSchedulingLink(BIZ, "m-discovery")).toBeNull();
   });
 });

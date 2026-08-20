@@ -45,6 +45,8 @@ export type OutreachSettingsRow = {
   send_window_start_hour: number;
   send_window_end_hour: number;
   from_connection_id: string | null;
+  /** Meeting the CTA links to. Null links the page and lets them choose. */
+  booking_meeting_type_id: string | null;
   /**
    * CAN-SPAM postal address. The DB refuses a non-off mode without one unless
    * `postal_address_exempt` is set, in which case the footer falls back to the
@@ -128,6 +130,7 @@ export type OutreachSettingsPatch = Partial<
     | "send_window_start_hour"
     | "send_window_end_hour"
     | "from_connection_id"
+    | "booking_meeting_type_id"
     | "postal_address"
     | "postal_address_exempt"
     | "value_prop"

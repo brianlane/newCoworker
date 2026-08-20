@@ -35,6 +35,7 @@ import {
   type OutreachSettingsRow
 } from "./db";
 import { summarizeFunnel, type OutreachFunnel, type VerticalFunnel } from "./stats";
+import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { listOutreachSendFromOptions, type SendFromOption } from "@/lib/email/mailbox-options";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -84,6 +85,11 @@ export type ProspectingView = {
    * tenant has connected none, which is a blocker rather than a preference.
    */
   mailboxes: SendFromOption[];
+  /**
+   * Meetings the CTA can link straight to. Empty when the tenant books through
+   * Calendly or has no booking page, where the choice does not apply.
+   */
+  meetings: Array<{ id: string; name: string; durationMinutes: number }>;
 };
 
 /** The two tier-derived gates the panel needs, resolved from one lookup. */
@@ -120,12 +126,16 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue, gates, mailboxes] = await Promise.all([
+  const [settings, outcomes, queue, gates, mailboxes, meetingTypes] = await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
     resolveTierGates(businessId, db),
-    listOutreachSendFromOptions(businessId)
+    listOutreachSendFromOptions(businessId),
+    // Only the ones a visitor could be sent to: a hidden type still books
+    // through its direct link, so it is offered here even though the page's
+    // own chooser leaves it off the menu.
+    listMeetingTypes(businessId, db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -144,7 +154,10 @@ export async function loadProspectingView(
     }),
     tierAllowed: gates.tierAllowed,
     postalAddressRequired: gates.postalAddressRequired,
-    mailboxes
+    mailboxes,
+    meetings: meetingTypes
+      .filter((t) => t.enabled)
+      .map((t) => ({ id: t.id, name: t.name, durationMinutes: t.duration_minutes }))
   };
 }
 
@@ -207,6 +220,8 @@ export type ProspectingSettingsInput = {
    * is connected", the behavior from before there was a choice.
    */
   fromConnectionId: string;
+  /** Meeting the CTA links to. Empty links the page and lets them choose. */
+  bookingMeetingTypeId: string;
 };
 
 export class ProspectingSettingsError extends Error {}
@@ -309,7 +324,8 @@ export async function saveProspectingSettings(
       postal_address_exempt: postalAddressExempt,
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null,
-      from_connection_id: fromConnectionId || null
+      from_connection_id: fromConnectionId || null,
+      booking_meeting_type_id: input.bookingMeetingTypeId.trim() || null
     },
     db
   );
@@ -403,6 +419,7 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     postalAddress: "",
     valueProp: "",
     senderName: "",
-    fromConnectionId: ""
+    fromConnectionId: "",
+    bookingMeetingTypeId: ""
   };
 }

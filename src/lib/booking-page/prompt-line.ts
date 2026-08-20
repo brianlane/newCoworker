@@ -159,6 +159,45 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
 }
 
 /**
+ * The scheduling link a COLD EMAIL should carry.
+ *
+ * Same resolution as `schedulingLink`, with one addition: when the owner has
+ * named a meeting for outreach, the link goes straight to that meeting rather
+ * than to the page's chooser.
+ *
+ * Why outreach gets its own answer. The chooser asks "what would you like to
+ * book?", which is a reasonable question for somebody who arrived on purpose
+ * and a bad one for a stranger who has read one paragraph about missed calls.
+ * A named meeting turns the click into a calendar. The coworker still offers
+ * the whole menu on every other surface, because there the question is fair.
+ *
+ * Falls back to the page link, never to nothing, in all three ways this can
+ * come apart: a Calendly tenant (whose event types are not ours to deep link,
+ * and whose URL is already one specific event), a meeting since deleted or
+ * disabled, and no choice made at all. A cold email with the chooser link is
+ * worse than one with a named meeting; a cold email with a dead link is worse
+ * than both.
+ */
+export async function outreachSchedulingLink(
+  businessId: string,
+  meetingTypeId: string | null
+): Promise<SchedulingLink | null> {
+  const base = await schedulingLink(businessId);
+  if (!base || !meetingTypeId || base.kind !== "booking_page") return base;
+  const chosen = (await listMeetingTypes(businessId)).find((t) => t.id === meetingTypeId);
+  // `enabled` is re-checked here rather than trusted from the stored id: the
+  // owner can switch a meeting off in Bookings long after choosing it here,
+  // and a direct link to a disabled type shows the visitor "not available".
+  if (!chosen || !chosen.enabled) return base;
+  return {
+    ...base,
+    url: `${base.url}/${chosen.slug}`,
+    title: chosen.name,
+    meetings: [{ name: chosen.name, durationMinutes: chosen.duration_minutes }]
+  };
+}
+
+/**
  * The line itself, pure so the live-model e2e can build its system prompt
  * from the REAL string (imported, not paraphrased) without a database.
  */

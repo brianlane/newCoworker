@@ -37,6 +37,7 @@ type Settings = {
   value_prop: string | null;
   sender_name: string | null;
   from_connection_id: string | null;
+  booking_meeting_type_id: string | null;
 };
 
 type Funnel = {
@@ -88,6 +89,8 @@ type View = {
   postalAddressRequired: boolean;
   /** Mailboxes cold email may leave from. Empty means none is connected. */
   mailboxes: Array<{ id: string; label: string; email: string | null }>;
+  /** Meetings the CTA can link straight to. Empty when the choice does not apply. */
+  meetings: Array<{ id: string; name: string; durationMinutes: number }>;
 };
 
 const inputClass =
@@ -104,7 +107,8 @@ const DEFAULTS: Settings = {
   postal_address: null,
   value_prop: null,
   sender_name: null,
-  from_connection_id: null
+  from_connection_id: null,
+  booking_meeting_type_id: null
 };
 
 export function ProspectingPanel({ businessId }: { businessId: string }) {
@@ -207,7 +211,8 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
           postalAddress: form.postal_address ?? "",
           valueProp: form.value_prop ?? "",
           senderName: form.sender_name ?? "",
-          fromConnectionId: form.from_connection_id ?? ""
+          fromConnectionId: form.from_connection_id ?? "",
+          bookingMeetingTypeId: form.booking_meeting_type_id ?? ""
         })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
@@ -566,6 +571,32 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
               sit together and reading one as the other is the obvious mistake. */}
           <p className="mt-1 text-xs text-parchment/50">{t("senderNameHelp")}</p>
         </div>
+        {/* Which meeting the CTA links to. The page's own chooser asks "what
+            would you like to book?", which is a fair question for someone who
+            arrived on purpose and a bad one for a stranger who has read one
+            paragraph. Only shown when there is more than one meeting: with a
+            single one the page IS that meeting. */}
+        {view && view.meetings.length > 1 ? (
+          <div>
+            <label className={labelClass} htmlFor="prospecting-meeting">
+              {t("fields.bookingMeeting")}
+            </label>
+            <select
+              id="prospecting-meeting"
+              className={inputClass}
+              value={form.booking_meeting_type_id ?? ""}
+              onChange={(e) => edit({ booking_meeting_type_id: e.target.value })}
+            >
+              <option value="">{t("bookingMeetingChooser")}</option>
+              {view.meetings.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {t("bookingMeetingOption", { name: m.name, minutes: m.durationMinutes })}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-parchment/50">{t("bookingMeetingHelp")}</p>
+          </div>
+        ) : null}
         {/* Only worth a control when there is a real choice: one connected
             mailbox needs no picker, and none is a blocker rather than a
             preference. Counted on the CONNECTED entries, not the list length:

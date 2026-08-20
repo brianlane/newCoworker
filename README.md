@@ -2003,6 +2003,32 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### Which meeting the cold email offers
+
+The pitch's CTA links the booking page, which for a tenant with more than one
+meeting type is a chooser: "what would you like to book?". That is a fair
+question for somebody who arrived on purpose and a bad one for a stranger who
+has read one paragraph about missed calls. **Which meeting the email offers**
+names one, and `outreachSchedulingLink` deep links it
+(`/book/<page>/<meeting>`) instead.
+
+Stored per tenant in `outreach_settings.booking_meeting_type_id`, null meaning
+"link the page and let them choose", which is what every existing tenant keeps
+until they pick one. The control only appears with more than one meeting: with
+a single one the page already IS that meeting.
+
+It falls back to the page link, never to nothing, in every way it can come
+apart: a Calendly tenant (whose event types are not ours to deep link, and
+whose URL is already one specific event), a meeting since deleted, and a
+meeting since disabled. `enabled` is re-checked at send time rather than
+trusted from the stored id, because a direct link to a disabled type shows the
+visitor "not available". A cold email carrying the chooser link is worse than
+one naming a meeting; a cold email carrying a dead link is worse than both.
+
+Disabled meetings are left off the picker for the same reason. Hidden ones are
+NOT: hidden only keeps a type off the page's own menu, and it still books
+through its direct link, which is exactly what outreach sends.
+
 ### Which mailbox cold email leaves from
 
 Prospecting sends through the owner's connected Gmail or Outlook mailbox. With

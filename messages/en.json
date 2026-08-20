@@ -2589,7 +2589,8 @@
         "draftSubject": "Subject",
         "draftBody": "What the email says",
         "wholeEmail": "The whole email, as it will send",
-        "fromMailbox": "Send from"
+        "fromMailbox": "Send from",
+        "bookingMeeting": "Which meeting the email offers"
       },
       "placeholders": {
         "searchTerms": "plumber, HVAC contractor, roofer",
@@ -2642,7 +2643,10 @@
       "verticalNothingOpen": "Nothing waiting",
       "senderNameHelp": "The name at the bottom of the email. It does not change the address it is sent from.",
       "fromMailboxHelp": "The address the email comes from, and where replies land. Automatic uses whichever mailbox you have connected.",
-      "fromMailboxGoneOption": "The mailbox you picked (no longer connected)"
+      "fromMailboxGoneOption": "The mailbox you picked (no longer connected)",
+      "bookingMeetingChooser": "Let them choose",
+      "bookingMeetingOption": "{name} ({minutes} min)",
+      "bookingMeetingHelp": "The booking link goes straight to this meeting. Let them choose sends them to your booking page to pick, which is one more decision for someone who has only just heard of you."
     }
   },
   "admin": {
