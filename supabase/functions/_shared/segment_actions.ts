@@ -30,8 +30,10 @@
  *    ACTION that did the same would tag the entire directory off a corrupt
  *    row, so an invalid filter set skips the segment with a recorded error
  *    instead.
- *  - Tag writes are capped per business per run (MAX_TAG_WRITES_PER_RUN) to
- *    bound automation storms; a truncated business is recorded in the
+ *  - Tag applications are capped per business per run
+ *    (MAX_TAG_WRITES_PER_RUN) to bound automation storms; the budget is
+ *    spent when the automations fire, so a business whose column writes are
+ *    erroring cannot storm either. A truncated business is recorded in the
  *    result AND logged, never silent. Membership is evaluated live and
  *    already-tagged contacts are skipped, so the next night converges on
  *    the remainder.
@@ -489,6 +491,13 @@ async function sweepBusiness(
       // Re-plan with only the budgeted adds so the row that gets persisted
       // carries exactly what the hooks announce.
       const finalPlan = planContactTagAdds(contact.tags ?? [], writes);
+      // Spend the budget HERE, at the announcement, not after the persist.
+      // What the cap exists to bound is the automation fan-out, and that is
+      // now what happens next, whether or not the column write below lands.
+      // Charging it only for successful writes would let a business whose
+      // writes are all erroring fire an unbounded number of goal jumps and
+      // tag_changed runs, which is exactly the storm the cap is for.
+      budget -= finalPlan.added.length;
 
       // ANNOUNCE FIRST, PERSIST SECOND, deliberately.
       //
@@ -563,7 +572,6 @@ async function sweepBusiness(
         if (capped) break;
         continue;
       }
-      budget -= finalPlan.added.length;
       result.tagsWritten += finalPlan.added.length;
       if (capped) break;
     }

@@ -756,6 +756,31 @@ describe("runSegmentActionSweep", () => {
     }
   });
 
+  it("charges the cap to the announcement, so erroring writes cannot storm", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // The hooks fire before the column write, so the budget has to be
+      // spent there. Charging it to successful writes only would let a
+      // business whose writes all error announce every match it has.
+      const { db } = makeDb([
+        { data: [segRow()] },
+        { data: [contactRow({ id: "c1" }), contactRow({ id: "c2", customer_e164: "+15550002222" })] },
+        { error: { message: "locked" } }, // c1's write fails
+        { data: null } // stamp
+      ]);
+      const result = await runSegmentActionSweep(db, NOW, 1);
+      expect(result.tagsWritten).toBe(0);
+      expect(result.errors).toEqual(["business biz-a: tag write for contact c1: locked"]);
+      expect(result.cappedBusinesses).toEqual([BIZ]);
+      // c1 spent the whole budget when its automation fired; c2 waits for
+      // the next night rather than fanning out past the cap.
+      expect(enqueueContactEventRuns).toHaveBeenCalledTimes(1);
+      expect(applyGoalEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("pages contacts in explicit chunks until a short page", async () => {
     const page1 = Array.from({ length: CONTACT_PAGE }, (_, i) =>
       contactRow({ id: `p${i}`, customer_e164: `+1555200${String(i).padStart(4, "0")}`, tags: [] })
