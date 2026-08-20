@@ -9087,7 +9087,16 @@ async function routeToTeamStep(
     action.broadcastAll === true ||
     parkedAsBroadcast
   ) {
-    return routeBroadcastStep(supabase, run, scope, action, routing, tried, stepIndex);
+    return routeBroadcastStep(
+      supabase,
+      run,
+      scope,
+      action,
+      routing,
+      tried,
+      stepIndex,
+      pinnedAgentName
+    );
   }
 
   // First entry, reject ('2'), or timeout: retire the agent we last offered, then
@@ -9703,13 +9712,50 @@ async function routeBroadcastStep(
   action: Extract<StepAction, { kind: "route_to_team" }>,
   routing: OfferRouting,
   tried: string[],
-  stepIndex: number
+  stepIndex: number,
+  pinnedAgentName?: string
 ): Promise<StepOutcome> {
   const event = routing.last_event;
   const replyFrom = typeof routing.reply_from === "string" ? routing.reply_from : "";
   delete routing.last_event;
   delete routing.reply_from;
   const live = Array.isArray(routing.offered_all) ? [...routing.offered_all] : [];
+
+  // Owned contact: no race. Checked on EVERY re-entry (a pass or a lapsed
+  // deadline), not just first entry below, because ownership can appear
+  // mid-broadcast: the dashboard Claim button, the owner dropdown, an
+  // unowned-lead alert answered "1", or a parallel rotation lead's own
+  // owner-assign all write it while this fan-out sits parked. Without this
+  // the ladder runs itself out and the owner is texted a "nobody claimed"
+  // notice about a lead that HAS an owner, and claimed_agent is set to the
+  // literal "none" that later steps branch on. Mirrors the rotation path's
+  // every-(re-)entry check, pin rule included: a PINNED step reaches this
+  // function whenever a reminder ladder parked it as a broadcast, and its pin
+  // must survive that (the spoke check pins to the claimer on purpose).
+  if ((event === "reject" || event === "timeout") && !pinnedAgentName) {
+    const midOfferOwner = await activeContactOwner(supabase, run.business_id, scope);
+    if (midOfferOwner) {
+      // Drop the park state the fallback branches drop, so no stale broadcast
+      // pointer outlives the step: routing is per RUN, and a leftover
+      // offered_all would send a LATER route_to_team step down the broadcast
+      // state machine on its own first entry.
+      delete routing.offered;
+      delete routing.offered_name;
+      delete routing.offered_all;
+      delete routing.offered_names;
+      delete routing.offer_deadline_ms;
+      delete routing.reminder_rounds;
+      return finalizeOwnerAssigned(
+        supabase,
+        run,
+        scope,
+        action,
+        routing,
+        stepIndex,
+        midOfferOwner
+      );
+    }
+  }
 
   if (event === "reject") {
     // The webhook already removed the passer from offered_all; retire them
