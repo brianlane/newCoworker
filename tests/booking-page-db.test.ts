@@ -16,6 +16,7 @@ import {
   recordPlatformBooking,
   rotateBookingPageToken,
   countUpcomingByAssignee,
+  stampAssigneeByClaimId,
   stampAssigneeIfUnset,
   claimOwnerBookingAlert,
   stampAttendeeContact,
@@ -1016,6 +1017,40 @@ describe("assignment settings and per-assignee load", () => {
     const { client } = fakeDb([{ data: [], error: null }]);
     mockClientFactory.mockResolvedValue(client);
     expect((await countUpcomingByAssignee(BIZ)).size).toBe(0);
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The by-row-id assignee stamp (AI door + broadcast "1" claims). Same CAS
+ * contract as stampAssigneeIfUnset: a raced or duplicate write can never
+ * reassign a held booking.
+ */
+describe("stampAssigneeByClaimId", () => {
+  it("stamps only while unheld, and reports which happened", async () => {
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
+    expect(await stampAssigneeByClaimId("row-1", "m-ana", client)).toBe(true);
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      assignee_member_id: "m-ana"
+    });
+    expect(calls.filter((c) => c.method === "is").map((c) => c.args)).toContainEqual([
+      "assignee_member_id",
+      null
+    ]);
+
+    const { client: taken } = fakeDb([{ data: [], error: null }]);
+    expect(await stampAssigneeByClaimId("row-1", "m-ana", taken)).toBe(false);
+    const { client: nullData } = fakeDb([{ data: null, error: null }]);
+    expect(await stampAssigneeByClaimId("row-1", "m-ana", nullData)).toBe(false);
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "denied" } }]);
+    await expect(stampAssigneeByClaimId("row-1", "m-ana", failing)).rejects.toThrow(
+      "stampAssigneeByClaimId: denied"
+    );
+
+    const { client: fallback } = fakeDb([{ data: [], error: null }]);
+    mockClientFactory.mockResolvedValue(fallback);
+    await stampAssigneeByClaimId("row-1", "m-ana");
     expect(mockClientFactory).toHaveBeenCalled();
   });
 });

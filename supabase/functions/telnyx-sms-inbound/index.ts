@@ -121,6 +121,11 @@ import {
   findLiveUnownedAlertsFor,
   type UnownedAlertCandidate
 } from "../_shared/unowned_lead_alerts.ts";
+import {
+  claimBookingOffer,
+  findLiveBookingClaimsFor,
+  type BookingClaimCandidate
+} from "../_shared/booking_claims.ts";
 
 /**
  * Marks an ALERT inside the shared name-matching candidate list. The matcher
@@ -128,6 +133,14 @@ import {
  * winner back to the right claim path.
  */
 const ALERT_CANDIDATE_PREFIX = "alert:";
+/** Same trick for broadcast-booking claims (the third "1" class). */
+const BOOKING_CANDIDATE_PREFIX = "booking:";
+
+/** How a booking offer reads in ask-backs and acks. */
+function bookingClaimLabel(b: BookingClaimCandidate): string {
+  const who = b.attendeeName || b.summary || "appointment";
+  return `booking: ${who}${b.startLocal ? `, ${b.startLocal}` : ""}`;
+}
 
 const MAX_BODY = 256 * 1024;
 
@@ -925,6 +938,127 @@ async function consumeAlertClaim(args: {
   });
   return new Response(
     JSON.stringify({ ok: true, alert_claim: outcome.ok ? "claimed" : outcome.reason }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
+
+/**
+ * A teammate's "1" answering a broadcast BOOKING invite: claim the offer
+ * row (the race arbiter), stamp the booking's assignee, ack the winner,
+ * and stand the other invitees down. Sibling of consumeAlertClaim; the
+ * booking variant has no contact-ownership stamp (a booking assignee is
+ * not a lead owner) and no sibling-alert retire (one offer row per
+ * booking by construction).
+ */
+async function consumeBookingClaim(args: {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  ackTo: string;
+  eventId: string;
+  envelope: unknown;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+  candidate: BookingClaimCandidate;
+}): Promise<Response> {
+  const { supabase, businessId, from, ackTo, eventId, envelope, telnyxApiKey, smsFromE164 } = args;
+  const nowIso = new Date().toISOString();
+
+  // Who is claiming. The recipients list authorizes the reply; a missing
+  // roster row only means no assignee stamp, never a refused claim.
+  const { data: memberRow } = await supabase
+    .from("ai_flow_team_members")
+    .select("id, name")
+    .eq("business_id", businessId)
+    .eq("phone_e164", from)
+    .maybeSingle();
+  const member = (memberRow as { id?: string; name?: string | null } | null) ?? null;
+
+  const outcome = await claimBookingOffer(supabase, {
+    businessId,
+    offerId: args.candidate.offerId,
+    memberId: member?.id ?? null,
+    claimedByE164: from,
+    nowIso
+  });
+
+  const label = args.candidate.attendeeName || args.candidate.summary || "the booking";
+  const when = args.candidate.startLocal ? `, ${args.candidate.startLocal}` : "";
+  let text: string;
+  const others: string[] = [];
+  if (outcome.ok) {
+    text = member?.id
+      ? `You've got the booking: ${label}${when}. It's on your plate now.`
+      : `You've got the booking: ${label}${when}. You are not on the roster, so it stays unassigned in the dashboard.`;
+    for (const r of outcome.recipients) {
+      if (r && r !== from) others.push(r);
+    }
+  } else if (outcome.reason === "already_claimed") {
+    text = `A teammate already took that booking (${label}${when}), you're all set, no action needed.`;
+  } else {
+    text = `That booking is no longer open to claim. Nothing has changed.`;
+  }
+
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) ||
+    args.messagingProfileId;
+  const ackFrom =
+    (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  let ackSent: string | null = null;
+  if (telnyxApiKey && ackProfile && from) {
+    const send = await sendOperationalSms(supabase, businessId, {
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text,
+      idempotencyKey: `${eventId}:booking-claim`
+    });
+    if (!send.ok) console.error("booking claim ack", send.status, send.body.slice(0, 300));
+    else ackSent = text;
+    // Stand-down per recipient, so one failed send cannot suppress the rest.
+    for (const other of others) {
+      const standDown = `The booking (${label}${when}) was just claimed by a teammate, you're all set, no action needed.`;
+      const s2 = await sendOperationalSms(supabase, businessId, {
+        apiKey: telnyxApiKey,
+        messagingProfileId: ackProfile,
+        fromE164: ackFrom,
+        toE164: other,
+        text: standDown,
+        idempotencyKey: `${eventId}:booking-claim-standdown:${other}`
+      });
+      if (!s2.ok) console.error("booking claim stand-down", other, s2.status);
+    }
+  }
+
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
+  await telemetryRecord(supabase, "booking_claim_offer_claim", {
+    business_id: businessId,
+    event_id: eventId,
+    offer_id: args.candidate.offerId,
+    claimed: outcome.ok,
+    ...(outcome.ok ? {} : { reason: outcome.reason })
+  });
+  return new Response(
+    JSON.stringify({ ok: true, booking_claim: outcome.ok ? "claimed" : outcome.reason }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
 }
@@ -2832,12 +2966,25 @@ serve(async (req: Request) => {
             from,
             new Date().toISOString()
           );
+          // Booking invites join too: the ask-back can list them, so the
+          // named answer must be able to pick one (the PR #1270 rule).
+          const bookingCands = await findLiveBookingClaimsFor(
+            supabase,
+            businessId,
+            from,
+            new Date().toISOString()
+          );
           const combined: OfferCandidate[] = [
             ...liveOffers.map((o) => o.candidate),
             ...alertCands.map((a) => ({
               runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
               leadLabel: a.leadLabel ?? "",
               leadPhone: a.leadE164
+            })),
+            ...bookingCands.map((b) => ({
+              runId: `${BOOKING_CANDIDATE_PREFIX}${b.offerId}`,
+              leadLabel: b.attendeeName || b.summary || "",
+              leadPhone: ""
             }))
           ];
           if (combined.length > 0) {
@@ -2863,6 +3010,25 @@ serve(async (req: Request) => {
               const picked = alertCands.find((a) => a.alertId === alertId);
               if (picked) {
                 return await consumeAlertClaim({
+                  supabase,
+                  businessId,
+                  from,
+                  ackTo: to,
+                  eventId,
+                  envelope,
+                  telnyxApiKey,
+                  messagingProfileId,
+                  smsFromE164,
+                  candidate: picked
+                });
+              }
+            }
+            if (match.kind === "one" && match.runId.startsWith(BOOKING_CANDIDATE_PREFIX)) {
+              // They named a BOOKING invite: same shape, no run to resume.
+              const offerId = match.runId.slice(BOOKING_CANDIDATE_PREFIX.length);
+              const picked = bookingCands.find((b) => b.offerId === offerId);
+              if (picked) {
+                return await consumeBookingClaim({
                   supabase,
                   businessId,
                   from,
@@ -3005,6 +3171,12 @@ serve(async (req: Request) => {
         const alertCandidates = bareClaim
           ? await findLiveUnownedAlertsFor(supabase, businessId, from, new Date().toISOString())
           : [];
+        // Broadcast BOOKING invites are the third claimable class ("first to
+        // reply 1 takes it"). Claims only, same as alerts: there is nothing
+        // for a "2" to retire from.
+        const bookingCandidates = bareClaim
+          ? await findLiveBookingClaimsFor(supabase, businessId, from, new Date().toISOString())
+          : [];
 
         // A lone "1" while several leads are pending does not say WHICH lead.
         // It used to take whichever run was touched most recently, which is
@@ -3016,14 +3188,15 @@ serve(async (req: Request) => {
         // Offers and alerts are counted TOGETHER, because from the phone they
         // are indistinguishable: two texts, both about a lead, both answered
         // with "1".
-        if (bareClaim && (offer || alertCandidates.length > 0)) {
+        if (bareClaim && (offer || alertCandidates.length > 0 || bookingCandidates.length > 0)) {
           const liveOffers = offer ? await findLiveOfferRunsFor(supabase, businessId, from) : [];
-          if (liveOffers.length + alertCandidates.length > 1) {
+          if (liveOffers.length + alertCandidates.length + bookingCandidates.length > 1) {
             const labels = [
               ...liveOffers.map(
                 (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
               ),
-              ...alertCandidates.map((a) => a.leadLabel || a.leadE164)
+              ...alertCandidates.map((a) => a.leadLabel || a.leadE164),
+              ...bookingCandidates.map((b) => bookingClaimLabel(b))
             ];
             return await consumeAmbiguousOfferReply({
               supabase,
@@ -3052,6 +3225,21 @@ serve(async (req: Request) => {
               messagingProfileId,
               smsFromE164,
               candidate: alertCandidates[0]
+            });
+          }
+          // Exactly one candidate and it is a booking invite: same shape.
+          if (!offer && alertCandidates.length === 0 && bookingCandidates.length === 1) {
+            return await consumeBookingClaim({
+              supabase,
+              businessId,
+              from,
+              ackTo: to,
+              eventId,
+              envelope,
+              telnyxApiKey,
+              messagingProfileId,
+              smsFromE164,
+              candidate: bookingCandidates[0]
             });
           }
         }

@@ -53,6 +53,7 @@ vi.mock("@/lib/calendar-tools/attendee-bookings", () => ({
 vi.mock("@/lib/calendar-tools/unassigned-booking-alert", () => ({
   maybeAlertUnassignedBooking: vi.fn()
 }));
+vi.mock("@/lib/booking-page/ai-door-assignment", () => ({ applyAiBookingAssignment: vi.fn() }));
 vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
   resolveWaitlistAfterBooking: vi.fn()
 }));
@@ -101,6 +102,7 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
+import { applyAiBookingAssignment } from "@/lib/booking-page/ai-door-assignment";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -158,6 +160,11 @@ beforeEach(() => {
   // tests pin.
   vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
   vi.mocked(maybeAlertUnassignedBooking).mockResolvedValue("sent_unowned");
+  // Default: the page assigns nobody, matching every pre-broadcast pin.
+  vi.mocked(applyAiBookingAssignment).mockResolvedValue({
+    assigneeMemberId: null,
+    invitedPhones: []
+  });
   // Default: no stored contact, the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
@@ -1479,8 +1486,50 @@ describe("bookCalendarAppointment, unassigned-booking owner alert (Truly, Jul 21
       startLocal: "Friday, June 12, 2026 at 5:00 PM UTC",
       summary: "Estimate",
       eventId: "ev-1",
-      surface: "sms"
+      surface: "sms",
+      bookingAssigneeMemberId: null,
+      employeesAlreadyInvited: []
     });
+  });
+
+  it("runs the page's assignment on this door and feeds the outcome to the alert", async () => {
+    confirmGoogleCreate();
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "dedupe-77" });
+    vi.mocked(applyAiBookingAssignment).mockResolvedValue({
+      assigneeMemberId: "m-ana",
+      invitedPhones: []
+    });
+    await bookCalendarAppointment(BIZ, ARGS, "+16136067906", { alertSurface: "sms" });
+    expect(applyAiBookingAssignment).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        dedupeClaimId: "dedupe-77",
+        attendeeName: "Joe Plumber",
+        attendeePhone: "+16136067906",
+        startIso: "2026-06-12T17:00:00.000Z",
+        summary: "Estimate",
+        // Derived from the booked window (17:00 to 17:30).
+        durationMinutes: 30
+      })
+    );
+    expect(maybeAlertUnassignedBooking).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ bookingAssigneeMemberId: "m-ana" })
+    );
+  });
+
+  it("passes broadcast invites through so the alert cannot double-text them", async () => {
+    confirmGoogleCreate();
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "dedupe-77" });
+    vi.mocked(applyAiBookingAssignment).mockResolvedValue({
+      assigneeMemberId: null,
+      invitedPhones: ["+14805550111"]
+    });
+    await bookCalendarAppointment(BIZ, ARGS, "+16136067906", { alertSurface: "voice" });
+    expect(maybeAlertUnassignedBooking).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ employeesAlreadyInvited: ["+14805550111"] })
+    );
   });
 
   it("no alertSurface (owner-initiated surfaces) fires nothing", async () => {

@@ -1386,11 +1386,29 @@ page.
   Entry point `/api/internal/booking-reminder-sweep`, kicked ~1/min by the
   ai-flow-worker tick.
 - **Who the booking is for** (`src/lib/booking-page/assignment.ts`): a page
-  books either the business as a whole (`any`, the original behavior, no
-  assignee recorded), the team (`round_robin`), or one employee (`fixed`).
-  The mode is visible to the visitor AS AVAILABILITY: an assigned page reads
-  the roster regardless of the require-staff toggle and offers only times
-  somebody who could take the booking is actually working. Round robin picks
+  books the business as a whole (`any`, the original behavior, no assignee
+  recorded), the team by claim (`broadcast`, the DEFAULT for businesses
+  created after Aug 2026: nobody is assigned at booking time, every eligible
+  teammate is texted "Reply 1 to take it", and the first "1" stamps the
+  assignee; existing tenants keep their stored mode), the team by pick
+  (`round_robin`), or one employee (`fixed`). The setting governs BOTH
+  doors: the public page here, and the appointments the AI coworker books
+  in conversation (`src/lib/booking-page/ai-door-assignment.ts`, applied
+  after the booking is durable on the same dedupe-ledger row; dashboard and
+  MCP bookings stay owner-made and unassigned). A broadcast booking parks
+  one `booking_claim_offers` row (the record a bare "1" attaches to, the
+  unowned-lead-alerts lesson); the claim is a compare-and-swap on the offer
+  row and then on the booking's own `assignee_member_id`, the winner gets
+  an ack, the other invitees get a stand-down text, and nobody claiming
+  simply leaves the booking unassigned past the 24 hour window (the owner
+  alert already fired at booking time, so there is no fallback ladder). A
+  one-person owner-only roster collapses `broadcast` to a direct pick of
+  the owner with no invite: there is nobody to race, and the owner alert
+  already reaches them. Availability: `broadcast` books whole-business like
+  `any`; only `round_robin`/`fixed` are visible to the visitor AS
+  AVAILABILITY, reading the roster regardless of the require-staff toggle
+  and offering only times somebody who could take the booking is actually
+  working. Round robin picks
   the eligible member with the LIGHTEST upcoming load (tie broken by who has
   waited longest, then a stable id), so a week emptied by cancellations
   self-corrects instead of a rotation pointer compounding the imbalance. A

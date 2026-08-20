@@ -1,22 +1,30 @@
 /**
- * Who a public-page booking is for.
+ * Who a booking is for. Shared by BOTH doors since the broadcast change:
+ * the public page and the AI coworker's in-conversation bookings resolve
+ * assignment from the same `booking_pages` setting.
  *
- * Three modes, and the difference is visible to the visitor as availability:
+ * Four modes, and the difference is visible to the visitor as availability:
  *
  * - `any`: the business as a whole (what every page did before this). No
  *   assignee is recorded, and availability is whole-business.
+ * - `broadcast`: nobody in particular at booking time, but every eligible
+ *   teammate is texted "Reply 1 to take it" and the first claim stamps the
+ *   assignee. Availability stays whole-business (anyone could take it). A
+ *   one-person owner-only roster collapses to a direct pick of the owner
+ *   (the #1500 rule): there is nobody to race.
  * - `round_robin`: the active roster shares the page. Availability is the
  *   union of their shifts, and each booking names whoever picks it up.
  * - `fixed`: one employee's page. Availability is THEIR shift, so a visitor
  *   can only take time that person actually has.
  *
- * The choice itself is pure (`chooseAssignee`) so the fairness rule is
- * readable and testable without a database: fewest upcoming bookings first,
- * then whoever has waited longest, then a stable id tiebreak. Counting real
- * bookings rather than just rotating means a cancellation-heavy week
- * self-corrects instead of compounding.
+ * The choices are pure (`chooseAssignee`, `resolveBroadcastAssignment`) so
+ * the rules are readable and testable without a database: fewest upcoming
+ * bookings first, then whoever has waited longest, then a stable id
+ * tiebreak. Counting real bookings rather than just rotating means a
+ * cancellation-heavy week self-corrects instead of compounding.
  */
 
+import { pickImplicitContactOwner } from "@/lib/contacts/owner-attribution";
 import type { TeamMemberRow, TimeOffRow } from "@/lib/db/employees";
 import {
   isWithinWeeklyWindows,
@@ -24,11 +32,11 @@ import {
   parseWeeklyWindows
 } from "../../../supabase/functions/_shared/ai_flows/engine";
 
-export type AssignmentMode = "any" | "round_robin" | "fixed";
+export type AssignmentMode = "any" | "round_robin" | "fixed" | "broadcast";
 
 /** Anything unrecognized reads as `any`: the safe, pre-existing behavior. */
 export function parseAssignmentMode(raw: unknown): AssignmentMode {
-  return raw === "round_robin" || raw === "fixed" ? raw : "any";
+  return raw === "round_robin" || raw === "fixed" || raw === "broadcast" ? raw : "any";
 }
 
 /**
@@ -44,12 +52,48 @@ export function eligibleMembers(
   roster: TeamMemberRow[]
 ): TeamMemberRow[] {
   const active = roster.filter((m) => m.active);
-  if (mode === "any") return active;
+  // `broadcast` books the whole business like `any`: anyone could claim it.
+  if (mode === "any" || mode === "broadcast") return active;
   if (mode === "fixed") {
     const one = active.filter((m) => m.id === employeeId);
     return one.length > 0 ? one : active;
   }
   return active;
+}
+
+/** What a broadcast booking should do, decided purely from the roster. */
+export type BroadcastAssignment =
+  | {
+      /** One-person owner-only roster: a direct pick, no race (per #1500). */
+      kind: "solo_owner";
+      memberId: string;
+    }
+  | {
+      /** Real team: park a claim and text these members "Reply 1". */
+      kind: "invite";
+      invitees: TeamMemberRow[];
+    }
+  | {
+      /** Nobody textable: the booking simply stays unassigned. */
+      kind: "nobody";
+    };
+
+/**
+ * Resolve a `broadcast` booking. `attendeePhone` keeps the visitor's own
+ * number out of the invite list: a roster member booking themselves in must
+ * never be invited to claim their own appointment.
+ */
+export function resolveBroadcastAssignment(
+  roster: TeamMemberRow[],
+  ownerNumbers: readonly string[],
+  attendeePhone: string | null
+): BroadcastAssignment {
+  const solo = pickImplicitContactOwner(roster, ownerNumbers);
+  if (solo) return { kind: "solo_owner", memberId: solo.id };
+  const invitees = roster.filter(
+    (m) => m.active && m.phone_e164 && m.phone_e164 !== (attendeePhone ?? "")
+  );
+  return invitees.length > 0 ? { kind: "invite", invitees } : { kind: "nobody" };
 }
 
 /** Is this member working at that instant, and not on time off? */
@@ -92,7 +136,11 @@ export function chooseAssignee(input: {
   timezone: string;
   upcomingCounts: Map<string, number>;
 }): AssigneeChoice {
-  if (input.mode === "any") return { memberId: null, reason: "unassigned_mode" };
+  // `broadcast` never picks here either: its assignee arrives later via the
+  // claim (or immediately via resolveBroadcastAssignment's solo pick).
+  if (input.mode === "any" || input.mode === "broadcast") {
+    return { memberId: null, reason: "unassigned_mode" };
+  }
 
   const candidates = eligibleMembers(input.mode, input.employeeId, input.roster).filter((m) =>
     memberAvailableAt(m, input.timeOff, input.startIso, input.timezone)

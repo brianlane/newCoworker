@@ -9,7 +9,8 @@ import {
   chooseAssignee,
   eligibleMembers,
   memberAvailableAt,
-  parseAssignmentMode
+  parseAssignmentMode,
+  resolveBroadcastAssignment
 } from "@/lib/booking-page/assignment";
 import type { TeamMemberRow, TimeOffRow } from "@/lib/db/employees";
 
@@ -52,10 +53,11 @@ function timeOff(over: Partial<TimeOffRow> = {}): TimeOffRow {
 }
 
 describe("parseAssignmentMode", () => {
-  it("reads the three modes and treats anything else as unassigned", () => {
+  it("reads the four modes and treats anything else as unassigned", () => {
     expect(parseAssignmentMode("round_robin")).toBe("round_robin");
     expect(parseAssignmentMode("fixed")).toBe("fixed");
     expect(parseAssignmentMode("any")).toBe("any");
+    expect(parseAssignmentMode("broadcast")).toBe("broadcast");
     // A future mode, a typo, or a null column must not change behavior.
     expect(parseAssignmentMode("pooled")).toBe("any");
     expect(parseAssignmentMode(null)).toBe("any");
@@ -224,5 +226,78 @@ describe("chooseAssignee", () => {
       upcomingCounts: new Map([["m-ben", 9]])
     });
     expect(out).toEqual({ memberId: "m-ben", reason: "chosen" });
+  });
+});
+
+/**
+ * Broadcast mode: nobody is picked at booking time. The pure resolver
+ * answers one of three shapes, and the solo-owner collapse (the #1500
+ * rule) means a one-person owner-only roster never races itself.
+ */
+describe("broadcast assignment", () => {
+  const OWNER_PHONE = "+16026866672";
+
+  it("eligibleMembers treats broadcast like any: the whole active roster", () => {
+    const roster = [member(), member({ id: "m-2", active: false })];
+    expect(eligibleMembers("broadcast", null, roster).map((m) => m.id)).toEqual(["m-1"]);
+  });
+
+  it("chooseAssignee never picks for broadcast", () => {
+    const out = chooseAssignee({
+      mode: "broadcast",
+      employeeId: null,
+      roster: [member()],
+      timeOff: [],
+      startIso: MONDAY_9AM,
+      timezone: TZ,
+      upcomingCounts: new Map()
+    });
+    expect(out).toEqual({ memberId: null, reason: "unassigned_mode" });
+  });
+
+  it("collapses to a direct owner pick on a one-person owner-only roster", () => {
+    const roster = [member({ id: "m-owner", name: "Brian", phone_e164: OWNER_PHONE })];
+    expect(resolveBroadcastAssignment(roster, [OWNER_PHONE], null)).toEqual({
+      kind: "solo_owner",
+      memberId: "m-owner"
+    });
+  });
+
+  it("invites the active textable roster when there is a real team", () => {
+    const roster = [
+      member({ id: "m-1", phone_e164: "+14805550100" }),
+      member({ id: "m-2", phone_e164: "+14805550101" }),
+      member({ id: "m-3", active: false, phone_e164: "+14805550102" }),
+      member({ id: "m-4", phone_e164: "" })
+    ];
+    const out = resolveBroadcastAssignment(roster, [OWNER_PHONE], null);
+    expect(out.kind).toBe("invite");
+    if (out.kind === "invite") {
+      expect(out.invitees.map((m) => m.id)).toEqual(["m-1", "m-2"]);
+    }
+  });
+
+  it("a solo ASSISTANT roster is a one-person invite, not an owner pick", () => {
+    const roster = [member({ id: "m-a", name: "Dana", phone_e164: "+14805550100" })];
+    const out = resolveBroadcastAssignment(roster, [OWNER_PHONE], null);
+    expect(out.kind).toBe("invite");
+  });
+
+  it("never invites the attendee's own number", () => {
+    const roster = [
+      member({ id: "m-1", phone_e164: "+14805550100" }),
+      member({ id: "m-2", phone_e164: "+14805550101" })
+    ];
+    const out = resolveBroadcastAssignment(roster, [OWNER_PHONE], "+14805550101");
+    expect(out.kind).toBe("invite");
+    if (out.kind === "invite") {
+      expect(out.invitees.map((m) => m.id)).toEqual(["m-1"]);
+    }
+  });
+
+  it("nobody textable answers nobody", () => {
+    const roster = [member({ id: "m-4", phone_e164: "" })];
+    expect(resolveBroadcastAssignment(roster, [OWNER_PHONE], null)).toEqual({ kind: "nobody" });
+    expect(resolveBroadcastAssignment([], [OWNER_PHONE], null)).toEqual({ kind: "nobody" });
   });
 });

@@ -17,6 +17,12 @@ vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
 }));
 vi.mock("@/lib/booking-page/assignee-notify", () => ({ notifyAssigneeOfBooking: vi.fn() }));
+vi.mock("@/lib/booking-page/claim-offers", () => ({
+  broadcastBookingClaim: vi.fn(),
+  findDedupeRowId: vi.fn(),
+  findInvitedPhonesForBooking: vi.fn(async () => [])
+}));
+vi.mock("@/lib/db/contact-names", () => ({ businessOwnerNumbers: vi.fn() }));
 vi.mock("@/lib/booking-page/meeting-types", async (importOriginal) => ({
   // The resolver is pure and its rules are pinned in its own suite; only
   // the database read is faked here.
@@ -100,6 +106,12 @@ import {
 } from "@/lib/booking-page/db";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
+import {
+  broadcastBookingClaim,
+  findDedupeRowId,
+  findInvitedPhonesForBooking
+} from "@/lib/booking-page/claim-offers";
+import { businessOwnerNumbers } from "@/lib/db/contact-names";
 import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
@@ -1937,5 +1949,224 @@ describe("submitPublicBooking", () => {
     );
     expect(mockCapture).not.toHaveBeenCalled();
     expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+  });
+});
+
+/**
+ * Broadcast mode ("first to reply 1 takes it"): the page books nobody at
+ * booking time; a claim row + invites pick the assignee later. The
+ * solo-owner collapse (the #1500 rule) stamps the owner directly instead
+ * of racing them against themselves.
+ */
+describe("submitPublicBooking: broadcast assignment", () => {
+  const VALID = {
+    startIso: "2026-01-05T16:00:00.000Z",
+    durationMinutes: 30,
+    name: "Pat Visitor",
+    phone: "+14805550100",
+    email: "pat@example.com"
+  };
+  const TEAM = [
+    { id: "m-1", name: "Ana", phone_e164: "+14805550111", active: true, weekly_schedule: null, last_offered_at: null },
+    { id: "m-2", name: "Ben", phone_e164: "+14805550112", active: true, weekly_schedule: null, last_offered_at: null }
+  ];
+  const OWNER_PHONE = "+16026866672";
+
+  beforeEach(() => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "broadcast" } as never);
+    vi.mocked(businessOwnerNumbers).mockResolvedValue([]);
+    vi.mocked(findDedupeRowId).mockResolvedValue("dedupe-row-1");
+    vi.mocked(broadcastBookingClaim).mockResolvedValue(["+14805550111", "+14805550112"]);
+  });
+
+  it("parks a claim + invites the team, stamps nobody, and feeds the alert the invited phones", async () => {
+    mockMembers.mockResolvedValue(TEAM as never);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+
+    // Nobody is picked at booking time.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      expect.objectContaining({ assigneeMemberId: null })
+    );
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+    expect(mockMarkOffered).not.toHaveBeenCalled();
+
+    // One claim row + invites for the textable roster.
+    expect(vi.mocked(broadcastBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "dedupe-row-1",
+      expect.arrayContaining([
+        expect.objectContaining({ id: "m-1" }),
+        expect.objectContaining({ id: "m-2" })
+      ]),
+      expect.objectContaining({ visitorName: "Pat Visitor", visitorPhone: "+14805550100" })
+    );
+
+    // The owner alert knows who was already texted, so its employee leg
+    // cannot double-text an invitee.
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        bookingAssigneeMemberId: null,
+        employeesAlreadyInvited: ["+14805550111", "+14805550112"]
+      })
+    );
+  });
+
+  it("solo owner-only roster: stamps the owner, no invites, no assignee text", async () => {
+    mockMembers.mockResolvedValue([
+      { id: "m-owner", name: "Brian", phone_e164: OWNER_PHONE, active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    vi.mocked(businessOwnerNumbers).mockResolvedValue([OWNER_PHONE]);
+
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      expect.objectContaining({ assigneeMemberId: "m-owner" })
+    );
+    // The assignee IS the owner: the owner alert covers them, so the
+    // separate assignee text must not double-page the same person.
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+    expect(vi.mocked(broadcastBookingClaim)).not.toHaveBeenCalled();
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        bookingAssigneeMemberId: "m-owner",
+        employeesAlreadyInvited: []
+      })
+    );
+  });
+
+  it("no dedupe row found: no invites, booking simply stays unassigned", async () => {
+    mockMembers.mockResolvedValue(TEAM as never);
+    vi.mocked(findDedupeRowId).mockResolvedValue(null);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(vi.mocked(broadcastBookingClaim)).not.toHaveBeenCalled();
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ employeesAlreadyInvited: [] })
+    );
+  });
+
+  it("nobody textable: warns and books unassigned with no claim machinery", async () => {
+    mockMembers.mockResolvedValue([
+      { id: "m-4", name: "Nophone", phone_e164: "", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(vi.mocked(findDedupeRowId)).not.toHaveBeenCalled();
+    expect(vi.mocked(broadcastBookingClaim)).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitPublicBooking: broadcast startLocal fallback", () => {
+  it("derives the invite's local start when the booking core answered none", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "broadcast" } as never);
+    vi.mocked(businessOwnerNumbers).mockResolvedValue([]);
+    vi.mocked(findDedupeRowId).mockResolvedValue("dedupe-row-1");
+    vi.mocked(broadcastBookingClaim).mockResolvedValue([]);
+    mockMembers.mockResolvedValue([
+      { id: "m-1", name: "Ana", phone_e164: "+14805550111", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    // Platform-mode shape: the booking is durable but carries no startLocal.
+    mockBook.mockResolvedValueOnce({ ok: true, data: { eventId: "ev-x" } } as never);
+    const out = await submitPublicBooking(TOKEN, {
+      startIso: "2026-01-05T16:00:00.000Z",
+      durationMinutes: 30,
+      name: "Pat Visitor",
+      phone: "+14805550100",
+      email: "pat@example.com"
+    });
+    expect(out.ok).toBe(true);
+    expect(vi.mocked(broadcastBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "dedupe-row-1",
+      expect.anything(),
+      expect.objectContaining({ startLocal: expect.stringContaining("9:00") })
+    );
+  });
+});
+
+/**
+ * Bugbot on PR #1543: the resubmit path must behave like the first submit
+ * for broadcast pages. The retry must not re-page invitees (the claim rows
+ * are the durable record of who was texted) and a solo-owner gap-fill must
+ * not send the assignee text the first-submit path deliberately skips.
+ */
+describe("submitPublicBooking: broadcast resubmit", () => {
+  const VALID = {
+    startIso: "2026-01-05T16:00:00.000Z",
+    durationMinutes: 30,
+    name: "Pat Visitor",
+    phone: "+14805550100",
+    email: "pat@example.com"
+  };
+  const OWNER_PHONE = "+16026866672";
+
+  beforeEach(() => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "broadcast" } as never);
+    vi.mocked(businessOwnerNumbers).mockResolvedValue([]);
+    // Hard reset, not just re-pin: unconsumed mockResolvedValueOnce entries
+    // queued by earlier suites survive vi.clearAllMocks and would fire
+    // before anything this suite queues (the leaked `false` made the
+    // gap-fill silently no-op here).
+    mockStampAssignee.mockReset();
+    mockStampAssignee.mockResolvedValue(true);
+    vi.mocked(findInvitedPhonesForBooking).mockReset();
+    vi.mocked(findInvitedPhonesForBooking).mockResolvedValue([]);
+    mockUpcomingForAttendee.mockReset();
+    // The resubmit trigger: the attendee already holds this exact start.
+    mockUpcomingForAttendee.mockResolvedValue([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+  });
+
+  it("feeds the alert the durably recorded invitees instead of re-texting them", async () => {
+    mockMembers.mockResolvedValue([
+      { id: "m-1", name: "Ana", phone_e164: "+14805550111", active: true, weekly_schedule: null, last_offered_at: null },
+      { id: "m-2", name: "Ben", phone_e164: "+14805550112", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    vi.mocked(findInvitedPhonesForBooking).mockResolvedValue(["+14805550111", "+14805550112"]);
+
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    // No re-invite: the first attempt's invites are the only ones ever sent.
+    expect(vi.mocked(broadcastBookingClaim)).not.toHaveBeenCalled();
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        employeesAlreadyInvited: ["+14805550111", "+14805550112"]
+      })
+    );
+  });
+
+  it("a solo-owner gap-fill stamps without paging the owner twice", async () => {
+    mockMembers.mockResolvedValue([
+      { id: "m-owner", name: "Brian", phone_e164: OWNER_PHONE, active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    vi.mocked(businessOwnerNumbers).mockResolvedValue([OWNER_PHONE]);
+    mockStampAssignee.mockResolvedValueOnce(true);
+
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(mockStampAssignee).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      "m-owner"
+    );
+    // The owner alert is the page; the assignee text would be a second one.
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ bookingAssigneeMemberId: "m-owner" })
+    );
   });
 });

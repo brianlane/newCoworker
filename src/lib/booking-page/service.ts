@@ -42,7 +42,19 @@ import {
   parseBookingPageRef,
   parseBookingPageSlug
 } from "@/lib/booking-page/keys";
-import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import {
+  chooseAssignee,
+  eligibleMembers,
+  parseAssignmentMode,
+  resolveBroadcastAssignment
+} from "@/lib/booking-page/assignment";
+import {
+  broadcastBookingClaim,
+  findDedupeRowId,
+  findInvitedPhonesForBooking
+} from "@/lib/booking-page/claim-offers";
+import { businessOwnerNumbers } from "@/lib/db/contact-names";
+import type { TeamMemberRow } from "@/lib/db/employees";
 import {
   effectiveTypeSettings,
   listMeetingTypes,
@@ -517,7 +529,9 @@ async function listSlotsForContext(
     // require-staff toggle, and narrow it to the members the page can book.
     const effective = effectiveTypeSettings(page, opts.meetingType ?? null, durationMinutes);
     const mode = parseAssignmentMode(effective.assignmentMode);
-    const assigned = mode !== "any";
+    // `broadcast` books the whole business like `any` (anyone could claim
+    // it), so only the two genuinely-assigned modes force the shift gate.
+    const assigned = mode === "round_robin" || mode === "fixed";
     const needsRoster = page.require_staff_on_shift || assigned;
     const allMembers = needsRoster ? await listTeamMembers(context.businessId) : [];
     const roster = assigned
@@ -613,17 +627,56 @@ export async function dailyCapReached(
 }
 
 /**
- * Who this booking belongs to, or null when the page is unassigned (mode
- * `any`) or nobody eligible is working that slot. Reads the roster fresh so
- * a member deactivated between listing and booking is not handed work.
+ * Who this booking belongs to. `memberId` null with empty invitees means
+ * genuinely unassigned (mode `any`, nobody working the slot, or a broadcast
+ * with nobody textable). A `broadcast` page answers invitees instead: the
+ * claim row + "Reply 1" texts pick the assignee later. Reads the roster
+ * fresh so a member deactivated between listing and booking is not handed
+ * work.
  */
+type AssigneeResolution = {
+  memberId: string | null;
+  /**
+   * True when `memberId` came from the solo-owner collapse of a broadcast
+   * page: the assignee IS the owner, whose owner alert already fires, so
+   * the separate assignee text must not double-page the same person.
+   */
+  soloOwnerPick: boolean;
+  /** Broadcast mode with a real team: who the claim invites should reach. */
+  broadcastInvitees: TeamMemberRow[];
+};
+
+const UNASSIGNED_RESOLUTION: AssigneeResolution = {
+  memberId: null,
+  soloOwnerPick: false,
+  broadcastInvitees: []
+};
+
 async function resolveAssignee(
   context: BookingPageContext,
   start: Date,
-  effective: Pick<EffectiveBookingSettings, "assignmentMode" | "employeeId">
-): Promise<string | null> {
+  effective: Pick<EffectiveBookingSettings, "assignmentMode" | "employeeId">,
+  attendeePhone: string | null
+): Promise<AssigneeResolution> {
   const mode = parseAssignmentMode(effective.assignmentMode);
-  if (mode === "any") return null;
+  if (mode === "any") return UNASSIGNED_RESOLUTION;
+  if (mode === "broadcast") {
+    const [roster, ownerNumbers] = await Promise.all([
+      listTeamMembers(context.businessId),
+      businessOwnerNumbers(context.businessId)
+    ]);
+    const verdict = resolveBroadcastAssignment(roster, ownerNumbers, attendeePhone);
+    if (verdict.kind === "solo_owner") {
+      return { memberId: verdict.memberId, soloOwnerPick: true, broadcastInvitees: [] };
+    }
+    if (verdict.kind === "invite") {
+      return { memberId: null, soloOwnerPick: false, broadcastInvitees: verdict.invitees };
+    }
+    logger.warn("booking-page: broadcast booking has nobody to invite", {
+      businessId: context.businessId
+    });
+    return UNASSIGNED_RESOLUTION;
+  }
   const [roster, timeOff, upcomingCounts] = await Promise.all([
     listTeamMembers(context.businessId),
     listTimeOff(context.businessId),
@@ -644,7 +697,7 @@ async function resolveAssignee(
       reason: choice.reason
     });
   }
-  return choice.memberId;
+  return { memberId: choice.memberId, soloOwnerPick: false, broadcastInvitees: [] };
 }
 
 export type SubmitPublicBookingResult =
@@ -767,7 +820,15 @@ export async function submitPublicBooking(
     // it here, assignee included. The confirmation email deliberately is
     // NOT re-sent: it either went out already or the visitor is holding an
     // appointment they can see, and a duplicate is worse than a missing one.
-    const retryAssignee = await resolveAssignee(context, start, effective).catch(() => null);
+    // Broadcast invitees are deliberately NOT re-derived on a resubmit: the
+    // original submit either sent the invites or died before the claim row
+    // existed, and re-inviting risks texting the whole team twice for one
+    // booking. Only a direct pick (round robin, fixed, or the solo-owner
+    // collapse) repairs a genuine assignment gap here.
+    const retryResolution = await resolveAssignee(context, start, effective, phone).catch(
+      () => null
+    );
+    const retryAssignee = retryResolution?.memberId ?? null;
     // Set only when THIS retry filled a genuine gap, so the owner alert below
     // can tell a repair from a no-op.
     let retryFilledAssignment: string | null = null;
@@ -787,8 +848,11 @@ export async function submitPublicBooking(
         retryFilledAssignment = retryAssignee;
         await markMemberOffered(retryAssignee).catch(() => {});
         // The gap-fill is the first time this booking had an owner, so the
-        // owner has never heard about it either.
-        if (context.page.notify_assignee) {
+        // owner has never heard about it either. A solo-owner broadcast pick
+        // skips the text here for the same reason the first-submit path
+        // does: the assignee IS the owner, and the owner alert below already
+        // reaches them, so this would page the same person twice.
+        if (context.page.notify_assignee && !retryResolution?.soloOwnerPick) {
           await notifyAssigneeOfBooking(context.businessId, retryAssignee, {
             visitorName: name,
             visitorPhone: phone,
@@ -848,6 +912,15 @@ export async function submitPublicBooking(
       return { claimed: false, assigneeMemberId: null };
     });
     if (alertClaim.claimed || retryFilledAssignment) {
+      // The first attempt's broadcast invites may have gone out before it
+      // died; the claim rows are the durable record of who was texted, so
+      // the employee leg cannot text the same teammates a second time. []
+      // on anything unreadable degrades to the pre-broadcast behavior.
+      const alreadyInvited = await findInvitedPhonesForBooking(
+        context.businessId,
+        bookingAttendeeKey(phone, email, name),
+        start.toISOString()
+      );
       await maybeAlertUnassignedBooking(context.businessId, {
         attendeeName: name,
         attendeePhone: phone,
@@ -855,6 +928,7 @@ export async function submitPublicBooking(
         startIso: start.toISOString(),
         startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
         summary,
+        employeesAlreadyInvited: alreadyInvited,
         // The retry cannot reconstruct the provider event id from the
         // ledger, and the alert only carries it for diagnostics.
         eventId: null,
@@ -1140,15 +1214,18 @@ export async function submitPublicBooking(
   // Reminder addressing + the confirmation email. Best-effort: the booking
   // is already durable, and a visitor who gets no email still holds the
   // appointment (and, in provider mode, the provider's own invitation).
-  const assignee = await resolveAssignee(context, start, effective).catch((err: unknown) => {
-    // An unassigned booking is a bookkeeping loss, never a lost
-    // appointment: the visitor already holds the time.
-    logger.warn("booking-page: assignee resolution failed", {
-      businessId: context.businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return null;
-  });
+  const resolution = await resolveAssignee(context, start, effective, phone).catch(
+    (err: unknown) => {
+      // An unassigned booking is a bookkeeping loss, never a lost
+      // appointment: the visitor already holds the time.
+      logger.warn("booking-page: assignee resolution failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return UNASSIGNED_RESOLUTION;
+    }
+  );
+  const assignee = resolution.memberId;
   if (assignee) {
     // Advance the round-robin tiebreak, or two members carrying the same
     // load would forever resolve to the same person. Best-effort: a stale
@@ -1194,8 +1271,11 @@ export async function submitPublicBooking(
   // The person who must show up hears about it where they look: their
   // texts. Sent only AFTER their ownership is durably on the row: a text
   // before a failed stamp would double when the resubmit's gap-fill
-  // (rightly) treats itself as the first ownership moment.
-  if (assignee && contactStamped && context.page.notify_assignee) {
+  // (rightly) treats itself as the first ownership moment. A solo-owner
+  // broadcast pick skips this on purpose: the assignee IS the owner, and
+  // the owner alert below already reaches them, so this text would page
+  // the same person twice about the same booking.
+  if (assignee && !resolution.soloOwnerPick && contactStamped && context.page.notify_assignee) {
     await notifyAssigneeOfBooking(context.businessId, assignee, {
       visitorName: name,
       visitorPhone: phone,
@@ -1203,6 +1283,32 @@ export async function submitPublicBooking(
       durationMinutes,
       summary
     });
+  }
+
+  // Broadcast mode with a real team: park the claim row and text the
+  // invites ("Reply 1 to take it"). The phones actually texted feed the
+  // owner alert below so its employee leg never texts the same teammate
+  // twice about one booking.
+  let invitedPhones: string[] = [];
+  if (resolution.broadcastInvitees.length > 0) {
+    const dedupeRowId = await findDedupeRowId(
+      context.businessId,
+      bookingAttendeeKey(phone, email, name),
+      start.toISOString()
+    );
+    if (dedupeRowId) {
+      invitedPhones = await broadcastBookingClaim(
+        context.businessId,
+        dedupeRowId,
+        resolution.broadcastInvitees,
+        {
+          visitorName: name,
+          visitorPhone: phone,
+          startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+          summary
+        }
+      );
+    }
   }
 
   // Now the owner hears about it, and only now: this alert reports WHO is on
@@ -1246,6 +1352,7 @@ export async function submitPublicBooking(
       // was simply false, and reusing the webchat tag hid that in the payload.
       surface: "booking_page",
       bookingAssigneeMemberId: assignee,
+      employeesAlreadyInvited: invitedPhones,
       durationMinutes,
       joinUrl: videoJoinUrl,
       note: note || null,

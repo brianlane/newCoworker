@@ -534,6 +534,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     }}
                   >
                     <option value="any">{t("assignModeAny")}</option>
+                    <option value="broadcast" disabled={roster.length === 0}>
+                      {t("assignModeBroadcast")}
+                    </option>
                     <option value="round_robin" disabled={roster.length === 0}>
                       {t("assignModeRoundRobin")}
                     </option>
@@ -563,7 +566,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   </div>
                 ) : null}
               </div>
-              {page && page.assignment_mode !== "any" ? (
+              {/* Hidden for `any` (no assignee ever exists) AND for
+                  `broadcast` (the claim confirmation IS the assignee's
+                  notice; a second text would be noise). */}
+              {page && (page.assignment_mode === "round_robin" || page.assignment_mode === "fixed") ? (
                 <label className="mt-4 flex items-center gap-2 text-sm text-parchment/70">
                   <input
                     type="checkbox"

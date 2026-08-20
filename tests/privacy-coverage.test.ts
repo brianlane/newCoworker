@@ -70,6 +70,8 @@ const RENAMED: Record<string, string> = {
  */
 const EXEMPT: Record<string, string> = {
   // Covered through another table.
+  booking_claim_offers:
+    "FK cascade from calendar_booking_dedupe (covered): the broadcast claim row (attendee name snapshot + invited teammate phones) dies with the booking's ledger row the erasure sweep already deletes",
   webchat_messages: "FK cascade from webchat_sessions (covered)",
   webchat_jobs: "FK cascade from webchat_sessions (covered)",
   messenger_jobs: "FK cascade from messenger_conversations (covered)",

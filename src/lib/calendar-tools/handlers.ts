@@ -33,6 +33,7 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
+import { applyAiBookingAssignment } from "@/lib/booking-page/ai-door-assignment";
 import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
@@ -1291,17 +1292,39 @@ export async function bookCalendarAppointment(
   if (opts.alertSurface && finalResult.ok) {
     const d = (finalResult.data ?? {}) as Record<string, unknown>;
     if (typeof d.eventId === "string" && d.eventId.length > 0) {
-      await maybeAlertUnassignedBooking(businessId, {
+      // "Who bookings go to" now covers this door too: the same resolution
+      // the public page runs (round robin / one person / broadcast claim),
+      // applied once the booking is durable. Best-effort: an assignment
+      // hiccup leaves the booking unassigned, exactly yesterday's behavior.
+      // Dashboard and MCP bookings (no alertSurface) stay owner-made and
+      // unassigned on purpose.
+      const assignment = await applyAiBookingAssignment(businessId, {
+        dedupeClaimId: claim?.kind === "claimed" ? claim.id : null,
         attendeeName: args.attendeeName,
         attendeePhone: attendeePhone || null,
-        attendeeEmail: args.attendeeEmail?.trim() || null,
         startIso: new Date(args.startIso).toISOString(),
         // Guaranteed present: withStartLocal stamps every confirmed create,
         // and this block only runs behind the same ok+eventId condition.
         startLocal: d.startLocal as string,
         summary: args.summary,
+        // This door books a window, not a duration; derive it for the
+        // assignee text (floored at one minute for degenerate windows).
+        durationMinutes: Math.max(
+          1,
+          Math.round((Date.parse(args.endIso) - Date.parse(args.startIso)) / 60_000)
+        )
+      });
+      await maybeAlertUnassignedBooking(businessId, {
+        attendeeName: args.attendeeName,
+        attendeePhone: attendeePhone || null,
+        attendeeEmail: args.attendeeEmail?.trim() || null,
+        startIso: new Date(args.startIso).toISOString(),
+        startLocal: d.startLocal as string,
+        summary: args.summary,
         eventId: d.eventId,
-        surface: opts.alertSurface
+        surface: opts.alertSurface,
+        bookingAssigneeMemberId: assignment.assigneeMemberId,
+        employeesAlreadyInvited: assignment.invitedPhones
       });
     }
   }
