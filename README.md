@@ -2095,6 +2095,29 @@ Only prospects with a PHONE reach the board at all. The CRM is phone-keyed, so
 one discovered with just an address files no contact and appears nowhere in
 Tasks. The Marketing page is the complete picture.
 
+### A row's failure is answered on that row
+
+The panel has one error banner at the top of the card, which is the right place
+for a settings error and the wrong place for everything else. By the time an
+owner is working the queue that banner is a thousand pixels above them, so
+pressing Send on the fortieth draft and having the reason appear off-screen
+reads as the button doing nothing at all.
+
+Row actions (Send, Skip, Save draft, Write it again) therefore render their
+failure ON the row, `rowError` keyed by prospect id, cleared at the start of the
+next press. Every reason the server can give lands there: the cap, a
+disconnected mailbox, a draft the sweep already sent, a rate limit.
+
+Panel-level failures (settings, Send all, Write it again for all, the per-trade
+Skip) keep the one banner and scroll it into view instead. `block: "nearest"`,
+so it moves the page only when the banner is genuinely off-screen rather than
+yanking it under an owner who can already see it.
+
+Disabling a button is not a substitute for either. The cap case is disabled AND
+explained, but a stale page, a mailbox disconnected in another tab, or a sweep
+that sent the draft first all produce a live button that fails, and those are
+the presses that most need an answer.
+
 ### Send all drafts, and why "all" respects the cap
 
 The owner does not always want to wait for tomorrow morning's window. **Send

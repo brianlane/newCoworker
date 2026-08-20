@@ -125,6 +125,26 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   /**
+   * A row action that failed, shown ON that row.
+   *
+   * The panel-level banner sits at the top of the card, which is off-screen by
+   * the time anyone is working through the queue: pressing Send on the
+   * fortieth draft and having the reason appear a thousand pixels above it
+   * reads as the button doing nothing at all. Failures belong where the press
+   * was.
+   */
+  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  /**
+   * The panel-level banner, brought into view when it appears.
+   *
+   * Send all and the per-trade Skip sit beside the queue, a long way below this
+   * banner, so their failures had the same problem the row ones did. Row
+   * failures are answered where they happened; these are answered by scrolling
+   * to the one place they can live, since a settings error genuinely belongs
+   * next to the settings.
+   */
+  const errorRef = useRef<HTMLParagraphElement | null>(null);
+  /**
    * Draft edits in progress, per prospect. Kept out of `view` for the same
    * reason the settings form is: Send, Skip, and Regenerate all re-read from
    * the server, and a refresh must not overwrite something half-typed.
@@ -198,6 +218,13 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     void refresh();
   }, [refresh]);
 
+  // `nearest` rather than `center`: it scrolls only when the banner is actually
+  // off-screen, so an error raised while it is already visible does not yank
+  // the page under the owner.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [error]);
+
   const save = async (mode: Mode) => {
     setSaving(true);
     setError(null);
@@ -248,6 +275,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     setBusyId(prospectId);
     setError(null);
     setNotice(null);
+    setRowError(null);
     try {
       const edit = action === "edit" ? drafts[prospectId] : undefined;
       const res = await fetch(`/api/dashboard/outreach/prospects/${prospectId}`, {
@@ -262,7 +290,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
       if (!json.ok) {
-        setError(json.error?.message ?? t("actionFailed"));
+        setRowError({ id: prospectId, message: json.error?.message ?? t("actionFailed") });
         return;
       }
       setNotice(NOTICE_BY_ACTION[action]);
@@ -279,7 +307,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
       // left alone, since the owner did not ask to discard it by pressing Send.
       await refresh();
     } catch {
-      setError(t("actionFailed"));
+      setRowError({ id: prospectId, message: t("actionFailed") });
     } finally {
       setBusyId(null);
     }
@@ -552,7 +580,11 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
       </div>
 
       {error ? (
-        <p className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        <p
+          ref={errorRef}
+          role="alert"
+          className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200"
+        >
           {error}
         </p>
       ) : null}
@@ -1026,6 +1058,17 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                     </Button>
                   </div>
                 </div>
+                {/* The reason this row's press failed, on this row. Rendered
+                    whether or not the draft is expanded, since Send and Skip
+                    are pressed from the collapsed card. */}
+                {rowError?.id === item.id ? (
+                  <p
+                    role="alert"
+                    className="mt-2 rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
+                  >
+                    {rowError.message}
+                  </p>
+                ) : null}
                 {expanded === item.id ? (
                   <div className="mt-2 space-y-2 rounded border border-parchment/10 bg-deep-ink/40 p-3">
                     {isLegacyDraft(item) ? (
