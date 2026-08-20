@@ -119,6 +119,43 @@ if [ -n "$base_files" ]; then
         version = (u > 1) ? substr($0, 1, u - 1) : $0
         if (version <= head) print
       }')
+
+  # PURE-RENAME exemption: a below-head file whose CONTENT is byte-identical
+  # to a base file this PR REMOVES is a restore, not a new migration. The one
+  # real occurrence: on 2026-08-19 the order heal, misled by a broken ledger
+  # read, renamed the APPLIED 20260420100000_voice_telnyx_platform.sql to a
+  # fresh stamp; putting the name back so it matches its ledger row again is
+  # something this guard must not block, and could not otherwise express (the
+  # below-head file it flags IS the correctly-stamped one). The exemption is
+  # deliberately narrow: content must hash-match a removed base file exactly,
+  # so no new SQL can ride it, the duplicate check above still applies, and a
+  # rename whose lower stamp does not match an applied ledger row still fails
+  # loudly at deploy time (db push, and the heal's age guard).
+  if [ -n "$stale" ]; then
+    removed_hashes=$(git ls-tree FETCH_HEAD -- "$MIGRATIONS_DIR/" \
+      | awk '{ split($0, a, "\t"); n = a[2]; sub(".*/", "", n); print $3 "\t" n }' \
+      | while IFS=$'\t' read -r hash name; do
+          case "$name" in *.sql) ;; *) continue ;; esac
+          # Herestring, not a pipe: grep -q exiting early would hand the
+          # pipeline printf's EPIPE under pipefail, the same race the order
+          # heal's membership read had (2026-08-19 incident).
+          if ! grep -qxF "$name" <<< "$pr_files"; then
+            printf '%s\n' "$hash"
+          fi
+        done)
+    kept=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      blob=$(git hash-object "$MIGRATIONS_DIR/$f")
+      if [ -n "$removed_hashes" ] && grep -qxF "$blob" <<< "$removed_hashes"; then
+        echo "Note: $f sorts below the head of origin/$BASE but is a pure rename of a file this PR removes (content identical); allowed as a stamp restore. Deploy-time checks still verify it against the applied ledger."
+      else
+        kept="${kept}${f}"$'\n'
+      fi
+    done <<< "$stale"
+    stale=$(printf '%s' "$kept" | grep -v '^$' || true)
+  fi
+
   if [ -n "$stale" ]; then
     echo "::error::Migration(s) in this PR sort at or below the migration head of origin/$BASE ($base_head):"
     echo ""

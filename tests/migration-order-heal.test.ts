@@ -368,3 +368,103 @@ describe("migration-order-heal.sh", () => {
     expect(local).not.toContain("20260822025000_stale_name.sql");
   }, 30_000);
 });
+
+/**
+ * The 2026-08-19 incident (run 32309988631 attempt 1): the membership check
+ * was `printf '%s\n' "$applied" | grep -qx "$v"`, and under pipefail a grep
+ * that matches and exits while printf is still writing hands the pipeline
+ * printf's EPIPE status (141), so an APPLIED version read as absent and the
+ * heal renamed 20260420100000_voice_telnyx_platform.sql, an applied 92KB
+ * platform migration, out from under its ledger row. Deploys froze until the
+ * ledger was repaired by hand.
+ */
+describe("the applied-membership read cannot be broken by a pipe race", () => {
+  const source = readFileSync(HEAL_SCRIPT, "utf8");
+
+  it("never pipes the applied set into an early-exiting grep", () => {
+    // Code lines only: the incident comment above the fix legitimately quotes
+    // the old broken pattern.
+    expect(source).not.toMatch(/^\s*if printf[^\n]*\|\s*grep -q/m);
+  });
+
+  it("the stamp guard carries no early-exiting grep pipeline either", () => {
+    // Bugbot caught the first cut of the pure-rename exemption reintroducing
+    // the exact pipefail race this change fixes in the heal.
+    const guard = readFileSync(
+      join(__dirname, "..", ".github", "scripts", "migration-stamp-guard.sh"),
+      "utf8"
+    );
+    expect(guard).not.toMatch(/^\s*if !? ?printf[^\n]*\|\s*grep -q/m);
+    expect(guard).not.toMatch(/&& printf[^\n]*\|\s*grep -q/);
+  });
+
+  it("reads membership from a herestring, whose writer cannot take EPIPE", () => {
+    expect(source).toContain('grep -qx "$v" <<< "$applied"');
+  });
+});
+
+describe("age guard: a months-old candidate refuses to heal", () => {
+  it("fails loudly instead of renaming a candidate far below the applied head", () => {
+    // The incident shape: an applied-but-misread April file under an Aug
+    // head. Even with the membership read broken, the 124-day gap must stop
+    // the rename.
+    const sb = makeSandbox({
+      "20260420100000_voice_telnyx_platform.sql": "select 1;",
+      "20260822204152_newest.sql": "select 2;",
+    });
+    // The ledger deliberately OMITS the April version, simulating the broken
+    // read that started the incident.
+    writeLedger(sb, ["20260822204152"]);
+
+    const res = runHeal(sb);
+    expect(res.status).toBe(1);
+    expect(res.stderr + res.stdout).toContain("days below the applied head");
+    expect(res.stderr + res.stdout).toContain("MIGRATION_HEAL_MAX_AGE_DAYS");
+    // Nothing renamed locally, nothing pushed.
+    expect(originMainFiles(sb)).toEqual([
+      "20260420100000_voice_telnyx_platform.sql",
+      "20260822204152_newest.sql",
+    ]);
+    expect(readdirSync(join(sb.run, MIG_DIR)).sort()).toEqual([
+      "20260420100000_voice_telnyx_platform.sql",
+      "20260822204152_newest.sql",
+    ]);
+  });
+
+  it("still heals a genuine merge-window casualty stamped close to the head", () => {
+    const sb = makeSandbox({
+      "20260820010000_casualty.sql": "select 1;",
+      "20260822204152_newest.sql": "select 2;",
+    });
+    writeLedger(sb, ["20260822204152"]);
+
+    const res = runHeal(sb);
+    expect(res.status).toBe(0);
+    const files = originMainFiles(sb);
+    expect(files).toHaveLength(2);
+    expect(files.some((f) => f.endsWith("_casualty.sql") && !f.startsWith("20260820010000"))).toBe(
+      true
+    );
+    expect(files.every((f) => f >= "20260822204152" || f === "20260822204152_newest.sql")).toBe(
+      true
+    );
+  });
+
+  it("the bound is an env knob", () => {
+    const sb = makeSandbox({
+      "20260420100000_voice_telnyx_platform.sql": "select 1;",
+      "20260822204152_newest.sql": "select 2;",
+    });
+    writeLedger(sb, ["20260822204152"]);
+
+    // With a wide-open bound the same candidate heals, proving the guard is
+    // the thing refusing above rather than some other path.
+    const res = runHeal(sb, { MIGRATION_HEAL_MAX_AGE_DAYS: "3650" });
+    expect(res.status).toBe(0);
+    expect(
+      originMainFiles(sb).some(
+        (f) => f.endsWith("_voice_telnyx_platform.sql") && !f.startsWith("20260420100000")
+      )
+    ).toBe(true);
+  });
+});

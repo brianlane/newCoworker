@@ -122,3 +122,40 @@ describe("migration-stamp-guard.sh", () => {
     expect(res.status, res.stdout + res.stderr).toBe(0);
   }, 30_000);
 });
+
+/**
+ * The pure-rename exemption (2026-08-19). The order heal, misled by a broken
+ * ledger read, renamed the APPLIED 20260420100000_voice_telnyx_platform.sql
+ * to a fresh stamp; the restore PR renames it back, which the ordering check
+ * flags as below-head, and the below-head file IS the correctly stamped one.
+ * A pure rename (content identical to a base file the PR removes) is allowed
+ * with a note; anything with changed content stays blocked.
+ */
+describe("pure-rename stamp restores", () => {
+  const RENAMED_BASE = [
+    "20260822010000_other.sql",
+    "20260822205330_platform.sql",
+  ];
+
+  it("allows renaming a file back below the head when content is identical", () => {
+    const pr = makePr(RENAMED_BASE, [
+      "20260822010000_other.sql",
+      "20260420100000_platform.sql",
+    ]);
+    const res = runGuard(pr);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("pure rename");
+    expect(res.stdout).toContain("20260420100000_platform.sql");
+  });
+
+  it("still blocks a below-head file whose content differs from anything removed", () => {
+    const pr = makePr(RENAMED_BASE, [
+      "20260822010000_other.sql",
+      "20260420100000_platform.sql",
+    ]);
+    writeFileSync(join(pr, MIG_DIR, "20260420100000_platform.sql"), "select 99;");
+    const res = runGuard(pr);
+    expect(res.status).toBe(1);
+    expect(res.stderr + res.stdout).toContain("sort at or below the migration head");
+  });
+});
