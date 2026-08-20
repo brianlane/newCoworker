@@ -2557,14 +2557,14 @@ runtime in `_shared/pipelines/lifecycle.ts`, the Next-side wrapper in
 `src/lib/pipelines/lifecycle-hooks.ts`. Existing leads are backfilled per
 tenant by a one-shot, which fires no hooks and edits no flows.
 
-## Authoring a browse step: see the page, then prove the actions
+## Authoring a browse step: see the page, prove the actions, or demonstrate it
 
 A `browse_action` step aims at markup we do not control, which makes it the
 step type most likely to break and, until Aug 2026, the only one the product
 could not test. "Test with a contact" SIMULATES browse steps (see
 `_shared/ai_flows/test_mode.ts`: it echoes the action list and never opens a
 browser), so a selector's first real trial was a live lead, days later,
-silently. Both halves of the fix run through the tenant's OWN aiflow-render
+silently. All three surfaces below run through the tenant's OWN aiflow-render
 sidecar with the tenant's own saved login, so what the owner sees is what the
 flow will see.
 
@@ -2584,6 +2584,46 @@ reports per action: `ready`, `blocked` (there but not yet clickable),
 `absent`, or `missing_option` with the choices the dropdown does offer, plus
 a screenshot and whatever the page reported about itself.
 
+**Teach it by doing it once** (`BrowseActionDemoPanel`,
+`POST /api/aiflows/demo/{start,act,stop}`, engine in
+`vps/aiflow-render/demo.mjs`). The one surface that ACTS, which is its whole
+point: the picker and the dry run judge a page AS LOADED, so a wizard's later
+pages are out of their reach. The owner performs the workflow once on a
+persistent live page (each interaction is one HTTP turn: click a control off
+the extracted list, click a point on the screenshot, or type into a per-field
+box), the sidecar executes it FOR REAL through the same `runAction` the flow
+engine replays with, and what comes back is a recorded action
+(`{ kind, target, value }`) plus the new page state. Finishing drops the
+recording into the step verbatim: every recorded action was proven to work
+once by construction. Contracts that must hold:
+
+- **A point click is recorded only after it verifies.** The element under the
+  point is resolved to candidates in durability order (`data-test` handle,
+  then accessible name, then a letters-only id), and a candidate is recorded
+  only when the ENGINE's own resolution (`locateActionTarget`) lands back on
+  the very element the owner clicked; a same-text twin elsewhere rejects the
+  text strategy instead of recording a click on the wrong control.
+  Unresolvable points are refused by name (iframe content, ambiguous,
+  password fields structurally, unaddressable custom widgets) and the owner
+  is routed to the control list.
+- **Destructive-looking labels confirm SIDECAR-side.** A target matching the
+  engineer probe's `DESTRUCTIVE_TARGETS` vocabulary (lockstep-tested copies)
+  returns `needs_confirm` and executes nothing until the request carries
+  `confirm: true`, so no dashboard bug can click a claim button silently. The
+  demo confirms rather than refuses, because clicking "Accept" may be the
+  workflow being taught.
+- **Undo edits only the recording.** A demonstrated click cannot be
+  un-clicked; the panel says "whatever that click already did on the site
+  stays done" next to every remove affordance, and the copy is pinned by a
+  test so a cleanup cannot soften it.
+- **Session lifecycle is bounded.** demoId is bound to the business (a
+  mismatch answers like an unknown id), sessions cap at 2 per box with
+  oldest-same-business eviction (so a start that timed out at the tunnel can
+  be retried), idle out at 5 minutes, hard-stop at 20, and hold at most 15
+  actions (the schema cap). An expired or restarted session answers HTTP 200
+  `unknown_demo`, NEVER 404 (which means "old box"); the panel keeps the
+  recording client-side and offers a restart.
+
 Three properties worth keeping:
 
 - **Read-only structurally, not by a flag.** The sidecar routes the dry run
@@ -2597,10 +2637,11 @@ Three properties worth keeping:
   so there is always a window where the dashboard is new and a box is old. An
   old box does not reject an unknown `checkOnly` field, it IGNORES it, and its
   `if (actions)` branch performs them: the button promising to change nothing
-  would click a live claim button. `POST /check-actions` returns 404 on an old
-  box instead, and the app says "this business's browser service has not been
-  updated yet". `debug/redeploy-aiflow-render.ts` greps the synced files for
-  the responder and exits non-zero if it is missing.
+  would click a live claim button. `POST /check-actions` and the three
+  `POST /demo/*` paths return 404 on an old box instead, and the app says
+  "this business's browser service has not been updated yet".
+  `debug/redeploy-aiflow-render.ts` greps the synced files for both responders
+  and exits non-zero if either is missing.
 - **The limit is in the UI, not hidden.** A dry run judges the page AS LOADED,
   so an action that only exists after an earlier click (a wizard page, a box
   inside a modal) reads as absent. That is stated under the results, because
