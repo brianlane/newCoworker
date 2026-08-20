@@ -1,7 +1,7 @@
 /**
  * Staff Task Center aggregation.
  *
- * GET /api/dashboard/tasks?businessId=<uuid>&scope=mine|all
+ * GET /api/dashboard/tasks?businessId=<uuid>&scope=mine|all|unowned
  *   → { tasks: TaskCardData[], employees: {id,name}[], myEmployeeId,
  *       implicitOwnerEmployeeId }
  *
@@ -17,7 +17,10 @@
  * it. scope=mine filters to contacts OWNED by the caller's linked roster
  * member (business_members.employee_id → contacts.owner_employee_id);
  * callers with no linked roster member get an empty "mine" list rather
- * than everyone's (the toggle tells them why).
+ * than everyone's (the toggle tells them why). scope=unowned filters to
+ * cards whose RESOLVED owner is null (explicit stamp or the implicit
+ * one-person-roster owner), the claimable set the board's Claim button
+ * acts on.
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -45,7 +48,7 @@ const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
 const querySchema = z.object({
   businessId: z.string().uuid(),
-  scope: z.enum(["mine", "all"]).default("all")
+  scope: z.enum(["mine", "all", "unowned"]).default("all")
 });
 
 /** Most leads one response carries; newest activity first. */
@@ -478,10 +481,15 @@ export async function GET(request: Request) {
     // In-motion leads (active runs) always rank above tag-only cards so the
     // MAX_TASKS cap can never hide a running workflow behind recently-edited
     // tagged contacts; within each group, newest activity first.
+    // "Unowned" reads the RESOLVED owner, so on a one-person team (where the
+    // implicit owner rule makes every unclaimed lead theirs) it is empty:
+    // there is nothing to claim on a board that already belongs to somebody.
     const scoped =
       scope === "mine"
         ? cards.filter((c) => myEmployeeId !== null && c.ownerEmployeeId === myEmployeeId)
-        : cards;
+        : scope === "unowned"
+          ? cards.filter((c) => c.ownerEmployeeId === null)
+          : cards;
     scoped.sort((a, b) => {
       const aActive = a.runs.length > 0 ? 1 : 0;
       const bActive = b.runs.length > 0 ? 1 : 0;
