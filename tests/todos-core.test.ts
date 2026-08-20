@@ -5,7 +5,9 @@ import {
   applyTodoCompletion,
   buildTodoAssignmentSms,
   formatTodoDueAt,
+  formatTodoDueAtLocal,
   isTodoOverdue,
+  todoAddDestination,
   todoCompletionStamps,
   todoCreateSchema,
   todoListFilterSchema,
@@ -144,6 +146,86 @@ describe("formatTodoDueAt", () => {
     expect(formatTodoDueAt("2026-08-25T21:00:00.000Z", "Not/AZone", now)).toBe(
       "Tue, Aug 25, 9:00 PM"
     );
+  });
+
+  it("decides the year in the business timezone, not in UTC", () => {
+    // Phoenix is UTC-7 year round, so the two calendars disagree for seven
+    // hours either side of New Year. Both cases below rendered the wrong
+    // year (or dropped it) while the year came from the UTC clock.
+
+    // 02:00Z on Jan 1 is still 7:00 PM on Dec 31 in Phoenix, and Phoenix is
+    // also still in 2026: the text must not claim 2027 for a Dec 31 date.
+    const stillLastYear = formatTodoDueAt(
+      "2027-01-01T02:00:00.000Z",
+      "America/Phoenix",
+      new Date("2026-12-31T20:00:00.000Z")
+    );
+    expect(stillLastYear).toBe("Thu, Dec 31, 7:00 PM");
+    expect(stillLastYear).not.toContain("2027");
+
+    // Mirror image: "now" is already Jan 1 in UTC but still Dec 31 2026 in
+    // Phoenix, so a January due date IS next year locally and needs saying.
+    const nextYearLocally = formatTodoDueAt(
+      "2027-01-05T20:00:00.000Z",
+      "America/Phoenix",
+      new Date("2027-01-01T02:00:00.000Z")
+    );
+    expect(nextYearLocally).toContain("2027");
+    expect(nextYearLocally).toBe("Tue, Jan 5, 2027, 1:00 PM");
+  });
+});
+
+describe("formatTodoDueAtLocal", () => {
+  // The dashboard rows' formatter: the viewer's own locale and timezone,
+  // but the SAME year rule as the SMS (both go through renderTodoDueAt), so
+  // the two surfaces can no longer disagree about the year.
+  const now = new Date("2026-08-20T12:00:00.000Z");
+
+  it("appends the year only when the due date is not in the current one", () => {
+    // Both instants sit at midday UTC, so they fall in the same calendar
+    // year in every timezone: the assertion holds wherever CI runs.
+    expect(formatTodoDueAtLocal("2027-06-15T12:00:00.000Z", now)).toContain("2027");
+    expect(formatTodoDueAtLocal("2026-08-25T12:00:00.000Z", now)).not.toContain("2026");
+  });
+
+  it("null in null out, unparseable in null out", () => {
+    expect(formatTodoDueAtLocal(null, now)).toBeNull();
+    expect(formatTodoDueAtLocal("nope", now)).toBeNull();
+  });
+
+  it("agrees with the SMS formatter about the year in the viewer's own zone", () => {
+    const viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    for (const iso of ["2027-01-01T02:00:00.000Z", "2026-12-31T20:00:00.000Z"]) {
+      const sms = formatTodoDueAt(iso, viewerZone, now) as string;
+      const dashboard = formatTodoDueAtLocal(iso, now) as string;
+      expect(dashboard.includes("2027")).toBe(sms.includes("2027"));
+      expect(dashboard.includes("2026")).toBe(sms.includes("2026"));
+    }
+  });
+});
+
+describe("todoAddDestination", () => {
+  const now = new Date("2026-08-20T12:00:00.000Z");
+  const past = "2026-08-19T12:00:00.000Z";
+  const future = "2026-08-21T12:00:00.000Z";
+  /** What the POST returns: never completed, due date optional. */
+  const created = (dueAt: string | null) => ({ dueAt, completedAt: null });
+
+  it("keeps the chip when it already holds the new row", () => {
+    expect(todoAddDestination(created(null), "open", now)).toBeNull();
+    expect(todoAddDestination(created(future), "open", now)).toBeNull();
+    // Added already late, while looking at Overdue: it lands right there.
+    expect(todoAddDestination(created(past), "overdue", now)).toBeNull();
+  });
+
+  it("sends the user to Open when the current chip could never show it", () => {
+    // Done can never hold a new to-do: nothing is created checked off.
+    expect(todoAddDestination(created(null), "done", now)).toBe("open");
+    expect(todoAddDestination(created(past), "done", now)).toBe("open");
+    // Overdue only holds it once the due date has passed, so a to-do with
+    // no due date, or one due later, would silently vanish from view.
+    expect(todoAddDestination(created(null), "overdue", now)).toBe("open");
+    expect(todoAddDestination(created(future), "overdue", now)).toBe("open");
   });
 });
 

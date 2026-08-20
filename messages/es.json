@@ -2728,6 +2728,8 @@
       "quickAddAdd": "Añadir",
       "quickAddAdding": "Añadiendo…",
       "addFailed": "No se pudo añadir el pendiente; inténtalo de nuevo.",
+      "added": "Añadido a la lista de abajo.",
+      "addedSwitched": "Añadido. Los pendientes nuevos empiezan abiertos, así que ahora estás viendo {filter}.",
       "updateFailed": "No se pudo guardar el pendiente; inténtalo de nuevo.",
       "deleteFailed": "No se pudo eliminar el pendiente; inténtalo de nuevo.",
       "deleteConfirm": "¿Eliminar \"{title}\"? Solo se elimina el pendiente; el contacto o trato vinculado se conserva.",

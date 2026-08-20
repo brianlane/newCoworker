@@ -22,7 +22,9 @@ import {
   MAX_TODO_DETAILS_LENGTH,
   MAX_TODO_TITLE_LENGTH,
   applyTodoCompletion,
+  formatTodoDueAtLocal,
   isTodoOverdue,
+  todoAddDestination,
   type Todo,
   type TodoListView,
   type TodoStatusFilter
@@ -42,20 +44,20 @@ async function readEnvelope<T>(res: Response): Promise<T> {
 type RosterOption = { id: string; name: string };
 type DealOption = { id: string; title: string };
 
-/** ISO instant → the viewer-local "Tue, Aug 25, 2:00 PM" (year only when
- * it isn't the current one), for row labels and the editor summary. */
+/** Each filter chip's label key, so the chips and the "added, showing X"
+ * confirmation always name a chip the same way. */
+const CHIP_LABEL_KEY: Record<TodoStatusFilter, "filterOpen" | "filterOverdue" | "filterDone"> = {
+  open: "filterOpen",
+  overdue: "filterOverdue",
+  done: "filterDone"
+};
+
+/** ISO instant → the viewer-local "Tue, Aug 25, 2:00 PM" for row labels and
+ * the editor summary. Delegates to the shared formatter so the year suffix
+ * follows the same rule here as in the assignment SMS; an unparseable
+ * instant falls back to showing the raw value. */
 function dueLabel(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    ...(sameYear ? {} : { year: "numeric" })
-  });
+  return formatTodoDueAtLocal(iso) ?? iso;
 }
 
 /** ISO instant → the value a datetime-local input holds (viewer-local). */
@@ -93,6 +95,9 @@ export function TodosPanel({
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** Confirmation for the last successful quick-add, so a save is always
+   * acknowledged even when the new row lands under a different chip. */
+  const [addedNotice, setAddedNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editing, setEditing] = useState<TodoWithRefs | null>(null);
@@ -170,10 +175,32 @@ export function TodosPanel({
     [businessId, t]
   );
 
+  /**
+   * A successful quick-add must always show something. The new row is
+   * always open, so under Done (and under Overdue, unless it is already
+   * late) reloading the current chip leaves the screen unchanged and reads
+   * as a failed save. Move to the chip that holds it, which reloads through
+   * the status effect, and name that chip; when the current chip does hold
+   * it, just reload and confirm in place.
+   */
+  const handleAdded = useCallback(
+    (created: Todo) => {
+      const destination = todoAddDestination(created, status);
+      if (destination === null) {
+        setAddedNotice(t("added"));
+        void load();
+        return;
+      }
+      setAddedNotice(t("addedSwitched", { filter: t(CHIP_LABEL_KEY[destination]) }));
+      setStatus(destination);
+    },
+    [status, load, t]
+  );
+
   const chips: { id: TodoStatusFilter; label: string }[] = [
-    { id: "open", label: t("filterOpen") },
-    { id: "overdue", label: t("filterOverdue") },
-    { id: "done", label: t("filterDone") }
+    { id: "open", label: t(CHIP_LABEL_KEY.open) },
+    { id: "overdue", label: t(CHIP_LABEL_KEY.overdue) },
+    { id: "done", label: t(CHIP_LABEL_KEY.done) }
   ];
 
   if (error) {
@@ -202,7 +229,12 @@ export function TodosPanel({
           {chips.map((chip) => (
             <button
               key={chip.id}
-              onClick={() => setStatus(chip.id)}
+              onClick={() => {
+                // The confirmation described the list the user was just
+                // moved to; once they pick a chip themselves it is stale.
+                setAddedNotice(null);
+                setStatus(chip.id);
+              }}
               className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                 status === chip.id
                   ? "bg-signal-teal/15 text-signal-teal"
@@ -243,8 +275,23 @@ export function TodosPanel({
           businessId={businessId}
           employees={employees}
           dealOptions={dealOptions}
-          onAdded={() => void load()}
+          onAdded={handleAdded}
         />
+      )}
+
+      {addedNotice && (
+        <Card>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-claw-green">{addedNotice}</p>
+            <button
+              onClick={() => setAddedNotice(null)}
+              className="text-parchment/40 hover:text-parchment"
+              aria-label={t("dismiss")}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </Card>
       )}
 
       {actionError && (
@@ -490,7 +537,9 @@ function QuickAddRow({
   businessId: string;
   employees: RosterOption[];
   dealOptions: DealOption[];
-  onAdded: () => void;
+  /** Handed the row the server actually created, so the panel can put the
+   * user on a chip that shows it. */
+  onAdded: (created: Todo) => void;
 }) {
   const t = useTranslations("dashboard.todos");
   const [title, setTitle] = useState("");
@@ -517,7 +566,7 @@ function QuickAddRow({
     setBusy(true);
     setFormError(null);
     try {
-      await fetch(`/api/dashboard/todos?businessId=${encodeURIComponent(businessId)}`, {
+      const data = await fetch(`/api/dashboard/todos?businessId=${encodeURIComponent(businessId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -527,14 +576,14 @@ function QuickAddRow({
           ...(contactId ? { contactId } : {}),
           ...(dealId ? { dealId } : {})
         })
-      }).then((r) => readEnvelope<unknown>(r));
+      }).then((r) => readEnvelope<{ todo: Todo }>(r));
       setTitle("");
       setDueLocal("");
       setAssigneeId("");
       setDealId("");
       setContactId(null);
       setContactLabel(null);
-      onAdded();
+      onAdded(data.todo);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : t("addFailed"));
     } finally {

@@ -2728,6 +2728,8 @@
       "quickAddAdd": "Add",
       "quickAddAdding": "Adding…",
       "addFailed": "Couldn't add the to-do, try again.",
+      "added": "Added to the list below.",
+      "addedSwitched": "Added. New to-dos start open, so you're now looking at {filter}.",
       "updateFailed": "Couldn't save the to-do, try again.",
       "deleteFailed": "Couldn't delete the to-do, try again.",
       "deleteConfirm": "Delete \"{title}\"? Only the to-do is removed; any linked contact or deal stays.",

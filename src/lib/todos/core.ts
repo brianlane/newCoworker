@@ -135,6 +135,27 @@ export function todoMatchesStatusFilter(
 }
 
 /**
+ * Where a just-created to-do is actually visible, given the chip the list is
+ * showing right now. `null` means it belongs under that chip already, so the
+ * list only needs a reload.
+ *
+ * Quick-add is offered under every chip, but a new to-do is always OPEN
+ * (nothing is created checked off). Under Done it can therefore never
+ * appear, and under Overdue it appears only when its due date is already
+ * past. Reloading in place there clears the form and changes nothing on
+ * screen, which reads as a failed save and invites the user to add the same
+ * to-do again. Open is the answer whenever the current chip cannot hold it,
+ * since Open covers every not-completed row, overdue ones included.
+ */
+export function todoAddDestination(
+  todo: Pick<Todo, "dueAt" | "completedAt">,
+  status: TodoStatusFilter,
+  now: Date = new Date()
+): TodoStatusFilter | null {
+  return todoMatchesStatusFilter(todo, status, now) ? null : "open";
+}
+
+/**
  * A loaded to-do list together with the filter chip it was loaded UNDER.
  *
  * The two travel as one value on purpose. A completion request can resolve
@@ -190,39 +211,82 @@ export function todoCompletionStamps(
 }
 
 /**
- * "Tue, Aug 25, 2:00 PM" for list rows and the assignment SMS, rendered in
- * the business's timezone (null timezone, or one the runtime cannot format,
- * falls back to UTC rather than crashing a render). Null in, null out. The
- * year is appended only when it is not the current one.
+ * The calendar year a date falls in AS SEEN FROM one timezone (undefined =
+ * whatever zone the runtime is in). Always read through en-US so the value
+ * is a plain Gregorian year, and only ever compared against another value
+ * from this same function.
  */
-export function formatTodoDueAt(
-  dueAtIso: string | null,
-  timeZone: string | null,
-  now: Date = new Date()
-): string | null {
-  if (dueAtIso === null) return null;
-  const due = new Date(dueAtIso);
-  if (Number.isNaN(due.getTime())) return null;
+function yearIn(date: Date, timeZone: string | undefined): string {
+  return date.toLocaleString("en-US", { timeZone, year: "numeric" });
+}
+
+/**
+ * One rendering rule for both surfaces: the date, and the year appended only
+ * when the due date's year DIFFERS FROM the current year in the very zone
+ * the rest of the string is rendered in. Deciding the year in a different
+ * zone from the clock time is how a Dec 31 / Jan 1 due date ends up labelled
+ * with the wrong year (or with the year silently dropped): 2027-01-01T02:00Z
+ * is still Dec 31 2026 in Phoenix, so a Phoenix business must not see the
+ * "2027" suffix on a date its own calendar calls this year.
+ */
+function renderTodoDueAt(
+  due: Date,
+  now: Date,
+  locale: string | undefined,
+  timeZone: string | undefined
+): string {
   const options: Intl.DateTimeFormatOptions = {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    ...(due.getUTCFullYear() === now.getUTCFullYear() ? {} : { year: "numeric" })
+    ...(yearIn(due, timeZone) === yearIn(now, timeZone) ? {} : { year: "numeric" }),
+    timeZone
   };
   // ICU 72+ separates the time from AM/PM with a narrow no-break space
   // (U+202F). Normalized to a plain space: it reads the same, keeps string
   // assertions sane, and keeps the SMS inside the GSM-7 charset (one
   // exotic space would force UCS-2 and triple the message's size on the
   // wire).
-  const render = (tz: string) =>
-    due.toLocaleString("en-US", { ...options, timeZone: tz }).replace(/[\u202f\u00a0]/g, " ");
+  return due.toLocaleString(locale, options).replace(/[\u202f\u00a0]/g, " ");
+}
+
+/**
+ * "Tue, Aug 25, 2:00 PM" for the assignment SMS, rendered in the business's
+ * timezone (null timezone, or one the runtime cannot format, falls back to
+ * UTC rather than crashing a render). Null in, null out. The year rule is
+ * renderTodoDueAt's, so it is decided in the same timezone shown.
+ */
+export function formatTodoDueAt(
+  dueAtIso: string | null,
+  timeZone: string | null,
+  now: Date = new Date()
+): string | null {
+  const due = dueAtIso === null ? null : new Date(dueAtIso);
+  if (due === null || Number.isNaN(due.getTime())) return null;
   try {
-    return render(timeZone ?? "UTC");
+    return renderTodoDueAt(due, now, "en-US", timeZone ?? "UTC");
   } catch {
-    return render("UTC");
+    return renderTodoDueAt(due, now, "en-US", "UTC");
   }
+}
+
+/**
+ * The same phrase for the dashboard list, in the VIEWER's own locale and
+ * timezone instead of the business's. Shares renderTodoDueAt, so the year
+ * suffix follows one rule everywhere: the dashboard and the SMS can no
+ * longer disagree about whether a due date needs its year spelled out.
+ */
+export function formatTodoDueAtLocal(
+  dueAtIso: string | null,
+  now: Date = new Date()
+): string | null {
+  const due = dueAtIso === null ? null : new Date(dueAtIso);
+  if (due === null || Number.isNaN(due.getTime())) return null;
+  // undefined locale and timezone: the viewer's own, which is what a
+  // dashboard row should show.
+  return renderTodoDueAt(due, now, undefined, undefined);
 }
 
 /**
