@@ -39,6 +39,7 @@ import {
   scrubSelfPhones,
   withSelfNameRetryHint
 } from "../_shared/ai_flows/extracted_contact.ts";
+import { resolveSoloOwner } from "../_shared/solo_owner.ts";
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
@@ -7543,6 +7544,15 @@ async function notifyLeadOwnerStep(
       console.error("notify_lead_owner member lookup", e);
     }
   }
+  // Solo-owner rung: a located contact with no stamped owner still has
+  // exactly one possible answer on a one-person owner-only roster, so the
+  // direct teammate delivery applies instead of the team/owner fallbacks.
+  // resolveSoloOwner never throws and returns null on any doubt, which
+  // keeps today's ladder as the fail direction.
+  if (!member && contactId) {
+    const solo = await resolveSoloOwner(supabase, run.business_id);
+    if (solo) member = { id: solo.memberId, name: solo.name, phone: solo.phone };
+  }
 
   /**
    * Recorded per OUTCOME rather than once up front.
@@ -9126,6 +9136,14 @@ async function routeToTeamStep(
   // A read failure falls back to offer-and-claim, never the other way:
   // wrongly hard-assigning a lead is worse than wrongly asking for a claim.
   const autoAssign = await leadAutoAssignEnabled(supabase, run.business_id);
+  // Solo-owner keep: a one-person owner-only roster gets one informational
+  // notice instead of an offer race against themselves. Gated on
+  // !autoAssign so auto-assign tenants keep the hard-assign semantics
+  // (claim stamp, claimed goal, contact ownership) they opted into.
+  if (!autoAssign) {
+    const solo = await maybeSoloOwnerKeep(supabase, run, scope, action, routing, tried);
+    if (solo) return solo;
+  }
   // Owner-first routing (preferContactOwner): a repeat lead whose contact
   // already has an owning employee gets offered to "their" person first; the
   // normal cascade follows if they pass or time out (they land in `tried`).
@@ -9390,6 +9408,100 @@ async function maybeOwnerDirect(
   }
   await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
   return { kind: "ok", result: { routed: "owner_direct" } };
+}
+
+/**
+ * Solo-owner keep: the roster is exactly one ACTIVE member and that member
+ * is provably the business owner (solo_owner.ts, the Deno twin of the
+ * implicit-contact-owner rule from PR #1500). There is nobody to race, so
+ * instead of texting the owner a "Reply 1" offer against themselves (and a
+ * "nobody claimed it" fallback to the same phone on timeout), they get ONE
+ * informational notice and the run advances.
+ *
+ * Deliberately NOT a claim: claimed_agent stays "none" (claim-gated later
+ * steps skip, as they do after an owner fallback today), no claim-notice
+ * SMS/email fires (those announce a claim EVENT), and contact ownership is
+ * never written, so hiring a second teammate restores the offer race with
+ * no backfill. First entry only, and null on ANY doubt (unreadable roster,
+ * opted-out owner, lead-phone collision): the caller then runs today's
+ * machinery, which is the required fail direction. Shared by the rotation
+ * and broadcast paths; auto-assign tenants keep their opted-in hard-assign.
+ */
+async function maybeSoloOwnerKeep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  tried: string[]
+): Promise<StepOutcome | null> {
+  const everOffered =
+    (Array.isArray(routing.offered_log) && routing.offered_log.length > 0) ||
+    (Array.isArray(routing.offered_all) && routing.offered_all.length > 0);
+  if (everOffered || tried.length > 0) return null;
+  const solo = await resolveSoloOwner(supabase, run.business_id);
+  if (!solo) return null;
+  // Same self-guards as the offer loop: never text the lead their own
+  // number, and a STOPped owner falls through to machinery that already
+  // knows how to skip them.
+  const leadPhone = leadPhoneE164(scope);
+  if (leadPhone && solo.phone === leadPhone) return null;
+  if (await isRecipientOptedOut(supabase, run.business_id, solo.phone)) return null;
+  scope.vars.claimed_agent = "none";
+  scope.vars.claimed_agent_phone = "none";
+  scope.vars.claimed_agent_eta_minutes = "0";
+  // Permanent marker: no live offer exists (offered/offered_log stay unset),
+  // so the webhook's claim/pass/unclaim machinery never applies to this run.
+  routing.solo_owner = true;
+  const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
+  // Prefix + rendered offerTemplate, the same FYI shape as the auto-assign
+  // and owner-assigned notices. Deliberately no hand-back digit line:
+  // nothing was claimed, so there is nothing to hand back.
+  let body =
+    "It's yours, you're the only teammate on the roster (no reply needed):\n" +
+    renderTemplate(action.offerTemplate, agentScope(scope, { name: solo.name, phone: solo.phone }));
+  {
+    const said = await contactSaidBlock(supabase, run, scope, action, "offer");
+    if (said) body = `${body}\n\n${said}`;
+  }
+  appendActionTaken(
+    scope,
+    "kept the lead with the owner: they are the only active teammate on the roster, so no claim was needed"
+  );
+  await telemetryRecord(supabase, "ai_flow_route_solo_owner", {
+    run_id: run.id,
+    business_id: run.business_id,
+    agent: solo.phone
+  });
+  // Best-effort delivery, the same posture as the auto-assign and
+  // owner-assigned FYIs: the routing decision is the durable fact (the run
+  // history carries it, and the Task Center already attributes the lead to
+  // the solo owner at read time), and a Telnyx hiccup or an unconfigured
+  // messaging profile must not wedge the run in retries. sendOfferSms
+  // targets the roster phone directly, where sendOwnerSms would silently
+  // no-op without a forward number even though the roster matched via
+  // another owner number.
+  try {
+    await sendOfferSms(
+      supabase,
+      run,
+      solo.phone,
+      body,
+      `aiflow-solo-owner:${run.id}`,
+      mmsUrl ? [mmsUrl] : undefined
+    );
+  } catch (e) {
+    console.error("route_to_team solo-owner notice send failed", e);
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_solo_owner_sms_failed",
+      message: `solo-owner notice send failed: ${e instanceof Error ? e.message : String(e)}`,
+      payload: { run_id: run.id, flow_id: run.flow_id, agent: solo.phone }
+    });
+  }
+  return { kind: "ok", result: { routed: "solo_owner" } };
 }
 
 /**
@@ -9668,6 +9780,17 @@ async function routeBroadcastStep(
     if (contactOwner) {
       return finalizeOwnerAssigned(supabase, run, scope, action, routing, stepIndex, contactOwner);
     }
+  }
+
+  // Solo-owner keep, same rule as the rotation path: a one-person owner-only
+  // roster gets one informational notice, never a first-to-reply race. This
+  // also covers the seeded needs-human broadcastAll flow. Availability-blind
+  // on purpose (ownership outranks availability, the contact_owner_target
+  // doctrine): a team_broadcast_enabled=false sole owner gets the notice
+  // instead of the instant owner-fallback text to the same phone.
+  {
+    const solo = await maybeSoloOwnerKeep(supabase, run, scope, action, routing, tried);
+    if (solo) return solo;
   }
 
   // Resolve the recipients; a member who texted STOP is skipped like the

@@ -185,6 +185,60 @@ describe("maybeAlertUnassignedBooking: a one-person roster that is the owner", (
     expect(out).toBe("sent_solo");
     expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
+
+  it("names the owner as holder in the payload without touching the write-shaped field", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER_ONLY);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT })
+    });
+    expect(out).toBe("sent_solo");
+    // The rule already carries the display name; no roster re-read.
+    expect(getTeamMember).not.toHaveBeenCalled();
+    expect(dispatched().payload).toMatchObject({
+      ownership_state: "solo",
+      assignee_member_id: null,
+      assignee_name: "Brian",
+      implicit_assignee_member_id: "mem-owner"
+    });
+  });
+
+  it("a STORED holder outranks the implicit owner and keeps the payload raw", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER_ONLY);
+    vi.mocked(getTeamMember).mockResolvedValue({ name: "Dana Reyes" } as never);
+    await maybeAlertUnassignedBooking(
+      BIZ,
+      { ...INPUT, bookingAssigneeMemberId: "emp-1" },
+      { client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT }) }
+    );
+    expect(getTeamMember).toHaveBeenCalledWith(BIZ, "emp-1");
+    const payload = dispatched().payload as Record<string, unknown>;
+    expect(payload.assignee_member_id).toBe("emp-1");
+    expect(payload.assignee_name).toBe("Dana Reyes");
+    expect(payload.implicit_assignee_member_id).toBeUndefined();
+  });
+
+  it("the employee text names the owner instead of 'NOT assigned to anyone yet.'", async () => {
+    // Audience `employees` is the visible gap: on `both` the owner-phone
+    // dedupe already drops the solo row, but on `employees` the owner's own
+    // roster row was texted that nobody held the booking they hold.
+    vi.mocked(getNotificationPreferences).mockResolvedValue({
+      booking_alert_audience: "employees"
+    } as never);
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER_ONLY);
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT }),
+      listMembers: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "mem-owner", name: "Brian", phone_e164: "+16026866672", active: true }
+        ]) as never,
+      sendSms
+    });
+    expect(out).toBe("sent_employees_only");
+    expect(String(sendSms.mock.calls[0][2])).toContain("Assigned to Brian.");
+    expect(String(sendSms.mock.calls[0][2])).not.toContain("NOT assigned");
+  });
 });
 
 describe("maybeAlertUnassignedBooking: a business with no employees", () => {

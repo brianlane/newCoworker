@@ -54,6 +54,13 @@ type LoadState = {
   availability: "ok" | "unreadable" | "unsupported" | "not_connected";
   upcoming: UpcomingRow[];
   roster: RosterMember[];
+  /**
+   * Set when the roster is exactly one ACTIVE member who is provably the
+   * business owner (the #1500 implicit-owner rule). Display-only: it swaps
+   * the assignment hint to say every booking lands with them; the stored
+   * mode is never auto-changed.
+   */
+  implicitOwner: { id: string; name: string } | null;
 };
 
 const NOTICE_CHOICES = [0, 60, 120, 240, 1440];
@@ -568,7 +575,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                 </label>
               ) : null}
               <p className="mt-3 text-xs text-parchment/40">
-                {roster.length === 0 ? t("assignNoRoster") : t("assignHint")}
+                {roster.length === 0
+                  ? t("assignNoRoster")
+                  : state.implicitOwner
+                    ? t("assignSoloHint")
+                    : t("assignHint")}
               </p>
             </Card>
 

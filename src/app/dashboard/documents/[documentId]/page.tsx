@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { DocumentDetail } from "@/components/dashboard/DocumentDetail";
 import type { DocumentItem } from "@/components/dashboard/documents-shared";
@@ -26,11 +27,19 @@ export default async function DocumentViewPage({
   const document = await getBusinessDocument(businessId, documentId);
   if (!document) notFound();
 
+  // Solo-owner default for the "Renewal handled by" picker (read-time, the
+  // #1500 rule; same server-prop pattern as the contact profile page).
+  const implicitOwner = await resolveImplicitContactOwner(businessId);
+
   return (
     <div className="space-y-4 max-w-3xl">
       {/* Breadcrumb lives inside DocumentDetail: it tracks live renames and
           folder moves, which this server render can't see. */}
-      <DocumentDetail businessId={businessId} initialDocument={document as DocumentItem} />
+      <DocumentDetail
+        businessId={businessId}
+        initialDocument={document as DocumentItem}
+        implicitOwner={implicitOwner}
+      />
     </div>
   );
 }

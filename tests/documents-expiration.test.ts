@@ -24,8 +24,12 @@ vi.mock("@/lib/telnyx/messaging", () => ({
 vi.mock("@/lib/ai-flows/webhook-events", () => ({
   processWebhookFlowEvent: vi.fn(async () => ({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0 }))
 }));
+vi.mock("@/lib/db/implicit-contact-owner", () => ({
+  resolveImplicitContactOwner: vi.fn()
+}));
 
 import { sweepDocumentExpirations } from "@/lib/documents/expiration";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { patchBusinessDocument, type BusinessDocumentRow } from "@/lib/documents/db";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
@@ -114,6 +118,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   dispatch.mockResolvedValue({ results: [] });
   patch.mockResolvedValue(undefined);
+  // Default: not a solo-owner business, so every existing case reads as a
+  // real team and keeps its pre-implicit-owner copy.
+  vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
   sendSms.mockResolvedValue({} as never);
   getMessaging.mockResolvedValue({ apiKey: "k" } as never);
   processFlowEvent.mockResolvedValue({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0 });
@@ -541,5 +548,106 @@ describe("sweepDocumentExpirations", () => {
     expect(call.emailBody).not.toContain("Assigned to");
     // Unresolvable contact → no outreach event (nobody to reach), no stamp.
     expect(processFlowEvent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Solo-owner attribution (read-time, the #1500 rule): an UNASSIGNED renewal
+ * on a one-person owner-only roster names the owner as handler in the
+ * reminder copy and the outreach event, while the write-shaped payload
+ * field stays null and the direct handler SMS never fires (the owner
+ * already got the owner-channel dispatch).
+ */
+describe("renewal reminders: solo-owner attribution", () => {
+  const OWNER = { id: "mem-owner", name: "Brian" };
+
+  it("names the owner in copy and outreach, keeps the payload raw, sends no handler SMS", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      contact_id: "c-1",
+      assigned_employee_id: null
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: {
+        data: [
+          { id: "c-1", display_name: "Jane Doe", customer_e164: "+16025551234", email: "jane@x.com" }
+        ],
+        error: null
+      }
+    });
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(result.renewalDueNotified).toBe(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "document_renewal_due",
+        emailBody: expect.stringContaining("Assigned to Brian."),
+        smsBody: expect.stringContaining("Assigned to Brian."),
+        payload: expect.objectContaining({ assignedEmployeeId: null })
+      })
+    );
+    // The implicit handler IS the owner; the dispatch above already reached
+    // their channels, so no direct handler text.
+    expect(sendSms).not.toHaveBeenCalled();
+    expect(processFlowEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        data: expect.objectContaining({ assigned_employee: "Brian" })
+      }),
+      expect.anything(),
+      { origin: "internal" }
+    );
+  });
+
+  it("resolves once per business and never for businesses whose docs are all assigned", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const OTHER_BIZ = "33333333-3333-4333-8333-333333333333";
+    const docs = [
+      doc({ id: "44444444-4444-4444-8444-444444444441", expires_at: null, renewal_date: "2026-08-01T00:00:00Z" }),
+      doc({ id: "44444444-4444-4444-8444-444444444442", expires_at: null, renewal_date: "2026-07-20T00:00:00Z" }),
+      doc({
+        id: "44444444-4444-4444-8444-444444444443",
+        business_id: OTHER_BIZ,
+        expires_at: null,
+        renewal_date: "2026-08-01T00:00:00Z",
+        assigned_employee_id: "m-1"
+      })
+    ];
+    const { db } = makeTableDb({
+      documents: { data: docs, error: null },
+      members: { data: [{ id: "m-1", name: "Dania", phone_e164: "+16025559876" }], error: null }
+    });
+    await sweepDocumentExpirations({ client: db, now: () => NOW });
+    // Two unassigned docs in BIZ: one resolve. OTHER_BIZ is fully assigned:
+    // zero resolves for it.
+    expect(resolveImplicitContactOwner).toHaveBeenCalledTimes(1);
+    expect(resolveImplicitContactOwner).toHaveBeenCalledWith(BIZ, expect.anything());
+  });
+
+  it("a STORED assignee outranks the implicit owner even when both exist", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      assigned_employee_id: "m-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      members: { data: [{ id: "m-1", name: "Dania", phone_e164: "+16025559876" }], error: null }
+    });
+    await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ emailBody: expect.stringContaining("Assigned to Dania.") })
+    );
+    expect(sendSms).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      "+16025559876",
+      expect.stringContaining("You're the assigned handler"),
+      { meterBusinessId: BIZ, meterMode: "operational" }
+    );
+    // All candidates in this business are assigned, so no resolve at all.
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
 });

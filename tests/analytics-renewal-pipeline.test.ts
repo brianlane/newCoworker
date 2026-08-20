@@ -4,12 +4,16 @@ const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
+vi.mock("@/lib/db/implicit-contact-owner", () => ({
+  resolveImplicitContactOwner: vi.fn()
+}));
 
 import {
   RENEWAL_PIPELINE_SCAN_LIMIT,
   getRenewalPipeline,
   renewalBucketFor
 } from "@/lib/analytics/renewal-pipeline";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-07-16T12:00:00Z");
@@ -51,6 +55,8 @@ function docRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: not a solo-owner business; unassigned rows keep "Unassigned".
+  vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
 });
 
 describe("renewalBucketFor", () => {
@@ -174,5 +180,75 @@ describe("getRenewalPipeline", () => {
         now: NOW
       })
     ).rejects.toThrow(/roster boom/);
+  });
+});
+
+/**
+ * Solo-owner attribution (read-time, the #1500 rule): unassigned rows on a
+ * one-person owner-only roster belong to the owner, so the byAssignee chart
+ * must never show a solo tenant a 100% "Unassigned" breakdown. Contrast:
+ * lead-sources' `claimed` counter deliberately stays event-based.
+ */
+describe("getRenewalPipeline: solo-owner attribution", () => {
+  const OWNER = { id: "mem-owner", name: "Brian" };
+
+  it("attributes unassigned rows to the owner; a stored assignee still wins per row", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const db = makeDb({
+      business_documents: [
+        {
+          data: [
+            docRow({ id: "d-1" }),
+            docRow({ id: "d-2", renewal_date: inDays(40), assigned_employee_id: "m-1" })
+          ],
+          error: null
+        }
+      ],
+      ai_flow_team_members: [{ data: [{ id: "m-1", name: "Dania" }], error: null }]
+    });
+    const out = await getRenewalPipeline(BIZ, { client: db, now: NOW });
+    expect(out.rows.find((r) => r.documentId === "d-1")?.assignedEmployee).toBe("Brian");
+    expect(out.rows.find((r) => r.documentId === "d-2")?.assignedEmployee).toBe("Dania");
+    expect(out.byAssignee).toEqual(
+      expect.arrayContaining([
+        { name: "Brian", count: 1 },
+        { name: "Dania", count: 1 }
+      ])
+    );
+    expect(out.byAssignee.find((b) => b.name === "Unassigned")).toBeUndefined();
+  });
+
+  it("skips the resolver entirely when every row is assigned", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const db = makeDb({
+      business_documents: [
+        { data: [docRow({ assigned_employee_id: "m-1" })], error: null }
+      ],
+      ai_flow_team_members: [{ data: [{ id: "m-1", name: "Dania" }], error: null }]
+    });
+    await getRenewalPipeline(BIZ, { client: db, now: NOW });
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
+  });
+
+  it("keeps Unassigned when the resolver answers null (real team)", async () => {
+    const db = makeDb({
+      business_documents: [{ data: [docRow()], error: null }]
+    });
+    const out = await getRenewalPipeline(BIZ, { client: db, now: NOW });
+    expect(out.byAssignee).toEqual([{ name: "Unassigned", count: 1 }]);
+  });
+
+  it("a stamped-but-deleted assignee stays Unassigned (stored claim wins nameless)", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER);
+    const db = makeDb({
+      business_documents: [
+        { data: [docRow({ assigned_employee_id: "m-gone" })], error: null }
+      ],
+      ai_flow_team_members: [{ data: [], error: null }]
+    });
+    const out = await getRenewalPipeline(BIZ, { client: db, now: NOW });
+    expect(out.rows[0].assignedEmployee).toBeNull();
+    expect(out.byAssignee).toEqual([{ name: "Unassigned", count: 1 }]);
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
 });

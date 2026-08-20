@@ -19,6 +19,7 @@ import {
   listTeamMembers,
   listTimeOff
 } from "@/lib/db/employees";
+import { pickImplicitContactOwner } from "@/lib/contacts/owner-attribution";
 import { businessOwnerNumbers } from "@/lib/db/contact-names";
 import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
 import { EmployeesManager } from "@/components/dashboard/EmployeesManager";
@@ -80,6 +81,12 @@ export default async function DashboardEmployeesPage() {
     businessOwnerNumbers(business.id, db)
   ]);
 
+  // Solo-owner hint for the two routing toggles (pure, both inputs already
+  // loaded): while the roster is exactly the owner, routing skips the
+  // offer-and-claim dance entirely, and the cards should say so instead of
+  // describing a race against yourself.
+  const soloOwner = pickImplicitContactOwner(members, ownerNumbers) !== null;
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
@@ -92,11 +99,13 @@ export default async function DashboardEmployeesPage() {
       <LeadAssignmentSettings
         businessId={business.id}
         initialLeadAutoAssign={business.lead_auto_assign === true}
+        soloOwner={soloOwner}
       />
 
       <HumanHandoffSettings
         businessId={business.id}
         initialTeamFirst={business.needs_human_team_first === true}
+        soloOwner={soloOwner}
       />
 
       <EmployeesManager

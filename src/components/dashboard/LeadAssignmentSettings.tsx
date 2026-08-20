@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 
 /**
@@ -12,11 +13,21 @@ import { Card } from "@/components/ui/Card";
  */
 export function LeadAssignmentSettings({
   businessId,
-  initialLeadAutoAssign
+  initialLeadAutoAssign,
+  soloOwner = false
 }: {
   businessId: string;
   initialLeadAutoAssign: boolean;
+  /**
+   * True when the roster is exactly one ACTIVE member who is provably the
+   * business owner. Routing then keeps every lead with them directly (no
+   * offer, no claim), so the card says the toggle matters once a teammate
+   * exists. The rest of this card's copy is legacy hardcoded English; the
+   * new string lives in the catalogs per the i18n rule.
+   */
+  soloOwner?: boolean;
 }) {
+  const t = useTranslations("dashboard.leadAssignment");
   const [autoAssign, setAutoAssign] = useState(initialLeadAutoAssign);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -65,6 +76,7 @@ export function LeadAssignmentSettings({
           </span>
         </span>
       </label>
+      {soloOwner && <p className="mt-2 text-xs text-parchment/40">{t("soloHint")}</p>}
       {status && <p className="mt-2 text-xs text-parchment/50">{status}</p>}
     </Card>
   );

@@ -171,6 +171,7 @@ export default async function DashboardCustomersPage() {
         owners={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
         canManageSegments={canManageSegments}
         clipped={directoryClipped}
+        implicitOwner={implicitOwner}
       />
     </div>
   );

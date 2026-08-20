@@ -170,14 +170,35 @@ describe("resolveContactOwnerTarget", () => {
    * two days while both of its alerts went to Amy alone.
    */
   it("reads the roster for an unowned contact and broadcasts to the team", async () => {
+    // A single-row roster also consults the three owner-number sources (the
+    // solo-owner rung); Dave is not the owner, so the broadcast still wins.
     const { db, tables } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
-      { data: [roster()] }
+      { data: [roster()] },
+      { data: { forward_to_e164: "+19998887777" } },
+      { data: { phone_number: null } },
+      { data: { phone: null } }
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
     expect(out.target).toBe("team_broadcast");
     expect(out.reason).toBe("contact_unowned");
     expect(out.team.map((m) => m.phone)).toEqual([DAVE]);
+    expect(tables).toEqual([
+      "contacts",
+      "ai_flow_team_members",
+      "business_telnyx_settings",
+      "notification_preferences",
+      "businesses"
+    ]);
+  });
+
+  it("skips the owner-number reads entirely for a multi-member roster", async () => {
+    const { db, tables } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { data: [roster(), roster({ id: "m2", name: "Jason Lane", phone_e164: JASON })] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("team_broadcast");
     expect(tables).toEqual(["contacts", "ai_flow_team_members"]);
   });
 
@@ -257,6 +278,122 @@ describe("resolveContactOwnerTarget", () => {
     const out = await resolveContactOwnerTarget(db, BIZ, "(602) 616-0662");
     expect(out.target).toBe("contact_owner");
     expect(tables).toEqual(["contacts", "ai_flow_team_members"]);
+  });
+});
+
+/**
+ * The solo-owner rung (PR after #1500): a roster of exactly one ACTIVE
+ * member who is provably the business owner has nobody to broadcast to but
+ * themselves, so the unowned branch resolves to a plain contact-owner page
+ * instead of a claim-invite broadcast. The rule must fail toward the
+ * broadcast on any doubt.
+ */
+describe("resolveContactOwnerTarget: solo owner", () => {
+  const BRIAN_PHONE = "+16026866672";
+  const brianRow = (over: Record<string, unknown> = {}) => ({
+    id: "m-brian",
+    name: "Brian",
+    phone_e164: BRIAN_PHONE,
+    email: "brian@example.com",
+    team_broadcast_enabled: null,
+    tags: [],
+    ...over
+  });
+  const unowned = { data: { id: "c1", owner_employee_id: null } };
+
+  it("resolves a solo owner-only roster to the owner, not a broadcast", async () => {
+    const { db, tables } = makeDb([
+      unowned,
+      { data: [brianRow()] },
+      { data: { forward_to_e164: BRIAN_PHONE } },
+      { data: { phone_number: null } },
+      { data: { phone: null } }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out).toMatchObject({
+      target: "contact_owner",
+      emailTarget: "contact_owner",
+      memberId: "m-brian",
+      memberName: "Brian",
+      phone: BRIAN_PHONE,
+      email: "brian@example.com",
+      matchedBy: "phone",
+      reason: "solo_owner"
+    });
+    expect(out.team).toEqual([]);
+    expect(tables).toEqual([
+      "contacts",
+      "ai_flow_team_members",
+      "business_telnyx_settings",
+      "notification_preferences",
+      "businesses"
+    ]);
+  });
+
+  it("keeps the email with the business owner when the roster row has none", async () => {
+    const { db } = makeDb([
+      unowned,
+      { data: [brianRow({ email: null })] },
+      { data: { forward_to_e164: BRIAN_PHONE } },
+      { data: { phone_number: null } },
+      { data: { phone: null } }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("contact_owner");
+    expect(out.reason).toBe("solo_owner");
+    expect(out.emailTarget).toBe("business_owner");
+    expect(out.email).toBeNull();
+  });
+
+  it("a solo ASSISTANT keeps the team-broadcast rung", async () => {
+    // The owner really can hand this lead over, so "unowned" is still news.
+    const { db } = makeDb([
+      unowned,
+      { data: [brianRow({ id: "m-a", name: "Dana", phone_e164: DAVE })] },
+      { data: { forward_to_e164: BRIAN_PHONE } },
+      { data: { phone_number: null } },
+      { data: { phone: null } }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("team_broadcast");
+    expect(out.reason).toBe("contact_unowned");
+    expect(out.team.map((m) => m.phone)).toEqual([DAVE]);
+  });
+
+  it("unreadable owner numbers fail open to the broadcast, never to a false solo match", async () => {
+    const { db } = makeDb([
+      unowned,
+      { data: [brianRow()] },
+      { error: { message: "down" } },
+      { error: { message: "down" } },
+      { error: { message: "down" } }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("team_broadcast");
+    expect(out.reason).toBe("contact_unowned");
+    expect(out.team.map((m) => m.phone)).toEqual([BRIAN_PHONE]);
+  });
+
+  it("records solo_owner routing telemetry", async () => {
+    const { db, rpcCalls } = makeDb([
+      unowned,
+      { data: [brianRow()] },
+      { data: { forward_to_e164: BRIAN_PHONE } },
+      { data: { phone_number: null } },
+      { data: { phone: null } }
+    ]);
+    await resolveContactOwnerTarget(db, BIZ, LEAD);
+    const ev = rpcCalls.find((c) => c.fn === "telemetry_record")?.args as {
+      p_event_type: string;
+      p_payload: Record<string, unknown>;
+    };
+    expect(ev.p_event_type).toBe("notification_contact_owner_routed");
+    expect(ev.p_payload).toMatchObject({
+      target: "contact_owner",
+      matched_by: "phone",
+      reason: "solo_owner",
+      team_size: 0
+    });
   });
 });
 

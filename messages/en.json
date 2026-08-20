@@ -1893,6 +1893,7 @@
       "assignModeFixed": "One person",
       "assignEmployeeLabel": "Person",
       "assignHint": "Sharing across the team gives each booking to whoever is on shift with the lightest upcoming load.",
+      "assignSoloHint": "Right now the roster is just you, so every booking is yours whichever option you pick. Add employees to share bookings across a team or send them to one person.",
       "assignNoRoster": "Add employees to book a specific person or share across the team.",
       "intakeQuestionLabel": "Question",
       "intakeTypeLabel": "Answer type",
@@ -2041,8 +2042,12 @@
       "title": "Human handoff",
       "toggleLabel": "Offer the team first when a customer asks for a person",
       "toggleHelp": "When on, the moment your AI coworker flags that a customer needs a human, every available employee is texted at once, the first to reply \"1\" takes the conversation, and you are alerted only if nobody claims it within 10 minutes. When off (default), you are alerted immediately. Turning this on adds an editable \"Human handoff — offer to team first\" automation to your AiFlows page.",
+      "soloHint": "While you are the only one on the roster, a customer who asks for a person reaches you directly. This setting takes effect once you add an employee.",
       "saved": "Saved.",
       "saveFailed": "Save failed"
+    },
+    "leadAssignment": {
+      "soloHint": "While you are the only one on the roster, new leads go straight to you whether this is on or off. Turning it on also marks each lead as assigned to you in the dashboard right away."
     },
     "employeeAvailability": {
       "ownerBadge": "Owner",

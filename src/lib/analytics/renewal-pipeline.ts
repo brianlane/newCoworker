@@ -10,6 +10,7 @@
  * service-role reads are correct for every tenant.
  */
 
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -128,6 +129,17 @@ export async function getRenewalPipeline(
     }
   }
 
+  // Solo-owner attribution (read-time, the #1500 rule): a business whose
+  // roster is exactly its owner should never see a 100% "Unassigned"
+  // breakdown, unassigned rows are theirs by construction. This report
+  // measures responsibility, unlike the lead-sources `claimed` counter that
+  // #1500 deliberately left alone (that one counts claim EVENTS). Resolved
+  // only when some row is actually unassigned, and the resolver never
+  // throws, so the report's throw-on-error reads stay the only failures.
+  const implicitOwner = docs.some((d) => !d.assigned_employee_id)
+    ? await resolveImplicitContactOwner(businessId, db)
+    : null;
+
   const counts: Record<RenewalBucket, number> = {
     overdue: 0,
     next30: 0,
@@ -144,9 +156,11 @@ export async function getRenewalPipeline(
     const bucket = renewalBucketFor(daysUntil);
     counts[bucket] += 1;
     const contact = doc.contact_id ? contacts.get(doc.contact_id) : undefined;
+    // A stored assignee wins even when their roster row is gone (nameless
+    // beats re-attributed); the implicit owner fills only truly unassigned.
     const assignee = doc.assigned_employee_id
       ? employees.get(doc.assigned_employee_id) ?? null
-      : null;
+      : implicitOwner?.name ?? null;
     assigneeCounts.set(assignee ?? "Unassigned", (assigneeCounts.get(assignee ?? "Unassigned") ?? 0) + 1);
     rows.push({
       documentId: doc.id,
