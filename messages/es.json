@@ -1813,6 +1813,20 @@
         "employees3": "Cambia quién recibe ofertas de leads"
       }
     },
+    "segments": {
+      "actions": {
+        "title": "Acción nocturna",
+        "description": "Cada noche, los contactos que estén en esta lista reciben esta etiqueta. Las automatizaciones de etiquetas se disparan como si la agregaras tú.",
+        "tagLabel": "Etiqueta a agregar",
+        "tagPlaceholder": "p. ej. Dar seguimiento",
+        "enableLabel": "Ejecutar cada noche",
+        "save": "Guardar acción",
+        "lastAppliedLabel": "Última aplicación",
+        "neverApplied": "Aún no aplicada",
+        "errorTagRequired": "Escribe una etiqueta antes de activar la acción nocturna.",
+        "errorSave": "No se pudo guardar la acción nocturna."
+      }
+    },
     "termsGate": {
       "title": "Antes de continuar",
       "body": "Revisa y acepta los Términos de Servicio y la Política de Privacidad para seguir usando New Coworker.",

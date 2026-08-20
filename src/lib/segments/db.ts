@@ -9,6 +9,7 @@ import {
   MAX_SEGMENT_NAME_LENGTH,
   segmentFiltersSchema,
   type ContactSegment,
+  type SegmentAction,
   type SegmentFilters
 } from "./core";
 
@@ -31,9 +32,13 @@ type SegmentRow = {
   name: string;
   filters: unknown;
   position: number;
+  action_tag: string | null;
+  action_enabled: boolean;
+  last_applied_at: string | null;
 };
 
-const SEGMENT_COLUMNS = "id, business_id, name, filters, position";
+const SEGMENT_COLUMNS =
+  "id, business_id, name, filters, position, action_tag, action_enabled, last_applied_at";
 
 /**
  * Stored filters re-validated on read: a row predating a filter-schema
@@ -47,7 +52,10 @@ function toSegment(row: SegmentRow): ContactSegment {
     businessId: row.business_id,
     name: row.name,
     filters: parsed.success ? parsed.data : {},
-    position: row.position
+    position: row.position,
+    actionTag: row.action_tag ?? null,
+    actionEnabled: row.action_enabled === true,
+    lastAppliedAt: row.last_applied_at ?? null
   };
 }
 
@@ -116,18 +124,23 @@ export async function createContactSegment(
   return toSegment(data as SegmentRow);
 }
 
-/** Rename and/or replace a segment's filters. */
+/** Rename, replace a segment's filters, and/or set its nightly action. */
 export async function updateContactSegment(
   businessId: string,
   segmentId: string,
-  patch: { name?: string; filters?: SegmentFilters },
+  patch: { name?: string; filters?: SegmentFilters; action?: SegmentAction },
   client?: SupabaseClient
 ): Promise<ContactSegment> {
   const db = client ?? (await createSupabaseServiceClient());
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     ...(patch.name !== undefined ? { name: cleanSegmentName(patch.name) } : {}),
-    ...(patch.filters !== undefined ? { filters: patch.filters } : {})
+    ...(patch.filters !== undefined ? { filters: patch.filters } : {}),
+    // The action is replaced as a whole (tag + enabled travel together), so
+    // the schema's "enabled requires a tag" rule holds without a read-back.
+    ...(patch.action !== undefined
+      ? { action_tag: patch.action.tag, action_enabled: patch.action.enabled }
+      : {})
   };
 
   const { data, error } = await db

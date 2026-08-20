@@ -1813,6 +1813,20 @@
         "employees3": "Change who gets lead offers"
       }
     },
+    "segments": {
+      "actions": {
+        "title": "Nightly action",
+        "description": "Every night, contacts currently in this list get this tag. Tag automations fire as if you added it yourself.",
+        "tagLabel": "Tag to add",
+        "tagPlaceholder": "e.g. Follow up",
+        "enableLabel": "Run nightly",
+        "save": "Save action",
+        "lastAppliedLabel": "Last applied",
+        "neverApplied": "Not applied yet",
+        "errorTagRequired": "Enter a tag before turning the nightly action on.",
+        "errorSave": "Could not save the nightly action."
+      }
+    },
     "termsGate": {
       "title": "Before you continue",
       "body": "Please review and accept the Terms of Service and Privacy Policy to keep using New Coworker.",

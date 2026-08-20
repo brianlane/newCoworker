@@ -100,6 +100,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.phoneDeliverability",
       "dashboard.planCard",
       "dashboard.prospecting",
+      "dashboard.segments.actions",
       "dashboard.settings",
       "dashboard.smsComposer",
       "dashboard.tasksData",
