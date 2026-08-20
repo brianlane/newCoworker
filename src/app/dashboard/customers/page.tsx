@@ -22,6 +22,7 @@ import { Card } from "@/components/ui/Card";
 import { listCustomerMemories, MAX_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { findDuplicateContactPairs } from "@/lib/customer-memory/dedup";
 import { listTeamMembers } from "@/lib/db/employees";
+import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
@@ -93,12 +94,18 @@ export default async function DashboardCustomersPage() {
   //   directory page must render even if the segments read fails.
   // - teamMembers: owner badges + the "owned by" filter show the roster
   //   member's NAME; one roster read covers every row (id → name).
-  const [contacts, duplicatePairs, segments, teamMembers] = await Promise.all([
-    listCustomerMemories(business.id, { limit: MAX_LIST_LIMIT }),
-    findDuplicateContactPairs(business.id).catch(() => []),
-    listContactSegments(business.id, db).catch(() => []),
-    listTeamMembers(business.id, db).catch(() => [])
-  ]);
+  const [contacts, duplicatePairs, segments, teamMembers, viewerEmployeeId] =
+    await Promise.all([
+      listCustomerMemories(business.id, { limit: MAX_LIST_LIMIT }),
+      findDuplicateContactPairs(business.id).catch(() => []),
+      listContactSegments(business.id, db).catch(() => []),
+      listTeamMembers(business.id, db).catch(() => []),
+      // The roster member this login IS (never throws, null when unlinked).
+      // Gates the per-row Claim buttons: no roster identity, no claim. The
+      // REAL login's email on purpose, matching the claim endpoint's own
+      // resolution, so admin view-as sees no button it could only 403 on.
+      resolveCallerEmployeeId(business.id, user.email, db)
+    ]);
   const directoryClipped = contacts.length >= MAX_LIST_LIMIT;
   // Smart List administration is manager+, same bar as the pipeline boards.
   const canManageSegments = ctx.role === "owner" || ctx.role === "manager";
@@ -172,6 +179,7 @@ export default async function DashboardCustomersPage() {
         canManageSegments={canManageSegments}
         clipped={directoryClipped}
         implicitOwner={implicitOwner}
+        canClaim={viewerEmployeeId !== null}
       />
     </div>
   );

@@ -126,7 +126,8 @@ export function CustomersList({
   owners = [],
   canManageSegments = false,
   clipped = false,
-  implicitOwner = null
+  implicitOwner = null,
+  canClaim = false
 }: {
   rows: CustomerListRow[];
   businessId?: string;
@@ -143,9 +144,21 @@ export function CustomersList({
    * "Anyone" default already matches everything, so nothing else changes.
    */
   implicitOwner?: { id: string; name: string } | null;
+  /**
+   * True when the viewer's login maps to a roster member (the same mapping
+   * the claim endpoint applies server-side): unowned rows then show a Claim
+   * button. False hides the buttons rather than offering a claim that can
+   * only 403.
+   */
+  canClaim?: boolean;
 }) {
   const tBulk = useTranslations("dashboard.bulk");
+  const tClaim = useTranslations("dashboard.leadClaim");
   const router = useRouter();
+  /** The row key mid-claim ("Claiming…" on exactly that button). */
+  const [claimingKey, setClaimingKey] = useState<string | null>(null);
+  /** Claim outcome worth telling: lost race ("already claimed by…"), failure. */
+  const [claimNotice, setClaimNotice] = useState<string | null>(null);
   const [sort, setSort] = usePersistentSort(
     "dashboard.contacts.sort",
     { field: "lastInteractionAt", dir: "desc" },
@@ -225,6 +238,46 @@ export function CustomersList({
       });
     } finally {
       setSegmentBusy(false);
+    }
+  };
+
+  /**
+   * Claim an unowned contact for the signed-in teammate. The server does the
+   * race-safe null-owner compare-and-swap; a 409 names whoever got there
+   * first. router.refresh() re-renders the server-built rows, so the row
+   * flips to owned-by-me (or to the race winner) without a manual reload.
+   */
+  const claimContact = async (contactKey: string) => {
+    if (!businessId) return;
+    setClaimingKey(contactKey);
+    setClaimNotice(null);
+    try {
+      const res = await fetch(`/api/dashboard/leads/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, contactKey })
+      });
+      const json = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: { message?: string; ownerName?: string | null };
+      } | null;
+      if (res.status === 409) {
+        const name = json?.error?.ownerName;
+        setClaimNotice(
+          name ? tClaim("alreadyClaimed", { name }) : tClaim("alreadyClaimedUnknown")
+        );
+        router.refresh();
+        return;
+      }
+      if (!res.ok || !json?.ok) {
+        setClaimNotice(json?.error?.message ?? tClaim("claimFailed"));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setClaimNotice(tClaim("claimFailed"));
+    } finally {
+      setClaimingKey(null);
     }
   };
 
@@ -456,6 +509,11 @@ export function CustomersList({
         </div>
       )}
       {segmentError && <p className="text-xs text-rose-300/90">{segmentError}</p>}
+      {claimNotice && (
+        <p data-testid="claim-notice" className="text-xs text-rose-300/90">
+          {claimNotice}
+        </p>
+      )}
       {clipped && (
         <p className="text-[11px] text-amber-300/80">
           Large directory, the list and Smart List counts cover the {rows.length.toLocaleString()}{" "}
@@ -902,6 +960,31 @@ export function CustomersList({
                       )}
                     </p>
                   </div>
+                  {/* Unowned rows (the same rows the Smart List "No owner"
+                      filter matches; hidden under an implicit owner because
+                      those rows already resolve to somebody, and for roster
+                      members' own cards, which are identities, not leads). */}
+                  {canClaim &&
+                    businessId &&
+                    !c.ownerEmployeeId &&
+                    c.type !== "owner" &&
+                    c.type !== "employee" && (
+                      <button
+                        type="button"
+                        data-testid="customer-claim"
+                        // The row is one big profile link; the button must
+                        // not navigate it.
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void claimContact(c.e164);
+                        }}
+                        disabled={claimingKey === c.e164}
+                        className="shrink-0 rounded-md bg-claw-green px-2.5 py-1 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {claimingKey === c.e164 ? tClaim("claiming") : tClaim("claim")}
+                      </button>
+                    )}
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
               </li>

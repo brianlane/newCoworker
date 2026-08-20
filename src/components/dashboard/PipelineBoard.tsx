@@ -48,7 +48,7 @@ import {
 } from "@/lib/pipelines/types";
 import type { TaskCardData } from "@/app/api/dashboard/tasks/route";
 
-type Scope = "mine" | "all";
+type Scope = "mine" | "all" | "unowned";
 
 /** Column accents per palette color (dot + top border + background fill). */
 const COLOR_CLASSES: Record<StageColor, { dot: string; border: string; bg: string }> = {
@@ -99,12 +99,19 @@ export function PipelineBoard({
   highlightLead: string | null;
 }) {
   const t = useTranslations("dashboard.tasksData");
+  const tClaim = useTranslations("dashboard.leadClaim");
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
   const [employees, setEmployees] = useState<RosterOption[]>([]);
   const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
+  /** The roster member this login IS; null hides every Claim button. */
+  const [myEmployeeId, setMyEmployeeId] = useState<string | null>(null);
+  /** The card key mid-claim ("Claiming…" on exactly that button). */
+  const [claimingKey, setClaimingKey] = useState<string | null>(null);
+  /** Claim outcome worth telling: lost race ("already claimed by…"), failure. */
+  const [claimNotice, setClaimNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -132,6 +139,7 @@ export function PipelineBoard({
             readEnvelope<{
               tasks: TaskCardData[];
               employees: RosterOption[];
+              myEmployeeId: string | null;
               implicitOwnerEmployeeId: string | null;
             }>(r)
           )
@@ -139,6 +147,7 @@ export function PipelineBoard({
         setPipelines(pipelinesData.pipelines);
         setTasks(tasksData.tasks);
         setEmployees(tasksData.employees ?? []);
+        setMyEmployeeId(tasksData.myEmployeeId ?? null);
         setImplicitOwnerEmployeeId(tasksData.implicitOwnerEmployeeId ?? null);
         setSelectedId((prev) =>
           prev && pipelinesData.pipelines.some((p) => p.id === prev)
@@ -241,6 +250,48 @@ export function PipelineBoard({
     [businessId, pipeline, tasks]
   );
 
+  /**
+   * Claim an unowned lead for the signed-in teammate. The server performs
+   * the race-safe null-owner compare-and-swap; a 409 means somebody got
+   * there first, so the notice names them and the reload shows the fresh
+   * owner instead of a stale Claim button.
+   */
+  const claimLead = useCallback(
+    async (contactKey: string) => {
+      setClaimingKey(contactKey);
+      setClaimNotice(null);
+      try {
+        const res = await fetch(`/api/dashboard/leads/claim`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessId, contactKey })
+        });
+        const json = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          error?: { message?: string; ownerName?: string | null };
+        } | null;
+        if (res.status === 409) {
+          const name = json?.error?.ownerName;
+          setClaimNotice(
+            name ? tClaim("alreadyClaimed", { name }) : tClaim("alreadyClaimedUnknown")
+          );
+          await load(scope);
+          return;
+        }
+        if (!res.ok || !json?.ok) {
+          setClaimNotice(json?.error?.message ?? tClaim("claimFailed"));
+          return;
+        }
+        await load(scope);
+      } catch {
+        setClaimNotice(tClaim("claimFailed"));
+      } finally {
+        setClaimingKey(null);
+      }
+    },
+    [businessId, load, scope, tClaim]
+  );
+
   const toggleCollapsed = (stageId: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -325,7 +376,7 @@ export function PipelineBoard({
         ))}
         <div className="ml-auto flex items-center gap-2">
           <div className="inline-flex overflow-hidden rounded-md border border-parchment/15">
-            {(["mine", "all"] as const).map((s) => (
+            {(["mine", "all", "unowned"] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setScope(s)}
@@ -335,7 +386,7 @@ export function PipelineBoard({
                     : "text-parchment/50 hover:text-parchment/80"
                 }`}
               >
-                {s === "mine" ? "My leads" : "All leads"}
+                {s === "mine" ? "My leads" : s === "all" ? "All leads" : tClaim("scopeUnowned")}
               </button>
             ))}
           </div>
@@ -384,6 +435,23 @@ export function PipelineBoard({
             <p className="text-sm text-spark-orange">{moveError}</p>
             <button
               onClick={() => setMoveError(null)}
+              className="text-parchment/40 hover:text-parchment"
+              aria-label="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {claimNotice && (
+        <Card>
+          <div className="flex items-center justify-between gap-3">
+            <p data-testid="claim-notice" className="text-sm text-spark-orange">
+              {claimNotice}
+            </p>
+            <button
+              onClick={() => setClaimNotice(null)}
               className="text-parchment/40 hover:text-parchment"
               aria-label="Dismiss"
             >
@@ -473,6 +541,17 @@ export function PipelineBoard({
                         highlighted={card.e164 === highlightLead}
                         highlightRef={card.e164 === highlightLead ? highlightRef : null}
                         onEdit={() => setEditLeadKey(card.e164)}
+                        // Claimable in every scope that can SHOW an unowned
+                        // card ("Unowned" and "All leads"): unowned, a real
+                        // contact row to write, and a caller with a roster
+                        // identity to claim it for.
+                        claimable={
+                          card.ownerEmployeeId === null &&
+                          card.hasContact &&
+                          myEmployeeId !== null
+                        }
+                        claiming={claimingKey === card.e164}
+                        onClaim={() => void claimLead(card.e164)}
                       />
                     ))}
                   </div>
@@ -545,15 +624,23 @@ function BoardCard({
   stages,
   highlighted,
   highlightRef,
-  onEdit
+  onEdit,
+  claimable,
+  claiming,
+  onClaim
 }: {
   card: TaskCardData;
   stages: PipelineStage[];
   highlighted: boolean;
   highlightRef: React.RefObject<HTMLDivElement | null> | null;
   onEdit: () => void;
+  /** Unowned + claimable by this viewer: the owner slot becomes a Claim button. */
+  claimable: boolean;
+  claiming: boolean;
+  onClaim: () => void;
 }) {
   const t = useTranslations("dashboard.tasksData");
+  const tClaim = useTranslations("dashboard.leadClaim");
   const activeRun = card.runs[0] ?? null;
   const extraTags = card.tags.filter((tag) => !isStageTag(stages, tag));
   return (
@@ -614,10 +701,27 @@ function BoardCard({
         </div>
       )}
       <div className="mt-1.5 flex items-center justify-between text-[10px] text-parchment/40">
-        <span className="inline-flex items-center gap-1 truncate">
-          <User className="h-3 w-3" />
-          {card.ownerName ?? "unassigned"}
-        </span>
+        {claimable ? (
+          <button
+            type="button"
+            data-testid="board-card-claim"
+            // The card is draggable; a click meant for the button must not
+            // start a drag-and-drop or bubble into the card's handlers.
+            onClick={(e) => {
+              e.stopPropagation();
+              onClaim();
+            }}
+            disabled={claiming}
+            className="rounded bg-claw-green px-2 py-0.5 text-[10px] font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {claiming ? tClaim("claiming") : tClaim("claim")}
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1 truncate">
+            <User className="h-3 w-3" />
+            {card.ownerName ?? "unassigned"}
+          </span>
+        )}
         <LocalDateTime iso={card.lastActivityAt} />
       </div>
     </div>

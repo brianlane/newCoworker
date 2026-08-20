@@ -2072,6 +2072,14 @@
     "leadAssignment": {
       "soloHint": "Mientras seas la única persona del equipo, los nuevos leads van directo a ti esté esto activado o no. Activarlo además marca cada lead como asignado a ti en el panel de inmediato."
     },
+    "leadClaim": {
+      "scopeUnowned": "Sin responsable",
+      "claim": "Reclamar",
+      "claiming": "Reclamando…",
+      "alreadyClaimed": "Ya lo reclamó {name}.",
+      "alreadyClaimedUnknown": "Ya lo reclamó otro compañero del equipo.",
+      "claimFailed": "No se pudo reclamar este lead, intenta de nuevo."
+    },
     "employeeAvailability": {
       "ownerBadge": "Propietario",
       "sectionTitle": "Disponibilidad para leads",
