@@ -192,6 +192,15 @@ export type OfferRouting = {
    */
   owner_direct_done?: boolean;
   /**
+   * The roster is exactly one ACTIVE member and that member is provably the
+   * business owner (solo_owner.ts), so the route step sent one informational
+   * notice instead of running an offer race. No live offer ever existed
+   * (offered/offered_log stay unset) and nothing was claimed (claimed_by
+   * stays unset), so the webhook's claim/pass/unclaim machinery never
+   * applies to such a run. Set: worker. Never cleared.
+   */
+  solo_owner?: boolean;
+  /**
    * LEGACY (pre-universal-digits). No longer set anywhere; the worker scrubs
    * them from stored runs on retire/claim so old stamps can't linger.
    * @deprecated
@@ -284,6 +293,9 @@ export function parseRouting(raw: unknown): OfferRouting {
   }
   if ("owner_direct_done" in out && typeof out.owner_direct_done !== "boolean") {
     delete out.owner_direct_done;
+  }
+  if ("solo_owner" in out && typeof out.solo_owner !== "boolean") {
+    delete out.solo_owner;
   }
   return out as OfferRouting;
 }

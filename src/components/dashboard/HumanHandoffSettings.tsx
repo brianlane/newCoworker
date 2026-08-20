@@ -15,10 +15,17 @@ import { Card } from "@/components/ui/Card";
  */
 export function HumanHandoffSettings({
   businessId,
-  initialTeamFirst
+  initialTeamFirst,
+  soloOwner = false
 }: {
   businessId: string;
   initialTeamFirst: boolean;
+  /**
+   * True when the roster is exactly one ACTIVE member who is provably the
+   * business owner. Routing then pages them directly either way, so the
+   * card explains the toggle takes effect once a teammate exists.
+   */
+  soloOwner?: boolean;
 }) {
   const t = useTranslations("dashboard.humanHandoff");
   const [teamFirst, setTeamFirst] = useState(initialTeamFirst);
@@ -63,6 +70,7 @@ export function HumanHandoffSettings({
           <span className="block text-xs text-parchment/40 mt-1">{t("toggleHelp")}</span>
         </span>
       </label>
+      {soloOwner && <p className="mt-2 text-xs text-parchment/40">{t("soloHint")}</p>}
       {status && <p className="mt-2 text-xs text-parchment/50">{status}</p>}
     </Card>
   );

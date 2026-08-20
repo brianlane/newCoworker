@@ -65,6 +65,17 @@ describe("buildBookingOwnerAlert: solo business", () => {
     expect(solo.body).toContain("(218) 770-2372");
     expect(solo.ctaLabel).toBe("Open contact");
   });
+
+  it("ignores an assigneeName: solo calls now carry the implicit owner's name for the SMS leg", () => {
+    // The alert resolver feeds the solo owner's name in for the employee
+    // text, but the owner-facing solo email stays ownership-free: the
+    // booking IS the message, and naming the owner to themselves is noise.
+    const named = buildBookingOwnerAlert(input({ state: "solo", assigneeName: "Brian" }));
+    const whole = `${named.subject}\n${named.heading}\n${named.body}\n${named.smsBody}`.toLowerCase();
+    expect(whole).not.toContain("assign");
+    expect(whole).not.toContain("brian");
+    expect(named.body).toBe(solo.body);
+  });
 });
 
 describe("buildBookingOwnerAlert: covered", () => {

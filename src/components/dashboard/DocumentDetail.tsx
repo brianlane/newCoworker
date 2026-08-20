@@ -56,10 +56,20 @@ type SignatureRequestItem = {
 
 export function DocumentDetail({
   businessId,
-  initialDocument
+  initialDocument,
+  implicitOwner = null
 }: {
   businessId: string;
   initialDocument: DocumentItem;
+  /**
+   * Set when the roster is exactly one ACTIVE member who is provably the
+   * business owner (the #1500 implicit-owner rule). Display-only: the
+   * "Renewal handled by" picker opens on them and drops the "unassigned"
+   * choice (it would resolve straight back to them). Nothing is written
+   * until the owner actively picks, so hiring a second teammate restores
+   * the unassigned state with no backfill.
+   */
+  implicitOwner?: { id: string; name: string } | null;
 }) {
   const router = useRouter();
   const [doc, setDoc] = useState<DocumentItem>(initialDocument);
@@ -519,20 +529,25 @@ export function DocumentDetail({
               <label className={labelClass}>Renewal handled by</label>
               <select
                 className={inputClass}
-                value={doc.assigned_employee_id ?? ""}
+                value={doc.assigned_employee_id ?? implicitOwner?.id ?? ""}
                 onChange={(e) =>
                   void patchDocument({
                     assignedEmployeeId: e.target.value ? e.target.value : null
                   })
                 }
               >
-                <option value="">unassigned</option>
+                {!implicitOwner && <option value="">unassigned</option>}
                 {members.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
                 ))}
               </select>
+              {implicitOwner && !doc.assigned_employee_id && (
+                <p className="mt-1 text-xs text-parchment/40">
+                  Your team is just you, so renewals land with you until you add a teammate.
+                </p>
+              )}
             </div>
           )}
         </div>

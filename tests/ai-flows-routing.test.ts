@@ -85,6 +85,13 @@ describe("parseRouting", () => {
     expect(bad.owner_direct_done).toBeUndefined();
   });
 
+  it("keeps a well-typed solo_owner marker and drops malformed ones", () => {
+    expect(parseRouting({ solo_owner: true }).solo_owner).toBe(true);
+    expect(parseRouting({ solo_owner: false }).solo_owner).toBe(false);
+    expect(parseRouting({ solo_owner: "yes" }).solo_owner).toBeUndefined();
+    expect(parseRouting({}).solo_owner).toBeUndefined();
+  });
+
   it("preserves unknown/legacy keys at runtime so persisting never drops data", () => {
     const parsed = parseRouting({ offered: "+15550001111", some_future_key: { x: 1 } });
     expect((parsed as Record<string, unknown>).some_future_key).toEqual({ x: 1 });

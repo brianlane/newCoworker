@@ -17,6 +17,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { listTeamMembers } from "@/lib/db/employees";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   BookingPageValidationError,
@@ -129,16 +130,21 @@ export async function GET(request: Request) {
     // The roster drives the assignment controls: an owner picking who a page
     // books needs the names, and there is nowhere else on this page to get
     // them.
-    const roster = (await listTeamMembers(businessId))
-      .filter((m) => m.active)
-      .map((m) => ({ id: m.id, name: m.name }));
+    const members = await listTeamMembers(businessId);
+    const roster = members.filter((m) => m.active).map((m) => ({ id: m.id, name: m.name }));
+    // Solo-owner hint (read-time, the #1500 rule): reuses the members just
+    // loaded, so a real team pays no extra query. Display-only sibling of
+    // `page`; the PATCH schema does not accept it, so nothing echoes it
+    // back into a write.
+    const implicitOwner = await resolveImplicitContactOwner(businessId, undefined, members);
 
     return successResponse({
       page,
       calendarProvider: provider,
       availability,
       upcoming,
-      roster
+      roster,
+      implicitOwner
     });
   } catch (error) {
     return handleRouteError(error);

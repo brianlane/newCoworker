@@ -1529,6 +1529,69 @@ describe("notifications/dispatch", () => {
     });
 
     /**
+     * Solo-owner verdict (the rung after #1500): a one-person owner-only
+     * roster resolves as contact_owner with reason solo_owner. This suite
+     * pins that the dispatcher then treats it as a plain redirect: one
+     * recipient, no claim framing, no claimable-alert row.
+     */
+    describe("solo-owner verdict", () => {
+      const TO_SOLO_OWNER = {
+        target: "contact_owner",
+        emailTarget: "business_owner",
+        memberId: "m-brian",
+        memberName: "Brian",
+        phone: "+16026866672",
+        email: null,
+        matchedBy: "phone",
+        reason: "solo_owner",
+        team: []
+      };
+
+      it("pages exactly the owner, with no Reply-1 claim invite", async () => {
+        resolveContactOwnerTarget.mockResolvedValue(TO_SOLO_OWNER);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: "Follow up with Donna Robinson",
+          kind: "sms_team_notify",
+          contactE164: LEAD_PHONE,
+          leadTag: "seller"
+        });
+        const smsCalls = vi.mocked(sendTelnyxSms).mock.calls;
+        expect(smsCalls.map((c) => c[1])).toEqual(["+16026866672"]);
+        expect(smsCalls[0][2]).not.toContain("Reply 1 to claim");
+      });
+
+      it("records NO claimable unowned-lead alert row", async () => {
+        resolveContactOwnerTarget.mockResolvedValue(TO_SOLO_OWNER);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: "Follow up with Donna Robinson",
+          kind: "sms_team_notify",
+          contactE164: LEAD_PHONE
+        });
+        expect(alertInsert).not.toHaveBeenCalled();
+      });
+
+      it("stamps routing_reason solo_owner on every row", async () => {
+        resolveContactOwnerTarget.mockResolvedValue(TO_SOLO_OWNER);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: "Follow up with Donna Robinson",
+          kind: "sms_team_notify",
+          contactE164: LEAD_PHONE
+        });
+        for (const row of vi.mocked(insertNotification).mock.calls.map((c) => c[0])) {
+          expect((row as { payload: Record<string, unknown> }).payload).toMatchObject({
+            routed_to: "contact_owner",
+            routed_member_id: "m-brian",
+            routed_member_name: "Brian",
+            routing_reason: "solo_owner"
+          });
+        }
+      });
+    });
+
+    /**
      * Amy's rule, 2026-08-15: an unowned lead asking for a human goes to
      * every teammate covering that lead type BEFORE the business owner. The
      * lead that forced it waited two days while both alerts went to Amy.

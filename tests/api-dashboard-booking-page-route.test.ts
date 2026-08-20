@@ -26,6 +26,7 @@ vi.mock("@/lib/booking-page/meeting-types", () => ({ ensureDefaultMeetingType: v
 vi.mock("@/lib/booking-page/service", () => ({ probeCalendarAvailability: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn() }));
+vi.mock("@/lib/db/implicit-contact-owner", () => ({ resolveImplicitContactOwner: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import { GET } from "@/app/api/dashboard/booking-page/route";
@@ -40,6 +41,7 @@ import { ensureDefaultMeetingType } from "@/lib/booking-page/meeting-types";
 import { probeCalendarAvailability } from "@/lib/booking-page/service";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { listTeamMembers } from "@/lib/db/employees";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -75,6 +77,8 @@ beforeEach(() => {
   mockProbe.mockResolvedValue("ok" as never);
   mockConn.mockResolvedValue(null as never);
   mockRoster.mockResolvedValue([]);
+  // Default: not a solo-owner business.
+  vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
 });
 
 describe("GET /api/dashboard/booking-page", () => {
@@ -85,6 +89,26 @@ describe("GET /api/dashboard/booking-page", () => {
     expect(mockEnsureMeeting).toHaveBeenCalledWith(page);
     // The page already existed, so nothing was created for it.
     expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("answers the solo-owner hint, reusing the members already loaded", async () => {
+    const members = [
+      { id: "mem-owner", name: "Brian", phone_e164: "+16026866672", active: true }
+    ];
+    mockRoster.mockResolvedValue(members as never);
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue({ id: "mem-owner", name: "Brian" });
+    const res = await get();
+    expect(await res.json()).toMatchObject({
+      data: { implicitOwner: { id: "mem-owner", name: "Brian" } }
+    });
+    // The resolver must receive the roster the route already read: a real
+    // team pays zero extra queries for this field.
+    expect(resolveImplicitContactOwner).toHaveBeenCalledWith(BIZ, undefined, members);
+  });
+
+  it("answers implicitOwner null for a real team", async () => {
+    const res = await get();
+    expect(await res.json()).toMatchObject({ data: { implicitOwner: null } });
   });
 
   it("answers with the page as the ensure pass left it", async () => {

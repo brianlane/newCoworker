@@ -1893,6 +1893,7 @@
       "assignModeFixed": "Una persona",
       "assignEmployeeLabel": "Persona",
       "assignHint": "Al repartir en el equipo, cada reserva va a quien esté en turno con menos citas próximas.",
+      "assignSoloHint": "Por ahora el equipo eres solo tú, así que cada reserva es tuya elijas la opción que elijas. Agrega empleados para repartir las reservas en un equipo o enviarlas a una persona.",
       "assignNoRoster": "Agrega empleados para reservar con una persona específica o repartir en el equipo.",
       "intakeQuestionLabel": "Pregunta",
       "intakeTypeLabel": "Tipo de respuesta",
@@ -2041,8 +2042,12 @@
       "title": "Traspaso a humano",
       "toggleLabel": "Ofrecer primero al equipo cuando un cliente pida hablar con una persona",
       "toggleHelp": "Al activarlo, en cuanto tu coworker de IA detecte que un cliente necesita a una persona, todos los empleados disponibles reciben un mensaje a la vez: quien primero responda \"1\" toma la conversación, y solo se te avisa si nadie la reclama en 10 minutos. Desactivado (por defecto), se te avisa de inmediato. Activarlo añade una automatización editable \"Human handoff — offer to team first\" a tu página de AiFlows.",
+      "soloHint": "Mientras seas la única persona del equipo, un cliente que pida hablar con una persona llega directo a ti. Esta opción entra en efecto cuando agregues un empleado.",
       "saved": "Guardado.",
       "saveFailed": "No se pudo guardar"
+    },
+    "leadAssignment": {
+      "soloHint": "Mientras seas la única persona del equipo, los nuevos leads van directo a ti. Esta opción entra en efecto cuando agregues un empleado."
     },
     "employeeAvailability": {
       "ownerBadge": "Propietario",

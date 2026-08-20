@@ -120,7 +120,8 @@ export function CustomersList({
   segments: initialSegments = [],
   owners = [],
   canManageSegments = false,
-  clipped = false
+  clipped = false,
+  implicitOwner = null
 }: {
   rows: CustomerListRow[];
   businessId?: string;
@@ -129,6 +130,14 @@ export function CustomersList({
   canManageSegments?: boolean;
   /** True when the directory scan hit its cap, counts are partial. */
   clipped?: boolean;
+  /**
+   * Set when the roster is exactly one ACTIVE member who is provably the
+   * business owner (the #1500 implicit-owner rule). Since then every
+   * unclaimed row RESOLVES to that person, so a Smart List "No owner"
+   * filter can never match anything here; the dead choice is hidden. The
+   * "Anyone" default already matches everything, so nothing else changes.
+   */
+  implicitOwner?: { id: string; name: string } | null;
 }) {
   const [sort, setSort] = usePersistentSort(
     "dashboard.contacts.sort",
@@ -347,7 +356,7 @@ export function CustomersList({
                 onChange={(ev) => setCreateForm({ ...createForm, owner: ev.target.value })}
               >
                 <option value="">Anyone</option>
-                <option value="none">No owner</option>
+                {!implicitOwner && <option value="none">No owner</option>}
                 {owners.map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.name}

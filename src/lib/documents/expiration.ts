@@ -25,6 +25,8 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { ImplicitContactOwner } from "@/lib/contacts/owner-attribution";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
@@ -174,6 +176,25 @@ export async function sweepDocumentExpirations(
     }
   }
 
+  // Solo-owner attribution for UNASSIGNED renewals (read-time, the #1500
+  // rule): a business whose roster is exactly its owner has only one
+  // possible handler, so the reminder copy names them instead of dropping
+  // the "Assigned to" line. Resolved once per business, and only for
+  // businesses that actually carry an unassigned renewal candidate, so the
+  // cron pays nothing when every doc is assigned and one roster read for a
+  // real team. The resolver never throws; null keeps today's copy.
+  const implicitOwnerByBusiness = new Map<string, ImplicitContactOwner | null>();
+  {
+    const unassignedBusinesses = [
+      ...new Set(
+        renewalCandidates.filter((d) => !d.assigned_employee_id).map((d) => d.business_id)
+      )
+    ];
+    for (const businessId of unassignedBusinesses) {
+      implicitOwnerByBusiness.set(businessId, await resolveImplicitContactOwner(businessId, db));
+    }
+  }
+
   // Businesses with a NEWLY-expired document: their on-VPS documents.md
   // digest still lists the dead title, so the sweep re-syncs the vault for
   // them below (the lookup/share tools already re-check live; the prompt
@@ -260,8 +281,15 @@ export async function sweepDocumentExpirations(
         const employee = doc.assigned_employee_id
           ? employeesById.get(doc.assigned_employee_id)
           : undefined;
+        // A STORED assignee always wins, even when their roster row is gone
+        // (nameless beats re-attributed, same as effectiveContactOwner); the
+        // implicit owner fills in only for a truly unassigned doc.
+        const implicitOwner = doc.assigned_employee_id
+          ? null
+          : (implicitOwnerByBusiness.get(doc.business_id) ?? null);
+        const handlerName = employee?.name ?? implicitOwner?.name ?? null;
         const forContact = contact ? ` for ${contact.name}` : "";
-        const assignedLine = employee ? ` Assigned to ${employee.name}.` : "";
+        const assignedLine = handlerName ? ` Assigned to ${handlerName}.` : "";
 
         if (tier) {
           const headline =
@@ -305,7 +333,11 @@ export async function sweepDocumentExpirations(
           // Direct text to the assigned employee (owner alerts above go to
           // the OWNER's channels). Operational metering: counted, never
           // refused. Best-effort, a carrier hiccup must not re-fire the
-          // whole tier tomorrow, so failures log and move on.
+          // whole tier tomorrow, so failures log and move on. Deliberately
+          // keyed on the STORED assignee only: the implicit handler IS the
+          // owner (their roster phone matches an owner number), and the
+          // dispatch above already reached the owner's channels, so the
+          // direct text would be the same news to the same phone twice.
           if (employee?.phone) {
             try {
               const config = await getMessagingConfig(doc.business_id);
@@ -365,7 +397,7 @@ export async function sweepDocumentExpirations(
                 contact_name: contact.name,
                 contact_phone: contact.phone,
                 contact_email: contact.email ?? "",
-                assigned_employee: employee?.name ?? ""
+                assigned_employee: employee?.name ?? implicitOwner?.name ?? ""
               }
             },
             db,

@@ -293,15 +293,25 @@ export async function maybeAlertUnassignedBooking(
       activeCount === 1 ? await resolveImplicitContactOwner(businessId, db) : null;
     const rostered = (activeCount === null || activeCount > 0) && implicitOwner === null;
 
-    // Whoever holds the appointment outranks whoever owns the lead.
-    const holderId =
+    // Whoever holds the appointment outranks whoever owns the lead. The
+    // STORED holder (booking assignee, then stamped contact owner) is kept
+    // apart from the implicit solo owner: writes and the payload's
+    // write-shaped field carry only the stored id, while the display name
+    // falls back to the implicit owner so a solo tenant's employee text
+    // reads "Assigned to Brian." instead of "NOT assigned to anyone yet."
+    const storedHolderId =
       input.bookingAssigneeMemberId ??
       (await contactOwnerEmployeeId(db, businessId, input.attendeePhone, input.attendeeEmail));
 
     let assigneeName: string | null = null;
-    if (holderId) {
-      const member = await getMember(businessId, holderId);
+    if (storedHolderId) {
+      const member = await getMember(businessId, storedHolderId);
       assigneeName = member?.name?.trim() || null;
+    } else if (implicitOwner) {
+      // Resolved above only at an active count of exactly one; the rule
+      // already derived the display name from the roster row, so there is
+      // no getMember re-read to pay for.
+      assigneeName = implicitOwner.name;
     }
 
     // A solo business is never "unowned": there is no one to assign to.
@@ -392,8 +402,14 @@ export async function maybeAlertUnassignedBooking(
         event_id: input.eventId,
         surface: input.surface,
         ownership_state: state,
-        assignee_member_id: holderId ?? null,
+        // The write-shaped field carries only the STORED claim; the implicit
+        // solo owner rides its own key so nothing can echo a derived id back
+        // into a write (the #1500 rule).
+        assignee_member_id: storedHolderId ?? null,
         assignee_name: assigneeName,
+        ...(storedHolderId === null && implicitOwner
+          ? { implicit_assignee_member_id: implicitOwner.id }
+          : {}),
         ...(input.attendeePhone ? { contactE164: input.attendeePhone } : {})
       }
     });

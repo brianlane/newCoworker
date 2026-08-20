@@ -32,6 +32,7 @@
  * pipelines route identically.
  */
 import { normalizeE164 } from "./normalize_e164.ts";
+import { pickSoloOwner, soloOwnerNumbers } from "./solo_owner.ts";
 import { telemetryRecord } from "./telemetry.ts";
 import {
   selectBroadcastTeam,
@@ -58,7 +59,8 @@ export const CONTACT_SCOPED_TASK_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * Why the alert went where it went. Null only on a clean contact-owner hit
- * where every channel reached the member.
+ * where every channel reached the member; informative reasons can also ride
+ * a `contact_owner` verdict (`employee_no_email`, `solo_owner`).
  */
 export type OwnerRedirectReason =
   | "no_contact_phone"
@@ -69,7 +71,15 @@ export type OwnerRedirectReason =
   | "member_no_phone"
   | "lookup_failed"
   /** Redirected, but the roster row has no address so email stayed with the owner. */
-  | "employee_no_email";
+  | "employee_no_email"
+  /**
+   * Nobody stamped an owner, but the roster is exactly one ACTIVE member who
+   * is provably the business owner (solo_owner.ts), so the alert goes to
+   * them as a plain informational page: no team broadcast, no "Reply 1"
+   * claim invite, no unowned_lead_alerts row. Read-time only; the contact's
+   * owner_employee_id stays null.
+   */
+  | "solo_owner";
 
 export type ContactOwnerTarget = {
   /**
@@ -233,32 +243,81 @@ export async function resolveContactOwnerTarget(
 }
 
 /**
- * The ACTIVE roster eligible for an unowned-lead alert, narrowed by lead type.
+ * The ACTIVE roster behind the unowned branch: the solo-owner rung counts
+ * it, and `selectBroadcastTeam` narrows it by lead type at the call site.
  *
  * Never throws: a roster read that fails returns an empty list, which the
  * caller reads as "fall back to the owner". Losing the broadcast is
  * acceptable; losing the alert is not.
  */
-async function readBroadcastTeam(
+type ActiveRosterRow = BroadcastMemberRow & { email?: string | null };
+
+async function readActiveRoster(
   supabase: AnyClient,
-  businessId: string,
-  leadTag: string | null | undefined
-): Promise<BroadcastMember[]> {
+  businessId: string
+): Promise<ActiveRosterRow[]> {
   try {
     const { data, error } = await supabase
       .from("ai_flow_team_members")
-      .select("id, name, phone_e164, team_broadcast_enabled, tags")
+      .select("id, name, phone_e164, email, team_broadcast_enabled, tags")
       .eq("business_id", businessId)
       .eq("active", true);
     if (error) {
       console.error("contact_owner_target: roster lookup", error);
       return [];
     }
-    return selectBroadcastTeam((data ?? []) as BroadcastMemberRow[], leadTag);
+    return (data ?? []) as ActiveRosterRow[];
   } catch (e) {
     console.error("contact_owner_target: roster lookup threw", e);
     return [];
   }
+}
+
+/**
+ * The solo-owner rung of the unowned branch: when the active roster is
+ * exactly one member and that member is provably the business owner, the
+ * "unowned" state is a fiction (there is nobody else to claim), so the
+ * alert goes to them as a plain contact-owner page instead of a
+ * team-broadcast claim invite.
+ *
+ * Never throws, and null on ANY doubt (roster not exactly one, owner
+ * numbers unreadable, no phone match): callers then run today's
+ * team-broadcast rung, which is the required fail direction.
+ */
+async function soloOwnerVerdict(
+  supabase: AnyClient,
+  businessId: string,
+  roster: ActiveRosterRow[]
+): Promise<ContactOwnerTarget | null> {
+  if (roster.length !== 1) return null;
+  // No try/catch here on purpose: soloOwnerNumbers and pickSoloOwner are
+  // never-throw by contract (their own tests pin it), and the enclosing
+  // resolveVerdict catch is the module's final backstop.
+  const ownerNumbers = await soloOwnerNumbers(supabase, businessId);
+  const solo = pickSoloOwner(
+    roster.map((m) => ({
+      id: m.id,
+      name: m.name,
+      phone_e164: m.phone_e164,
+      email: m.email ?? null,
+      active: true
+    })),
+    ownerNumbers
+  );
+  if (!solo) return null;
+  return {
+    target: "contact_owner",
+    // Same posture as decideOwnerRedirect: a roster row with no address
+    // keeps the email (the paper trail) with the business owner.
+    emailTarget: solo.email ? "contact_owner" : "business_owner",
+    memberId: solo.memberId,
+    memberName: solo.name,
+    phone: solo.phone,
+    email: solo.email,
+    matchedBy: "phone",
+    reason: "solo_owner",
+    team: []
+  };
 }
 
 /** The lookups and the decision, without the telemetry wrapper. */
@@ -287,7 +346,12 @@ async function resolveVerdict(
       // behavior: without a contact row there is no lead to speak of, and
       // broadcasting to the whole team on a lookup miss is noise, not rescue.
       if (verdict.reason !== "contact_unowned") return verdict;
-      const team = await readBroadcastTeam(supabase, businessId, leadTag);
+      const roster = await readActiveRoster(supabase, businessId);
+      // Solo-owner rung: a one-person owner-only roster has nobody to
+      // broadcast to but the owner themselves, so skip the claim framing.
+      const solo = await soloOwnerVerdict(supabase, businessId, roster);
+      if (solo) return solo;
+      const team = selectBroadcastTeam(roster, leadTag);
       return team.length > 0 ? TO_TEAM(team) : verdict;
     }
 
