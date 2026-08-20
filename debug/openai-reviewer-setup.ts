@@ -319,6 +319,24 @@ const staffPassword = await ensureUser(STAFF_EMAIL, "Oas");
     .from("contacts")
     .upsert(contacts, { onConflict: "business_id,customer_e164" });
   if (error) throw new Error(`contacts upsert: ${error.message}`);
+
+  // Reconcile, do not just add. contacts are keyed on
+  // (business_id, customer_e164), so a rerun with a different --sms-target
+  // inserts a SECOND Maria and leaves the old one behind. A reviewer
+  // searching "Maria" would then get two hits and could text the untextable
+  // one, which is precisely the failure this flag exists to prevent.
+  // Scoped to the demo business, so it can only ever remove seed rows.
+  const keep = contacts.map((c) => c.customer_e164);
+  const { data: removed, error: pruneErr } = await db
+    .from("contacts")
+    .delete()
+    .eq("business_id", BUSINESS_ID)
+    .not("customer_e164", "in", `(${keep.map((p) => `"${p}"`).join(",")})`)
+    .select("customer_e164");
+  if (pruneErr) throw new Error(`contacts prune: ${pruneErr.message}`);
+  for (const row of removed ?? []) {
+    console.log(`[setup] pruned stale seed contact ${row.customer_e164}`);
+  }
   console.log(`[setup] ${contacts.length} contacts ready`);
 }
 
