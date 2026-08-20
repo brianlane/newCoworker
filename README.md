@@ -1298,7 +1298,15 @@ page.
   (`/api/book/slots`, `/api/book/submit`) are durably rate-limited and
   CSRF-exempt with the `/api/widget/*` rationale. Slot ends are ALWAYS
   start plus elapsed duration (DST-pinned in `tests/booking-page-slots`,
-  the BizBlasts DST lesson).
+  the BizBlasts DST lesson). Google free/busy alone is NOT the whole truth:
+  it only reports opaque spans, and Google defaults all-day events to
+  "Free", so the owner's own OOO banner never appeared in it (Aug 2026
+  report, the founder's out-of-office day was offered to visitors). A
+  per-calendar day-block read (`readGoogleDayBlockBusy`) supplements it:
+  all-day events block their business-local days regardless of
+  transparency, timed out-of-office events block their span, timed events
+  of any other kind stay free/busy's call (marking a timed event Free is an
+  owner choice that keeps working, matching the Microsoft `showAs` rule).
 - Submission re-verifies the slot against live availability before the
   write; the dedupe ledger + attendee guard make the write idempotent, so a
   visitor race re-offers slots instead of double-booking.

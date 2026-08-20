@@ -66,7 +66,8 @@ import {
   findCalendarSlots,
   formatBookingStartLocal,
   getWorkspaceBusyBlocks,
-  wallClockInZone
+  wallClockInZone,
+  zonedMidnightUtc
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
@@ -740,6 +741,358 @@ describe("findCalendarSlots", () => {
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result.ok).toBe(false);
     expect((result as { detail: string }).detail).toBe("calendar_not_connected");
+  });
+
+  it("stops offering a day an all-day event covers even though freeBusy is empty", async () => {
+    // The Aug 2026 report: the founder's all-day OOO (transparent, as Google
+    // defaults all-day events) never reached freeBusy, so every consumer of
+    // this fetch kept offering the day.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(workspaceProxyForBusiness).mockImplementation(async (_biz, _link, config) => {
+      const cfg = config as { endpoint: string };
+      if (cfg.endpoint === "/calendar/v3/freeBusy") return { data: { calendars: {} } } as never;
+      return {
+        data: {
+          items: [
+            {
+              status: "confirmed",
+              eventType: "default",
+              transparency: "transparent",
+              start: { date: "2026-08-21" },
+              end: { date: "2026-08-22" }
+            }
+          ]
+        }
+      } as never;
+    });
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-08-21T09:00:00.000Z",
+      latest: "2026-08-21T17:00:00.000Z",
+      durationMinutes: 30
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toEqual([]);
+  });
+});
+
+describe("zonedMidnightUtc", () => {
+  it("is the identity for UTC dates", () => {
+    expect(zonedMidnightUtc("2026-08-21", "UTC")).toEqual(new Date("2026-08-21T00:00:00.000Z"));
+  });
+
+  it("converges on local midnight for offset zones", () => {
+    expect(zonedMidnightUtc("2026-08-21", "America/Phoenix")).toEqual(
+      new Date("2026-08-21T07:00:00.000Z")
+    );
+    expect(zonedMidnightUtc("2026-08-21", "Asia/Tokyo")).toEqual(
+      new Date("2026-08-20T15:00:00.000Z")
+    );
+  });
+
+  it("keeps the pre-transition offset on a US spring-forward day", () => {
+    // New York jumps at 02:00, so midnight itself is still EST.
+    expect(zonedMidnightUtc("2026-03-08", "America/New_York")).toEqual(
+      new Date("2026-03-08T05:00:00.000Z")
+    );
+  });
+
+  it("settles within the hour when the DST jump skips midnight itself", () => {
+    // Havana springs forward AT midnight (00:00 becomes 01:00), so local
+    // midnight of Mar 8 2026 does not exist; the bounded correction lands
+    // one hour before the day opens, deep in the unbookable night.
+    expect(zonedMidnightUtc("2026-03-08", "America/Havana")).toEqual(
+      new Date("2026-03-08T04:00:00.000Z")
+    );
+  });
+
+  it("yields an Invalid Date for a malformed date string", () => {
+    expect(Number.isNaN(zonedMidnightUtc("not-a-date", "UTC").getTime())).toBe(true);
+  });
+});
+
+describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office)", () => {
+  const WINDOW_START = new Date("2026-08-17T00:00:00.000Z");
+  const WINDOW_END = new Date("2026-09-02T00:00:00.000Z");
+
+  type EventsAnswer = (params: Record<string, string> | undefined, endpoint: string) => unknown;
+
+  /** Route the proxy mock by endpoint: freeBusy POST vs per-calendar events GET. */
+  const mockGoogleProxy = (freeBusy: unknown, events: EventsAnswer) => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation(async (_biz, _link, config) => {
+      const cfg = config as { endpoint: string; params?: Record<string, string> };
+      if (cfg.endpoint === "/calendar/v3/freeBusy") return freeBusy as never;
+      return events(cfg.params, cfg.endpoint) as never;
+    });
+  };
+
+  it("blocks the business-local day of a transparent all-day event", async () => {
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
+    mockGoogleProxy({ data: { calendars: {} } }, () => ({
+      data: {
+        items: [
+          {
+            status: "confirmed",
+            eventType: "default",
+            transparency: "transparent",
+            start: { date: "2026-08-21" },
+            end: { date: "2026-08-22" }
+          }
+        ]
+      }
+    }));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({
+      busy: [
+        {
+          start: new Date("2026-08-21T07:00:00.000Z"),
+          end: new Date("2026-08-22T07:00:00.000Z")
+        }
+      ],
+      complete: true
+    });
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledWith(
+      BIZ,
+      { connectionId: "conn-1", providerConfigKey: "google-calendar" },
+      expect.objectContaining({
+        endpoint: "/calendar/v3/calendars/primary/events",
+        method: "GET",
+        params: expect.objectContaining({
+          singleEvents: "true",
+          timeMin: WINDOW_START.toISOString(),
+          timeMax: WINDOW_END.toISOString()
+        })
+      })
+    );
+  });
+
+  it("spans every day of a multi-day all-day event, end date exclusive", async () => {
+    // The report's second shape: "Brian: out of office" dragged across
+    // Friday and Saturday arrives as date 21 to exclusive date 23.
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
+    mockGoogleProxy({ data: { calendars: {} } }, () => ({
+      data: {
+        items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-23" } }]
+      }
+    }));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read?.busy).toEqual([
+      {
+        start: new Date("2026-08-21T07:00:00.000Z"),
+        end: new Date("2026-08-23T07:00:00.000Z")
+      }
+    ]);
+  });
+
+  it("blocks a timed out-of-office event's span", async () => {
+    mockGoogleProxy({ data: { calendars: {} } }, () => ({
+      data: {
+        items: [
+          {
+            eventType: "outOfOffice",
+            start: { dateTime: "2026-08-21T16:30:00.000Z" },
+            end: { dateTime: "2026-08-22T04:15:00.000Z" }
+          }
+        ]
+      }
+    }));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read?.busy).toEqual([
+      {
+        start: new Date("2026-08-21T16:30:00.000Z"),
+        end: new Date("2026-08-22T04:15:00.000Z")
+      }
+    ]);
+  });
+
+  it("leaves plain timed events to freeBusy and skips day annotations", async () => {
+    mockGoogleProxy(
+      {
+        data: {
+          calendars: {
+            primary: {
+              busy: [{ start: "2026-08-20T17:00:00.000Z", end: "2026-08-20T18:00:00.000Z" }]
+            }
+          }
+        }
+      },
+      () => ({
+        data: {
+          items: [
+            // A plain timed event is freeBusy's call (opaque already came
+            // back above; transparent means the owner said Free).
+            {
+              eventType: "default",
+              start: { dateTime: "2026-08-20T17:00:00.000Z" },
+              end: { dateTime: "2026-08-20T18:00:00.000Z" }
+            },
+            { eventType: "birthday", start: { date: "2026-08-24" }, end: { date: "2026-08-25" } },
+            {
+              eventType: "workingLocation",
+              start: { date: "2026-08-24" },
+              end: { date: "2026-08-25" }
+            },
+            { status: "cancelled", start: { date: "2026-08-26" }, end: { date: "2026-08-27" } },
+            { start: { date: "garbage" }, end: { date: "2026-08-27" } },
+            { start: { date: "2026-08-28" } },
+            { eventType: "outOfOffice", start: { dateTime: "2026-08-28T16:00:00.000Z" } }
+          ]
+        }
+      })
+    );
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({
+      busy: [
+        {
+          start: new Date("2026-08-20T17:00:00.000Z"),
+          end: new Date("2026-08-20T18:00:00.000Z")
+        }
+      ],
+      complete: true
+    });
+  });
+
+  it("reads the shared calendar's day blocks too", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "team@group.calendar.google.com",
+      conn: GOOGLE_CONN
+    } as never);
+    mockGoogleProxy({ data: { calendars: {} } }, (_params, endpoint) =>
+      endpoint === "/calendar/v3/calendars/team%40group.calendar.google.com/events"
+        ? {
+            data: {
+              items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }]
+            }
+          }
+        : { data: { items: [] } }
+    );
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read?.busy).toEqual([
+      {
+        start: new Date("2026-08-21T00:00:00.000Z"),
+        end: new Date("2026-08-22T00:00:00.000Z")
+      }
+    ]);
+    expect(read?.complete).toBe(true);
+  });
+
+  it("keeps freeBusy blocks and reports incomplete when a day read yields nothing", async () => {
+    mockGoogleProxy(
+      {
+        data: {
+          calendars: {
+            primary: {
+              busy: [{ start: "2026-08-20T17:00:00.000Z", end: "2026-08-20T18:00:00.000Z" }]
+            }
+          }
+        }
+      },
+      () => null
+    );
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({
+      busy: [
+        {
+          start: new Date("2026-08-20T17:00:00.000Z"),
+          end: new Date("2026-08-20T18:00:00.000Z")
+        }
+      ],
+      complete: false
+    });
+  });
+
+  it("tolerates an events response with no body", async () => {
+    mockGoogleProxy({ data: { calendars: {} } }, () => ({}));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({ busy: [], complete: true });
+  });
+
+  it("tolerates non-Error day-read throw values", async () => {
+    mockGoogleProxy({ data: { calendars: {} } }, () => {
+      throw "string failure";
+    });
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({ busy: [], complete: false });
+  });
+
+  it("keeps freeBusy blocks and reports incomplete when a day read throws", async () => {
+    mockGoogleProxy(
+      {
+        data: {
+          calendars: {
+            primary: {
+              busy: [{ start: "2026-08-20T17:00:00.000Z", end: "2026-08-20T18:00:00.000Z" }]
+            }
+          }
+        }
+      },
+      () => {
+        throw Object.assign(new Error("Provider request failed (404)"), {
+          response: { status: 404 }
+        });
+      }
+    );
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({
+      busy: [
+        {
+          start: new Date("2026-08-20T17:00:00.000Z"),
+          end: new Date("2026-08-20T18:00:00.000Z")
+        }
+      ],
+      complete: false
+    });
+  });
+
+  it("pages through nextPageToken and merges every page", async () => {
+    mockGoogleProxy({ data: { calendars: {} } }, (params) =>
+      params?.pageToken === "p2"
+        ? { data: { items: [{ start: { date: "2026-08-24" }, end: { date: "2026-08-25" } }] } }
+        : {
+            data: {
+              items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }],
+              nextPageToken: "p2"
+            }
+          }
+    );
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toEqual({
+      busy: [
+        {
+          start: new Date("2026-08-21T00:00:00.000Z"),
+          end: new Date("2026-08-22T00:00:00.000Z")
+        },
+        {
+          start: new Date("2026-08-24T00:00:00.000Z"),
+          end: new Date("2026-08-25T00:00:00.000Z")
+        }
+      ],
+      complete: true
+    });
+    // One freeBusy call plus the two event pages.
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops at the page budget and reports the under-report", async () => {
+    mockGoogleProxy({ data: { calendars: {} } }, () => ({
+      data: {
+        items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }],
+        nextPageToken: "again"
+      }
+    }));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read?.complete).toBe(false);
+    // Four page-budget reads, each surfacing its (repeated) block.
+    expect(read?.busy).toHaveLength(4);
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledTimes(5);
+  });
+
+  it("still returns null when freeBusy itself is unreadable", async () => {
+    // Day blocks supplement freeBusy; they never resurrect a dead read.
+    mockGoogleProxy(null, () => ({
+      data: { items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }] }
+    }));
+    const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
+    expect(read).toBeNull();
   });
 });
 
