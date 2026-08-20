@@ -10,9 +10,16 @@
  * requested and won is a win, not two funnel entries). `quote-lost` is the
  * terminal drop-out. Conversion = won / everyone who ever entered the
  * funnel.
+ *
+ * Residency: the stage tags live on `contacts`, a residency-moved table, so
+ * a `vps`-mode tenant's scan reads that tenant's box. Central held nothing
+ * for them, and an empty funnel reads as "no quotes in flight". An
+ * unreachable box raises ResidencyReadError, which the analytics page turns
+ * into a hidden card.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { ENGAGEMENT_SCAN_LIMIT } from "./engagement";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -67,19 +74,35 @@ export async function getQuoteFunnel(
   opts: { client?: SupabaseClient } = {}
 ): Promise<QuoteFunnel> {
   const db = opts.client ?? (await createSupabaseServiceClient());
+
   // Full customer-directory scan (same cap as the engagement segments):
   // stage matching is case-insensitive and tag normalization preserves the
   // owner's original casing, so a case-sensitive SQL tag filter would
   // silently under-count (a contact tagged "Quote-Won" must still count).
-  const { data, error } = await db
-    .from("contacts")
-    .select("tags")
-    .eq("business_id", businessId)
-    .eq("type", "customer")
-    .limit(ENGAGEMENT_SCAN_LIMIT);
-  if (error) throw new Error(`getQuoteFunnel: ${error.message}`);
+  type TagRow = { tags: string[] | null };
+  const fetchContacts = async (): Promise<TagRow[]> => {
+    if (await isVpsReadMode(businessId, db)) {
+      return await readMovedRows<TagRow>(businessId, {
+        table: "contacts",
+        columns: ["tags"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: ENGAGEMENT_SCAN_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("contacts")
+      .select("tags")
+      .eq("business_id", businessId)
+      .eq("type", "customer")
+      .limit(ENGAGEMENT_SCAN_LIMIT);
+    if (error) throw new Error(`getQuoteFunnel: ${error.message}`);
+    return (data as TagRow[] | null) ?? [];
+  };
 
-  const rows = ((data as Array<{ tags: string[] | null }> | null) ?? []);
+  const rows = await fetchContacts();
   const counts: Record<QuoteStage, number> = {
     "quote-requested": 0,
     "quote-received": 0,

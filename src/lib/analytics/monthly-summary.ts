@@ -8,9 +8,17 @@
  * Snapshots cover FINISHED days only (the nightly sweep runs after
  * midnight), so month-to-date lags today by up to a day, labeled in the
  * card rather than papered over.
+ *
+ * Residency: `analytics_daily_snapshots` is a central control-plane table,
+ * but `contacts` is residency-moved, so the new-contact count for a
+ * `vps`-mode tenant is counted on that tenant's box. Counting centrally
+ * returned 0 for them, which reads as "nobody new called this month" next
+ * to real call and text volume. An unreachable box raises
+ * ResidencyReadError, which the analytics page turns into a hidden card.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { countMovedRows, isVpsReadMode } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -44,27 +52,46 @@ async function monthActivity(
   db: SupabaseClient,
   businessId: string,
   start: Date,
-  end: Date
+  end: Date,
+  vpsReadMode: boolean
 ): Promise<MonthActivity> {
   const startYmd = start.toISOString().slice(0, 10);
   const endYmd = end.toISOString().slice(0, 10);
-  const [snapshotRes, contactsRes] = await Promise.all([
+
+  // Head count, never a row fetch: the card only needs "how many".
+  const countNewContacts = async (): Promise<number> => {
+    if (vpsReadMode) {
+      return await countMovedRows(businessId, {
+        table: "contacts",
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "type", op: "eq", value: "customer" },
+          { column: "created_at", op: "gte", value: start.toISOString() },
+          { column: "created_at", op: "lt", value: end.toISOString() }
+        ]
+      });
+    }
+    const contactsRes = await db
+      .from("contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .eq("type", "customer")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString());
+    if (contactsRes.error) throw new Error(`monthActivity contacts: ${contactsRes.error.message}`);
+    return contactsRes.count ?? 0;
+  };
+
+  const [snapshotRes, newContacts] = await Promise.all([
     db
       .from("analytics_daily_snapshots")
       .select("calls, sms_sent, voice_minutes, missed_calls")
       .eq("business_id", businessId)
       .gte("snapshot_date", startYmd)
       .lt("snapshot_date", endYmd),
-    db
-      .from("contacts")
-      .select("id", { count: "exact", head: true })
-      .eq("business_id", businessId)
-      .eq("type", "customer")
-      .gte("created_at", start.toISOString())
-      .lt("created_at", end.toISOString())
+    countNewContacts()
   ]);
   if (snapshotRes.error) throw new Error(`monthActivity snapshots: ${snapshotRes.error.message}`);
-  if (contactsRes.error) throw new Error(`monthActivity contacts: ${contactsRes.error.message}`);
 
   type Row = { calls: number; sms_sent: number; voice_minutes: number; missed_calls: number };
   const rows = ((snapshotRes.data as Row[] | null) ?? []);
@@ -75,7 +102,7 @@ async function monthActivity(
     texts: sum((r) => r.sms_sent),
     voiceMinutes: sum((r) => r.voice_minutes),
     missedCalls: sum((r) => r.missed_calls),
-    newContacts: contactsRes.count ?? 0,
+    newContacts,
     coveredDays: rows.length
   };
 }
@@ -89,9 +116,11 @@ export async function getMonthlySummary(
   const currentStart = monthStart(now);
   const nextStart = monthStart(now, 1);
   const previousStart = monthStart(now, -1);
+  // Resolved once for both months rather than per query.
+  const vpsReadMode = await isVpsReadMode(businessId, db);
   const [current, previous] = await Promise.all([
-    monthActivity(db, businessId, currentStart, nextStart),
-    monthActivity(db, businessId, previousStart, currentStart)
+    monthActivity(db, businessId, currentStart, nextStart, vpsReadMode),
+    monthActivity(db, businessId, previousStart, currentStart, vpsReadMode)
   ]);
   return { current, previous };
 }

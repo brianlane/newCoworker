@@ -19,10 +19,18 @@
  * Values are summed in integer cents. v1 sums across the tenant's single
  * currency (deals default to USD); a mixed-currency book would need
  * per-currency buckets before these totals mean anything.
+ *
+ * Residency: `deals` and the roster are central tables, but `contacts` is
+ * residency-moved, so the source/owner join reads a `vps`-mode tenant's box.
+ * Reading it centrally for them resolved no contact at all, which silently
+ * filed every won deal under "No source" and "Unassigned", the two labels
+ * that exist to mean something real. An unreachable box raises
+ * ResidencyReadError, which the analytics page turns into a hidden card.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { listTeamMembers } from "@/lib/db/employees";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -210,15 +218,37 @@ export async function getDealsOverview(
     ...new Set(wonDeals.map((d) => d.contact_id).filter((id): id is string => !!id))
   ];
   const contacts: DealContactFacts[] = [];
-  for (let i = 0; i < contactIds.length; i += DEALS_CONTACT_CHUNK) {
-    const chunk = contactIds.slice(i, i + DEALS_CONTACT_CHUNK);
-    const { data, error } = await db
-      .from("contacts")
-      .select("id, lead_source, owner_employee_id")
-      .eq("business_id", businessId)
-      .in("id", chunk);
-    if (error) throw new Error(`getDealsOverview: contacts: ${error.message}`);
-    contacts.push(...(((data as DealContactFacts[] | null) ?? [])));
+  if (contactIds.length > 0) {
+    // Resolved once for the whole chunk loop, not per chunk (and skipped
+    // entirely when no won deal names a contact).
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+    for (let i = 0; i < contactIds.length; i += DEALS_CONTACT_CHUNK) {
+      const chunk = contactIds.slice(i, i + DEALS_CONTACT_CHUNK);
+      if (vpsReadMode) {
+        contacts.push(
+          ...(await readMovedRows<DealContactFacts>(businessId, {
+            table: "contacts",
+            columns: ["id", "lead_source", "owner_employee_id"],
+            filters: [
+              { column: "business_id", op: "eq", value: businessId },
+              { column: "id", op: "in", value: chunk }
+            ],
+            // `id` is the primary key, so a chunk can never match more rows
+            // than it carries ids: the cap exists to bound the box, not to
+            // page (central relies on the same chunking).
+            limit: DEALS_CONTACT_CHUNK
+          }))
+        );
+        continue;
+      }
+      const { data, error } = await db
+        .from("contacts")
+        .select("id, lead_source, owner_employee_id")
+        .eq("business_id", businessId)
+        .in("id", chunk);
+      if (error) throw new Error(`getDealsOverview: contacts: ${error.message}`);
+      contacts.push(...(((data as DealContactFacts[] | null) ?? [])));
+    }
   }
 
   return buildDealsOverview({

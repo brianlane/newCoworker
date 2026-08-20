@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Pin CENTRAL residency mode. `contacts` is a residency-moved table, so this
+// module routes its scan through the residency layer; the VPS branch is
+// covered by tests/residency-read-flip.test.ts.
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return { ...actual, isVpsReadMode: vi.fn(async () => false) };
+});
+
 const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
