@@ -148,6 +148,39 @@ describe("stripHtml", () => {
       "A & B <c>   'd' \"e\"\n\nf"
     );
   });
+
+  it("decodes every supported entity exactly once, case-insensitively", () => {
+    const entities: [string, string][] = [
+      ["&nbsp;", " "],
+      ["&amp;", "&"],
+      ["&lt;", "<"],
+      ["&gt;", ">"],
+      ["&quot;", '"'],
+      ["&#39;", "'"],
+      ["&#039;", "'"]
+    ];
+    for (const [entity, decoded] of entities) {
+      expect(stripHtml(`x${entity}x`)).toBe(`x${decoded}x`);
+      expect(stripHtml(`x${entity.toUpperCase()}x`)).toBe(`x${decoded}x`);
+    }
+  });
+
+  it("strips nested tag constructions down to text, leaving no tag behind", () => {
+    const out = stripHtml("<scr<script>ipt>alert(1)</script>");
+    expect(out).not.toMatch(/<[^>]*>/);
+    expect(out).not.toContain("<script");
+    expect(out).toBe("ipt>alert(1)");
+  });
+
+  it("decodes an escaped entity once: &amp;lt; stays the text &lt;", () => {
+    expect(stripHtml("&amp;lt;")).toBe("&lt;");
+    expect(stripHtml("&amp;lt;script&amp;gt;")).toBe("&lt;script&gt;");
+    expect(stripHtml("&amp;amp;")).toBe("&amp;");
+  });
+
+  it("keeps comparison text intact: entities decode after tags are stripped", () => {
+    expect(stripHtml("5 &lt; 10 &gt; 3")).toBe("5 < 10 > 3");
+  });
 });
 
 describe("mapFubNote", () => {

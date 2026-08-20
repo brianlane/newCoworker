@@ -161,6 +161,10 @@ export function FubImport({ businessId }: Props) {
   const dryRun = job?.counts.dryRun;
   const run = job?.counts.run;
   const running = busy === "run" || job?.status === "running";
+  // Resume offer, matching what the run endpoint accepts: a failed REAL run
+  // still has a valid cursor, while a job that never got past its preview
+  // (dryRun still true, because the server flips it the moment a real run
+  // starts) has nothing to resume and has to be started again.
   const canRun =
     !!job &&
     job.hasApiKey &&

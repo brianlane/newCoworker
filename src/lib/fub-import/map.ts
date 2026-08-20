@@ -117,21 +117,56 @@ export function mapFubPerson(person: FubPerson): MappedOrSkipped<MappedFubContac
 }
 
 /**
+ * The handful of HTML entities FUB note bodies actually carry. Keys are
+ * lowercase; ENTITY_PATTERN below must match exactly these, and the unit
+ * tests assert every one of them, so the two cannot drift apart.
+ */
+const HTML_ENTITIES: Record<string, string> = {
+  "&nbsp;": " ",
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&#039;": "'"
+};
+
+/** Every entity above, in one case-insensitive alternation. */
+const ENTITY_PATTERN = /&(?:nbsp|amp|lt|gt|quot|#0?39);/gi;
+
+/** Tag-stripping passes before we stop. Real note bodies settle in two. */
+const MAX_TAG_STRIP_PASSES = 20;
+
+/**
  * Strip an HTML note body down to readable text: tags out, the handful of
  * entities FUB actually emits decoded, whitespace collapsed. Deliberately
  * simple; imported notes are a log, not rendered HTML.
  */
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#0?39;/g, "'")
-    .replace(/&quot;/gi, '"')
+  // Breaks and block closers become newlines first, while the tags they live
+  // on are still intact.
+  let text = html.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n");
+  // Then strip tags until the string stops changing. A single pass is the
+  // incomplete sanitization CodeQL flags: removing a match joins whatever
+  // sat on either side of it, and nested constructions like
+  // `<scr<script>ipt>` are the classic way to rebuild a tag out of the
+  // leftovers. Looping to a fixed point means the result carries no
+  // `<...>` pair whatever the input; the cap stops pathological input from
+  // looping without end.
+  for (let pass = 0; pass < MAX_TAG_STRIP_PASSES; pass++) {
+    const stripped = text.replace(/<[^>]*>/g, "");
+    if (stripped === text) break;
+    text = stripped;
+  }
+  // Entities LAST, and in a SINGLE pass through a replacer, so each entity
+  // decodes exactly once and no decoded output is re-scanned: `&amp;lt;`
+  // ends up as the literal text `&lt;`, never as `<`. Decoding after
+  // stripping is deliberate too, so `5 &lt; 10 &gt; 3` keeps its numbers
+  // instead of losing `< 10 >` to the tag regex. The result is plain text
+  // stored in a text column and rendered escaped by React, so a decoded
+  // `<script>` is literal characters on the page, not markup.
+  return text
+    .replace(ENTITY_PATTERN, (entity) => HTML_ENTITIES[entity.toLowerCase()])
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

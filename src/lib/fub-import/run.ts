@@ -540,6 +540,24 @@ export async function runFubImportChunk(
   const counts = normalizeFubRunCounts((job.counts as { run?: unknown }).run);
   const personCache = new Map<number, string | null>();
 
+  // Claim the job as a REAL run BEFORE the first FUB call. dry_run is the
+  // only thing that tells a preview apart from an import, and both the run
+  // route and the dashboard refuse to resume a failed job that still looks
+  // like a preview. Flipping it at the first page persist instead would
+  // strand any run that dies on its opening page (a FUB timeout, a 500):
+  // the job would be unresumable even though later pages may already have
+  // written contacts, and starting a fresh job re-fires every contact event
+  // (the dedupe keys are job-scoped), running automations a second time.
+  // One write, only on the first chunk of a job: after that dry_run is
+  // already false.
+  if (job.dry_run) {
+    await updateFubImportJob(db, job.business_id, job.id, {
+      status: "running",
+      dry_run: false,
+      error: null
+    });
+  }
+
   const persist = async () => {
     await updateFubImportJob(db, job.business_id, job.id, {
       status: cursor.phase === "done" ? "done" : "running",

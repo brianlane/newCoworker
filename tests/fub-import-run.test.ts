@@ -427,9 +427,10 @@ describe("runFubImportChunk: people phase", () => {
         dedupeKey: `ce:created:+16025551001:fub:${JOB}`
       })
     );
-    // Progress persisted after every page (3 pages here).
+    // The opening claim write, then progress persisted after every page
+    // (3 pages here).
     const persists = log.filter((t) => t.table === "fub_import_jobs");
-    expect(persists.length).toBe(3);
+    expect(persists.length).toBe(4);
     const lastPersist = persists[persists.length - 1].calls.find((c) => c.name === "update")
       ?.args[0] as Record<string, unknown>;
     expect(lastPersist.status).toBe("done");
@@ -655,7 +656,7 @@ describe("runFubImportChunk: people phase", () => {
 
   it("persists once even when the deadline has already passed", async () => {
     const { db, log } = makeDb();
-    const result = await runFubImportChunk(db, stubClient(), jobRow(), {
+    const result = await runFubImportChunk(db, stubClient(), jobRow({ dry_run: false }), {
       deadlineMs: 0,
       now: () => 5
     });
@@ -665,16 +666,56 @@ describe("runFubImportChunk: people phase", () => {
 
   it("a job already done persists its done status and returns immediately", async () => {
     const { db, log } = makeDb();
-    const result = await runFubImportChunk(db, stubClient(), jobRow({ cursor: { phase: "done" } }), {
-      deadlineMs: 10,
-      now: () => 0
-    });
+    const result = await runFubImportChunk(
+      db,
+      stubClient(),
+      jobRow({ dry_run: false, cursor: { phase: "done" } }),
+      { deadlineMs: 10, now: () => 0 }
+    );
     expect(result.status).toBe("done");
     const persist = log[0].calls.find((c) => c.name === "update")?.args[0] as Record<
       string,
       unknown
     >;
     expect(persist.status).toBe("done");
+  });
+
+  // Regression: a real run has to stop looking like a preview from its first
+  // instruction, not from its first saved page. dry_run is what the run route
+  // and the dashboard read to decide whether a failed job may resume, so a
+  // run that dies on its opening FUB call used to be stranded forever.
+  it("claims the job as a real run BEFORE the first FUB call, so an early failure can resume", async () => {
+    const client = stubClient({
+      getPeople: vi.fn(async () => {
+        throw new Error("FUB 503");
+      })
+    });
+    const { db, log } = makeDb();
+    await expect(
+      runFubImportChunk(db, client, jobRow(), { deadlineMs: 10, now: () => 0 })
+    ).rejects.toThrow("FUB 503");
+    const writes = log.filter((t) => t.table === "fub_import_jobs");
+    expect(writes).toHaveLength(1);
+    const claim = writes[0].calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    // Not a preview any more: status running, dry_run false, no page saved.
+    expect(claim).toMatchObject({ status: "running", dry_run: false, error: null });
+    expect(claim.cursor).toBeUndefined();
+  });
+
+  it("does not re-claim a job whose real run already started", async () => {
+    const { db, log } = makeDb();
+    const result = await runFubImportChunk(
+      db,
+      stubClient(),
+      jobRow({ status: "running", dry_run: false }),
+      { deadlineMs: 10, now: () => 0 }
+    );
+    expect(result.status).toBe("done");
+    // Three page persists, no extra claim write.
+    expect(log.filter((t) => t.table === "fub_import_jobs")).toHaveLength(3);
   });
 });
 

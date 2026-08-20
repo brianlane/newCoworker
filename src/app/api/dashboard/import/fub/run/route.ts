@@ -62,7 +62,10 @@ export async function POST(request: Request) {
     const job = await getFubImportJob(db, parsed.businessId, parsed.jobId);
     if (!job) return errorResponse("NOT_FOUND", "Import job not found");
     // A failed REAL run may resume (its cursor is still valid); a job whose
-    // dry run never completed has nothing to resume from.
+    // dry run never completed has nothing to resume from. dry_run stays true
+    // only until runFubImportChunk claims the job, which it does before its
+    // first Follow Up Boss call, so `failed && dry_run` is exactly "this job
+    // never got past its preview" and never "the import died early".
     if (job.status === "pending" || (job.status === "failed" && job.dry_run)) {
       return errorResponse(
         "CONFLICT",
