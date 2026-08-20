@@ -24,7 +24,7 @@
 import { findBookingByZoomMeetingId } from "@/lib/calendar-tools/booking-dedupe";
 import { getCustomerMemory, findCustomerByEmail } from "@/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { extractVttSpeakers, pickZoomGuestName } from "@/lib/zoom/document-title";
+import { extractVttSpeakers, pickZoomGuestSpeaker } from "@/lib/zoom/document-title";
 import { vttToPlainText } from "@/lib/transcripts/vtt";
 import { emailContactKey } from "../../../supabase/functions/_shared/contact_key";
 import { logger } from "@/lib/logger";
@@ -213,10 +213,12 @@ export async function resolveMeetingContact(
   }
 
   // 3. The guest's speaker name, when exactly one contact carries it.
-  const guest = pickZoomGuestName({
+  //    The WHOLE label ("Kingsley Moyo"), not the title-shaped first name
+  //    pickZoomGuestName returns: contacts store full names, so an anchored
+  //    compare against "Kingsley" never matches one.
+  const guest = pickZoomGuestSpeaker({
     speakers: extractVttSpeakers(plain),
-    hostNames: input.hostNames,
-    summary: null
+    hostNames: input.hostNames
   });
   if (guest) {
     const contactId = await findByName(businessId, guest);

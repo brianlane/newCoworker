@@ -228,6 +228,16 @@ describe("resolveMeetingContact: the transcript fallbacks", () => {
     expect(await resolveMeetingContact({ ...input, zoomMeetingId: null }, d)).toBeNull();
   });
 
+  it("looks up the guest's WHOLE speaker name, not a first name", async () => {
+    // Bugbot, PR #1566: this used pickZoomGuestName, which is built for
+    // TITLES and shortens to a first name or a nickname. Contacts store full
+    // names, so an anchored "Kingsley" could never match "Kingsley Moyo" and
+    // the entire name fallback was dead for the common case.
+    const findByName = vi.fn(async () => null);
+    await resolveMeetingContact({ ...input, zoomMeetingId: null }, deps({ findByName }));
+    expect(findByName).toHaveBeenCalledWith(BIZ, "Kingsley Moyo");
+  });
+
   it("falls through to the guest's speaker name", async () => {
     createSupabaseServiceClient.mockResolvedValue({
       from: () => ({
