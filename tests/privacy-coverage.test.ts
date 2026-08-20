@@ -202,6 +202,8 @@ const EXEMPT: Record<string, string> = {
   // Infrastructure, provisioning, and ops.
   applied_oneshots: "ops ledger",
   data_backups: "backup metadata",
+  fub_import_jobs:
+    "Follow Up Boss import job state: the tenant's own API key (encrypted, nullable, wiped on demand), aggregate counts, and a capped list of failure reasons keyed by FUB record ids, not our person rows. The imported people/notes/deals land in contacts/contact_notes/deals, which carry the erasure story; the job row cascades with the business",
   number_port_requests: "the tenant's own number porting",
   provisioning_jobs: "provisioning state",
   residency_backup_keys: "backup key escrow",
