@@ -255,7 +255,18 @@ export async function collectHitAtPoint(page, x, y) {
     ({ x, y }) => {
       const iw = window.innerWidth || 1280;
       const ih = window.innerHeight || 720;
-      window.scrollTo(Math.max(0, x - iw / 2), Math.max(0, y - ih / 2));
+      // The OPTIONS form with behavior "instant", never the two-argument
+      // form: that one respects CSS `scroll-behavior: smooth`, so on a
+      // smooth-scrolling portal the scroll could still be ANIMATING when
+      // scrollX / elementFromPoint read below, reporting a below-the-fold
+      // click as offscreen or resolving it to whatever sat under the point
+      // mid-flight. "instant" completes synchronously regardless of the
+      // page's own scroll-behavior.
+      window.scrollTo({
+        left: Math.max(0, x - iw / 2),
+        top: Math.max(0, y - ih / 2),
+        behavior: "instant"
+      });
       const vx = x - window.scrollX;
       const vy = y - window.scrollY;
       if (vx < 0 || vy < 0 || vx >= iw || vy >= ih) return "offscreen";

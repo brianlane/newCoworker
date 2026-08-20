@@ -647,6 +647,22 @@ describe("collectHitAtPoint and resolveDemoPointAction", () => {
   });
 });
 
+describe("the in-page hit-test source", () => {
+  it("scrolls with behavior instant, so smooth-scroll pages cannot race the hit-test", () => {
+    // Bugbot, PR #1550: two-argument window.scrollTo respects CSS
+    // `scroll-behavior: smooth`, so the scroll could still be animating when
+    // scrollX / elementFromPoint read, and a below-the-fold click would be
+    // reported offscreen or resolve to the wrong node. The in-page function
+    // only runs in a real browser, so its source is what a unit test can pin.
+    const demoSource = readFileSync(
+      new URL("../vps/aiflow-render/demo.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(demoSource).toContain('behavior: "instant"');
+    expect(demoSource).not.toMatch(/window\.scrollTo\((?!\{)/);
+  });
+});
+
 describe("per-turn diagnostics slicing", () => {
   it("returns only what arrived since the marks were taken", () => {
     const diag: Record<string, string[]> = {
