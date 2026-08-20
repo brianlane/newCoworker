@@ -7,7 +7,7 @@ import {
   formatTodoDueAt,
   formatTodoDueAtLocal,
   isTodoOverdue,
-  todoAddDestination,
+  todoAddLanding,
   todoCompletionStamps,
   todoCreateSchema,
   todoListFilterSchema,
@@ -204,28 +204,63 @@ describe("formatTodoDueAtLocal", () => {
   });
 });
 
-describe("todoAddDestination", () => {
+describe("todoAddLanding", () => {
   const now = new Date("2026-08-20T12:00:00.000Z");
   const past = "2026-08-19T12:00:00.000Z";
   const future = "2026-08-21T12:00:00.000Z";
-  /** What the POST returns: never completed, due date optional. */
-  const created = (dueAt: string | null) => ({ dueAt, completedAt: null });
-
-  it("keeps the chip when it already holds the new row", () => {
-    expect(todoAddDestination(created(null), "open", now)).toBeNull();
-    expect(todoAddDestination(created(future), "open", now)).toBeNull();
-    // Added already late, while looking at Overdue: it lands right there.
-    expect(todoAddDestination(created(past), "overdue", now)).toBeNull();
+  /** What the POST returns: never completed, due date and assignee optional. */
+  const created = (dueAt: string | null, assigneeEmployeeId: string | null = null) => ({
+    dueAt,
+    completedAt: null,
+    assigneeEmployeeId
+  });
+  const view = (status: "open" | "overdue" | "done", assigneeEmployeeId = "") => ({
+    status,
+    assigneeEmployeeId
   });
 
-  it("sends the user to Open when the current chip could never show it", () => {
+  it("keeps the view when it already holds the new row", () => {
+    expect(todoAddLanding(created(null), view("open"), now)).toBeNull();
+    expect(todoAddLanding(created(future), view("open"), now)).toBeNull();
+    // Added already late, while looking at Overdue: it lands right there.
+    expect(todoAddLanding(created(past), view("overdue"), now)).toBeNull();
+    // Filtered to one teammate, and the new to-do is theirs.
+    expect(todoAddLanding(created(null, "emp-1"), view("open", "emp-1"), now)).toBeNull();
+  });
+
+  it("moves to Open when the chip could never show it", () => {
     // Done can never hold a new to-do: nothing is created checked off.
-    expect(todoAddDestination(created(null), "done", now)).toBe("open");
-    expect(todoAddDestination(created(past), "done", now)).toBe("open");
+    expect(todoAddLanding(created(null), view("done"), now)).toEqual(view("open"));
+    expect(todoAddLanding(created(past), view("done"), now)).toEqual(view("open"));
     // Overdue only holds it once the due date has passed, so a to-do with
     // no due date, or one due later, would silently vanish from view.
-    expect(todoAddDestination(created(null), "overdue", now)).toBe("open");
-    expect(todoAddDestination(created(future), "overdue", now)).toBe("open");
+    expect(todoAddLanding(created(null), view("overdue"), now)).toEqual(view("open"));
+    expect(todoAddLanding(created(future), view("overdue"), now)).toEqual(view("open"));
+  });
+
+  it("clears an assignee filter that hides the new row, chip untouched", () => {
+    // Quick-add has its own assignee control, so the row can belong to
+    // someone other than the teammate the list is filtered to.
+    expect(todoAddLanding(created(null, "emp-2"), view("open", "emp-1"), now)).toEqual(
+      view("open", "")
+    );
+    // Unassigned counts as "not that teammate" too.
+    expect(todoAddLanding(created(null, null), view("open", "emp-1"), now)).toEqual(view("open", ""));
+    // The chip still holds it, so only the assignee filter is relaxed.
+    expect(todoAddLanding(created(past, "emp-2"), view("overdue", "emp-1"), now)).toEqual(
+      view("overdue", "")
+    );
+  });
+
+  it("relaxes only what hides the row, and both when both do", () => {
+    // Chip is wrong, assignee filter matches: the filter is kept.
+    expect(todoAddLanding(created(null, "emp-1"), view("done", "emp-1"), now)).toEqual(
+      view("open", "emp-1")
+    );
+    // Both wrong: Open, all teammates.
+    expect(todoAddLanding(created(future, "emp-2"), view("done", "emp-1"), now)).toEqual(
+      view("open", "")
+    );
   });
 });
 

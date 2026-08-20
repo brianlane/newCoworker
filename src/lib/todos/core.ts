@@ -135,24 +135,45 @@ export function todoMatchesStatusFilter(
 }
 
 /**
- * Where a just-created to-do is actually visible, given the chip the list is
- * showing right now. `null` means it belongs under that chip already, so the
- * list only needs a reload.
- *
- * Quick-add is offered under every chip, but a new to-do is always OPEN
- * (nothing is created checked off). Under Done it can therefore never
- * appear, and under Overdue it appears only when its due date is already
- * past. Reloading in place there clears the form and changes nothing on
- * screen, which reads as a failed save and invites the user to add the same
- * to-do again. Open is the answer whenever the current chip cannot hold it,
- * since Open covers every not-completed row, overdue ones included.
+ * Everything that decides whether a row is on screen: the status chip and
+ * the assignee filter. An empty assignee means "all teammates".
  */
-export function todoAddDestination(
-  todo: Pick<Todo, "dueAt" | "completedAt">,
-  status: TodoStatusFilter,
+export type TodoListFilters = {
+  status: TodoStatusFilter;
+  assigneeEmployeeId: string;
+};
+
+/**
+ * Which filters actually show a just-created to-do. `null` means the view
+ * on screen already holds it, so it only needs a reload.
+ *
+ * Quick-add is offered under every chip and carries its own assignee
+ * control, but a new to-do is always OPEN (nothing is created checked off)
+ * and belongs to whoever the form named. So Done can never show it, Overdue
+ * shows it only when its due date is already past, and an assignee filter
+ * naming someone else hides it whatever the chip says. Reloading in place
+ * there clears the form and changes nothing on screen, which reads as a
+ * failed save and invites the user to add the same to-do twice.
+ *
+ * Only the control that actually hides the row is relaxed: the chip becomes
+ * Open (which covers every not-completed row, overdue ones included) and the
+ * assignee filter clears to all teammates, each only when it has to. A
+ * manager filtered to one teammate who adds another to-do for that same
+ * teammate keeps their filter.
+ */
+export function todoAddLanding(
+  todo: Pick<Todo, "dueAt" | "completedAt" | "assigneeEmployeeId">,
+  current: TodoListFilters,
   now: Date = new Date()
-): TodoStatusFilter | null {
-  return todoMatchesStatusFilter(todo, status, now) ? null : "open";
+): TodoListFilters | null {
+  const statusHolds = todoMatchesStatusFilter(todo, current.status, now);
+  const assigneeHolds =
+    current.assigneeEmployeeId === "" || todo.assigneeEmployeeId === current.assigneeEmployeeId;
+  if (statusHolds && assigneeHolds) return null;
+  return {
+    status: statusHolds ? current.status : "open",
+    assigneeEmployeeId: assigneeHolds ? current.assigneeEmployeeId : ""
+  };
 }
 
 /**

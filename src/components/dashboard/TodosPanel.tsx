@@ -24,8 +24,9 @@ import {
   applyTodoCompletion,
   formatTodoDueAtLocal,
   isTodoOverdue,
-  todoAddDestination,
+  todoAddLanding,
   type Todo,
+  type TodoListFilters,
   type TodoListView,
   type TodoStatusFilter
 } from "@/lib/todos/core";
@@ -104,34 +105,56 @@ export function TodosPanel({
   /** Monotonic fetch counter: only the LATEST load may write state, so a
    * slow earlier response can never overwrite a newer filter's list. */
   const loadSeq = useRef(0);
-
-  const load = useCallback(async () => {
-    const seq = ++loadSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ businessId, status });
-      if (assigneeFilter) params.set("assigneeEmployeeId", assigneeFilter);
-      const data = await fetch(`/api/dashboard/todos?${params.toString()}`, {
-        cache: "no-store"
-      }).then((r) => readEnvelope<{ todos: TodoWithRefs[]; employees: RosterOption[] }>(r));
-      if (seq !== loadSeq.current) return;
-      // Stamped with the chip THIS fetch asked for, not whatever the chip
-      // reads at the moment the rows land.
-      setList({ status, rows: data.todos });
-      setEmployees(data.employees);
-    } catch (e) {
-      if (seq !== loadSeq.current) return;
-      setError(e instanceof Error ? e.message : t("loadFailed"));
-      setList(null);
-    } finally {
-      if (seq === loadSeq.current) setLoading(false);
-    }
-  }, [businessId, status, assigneeFilter, t]);
+  /** The filters on screen RIGHT NOW. A create can resolve after the user
+   * has moved to another chip, and the values captured when the form was
+   * submitted are stale by then; this is always current. */
+  const filtersRef = useRef<TodoListFilters>({
+    status,
+    assigneeEmployeeId: assigneeFilter
+  });
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    filtersRef.current = { status, assigneeEmployeeId: assigneeFilter };
+  }, [status, assigneeFilter]);
+
+  /**
+   * Fetch one view. The filters are an ARGUMENT rather than read from state
+   * so this identity never changes: a caller holding an older copy still
+   * fetches whatever view it asks for, and the rows are stamped with the
+   * filters the request actually used.
+   */
+  const load = useCallback(
+    async (filters: TodoListFilters) => {
+      const seq = ++loadSeq.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams({ businessId, status: filters.status });
+        if (filters.assigneeEmployeeId) {
+          params.set("assigneeEmployeeId", filters.assigneeEmployeeId);
+        }
+        const data = await fetch(`/api/dashboard/todos?${params.toString()}`, {
+          cache: "no-store"
+        }).then((r) => readEnvelope<{ todos: TodoWithRefs[]; employees: RosterOption[] }>(r));
+        if (seq !== loadSeq.current) return;
+        // Stamped with the chip THIS fetch asked for, not whatever the chip
+        // reads at the moment the rows land.
+        setList({ status: filters.status, rows: data.todos });
+        setEmployees(data.employees);
+      } catch (e) {
+        if (seq !== loadSeq.current) return;
+        setError(e instanceof Error ? e.message : t("loadFailed"));
+        setList(null);
+      } finally {
+        if (seq === loadSeq.current) setLoading(false);
+      }
+    },
+    [businessId, t]
+  );
+
+  useEffect(() => {
+    void load({ status, assigneeEmployeeId: assigneeFilter });
+  }, [load, status, assigneeFilter]);
 
   // Deal titles for the link dropdowns; a blip just leaves the list empty
   // (the to-dos themselves still render their linked deal's title).
@@ -177,24 +200,46 @@ export function TodosPanel({
 
   /**
    * A successful quick-add must always show something. The new row is
-   * always open, so under Done (and under Overdue, unless it is already
-   * late) reloading the current chip leaves the screen unchanged and reads
-   * as a failed save. Move to the chip that holds it, which reloads through
-   * the status effect, and name that chip; when the current chip does hold
-   * it, just reload and confirm in place.
+   * always open and belongs to whoever the form named, so Done (and
+   * Overdue, for a to-do that is not late yet), or an assignee filter
+   * naming someone else, would reload a view that cannot contain it: the
+   * form clears, nothing changes on screen, and that reads as a failed
+   * save. Move to the filters that DO hold it, and say which ones.
    */
   const handleAdded = useCallback(
     (created: Todo) => {
-      const destination = todoAddDestination(created, status);
-      if (destination === null) {
-        setAddedNotice(t("added"));
-        void load();
+      // Live filters, not the ones captured when the create started: the
+      // user may have switched chips while the request was in flight.
+      const current = filtersRef.current;
+      const landing = todoAddLanding(created, current);
+      const movedStatus = landing !== null && landing.status !== current.status;
+      const movedAssignee =
+        landing !== null && landing.assigneeEmployeeId !== current.assigneeEmployeeId;
+
+      if (movedStatus && movedAssignee) {
+        setAddedNotice(t("addedShowingBoth", { filter: t(CHIP_LABEL_KEY[landing.status]) }));
+      } else if (movedStatus) {
+        setAddedNotice(t("addedShowingStatus", { filter: t(CHIP_LABEL_KEY[landing.status]) }));
+      } else if (movedAssignee) {
+        setAddedNotice(t("addedShowingAssignee"));
+      } else {
+        setAddedNotice(t("addedHere"));
+      }
+
+      if (movedStatus || movedAssignee) {
+        // Changing a filter re-runs the load effect, which fetches the view
+        // that holds the row; a second fetch here would only be a duplicate.
+        if (landing !== null) {
+          setStatus(landing.status);
+          setAssigneeFilter(landing.assigneeEmployeeId);
+        }
         return;
       }
-      setAddedNotice(t("addedSwitched", { filter: t(CHIP_LABEL_KEY[destination]) }));
-      setStatus(destination);
+      // Nothing moved, so nothing else will refetch, and the list on screen
+      // may have been loaded before this row was inserted.
+      void load(current);
     },
-    [status, load, t]
+    [load, t]
   );
 
   const chips: { id: TodoStatusFilter; label: string }[] = [
@@ -211,7 +256,7 @@ export function TodosPanel({
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-spark-orange">{error}</p>
           <button
-            onClick={() => void load()}
+            onClick={() => void load({ status, assigneeEmployeeId: assigneeFilter })}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/60 hover:text-parchment"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -247,7 +292,12 @@ export function TodosPanel({
         </div>
         <select
           value={assigneeFilter}
-          onChange={(e) => setAssigneeFilter(e.target.value)}
+          onChange={(e) => {
+            // Same reason as the chips: the confirmation named the view the
+            // user was moved to, and they have just chosen another one.
+            setAddedNotice(null);
+            setAssigneeFilter(e.target.value);
+          }}
           aria-label={t("filterAssignee")}
           className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment/80"
         >
@@ -260,7 +310,7 @@ export function TodosPanel({
         </select>
         <div className="ml-auto">
           <button
-            onClick={() => void load()}
+            onClick={() => void load({ status, assigneeEmployeeId: assigneeFilter })}
             className="inline-flex items-center gap-1.5 rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/60 hover:text-parchment"
             aria-label={t("refresh")}
           >
@@ -419,7 +469,7 @@ export function TodosPanel({
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            void load();
+            void load({ status, assigneeEmployeeId: assigneeFilter });
           }}
         />
       )}
