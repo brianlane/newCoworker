@@ -137,6 +137,12 @@ verify_jwt = false
 [functions.email-campaign-sweep]
 verify_jwt = false
 
+# Smart List nightly action sweep (pg_cron daily at 09:10 UTC). Auth is the
+# plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway JWT
+# check must stay OFF, same rationale as the cron workers above.
+[functions.segment-action-sweep]
+verify_jwt = false
+
 # Deployed at #972 without an entry here, so the CI bulk deploy left the
 # gateway JWT check ON and every pg_cron tick 401'd (the exact
 # `UNAUTHORIZED_INVALID_JWT_FORMAT` failure this file's header describes)

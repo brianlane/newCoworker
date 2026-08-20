@@ -55,6 +55,26 @@ export const segmentFiltersSchema = z
 
 export type SegmentFilters = z.infer<typeof segmentFiltersSchema>;
 
+/**
+ * A segment's nightly action: when enabled, the segment-action-sweep adds
+ * `tag` to every matching contact through the shared tag_changed event path
+ * (supabase/functions/_shared/segment_actions.ts). Saved as a whole so
+ * "enabled requires a tag" is validated atomically; `.strict()` for the same
+ * typo protection the filters get.
+ */
+export const segmentActionSchema = z
+  .object({
+    /** The single tag the sweep adds; null clears the action. */
+    tag: z.string().trim().min(1).max(MAX_SEGMENT_TAG_LENGTH).nullable(),
+    enabled: z.boolean()
+  })
+  .strict()
+  .refine((action) => !action.enabled || action.tag !== null, {
+    message: "Turning the nightly action on requires a tag."
+  });
+
+export type SegmentAction = z.infer<typeof segmentActionSchema>;
+
 /** A saved segment as the API serves it. */
 export type ContactSegment = {
   id: string;
@@ -62,6 +82,12 @@ export type ContactSegment = {
   name: string;
   filters: SegmentFilters;
   position: number;
+  /** Nightly action tag, or null when no action is configured. */
+  actionTag: string | null;
+  /** Whether the nightly sweep applies actionTag to matching contacts. */
+  actionEnabled: boolean;
+  /** When the sweep last finished a pass over this segment. */
+  lastAppliedAt: string | null;
 };
 
 /** The per-contact facts membership is evaluated over. */

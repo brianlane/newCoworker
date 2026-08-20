@@ -17,6 +17,7 @@ import {
   describeSegmentFilters,
   matchesSegment,
   MAX_SEGMENT_NAME_LENGTH,
+  MAX_SEGMENT_TAG_LENGTH,
   type ContactSegment,
   type SegmentFilters
 } from "@/lib/segments/core";
@@ -167,10 +168,17 @@ export function CustomersList({
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
+  const t = useTranslations("dashboard.segments.actions");
   const [segments, setSegments] = useState<ContactSegment[]>(initialSegments);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
   const [segmentError, setSegmentError] = useState<string | null>(null);
   const [segmentBusy, setSegmentBusy] = useState(false);
+  /** Unsaved nightly-action edits, keyed to the segment they belong to. */
+  const [actionEdit, setActionEdit] = useState<{
+    segmentId: string;
+    tag: string;
+    enabled: boolean;
+  } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({
     name: "",
@@ -313,6 +321,57 @@ export function CustomersList({
   ).sort((a, b) => a.localeCompare(b));
 
   const selectedSegment = segments.find((s) => s.id === selectedSegmentId) ?? null;
+  // The nightly-action draft: unsaved edits for the selected segment, else
+  // its stored values (switching chips discards a stale draft implicitly).
+  const actionDraft =
+    selectedSegment === null
+      ? null
+      : actionEdit?.segmentId === selectedSegment.id
+        ? actionEdit
+        : {
+            segmentId: selectedSegment.id,
+            tag: selectedSegment.actionTag ?? "",
+            enabled: selectedSegment.actionEnabled
+          };
+
+  const saveSegmentAction = async () => {
+    if (!businessId || !selectedSegment || !actionDraft) return;
+    const tag = actionDraft.tag.trim();
+    if (actionDraft.enabled && !tag) {
+      setSegmentError(t("errorTagRequired"));
+      return;
+    }
+    setSegmentBusy(true);
+    setSegmentError(null);
+    try {
+      const res = await fetch(
+        `/api/dashboard/segments/${selectedSegment.id}?businessId=${encodeURIComponent(businessId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: { tag: tag || null, enabled: actionDraft.enabled }
+          })
+        }
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { segment: ContactSegment };
+        error?: { message: string };
+      };
+      if (!json.ok || !json.data) {
+        setSegmentError(json.error?.message ?? t("errorSave"));
+        return;
+      }
+      setSegments((prev) =>
+        prev.map((s) => (s.id === json.data!.segment.id ? json.data!.segment : s))
+      );
+      setActionEdit(null);
+    } finally {
+      setSegmentBusy(false);
+    }
+  };
+
   const nowMs = Date.now();
   const segmentCount = (s: ContactSegment) =>
     rows.filter((r) => matchesSegment(r, s.filters, nowMs)).length;
@@ -513,6 +572,53 @@ export function CustomersList({
         <p data-testid="claim-notice" className="text-xs text-rose-300/90">
           {claimNotice}
         </p>
+      )}
+      {canManageSegments && businessId && selectedSegment && actionDraft && (
+        <Card padding="sm">
+          <div className="flex flex-wrap items-end gap-3 text-xs text-parchment/70">
+            <div className="flex flex-col gap-1">
+              <span className="font-semibold text-parchment/80">{t("title")}</span>
+              <span className="max-w-sm text-parchment/50">{t("description")}</span>
+            </div>
+            <label className="flex flex-col gap-1">
+              {t("tagLabel")}
+              <input
+                className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment"
+                value={actionDraft.tag}
+                maxLength={MAX_SEGMENT_TAG_LENGTH}
+                placeholder={t("tagPlaceholder")}
+                onChange={(ev) => setActionEdit({ ...actionDraft, tag: ev.target.value })}
+              />
+            </label>
+            <label className="flex items-center gap-1.5 pb-1.5">
+              <input
+                type="checkbox"
+                checked={actionDraft.enabled}
+                onChange={(ev) =>
+                  setActionEdit({ ...actionDraft, enabled: ev.target.checked })
+                }
+              />
+              {t("enableLabel")}
+            </label>
+            <button
+              onClick={saveSegmentAction}
+              disabled={segmentBusy}
+              className="rounded-md bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+            >
+              {t("save")}
+            </button>
+            <span className="pb-1.5 text-parchment/40">
+              {selectedSegment.lastAppliedAt ? (
+                <>
+                  {t("lastAppliedLabel")}{" "}
+                  <LocalDateTime iso={selectedSegment.lastAppliedAt} />
+                </>
+              ) : (
+                t("neverApplied")
+              )}
+            </span>
+          </div>
+        </Card>
       )}
       {clipped && (
         <p className="text-[11px] text-amber-300/80">

@@ -2,7 +2,9 @@
  * Manage one Smart List.
  *
  * PATCH  /api/dashboard/segments/:segmentId?businessId=<uuid>
- *   body: { name?, filters? } → { segment }
+ *   body: { name?, filters?, action? } → { segment }
+ *   `action` replaces the segment's nightly action as a whole
+ *   ({ tag, enabled }; enabling requires a tag, see segmentActionSchema).
  * DELETE /api/dashboard/segments/:segmentId?businessId=<uuid>
  *   Deletes the saved view; contacts are untouched.
  *
@@ -15,6 +17,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import {
   MAX_SEGMENT_NAME_LENGTH,
+  segmentActionSchema,
   segmentFiltersSchema
 } from "@/lib/segments/core";
 import {
@@ -33,10 +36,11 @@ const paramsSchema = z.object({ segmentId: z.string().uuid() });
 const patchBodySchema = z
   .object({
     name: z.string().trim().min(1).max(MAX_SEGMENT_NAME_LENGTH).optional(),
-    filters: segmentFiltersSchema.optional()
+    filters: segmentFiltersSchema.optional(),
+    action: segmentActionSchema.optional()
   })
-  .refine((b) => b.name !== undefined || b.filters !== undefined, {
-    message: "Nothing to update; set name and/or filters."
+  .refine((b) => b.name !== undefined || b.filters !== undefined || b.action !== undefined, {
+    message: "Nothing to update; set name, filters, and/or action."
   });
 
 type Ctx = { params: Promise<{ segmentId: string }> };

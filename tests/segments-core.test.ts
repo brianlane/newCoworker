@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeSegmentFilters,
   matchesSegment,
+  segmentActionSchema,
   segmentFiltersSchema,
   type SegmentContactFacts,
   type SegmentFilters
@@ -191,5 +192,43 @@ describe("describeSegmentFilters", () => {
     });
     expect(caption).toContain("owned");
     expect(caption).toContain("has history");
+  });
+});
+
+describe("segmentActionSchema", () => {
+  it("accepts a trimmed tag with enabled on, and a null tag with enabled off", () => {
+    expect(segmentActionSchema.parse({ tag: "  Follow up  ", enabled: true })).toEqual({
+      tag: "Follow up",
+      enabled: true
+    });
+    expect(segmentActionSchema.parse({ tag: null, enabled: false })).toEqual({
+      tag: null,
+      enabled: false
+    });
+  });
+
+  it("a saved-but-off tag is allowed (the toggle can rest while the tag stays)", () => {
+    expect(segmentActionSchema.parse({ tag: "VIP", enabled: false })).toEqual({
+      tag: "VIP",
+      enabled: false
+    });
+  });
+
+  it("refuses enabling without a tag", () => {
+    expect(segmentActionSchema.safeParse({ tag: null, enabled: true }).success).toBe(false);
+  });
+
+  it("refuses empty, whitespace-only, and over-long tags", () => {
+    expect(segmentActionSchema.safeParse({ tag: "", enabled: false }).success).toBe(false);
+    expect(segmentActionSchema.safeParse({ tag: "   ", enabled: false }).success).toBe(false);
+    expect(
+      segmentActionSchema.safeParse({ tag: "x".repeat(41), enabled: false }).success
+    ).toBe(false);
+  });
+
+  it("is strict: an unknown key is an error, not an ignored field", () => {
+    expect(
+      segmentActionSchema.safeParse({ tag: "VIP", enabled: false, bogus: 1 }).success
+    ).toBe(false);
   });
 });

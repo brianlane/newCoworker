@@ -58,7 +58,10 @@ const ROW = {
   business_id: "biz-1",
   name: "Hot leads",
   filters: { tagsAny: ["VIP"] },
-  position: 0
+  position: 0,
+  action_tag: null,
+  action_enabled: false,
+  last_applied_at: null
 };
 
 beforeEach(() => vi.clearAllMocks());
@@ -73,9 +76,41 @@ describe("listContactSegments", () => {
         businessId: "biz-1",
         name: "Hot leads",
         filters: { tagsAny: ["VIP"] },
-        position: 0
+        position: 0,
+        actionTag: null,
+        actionEnabled: false,
+        lastAppliedAt: null
       }
     ]);
+  });
+
+  it("maps a configured nightly action, and defaults absent action columns", async () => {
+    const db = mockDb([
+      {
+        data: [
+          {
+            ...ROW,
+            action_tag: "Follow up",
+            action_enabled: true,
+            last_applied_at: "2026-08-20T09:10:00Z"
+          },
+          // A row shaped before the action columns existed maps to "no action".
+          { id: "seg-2", business_id: "biz-1", name: "Old", filters: {}, position: 1 }
+        ],
+        error: null
+      }
+    ]);
+    const segments = await listContactSegments("biz-1", db as never);
+    expect(segments[0]).toMatchObject({
+      actionTag: "Follow up",
+      actionEnabled: true,
+      lastAppliedAt: "2026-08-20T09:10:00Z"
+    });
+    expect(segments[1]).toMatchObject({
+      actionTag: null,
+      actionEnabled: false,
+      lastAppliedAt: null
+    });
   });
 
   it("degrades malformed stored filters to 'all contacts' instead of throwing", async () => {
@@ -206,7 +241,37 @@ describe("updateContactSegment", () => {
     await updateContactSegment("biz-1", "seg-1", { filters: { neverContacted: true } }, db as never);
     const update = db.chains[0].update.mock.calls[0][0];
     expect(update).not.toHaveProperty("name");
+    expect(update).not.toHaveProperty("action_tag");
     expect(update).toMatchObject({ filters: { neverContacted: true } });
+  });
+
+  it("an action patch writes both action columns as a pair", async () => {
+    const db = mockDb([
+      { data: { ...ROW, action_tag: "Follow up", action_enabled: true }, error: null }
+    ]);
+    const segment = await updateContactSegment(
+      "biz-1",
+      "seg-1",
+      { action: { tag: "Follow up", enabled: true } },
+      db as never
+    );
+    const update = db.chains[0].update.mock.calls[0][0];
+    expect(update).toMatchObject({ action_tag: "Follow up", action_enabled: true });
+    expect(update).not.toHaveProperty("name");
+    expect(segment.actionTag).toBe("Follow up");
+    expect(segment.actionEnabled).toBe(true);
+  });
+
+  it("a null-tag action patch clears the configured action", async () => {
+    const db = mockDb([{ data: ROW, error: null }]);
+    await updateContactSegment(
+      "biz-1",
+      "seg-1",
+      { action: { tag: null, enabled: false } },
+      db as never
+    );
+    const update = db.chains[0].update.mock.calls[0][0];
+    expect(update).toMatchObject({ action_tag: null, action_enabled: false });
   });
 
   it("not-found, duplicate, and plain errors map distinctly", async () => {
