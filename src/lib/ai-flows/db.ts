@@ -14,7 +14,7 @@ import {
   parseAiFlowDefinition
 } from "@/lib/ai-flows/schema";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
-import { readMovedRows } from "@/lib/residency/read";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { reentryBlocked } from "../../../supabase/functions/_shared/ai_flows/reentry";
 import { isTestModeTrigger } from "../../../supabase/functions/_shared/ai_flows/test_mode";
 
@@ -122,8 +122,28 @@ const SCREENSHOT_BUCKET = "aiflow-screenshots";
 /** Signed-URL lifetime for dashboard screenshot viewing. */
 const SCREENSHOT_SIGNED_URL_TTL_S = 600;
 
+/**
+ * One column list in two shapes: the box data API takes an array of names,
+ * supabase-js takes the comma string AND needs it to stay a literal (it
+ * parses the literal to type the row, so deriving it with .join() erases
+ * that inference). They are therefore declared side by side and pinned
+ * equal by a test, which is what stops a routed read and its central twin
+ * from drifting a column apart.
+ */
 const FLOW_COLS =
   "id,business_id,name,enabled,definition,created_by,created_at,updated_at,enabled_changed_at";
+export const FLOW_COLUMNS = [
+  "id",
+  "business_id",
+  "name",
+  "enabled",
+  "definition",
+  "created_by",
+  "created_at",
+  "updated_at",
+  "enabled_changed_at"
+] as const;
+export const FLOW_COLS_FOR_TEST = FLOW_COLS;
 const RUN_COLS =
   "id,flow_id,business_id,status,context,current_step,attempt_count,error_retry_count,earliest_claim_at,last_error,claimed_at,dedupe_key,awaiting_agent_e164,respond_by_at,created_at,updated_at";
 const STEP_COLS =
@@ -142,19 +162,40 @@ export async function listAiFlows(
   client?: SupabaseClient
 ): Promise<AiFlowRow[]> {
   const db = await resolveDb(client);
-  const { data, error } = await db
-    .from("ai_flows")
-    .select(FLOW_COLS)
-    .eq("business_id", businessId)
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(`listAiFlows: ${error.message}`);
-  const flows = (data ?? []) as AiFlowRow[];
+  // `ai_flows` is residency-moved, so a vps tenant's flows live on their own
+  // box and the central read below returns nothing. An empty list here is
+  // indistinguishable from "this business has no flows", which is why the
+  // box read is allowed to throw: a ResidencyReadError reaches the page as a
+  // failure instead of an empty AiFlows list that reads as "you have none".
+  const fetchFlows = async (): Promise<AiFlowRow[]> => {
+    if (await isVpsReadMode(businessId, db)) {
+      return await readMovedRows<AiFlowRow>(businessId, {
+        table: "ai_flows",
+        columns: [...FLOW_COLUMNS],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "deleted_at", op: "is", value: null }
+        ],
+        order: [{ column: "created_at", ascending: false }]
+      });
+    }
+    const { data, error } = await db
+      .from("ai_flows")
+      .select(FLOW_COLS)
+      .eq("business_id", businessId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(`listAiFlows: ${error.message}`);
+    return (data ?? []) as AiFlowRow[];
+  };
+  const flows = await fetchFlows();
 
   // Attach each flow's most-recent run time so the dashboard can sort by
   // activity (most-recently-run first). Read runs newest-first and keep the
   // first time seen per flow. A failure here must not blank the list, so on
   // error we fall back to the created_at order above.
+  // `ai_flow_runs` is NOT residency-moved (see RESIDENCY_MOVED_TABLES), so
+  // this one stays central for every tenant. Only the flows above moved.
   const lastRunByFlow = new Map<string, string>();
   const { data: runRows } = await db
     .from("ai_flow_runs")
@@ -187,6 +228,9 @@ export type AiFlowDefinitionRow = {
 
 /** Projection shared by the box and central paths so they cannot drift. */
 const FLOW_DEFINITION_COLUMNS = ["id", "name", "definition"] as const;
+
+/** The two fields enqueueAiFlowRun's soft-delete and pacing gates need. */
+const FLOW_GATE_COLUMNS = ["definition", "deleted_at"] as const;
 
 /**
  * The named flows behind a set of runs.
@@ -234,6 +278,23 @@ export async function getAiFlow(
   client?: SupabaseClient
 ): Promise<AiFlowRow | null> {
   const db = await resolveDb(client);
+  // Residency-moved, same reasoning as listAiFlows: for a vps tenant the row
+  // is on their box, and a central miss here is indistinguishable from "this
+  // flow does not exist". The box read throws rather than returning null so
+  // an unreachable box cannot masquerade as a deleted flow.
+  if (await isVpsReadMode(businessId, db)) {
+    const rows = await readMovedRows<AiFlowRow>(businessId, {
+      table: "ai_flows",
+      columns: [...FLOW_COLUMNS],
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "id", op: "eq", value: id },
+        { column: "deleted_at", op: "is", value: null }
+      ],
+      limit: 1
+    });
+    return rows[0] ?? null;
+  }
   const { data, error } = await db
     .from("ai_flows")
     .select(FLOW_COLS)
@@ -399,14 +460,40 @@ export async function enqueueAiFlowRun(
   // gate", losing the lead is worse than a duplicate or a burst.
   let definition: { drip?: { intervalMinutes?: number } } | null = null;
   try {
-    const { data: flowRow } = await db
-      .from("ai_flows")
-      .select("definition, deleted_at")
-      .eq("id", input.flowId)
-      .maybeSingle();
-    const row = flowRow as
-      | { definition?: { drip?: { intervalMinutes?: number } }; deleted_at?: string | null }
-      | null;
+    type FlowGateRow = {
+      definition?: { drip?: { intervalMinutes?: number } };
+      deleted_at?: string | null;
+    };
+    // Residency-moved. Unrouted, a vps tenant read nothing here and every
+    // gate below silently defaulted open: a soft-deleted flow still accepted
+    // runs, re-entry stopped blocking repeat enrollments, and drip pacing
+    // stopped staggering. The run itself always enqueued, so this was never
+    // "automations stop", it was "the gates stop".
+    //
+    // The box read deliberately sits INSIDE the existing try. An unreachable
+    // box then lands in the same catch a central read failure does, which
+    // keeps the contract stated above: gates default to no gate, because
+    // losing the lead is worse than a duplicate or a burst. Letting it throw
+    // out of here would invert that on purpose-built behavior.
+    const row: FlowGateRow | null = (await isVpsReadMode(input.businessId, db))
+      ? ((
+          await readMovedRows<FlowGateRow>(input.businessId, {
+            table: "ai_flows",
+            columns: [...FLOW_GATE_COLUMNS],
+            filters: [
+              { column: "business_id", op: "eq", value: input.businessId },
+              { column: "id", op: "eq", value: input.flowId }
+            ],
+            limit: 1
+          })
+        )[0] ?? null)
+      : (((
+          await db
+            .from("ai_flows")
+            .select(FLOW_GATE_COLUMNS.join(", "))
+            .eq("id", input.flowId)
+            .maybeSingle()
+        ).data as FlowGateRow | null) ?? null);
     if (row?.deleted_at) {
       // Soft-deleted flows must not accept new runs (in-flight worker loads
       // by id without this gate so already-queued runs can finish).
