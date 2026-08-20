@@ -1298,15 +1298,26 @@ page.
   (`/api/book/slots`, `/api/book/submit`) are durably rate-limited and
   CSRF-exempt with the `/api/widget/*` rationale. Slot ends are ALWAYS
   start plus elapsed duration (DST-pinned in `tests/booking-page-slots`,
-  the BizBlasts DST lesson). Google free/busy alone is NOT the whole truth:
-  it only reports opaque spans, and Google defaults all-day events to
-  "Free", so the owner's own OOO banner never appeared in it (Aug 2026
-  report, the founder's out-of-office day was offered to visitors). A
-  per-calendar day-block read (`readGoogleDayBlockBusy`) supplements it:
-  all-day events block their business-local days regardless of
-  transparency, timed out-of-office events block their span, timed events
-  of any other kind stay free/busy's call (marking a timed event Free is an
-  owner choice that keeps working, matching the Microsoft `showAs` rule).
+  the BizBlasts DST lesson). What blocks follows ONE convention, both
+  providers (founder's call, Aug 19 2026): **the event's Busy/Free flag
+  decides, and a real out-of-office event always blocks.** Google
+  free/busy honors the flag by construction (it only reports opaque
+  spans; note Google defaults all-day events to "Free", so a plain
+  all-day banner blocks only once it is marked Busy), but its coverage of
+  out-of-office events is inconsistent across account types, the Aug 2026
+  report was the founder's own OOO day being offered to visitors, so
+  `readGoogleOutOfOfficeBusy` reads them explicitly (`events.list` with
+  the server-side `eventTypes=outOfOffice` filter, primary + shared
+  calendar, business-local midnights for date-form events, `complete:
+  false` under-report contract on failure). Microsoft follows the same
+  convention via `showAs`: the calendarView paths already skipped
+  free/workingElsewhere, and getSchedule items are now status-filtered the
+  same way. The platform's OWN time-off mirror writes Busy events
+  (`transparency: "opaque"` / Graph `showAs: "oof"`) so marking yourself
+  or an employee out actually closes those days; it was display-only
+  transparent before, which is why the founder's marked-off days kept
+  being offered. Pre-existing transparent mirrors are re-marked by
+  `scripts/oneshot/opaque-time-off-mirrors.ts`.
 - Submission re-verifies the slot against live availability before the
   write; the dedupe ledger + attendee guard make the write idempotent, so a
   visitor race re-offers slots instead of double-booking.

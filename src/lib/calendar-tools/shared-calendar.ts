@@ -446,7 +446,15 @@ export async function removeSharedCalendarMirror(
  * Push an all-day "out of office" mirror event for a time-off range. Only
  * mirrors when the shared calendar already exists (adding time off should
  * not create calendars). Returns the provider event id, or null when
- * skipped/failed, strictly display-only either way; routing reads the DB.
+ * skipped/failed. Routing never reads it (the DB row stays authoritative
+ * there), but availability now does: the event is written BUSY on purpose
+ * (Google `transparency: "opaque"`, Graph `showAs: "oof"`), so free/busy
+ * carries the range and the booking page, find-slots, and waitlist fill
+ * all stop offering those days. That is the Aug 19 2026 convention: the
+ * Busy/Free flag decides what blocks. Until then this mirror was written
+ * transparent as "display-only", which is exactly why the founder's own
+ * marked-off days kept being offered to visitors. Pre-existing mirrors are
+ * re-marked by scripts/oneshot/opaque-time-off-mirrors.ts.
  */
 export async function mirrorTimeOffEvent(
   businessId: string,
@@ -470,7 +478,7 @@ export async function mirrorTimeOffEvent(
           summary,
           start: { date: startsOn },
           end: { date: endExclusive },
-          transparency: "transparent"
+          transparency: "opaque"
         }
       });
       const data = (res?.data ?? null) as { id?: string } | null;
@@ -482,7 +490,7 @@ export async function mirrorTimeOffEvent(
       data: {
         subject: summary,
         isAllDay: true,
-        showAs: "free",
+        showAs: "oof",
         start: { dateTime: `${startsOn}T00:00:00`, timeZone: "UTC" },
         end: { dateTime: `${endExclusive}T00:00:00`, timeZone: "UTC" }
       }

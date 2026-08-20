@@ -743,10 +743,9 @@ describe("findCalendarSlots", () => {
     expect((result as { detail: string }).detail).toBe("calendar_not_connected");
   });
 
-  it("stops offering a day an all-day event covers even though freeBusy is empty", async () => {
-    // The Aug 2026 report: the founder's all-day OOO (transparent, as Google
-    // defaults all-day events) never reached freeBusy, so every consumer of
-    // this fetch kept offering the day.
+  it("stops offering a day an out-of-office event covers even though freeBusy is empty", async () => {
+    // The Aug 2026 report: the founder's OOO day never reached freeBusy, so
+    // every consumer of this fetch kept offering it.
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(workspaceProxyForBusiness).mockImplementation(async (_biz, _link, config) => {
       const cfg = config as { endpoint: string };
@@ -756,8 +755,7 @@ describe("findCalendarSlots", () => {
           items: [
             {
               status: "confirmed",
-              eventType: "default",
-              transparency: "transparent",
+              eventType: "outOfOffice",
               start: { date: "2026-08-21" },
               end: { date: "2026-08-22" }
             }
@@ -772,6 +770,49 @@ describe("findCalendarSlots", () => {
     });
     expect(result.ok).toBe(true);
     expect((result.data as { slots: unknown[] }).slots).toEqual([]);
+  });
+
+  it("drops getSchedule items Microsoft labels free or working-elsewhere", async () => {
+    // Same Busy/Free convention as everywhere else: an event the owner
+    // marked Free (all-day events default to it in Outlook) is not busy.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: {
+        value: [
+          {
+            scheduleItems: [
+              {
+                status: "free",
+                start: { dateTime: "2026-06-12T09:00:00.000Z" },
+                end: { dateTime: "2026-06-12T12:00:00.000Z" }
+              },
+              {
+                status: "workingElsewhere",
+                start: { dateTime: "2026-06-12T09:00:00.000Z" },
+                end: { dateTime: "2026-06-12T12:00:00.000Z" }
+              },
+              {
+                status: "oof",
+                start: { dateTime: "2026-06-12T09:00:00.000Z" },
+                end: { dateTime: "2026-06-12T10:00:00.000Z" }
+              }
+            ]
+          }
+        ]
+      }
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 60
+    });
+    expect(result.ok).toBe(true);
+    // Only the oof block holds (09:00-10:00). Had the free/workingElsewhere
+    // items counted, the whole window would be busy and nothing offerable;
+    // instead the 10:00-12:00 gap yields its one aligned offer.
+    expect((result.data as { slots: Array<{ startIso: string }> }).slots).toEqual([
+      { startIso: "2026-06-12T10:00:00.000Z", endIso: "2026-06-12T11:00:00.000Z" }
+    ]);
   });
 });
 
@@ -810,7 +851,7 @@ describe("zonedMidnightUtc", () => {
   });
 });
 
-describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office)", () => {
+describe("getWorkspaceBusyBlocks, Google out-of-office read", () => {
   const WINDOW_START = new Date("2026-08-17T00:00:00.000Z");
   const WINDOW_END = new Date("2026-09-02T00:00:00.000Z");
 
@@ -825,15 +866,14 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
     });
   };
 
-  it("blocks the business-local day of a transparent all-day event", async () => {
+  it("blocks the business-local days of a date-form out-of-office event", async () => {
     vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
     mockGoogleProxy({ data: { calendars: {} } }, () => ({
       data: {
         items: [
           {
             status: "confirmed",
-            eventType: "default",
-            transparency: "transparent",
+            eventType: "outOfOffice",
             start: { date: "2026-08-21" },
             end: { date: "2026-08-22" }
           }
@@ -850,6 +890,8 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
       ],
       complete: true
     });
+    // The eventTypes filter is load-bearing: it narrows the listing on the
+    // SERVER, so ordinary timed meetings can never starve the page budget.
     expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledWith(
       BIZ,
       { connectionId: "conn-1", providerConfigKey: "google-calendar" },
@@ -858,6 +900,7 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
         method: "GET",
         params: expect.objectContaining({
           singleEvents: "true",
+          eventTypes: "outOfOffice",
           timeMin: WINDOW_START.toISOString(),
           timeMax: WINDOW_END.toISOString()
         })
@@ -865,13 +908,15 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
     );
   });
 
-  it("spans every day of a multi-day all-day event, end date exclusive", async () => {
-    // The report's second shape: "Brian: out of office" dragged across
+  it("spans every day of a multi-day date-form event, end date exclusive", async () => {
+    // The report's banner shape: "Brian: out of office" dragged across
     // Friday and Saturday arrives as date 21 to exclusive date 23.
     vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
     mockGoogleProxy({ data: { calendars: {} } }, () => ({
       data: {
-        items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-23" } }]
+        items: [
+          { eventType: "outOfOffice", start: { date: "2026-08-21" }, end: { date: "2026-08-23" } }
+        ]
       }
     }));
     const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
@@ -904,7 +949,7 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
     ]);
   });
 
-  it("leaves plain timed events to freeBusy and skips day annotations", async () => {
+  it("blocks nothing but real out-of-office events, whatever the listing returns", async () => {
     mockGoogleProxy(
       {
         data: {
@@ -918,23 +963,27 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
       () => ({
         data: {
           items: [
-            // A plain timed event is freeBusy's call (opaque already came
-            // back above; transparent means the owner said Free).
+            // The server-side eventTypes filter should never return these
+            // two; the client check is belt and braces against a proxy or
+            // API revision that ignores the param, because the alternative
+            // is every plain meeting and Free all-day banner turning into
+            // a block.
             {
               eventType: "default",
               start: { dateTime: "2026-08-20T17:00:00.000Z" },
               end: { dateTime: "2026-08-20T18:00:00.000Z" }
             },
-            { eventType: "birthday", start: { date: "2026-08-24" }, end: { date: "2026-08-25" } },
+            { eventType: "default", start: { date: "2026-08-24" }, end: { date: "2026-08-25" } },
             {
-              eventType: "workingLocation",
-              start: { date: "2026-08-24" },
-              end: { date: "2026-08-25" }
+              status: "cancelled",
+              eventType: "outOfOffice",
+              start: { date: "2026-08-26" },
+              end: { date: "2026-08-27" }
             },
-            { status: "cancelled", start: { date: "2026-08-26" }, end: { date: "2026-08-27" } },
-            { start: { date: "garbage" }, end: { date: "2026-08-27" } },
-            { start: { date: "2026-08-28" } },
-            { eventType: "outOfOffice", start: { dateTime: "2026-08-28T16:00:00.000Z" } }
+            { eventType: "outOfOffice", start: { date: "garbage" }, end: { date: "2026-08-27" } },
+            { eventType: "outOfOffice", start: { date: "2026-08-28" } },
+            { eventType: "outOfOffice", start: { dateTime: "2026-08-28T16:00:00.000Z" } },
+            { eventType: "outOfOffice" }
           ]
         }
       })
@@ -951,7 +1000,7 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
     });
   });
 
-  it("reads the shared calendar's day blocks too", async () => {
+  it("reads the shared calendar's out-of-office events too", async () => {
     vi.mocked(getSharedCalendar).mockResolvedValue({
       calendarId: "team@group.calendar.google.com",
       conn: GOOGLE_CONN
@@ -960,7 +1009,13 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
       endpoint === "/calendar/v3/calendars/team%40group.calendar.google.com/events"
         ? {
             data: {
-              items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }]
+              items: [
+                {
+                  eventType: "outOfOffice",
+                  start: { date: "2026-08-21" },
+                  end: { date: "2026-08-22" }
+                }
+              ]
             }
           }
         : { data: { items: [] } }
@@ -1046,10 +1101,26 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
   it("pages through nextPageToken and merges every page", async () => {
     mockGoogleProxy({ data: { calendars: {} } }, (params) =>
       params?.pageToken === "p2"
-        ? { data: { items: [{ start: { date: "2026-08-24" }, end: { date: "2026-08-25" } }] } }
+        ? {
+            data: {
+              items: [
+                {
+                  eventType: "outOfOffice",
+                  start: { date: "2026-08-24" },
+                  end: { date: "2026-08-25" }
+                }
+              ]
+            }
+          }
         : {
             data: {
-              items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }],
+              items: [
+                {
+                  eventType: "outOfOffice",
+                  start: { date: "2026-08-21" },
+                  end: { date: "2026-08-22" }
+                }
+              ],
               nextPageToken: "p2"
             }
           }
@@ -1075,7 +1146,9 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
   it("stops at the page budget and reports the under-report", async () => {
     mockGoogleProxy({ data: { calendars: {} } }, () => ({
       data: {
-        items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }],
+        items: [
+          { eventType: "outOfOffice", start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }
+        ],
         nextPageToken: "again"
       }
     }));
@@ -1087,9 +1160,14 @@ describe("getWorkspaceBusyBlocks, Google day-block read (all-day + out-of-office
   });
 
   it("still returns null when freeBusy itself is unreadable", async () => {
-    // Day blocks supplement freeBusy; they never resurrect a dead read.
+    // Out-of-office blocks supplement freeBusy; they never resurrect a
+    // dead read.
     mockGoogleProxy(null, () => ({
-      data: { items: [{ start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }] }
+      data: {
+        items: [
+          { eventType: "outOfOffice", start: { date: "2026-08-21" }, end: { date: "2026-08-22" } }
+        ]
+      }
     }));
     const read = await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END);
     expect(read).toBeNull();

@@ -342,10 +342,13 @@ export function computeFreeSlots(
  * Callers pass google/microsoft connections only (the resolver's vagaro /
  * calendly / caldav providers never reach this fetch).
  *
- * For Google, freeBusy alone is not the whole truth: it hides all-day
- * events (Google defaults them to "Free") and can hide out-of-office
- * events, so a per-calendar day-block read supplements it. See
- * readGoogleDayBlockBusy for the rules.
+ * Both providers follow one convention (the founder's Aug 19 2026 call):
+ * the Busy/Free flag decides what blocks, and a real out-of-office event
+ * always blocks. Google freeBusy honors the flag by construction but its
+ * out-of-office coverage is inconsistent, so readGoogleOutOfOfficeBusy
+ * supplements it; Microsoft honors it through showAs / getSchedule status.
+ * The platform's own time-off mirror writes Busy events on purpose (see
+ * mirrorTimeOffEvent), so marked-off days block through this same read.
  */
 /**
  * True when a thrown proxy error carries a real HTTP status, i.e. the provider
@@ -499,33 +502,28 @@ async function readCalendarViewBusy(
   return { busy, complete: false };
 }
 
-/** Google events that annotate a day rather than claim the owner's time. */
-const GOOGLE_NON_BLOCKING_EVENT_TYPES = new Set(["birthday", "workingLocation"]);
-
 /**
- * Google events the owner reads as "that day is taken" but freeBusy never
- * reports.
+ * Google out-of-office events, which freeBusy cannot be trusted to report.
  *
- * freeBusy only carries OPAQUE spans, and Google flips the default to
- * transparent ("Free") for every all-day event created in its UI, so the
- * banner an owner drags across a day ("OOO", a conference, a closure) is
- * invisible to it while the same hours typed as a 9-to-9 event block. That
- * is exactly backwards for a booking surface: the Aug 2026 report was the
- * founder's own out-of-office day being offered to visitors.
+ * freeBusy only carries OPAQUE spans, and that rule is honored on purpose
+ * for ordinary events: a timed or all-day event the owner marks Free stays
+ * bookable, and Google defaults all-day events to Free, so a plain all-day
+ * banner blocks only once the owner flips it to Busy (the founder's Aug 19
+ * 2026 call, over blocking every all-day event and eating false positives
+ * from decorative reminders). A real out-of-office event carries intent no
+ * flag can soften, Google auto-declines meetings inside it, yet freeBusy's
+ * coverage of the type is inconsistent across account types: the Aug 2026
+ * report was the founder's own out-of-office day being offered to visitors.
+ * So out-of-office is read explicitly; a block freeBusy also reported is
+ * harmless to every consumer.
  *
- * Rules: an all-day event blocks its whole business-local days regardless of
- * transparency (the Free default means transparency carries no intent
- * there), and a timed out-of-office event blocks its span (freeBusy may or
- * may not report those; a duplicate block is harmless to every consumer).
- * Timed events of any other kind stay freeBusy's call, so an owner who
- * marks a timed event Free keeps that choice, mirroring the Graph `showAs`
- * rule above. Birthday and working-location events annotate a day rather
- * than claim it, and cancelled instances claim nothing.
- *
- * Same page budget as the Graph calendarView read, same `complete: false`
- * under-report contract when it runs out.
+ * The eventTypes filter narrows the listing SERVER-side. That is what keeps
+ * the page budget honest: an unfiltered listing spends it on ordinary timed
+ * meetings and can starve out the very events this read exists to find.
+ * Date-form events resolve at business-local midnights; same page budget as
+ * the Graph calendarView read, same `complete: false` under-report contract.
  */
-async function readGoogleDayBlockBusy(
+async function readGoogleOutOfOfficeBusy(
   businessId: string,
   conn: { connectionId: string; providerConfigKey: string },
   calendarId: string,
@@ -552,8 +550,9 @@ async function readGoogleDayBlockBusy(
       params: {
         timeMin: windowStart.toISOString(),
         timeMax: windowEnd.toISOString(),
-        // Recurring "closed every Monday" style events arrive expanded.
+        // Recurring out-of-office ("every Friday off") arrives expanded.
         singleEvents: "true",
+        eventTypes: "outOfOffice",
         maxResults: String(CALENDAR_VIEW_PAGE_SIZE),
         fields: "nextPageToken,items(status,eventType,start,end)",
         ...(pageToken ? { pageToken } : {})
@@ -564,9 +563,12 @@ async function readGoogleDayBlockBusy(
     const data = (res.data ?? null) as GoogleEventsPage | null;
     for (const i of data?.items ?? []) {
       if (i.status === "cancelled") continue;
-      if (i.eventType && GOOGLE_NON_BLOCKING_EVENT_TYPES.has(i.eventType)) continue;
+      // Belt and braces under the server-side filter: a proxy or API
+      // revision that ignored eventTypes would otherwise turn every plain
+      // meeting into a block here.
+      if (i.eventType !== "outOfOffice") continue;
       if (i.start?.date && i.end?.date) {
-        // All-day: bare dates, end exclusive. A malformed date (a shape
+        // Date-form: bare dates, end exclusive. A malformed date (a shape
         // Google does not send) drops the event rather than pushing an
         // Invalid Date block, which compares as never-clear and would
         // silently freeze the whole window.
@@ -576,7 +578,7 @@ async function readGoogleDayBlockBusy(
         busy.push({ start, end });
         continue;
       }
-      if (i.eventType === "outOfOffice" && i.start?.dateTime && i.end?.dateTime) {
+      if (i.start?.dateTime && i.end?.dateTime) {
         busy.push({ start: new Date(i.start.dateTime), end: new Date(i.end.dateTime) });
       }
     }
@@ -586,7 +588,7 @@ async function readGoogleDayBlockBusy(
     pageToken = next;
   }
 
-  logger.warn("google day-block read exceeded its page budget; busy list is an under-report", {
+  logger.warn("google out-of-office read exceeded its page budget; busy list is an under-report", {
     businessId,
     calendarId,
     pages: CALENDAR_VIEW_MAX_PAGES,
@@ -608,13 +610,13 @@ export async function getWorkspaceBusyBlocks(
   if (conn.provider === "google") {
     const link = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
     const calendarIds = ["primary", ...(shared ? [shared.calendarId] : [])];
-    // All-day events resolve at business-local midnights: the day grid every
-    // consumer offers from is business-local, and "out Friday" means THAT
-    // Friday wherever the calendar's own zone setting happens to sit.
+    // Date-form out-of-office events resolve at business-local midnights:
+    // the day grid every consumer offers from is business-local, and "out
+    // Friday" means THAT Friday wherever the calendar's zone setting sits.
     const timeZone = await resolveToolTimezone(businessId, undefined);
-    // freeBusy and the per-calendar day-block reads are independent, and a
-    // public page load sits behind this fetch, so they run concurrently.
-    const [res, ...dayReads] = await Promise.all([
+    // freeBusy and the per-calendar out-of-office reads are independent, and
+    // a public page load sits behind this fetch, so they run concurrently.
+    const [res, ...oooReads] = await Promise.all([
       workspaceProxyForBusiness(businessId, link, {
         endpoint: "/calendar/v3/freeBusy",
         method: "POST",
@@ -625,11 +627,11 @@ export async function getWorkspaceBusyBlocks(
         }
       }),
       ...calendarIds.map(async (calendarId): Promise<WorkspaceBusyRead | null> => {
-        // A failed day-block read must not take down the freeBusy answer it
-        // supplements. `complete: false` already says exactly what happened:
-        // every block returned is real, and more went unread.
+        // A failed out-of-office read must not take down the freeBusy answer
+        // it supplements. `complete: false` already says exactly what
+        // happened: every block returned is real, and more went unread.
         try {
-          return await readGoogleDayBlockBusy(
+          return await readGoogleOutOfOfficeBusy(
             businessId,
             link,
             calendarId,
@@ -638,7 +640,7 @@ export async function getWorkspaceBusyBlocks(
             timeZone
           );
         } catch (err) {
-          logger.warn("google day-block read failed; busy list is an under-report", {
+          logger.warn("google out-of-office read failed; busy list is an under-report", {
             businessId,
             calendarId,
             error: err instanceof Error ? err.message : String(err)
@@ -653,7 +655,7 @@ export async function getWorkspaceBusyBlocks(
     // freeBusy answers for every calendar in one response, with no paging.
     const busy = blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
     let complete = true;
-    for (const read of dayReads) {
+    for (const read of oooReads) {
       if (read === null) {
         complete = false;
         continue;
@@ -721,13 +723,21 @@ export async function getWorkspaceBusyBlocks(
     if (!res) return null;
     type GraphBusy = {
       value?: Array<{
-        scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+        scheduleItems?: Array<{
+          status?: string;
+          start?: { dateTime: string };
+          end?: { dateTime: string };
+        }>;
       }>;
     };
     const data = res.data as GraphBusy;
     const items = data?.value?.[0]?.scheduleItems ?? [];
     busy = items
       .filter((i) => i.start?.dateTime && i.end?.dateTime)
+      // Same Busy/Free convention as the calendarView fallback below: a
+      // schedule item getSchedule labels free or working-elsewhere is not
+      // busy, and treating it as busy would delete real availability.
+      .filter((i) => !(typeof i.status === "string" && GRAPH_FREE_SHOW_AS.has(i.status)))
       .map((i) => ({
         start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
         end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
