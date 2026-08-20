@@ -2159,7 +2159,8 @@
       "emailOutbound": "Email out",
       "chat": "Chat",
       "customer": "Customer",
-      "alert": "Alert"
+      "alert": "Alert",
+      "note": "Note"
     },
     "billing": {
       "title": "Billing",
@@ -2519,6 +2520,27 @@
       "languageOwnerSet": "Set by you",
       "languageEnglish": "English",
       "languageSpanish": "Spanish"
+    },
+    "notes": {
+      "title": "Notes",
+      "subtitle": "Team log for this contact, with author and time. Your AI coworker reads pinned notes, not these.",
+      "addPlaceholder": "Add a note about this contact…",
+      "addLabel": "New note",
+      "add": "Add note",
+      "adding": "Adding…",
+      "empty": "No notes yet. Add the first one above.",
+      "edit": "Edit",
+      "delete": "Delete",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "deleteConfirm": "Delete this note?",
+      "edited": "edited",
+      "charCount": "{count}/{max}",
+      "justNow": "just now",
+      "minutesAgo": "{count}m ago",
+      "hoursAgo": "{count}h ago",
+      "daysAgo": "{count}d ago"
     },
     "smsComposer": {
       "sendAsPlainSms": "Send as plain SMS (skip RCS)"

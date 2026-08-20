@@ -15,6 +15,7 @@ import {
   DEFAULT_CONTACT_ACTIVITY_LIMIT,
   CONTACT_ACTIVITY_RUN_SCAN,
   ACTIVITY_FEED_MAX,
+  NOTE_EXCERPT_MAX,
   ACTIVITY_WINDOW_DAYS,
   ACTIVITY_WINDOW_DAYS_STARTER,
   ACTIVITY_WINDOW_DAYS_STANDARD,
@@ -43,6 +44,7 @@ function emptyInput(overrides: Partial<ActivityFeedInput> = {}): ActivityFeedInp
     flows: [],
     customers: [],
     alerts: [],
+    notes: [],
     limit: 10,
     ...overrides
   };
@@ -607,8 +609,10 @@ function chainResult(result: { data: unknown; error: unknown }) {
  * to the per-table result supplied in `byTable`.
  */
 function mockDbByTable(byTable: Record<string, { data: unknown; error: unknown }>) {
+  // Tables a test doesn't care about resolve empty, so adding a source to
+  // the fetch layer doesn't force every existing test to enumerate it.
   return {
-    from: vi.fn((table: string) => chainResult(byTable[table]))
+    from: vi.fn((table: string) => chainResult(byTable[table] ?? { data: [], error: null }))
   };
 }
 
@@ -620,7 +624,8 @@ const ALL_EMPTY = {
   dashboard_chat_jobs: { data: [], error: null },
   ai_flow_runs: { data: [], error: null },
   contacts: { data: [], error: null },
-  coworker_logs: { data: [], error: null }
+  coworker_logs: { data: [], error: null },
+  contact_notes: { data: [], error: null }
 };
 
 describe("activityWindowDays", () => {
@@ -697,7 +702,8 @@ describe("getRecentActivity", () => {
     await getRecentActivity("biz-1", 10, db as never);
     const callChain = db.from.mock.results.find((r) => r.value.gte.mock.calls.length > 0)?.value;
     expect(callChain.gte).toHaveBeenCalledWith(expect.any(String), expect.any(String));
-    const logChain = db.from.mock.results[db.from.mock.calls.length - 1].value;
+    const logChain =
+      db.from.mock.results[db.from.mock.calls.findIndex((c) => c[0] === "coworker_logs")].value;
     expect(logChain.eq).toHaveBeenCalledWith("status", "urgent_alert");
     // Replies are queried on their own updated_at window (not null reply).
     const replyChain = db.from.mock.results.find((r) => r.value.not.mock.calls.length > 0)?.value;
@@ -871,8 +877,8 @@ describe("getActivityFeedPage", () => {
     };
     const db = {
       from: vi.fn((table: string) => {
-        // 9 source queries per fetch round.
-        const round = Math.floor(call / 9);
+        // 10 source queries per fetch round.
+        const round = Math.floor(call / 10);
         call += 1;
         const byTable = round === 0 ? first : second;
         return chainResult(byTable[table as keyof typeof first]);
@@ -908,9 +914,9 @@ describe("getActivityFeedPage", () => {
     const page = await getActivityFeedPage("biz-1", { limit: 2 }, db as never);
     expect(page.items).toEqual([]);
     expect(page.nextBefore).toBe("2026-02-15T00:00:00Z");
-    // 3 hops × 9 source queries... but sms_inbound_jobs is queried twice per
+    // 3 hops × 10 source queries... but sms_inbound_jobs is queried twice per
     // round (inbound + replies), so just assert the loop was bounded.
-    expect(db.from.mock.calls.length).toBe(27);
+    expect(db.from.mock.calls.length).toBe(30);
   });
 
   it("applies the `before` cursor to every source on its own timestamp column", async () => {
@@ -919,8 +925,8 @@ describe("getActivityFeedPage", () => {
     await getActivityFeedPage("biz-1", { before }, db as never);
 
     const chains = db.from.mock.results.map((r) => r.value);
-    // 9 source queries, each cursor-bounded.
-    expect(chains).toHaveLength(9);
+    // 10 source queries, each cursor-bounded.
+    expect(chains).toHaveLength(10);
     for (const chain of chains) {
       expect(chain.lt).toHaveBeenCalledWith(expect.any(String), before);
     }
@@ -1011,7 +1017,7 @@ describe("getActivityFeedPage, filters", () => {
   it("treats an empty kinds array as no filter (all sources queried)", async () => {
     const db = mockDbByTable(ALL_EMPTY);
     await getActivityFeedPage("biz-1", { filter: { kinds: [] } }, db as never);
-    expect(db.from.mock.calls).toHaveLength(9);
+    expect(db.from.mock.calls).toHaveLength(10);
   });
 
   it("tightens the look-back with sinceDays and clamps it to the tier window", async () => {
@@ -1114,6 +1120,7 @@ describe("paginateFullActivityFeed", () => {
       flows: [],
       customers: [],
       alerts: [],
+      notes: [],
       limit: 3,
       ...over
     };
@@ -1597,5 +1604,220 @@ describe("getActivityForContacts", () => {
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     // Default scan cap of 200 rows per source.
     expect(db.from.mock.results[0].value.limit).toHaveBeenCalledWith(200);
+  });
+});
+
+describe("collectActivityItems, notes", () => {
+  it("maps a note with a resolved contact name, excerpting the body", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        notes: [
+          {
+            author_label: "Sarah",
+            body: "  Prefers   evening\ncalls  ",
+            created_at: "2026-02-01T10:00:00Z",
+            contact_e164: "+15550001111"
+          }
+        ],
+        contactNames: new Map<string, ContactName>([
+          ["+15550001111", { name: "Mike Haas", kind: "customer" }]
+        ])
+      })
+    );
+    expect(items).toEqual([
+      {
+        id: "note:0:2026-02-01T10:00:00Z",
+        kind: "note",
+        label: "Note on Mike Haas by Sarah: Prefers evening calls",
+        href: "/dashboard/customers/%2B15550001111",
+        at: "2026-02-01T10:00:00Z",
+        contactE164: "+15550001111"
+      }
+    ]);
+  });
+
+  it("truncates a long note body to the excerpt cap with an ellipsis", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        notes: [
+          {
+            author_label: "Sarah",
+            body: "x".repeat(NOTE_EXCERPT_MAX + 5),
+            created_at: "2026-02-01T10:00:00Z",
+            contact_e164: "+15550001111"
+          }
+        ]
+      })
+    );
+    expect(items[0].label).toBe(`Note on +15550001111 by Sarah: ${"x".repeat(NOTE_EXCERPT_MAX)}…`);
+  });
+
+  it("shows the bare address for an unresolved email-keyed contact", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        notes: [
+          {
+            author_label: "Sarah",
+            body: "Warm lead",
+            created_at: "2026-02-01T10:00:00Z",
+            contact_e164: "email:lead@example.com"
+          }
+        ]
+      })
+    );
+    expect(items[0].label).toBe("Note on lead@example.com by Sarah: Warm lead");
+    // The deep link still uses the real contact KEY, prefix included.
+    expect(items[0].href).toBe("/dashboard/customers/email%3Alead%40example.com");
+    expect(items[0].contactE164).toBe("email:lead@example.com");
+  });
+
+  it("maps a contact-less note (deleted contact) without a person or deep link", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        notes: [
+          { author_label: "Sarah", body: "Orphaned", created_at: "2026-02-01T10:00:00Z" }
+        ]
+      })
+    );
+    expect(items[0].label).toBe("Note by Sarah: Orphaned");
+    expect(items[0].href).toBe("/dashboard/customers");
+    expect(items[0].contactE164).toBeUndefined();
+  });
+});
+
+describe("paginateFullActivityFeed, notes as a capped source", () => {
+  it("treats a cap-hit notes source as a merge boundary like any other", () => {
+    // 2 notes with limit 2 = cap hit; a quieter chat row below the boundary
+    // must be withheld from this chunk.
+    const page = paginateFullActivityFeed({
+      calls: [],
+      smsInbound: [],
+      smsReplies: [],
+      smsOutbound: [],
+      emails: [],
+      chat: [{ created_at: "2026-02-01T00:00:00Z" }],
+      flows: [],
+      customers: [],
+      alerts: [],
+      notes: [
+        { author_label: "A", body: "newest", created_at: "2026-02-05T00:00:00Z" },
+        { author_label: "A", body: "boundary", created_at: "2026-02-03T00:00:00Z" }
+      ],
+      limit: 2
+    });
+    expect(page.items.map((i) => i.kind)).toEqual(["note", "note"]);
+    expect(page.nextBefore).toBe("2026-02-03T00:00:00Z");
+  });
+});
+
+describe("business-wide feed, notes source", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("surfaces contact_notes rows across the join's object/array/null shapes", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      contact_notes: {
+        data: [
+          {
+            author_label: "Sarah",
+            body: "Object join",
+            created_at: "2026-02-03T00:00:00Z",
+            contacts: { customer_e164: "+15550001111" }
+          },
+          {
+            author_label: "Sarah",
+            body: "Array join",
+            created_at: "2026-02-02T00:00:00Z",
+            contacts: [{ customer_e164: "+15550002222" }]
+          },
+          {
+            author_label: "Sarah",
+            body: "No contact",
+            created_at: "2026-02-01T00:00:00Z",
+            contacts: null
+          }
+        ],
+        error: null
+      }
+    });
+    const items = await getRecentActivity("biz-1", 10, db as never);
+    expect(items.map((i) => i.label)).toEqual([
+      "Note on +15550001111 by Sarah: Object join",
+      "Note on +15550002222 by Sarah: Array join",
+      "Note by Sarah: No contact"
+    ]);
+    // Soft-deleted notes are excluded at the query.
+    const noteChain =
+      db.from.mock.results[db.from.mock.calls.findIndex((c) => c[0] === "contact_notes")].value;
+    expect(noteChain.is).toHaveBeenCalledWith("deleted_at", null);
+    // The joined contact keys join the name-resolution batch.
+    expect(resolveContactNames).toHaveBeenCalledWith(
+      "biz-1",
+      expect.arrayContaining(["+15550001111", "+15550002222"]),
+      db
+    );
+  });
+
+  it("queries only contact_notes for kinds=[note]", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["note"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["contact_notes"]);
+  });
+});
+
+describe("getContactActivity, notes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("fetches the contact's notes by row id and stamps the primary key", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      contact_notes: {
+        data: [
+          { author_label: "Sarah", body: "Warm lead", created_at: "2026-02-01T10:00:00Z" }
+        ],
+        error: null
+      }
+    });
+    const items = await getContactActivity(
+      "biz-1",
+      { e164s: ["+15550001111"], contactId: "contact-1" },
+      {},
+      db as never
+    );
+    const noteChain =
+      db.from.mock.results[db.from.mock.calls.findIndex((c) => c[0] === "contact_notes")].value;
+    expect(noteChain.eq).toHaveBeenCalledWith("contact_id", "contact-1");
+    expect(noteChain.is).toHaveBeenCalledWith("deleted_at", null);
+    expect(items.map((i) => i.kind)).toEqual(["note"]);
+    expect(items[0].contactE164).toBe("+15550001111");
+    expect(items[0].label).toBe("Note on +15550001111 by Sarah: Warm lead");
+  });
+
+  it("serves a contactId-only target (no numbers, no email) with unstamped notes", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      contact_notes: {
+        data: [
+          { author_label: "Sarah", body: "Keyless", created_at: "2026-02-01T10:00:00Z" }
+        ],
+        error: null
+      }
+    });
+    const items = await getContactActivity(
+      "biz-1",
+      { e164s: [], email: null, contactId: "contact-1" },
+      {},
+      db as never
+    );
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["contact_notes"]);
+    expect(items).toHaveLength(1);
+    expect(items[0].label).toBe("Note by Sarah: Keyless");
+    expect(items[0].contactE164).toBeUndefined();
   });
 });

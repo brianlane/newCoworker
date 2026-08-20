@@ -9,6 +9,10 @@ vi.mock("@/lib/documents/cleanup", () => ({
   deleteContactLinkedDocuments: vi.fn(async () => ({ deleted: 0, keptSigned: 0 }))
 }));
 
+vi.mock("@/lib/notes/db", () => ({
+  deleteNotesForContact: vi.fn(async () => 0)
+}));
+
 // The routes branch on `err instanceof <Error class>`, so the mock has to carry
 // real classes, not stubs: an undefined right-hand side makes every error path
 // throw a TypeError instead of returning its response. They are declared inside
@@ -70,6 +74,7 @@ import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
+import { deleteNotesForContact } from "@/lib/notes/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER = "+15551234567";
@@ -637,7 +642,26 @@ describe("DELETE /api/dashboard/customers/:e164", () => {
     const res = await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
     expect(res.status).toBe(200);
     expect(deleteContactLinkedDocuments).toHaveBeenCalledWith(BIZ, "contact-1");
+    // Notes go with the profile too: the FK's SET NULL would otherwise
+    // strand them as unreachable orphan rows.
+    expect(deleteNotesForContact).toHaveBeenCalledWith(BIZ, "contact-1");
     expect(deleteCustomerMemory).toHaveBeenCalledWith(BIZ, CUSTOMER);
+  });
+
+  it("aborts the contact delete when the notes cleanup fails (nothing orphans)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "u",
+      email: "o@o.com",
+      isAdmin: true
+    });
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      id: "contact-1",
+      customer_e164: CUSTOMER
+    } as never);
+    vi.mocked(deleteNotesForContact).mockRejectedValueOnce(new Error("notes boom"));
+    const res = await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
+    expect(res.status).toBe(500);
+    expect(deleteCustomerMemory).not.toHaveBeenCalled();
   });
 
   it("aborts the contact delete when document cleanup fails (nothing orphans)", async () => {

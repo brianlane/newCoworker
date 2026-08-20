@@ -97,7 +97,16 @@ export const KG_SOURCES = {
     reason: "Derivative of ingested identity/website content; no novel facts."
   },
   /** Platform blog: HQ marketing content, not tenant knowledge. */
-  platform_blog: { status: "exempt", reason: "Platform content, not tenant knowledge." }
+  platform_blog: { status: "exempt", reason: "Platform content, not tenant knowledge." },
+  /** Authored contact notes (contact_notes): the team's running log on a
+   * person. The AI-facing channel for durable per-contact facts stays
+   * customer_pinned_notes; the notes UI says so, so promoting these into
+   * the graph would surprise the owner who was told the AI does not read
+   * them. */
+  contact_notes: {
+    status: "exempt",
+    reason: "Team-internal log; owners are told the AI reads pinned notes, not these."
+  }
 } as const satisfies Record<string, KgSourceEntry>;
 
 export type KgSource = keyof typeof KG_SOURCES;

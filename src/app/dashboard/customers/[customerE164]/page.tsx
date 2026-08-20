@@ -39,6 +39,9 @@ import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listTeamMembers } from "@/lib/db/employees";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { listBusinessDocumentsForContact } from "@/lib/documents/db";
+import { listContactNotes } from "@/lib/notes/db";
+import { getBusinessRoleForEmail } from "@/lib/db/business-members";
+import { ContactNotesPanel } from "@/components/dashboard/ContactNotesPanel";
 import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { listSmsLinksForContact } from "@/lib/db/sms-links";
@@ -122,7 +125,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box,
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, mailboxAddress, trackedLinks] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, contactNotes, callerRole, mailboxAddress, trackedLinks] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -157,7 +160,8 @@ export default async function CustomerDetailPage({ params }: Props) {
         business.id,
         {
           e164s: [memory.customer_e164, ...(memory.alias_e164s ?? [])],
-          email: memory.email
+          email: memory.email,
+          contactId: memory.id
         },
         {},
         db
@@ -165,6 +169,16 @@ export default async function CustomerDetailPage({ params }: Props) {
       // Linked records (policies, contracts, memberships); tolerated so a
       // documents-table error never blocks the profile page.
       listBusinessDocumentsForContact(business.id, memory.id, db).catch(() => []),
+      // The team's authored notes on this person; tolerated so a notes-table
+      // error never blocks the profile page.
+      listContactNotes(business.id, memory.id, db).catch(() => []),
+      // The caller's role, for the notes panel's delete-any affordance (the
+      // owner may clear anyone's note; the API enforces it authoritatively).
+      // Under admin view-as, ownerEmail is the tenant owner's address, which
+      // resolves "owner", matching view-as's full access.
+      user.isAdmin
+        ? Promise.resolve("owner" as const)
+        : getBusinessRoleForEmail(business.id, ownerEmail, db).catch(() => null),
       // AI mailbox address for the "Request documents" action; tolerated,
       // a mailbox-table error just hides the action.
       ensureTenantMailbox(business.id, db)
@@ -338,6 +352,24 @@ export default async function CustomerDetailPage({ params }: Props) {
           candidates={mergeCandidates}
         />
       )}
+
+      {/* Authored team notes (records with author + timestamp), deliberately
+          separate from the profile editor's pinned blob: pinned feeds the AI
+          preamble, these are the team's running log. */}
+      <ContactNotesPanel
+        businessId={business.id}
+        customerE164={memory.customer_e164}
+        notes={contactNotes.map((n) => ({
+          id: n.id,
+          authorUserId: n.author_user_id,
+          authorLabel: n.author_label,
+          body: n.body,
+          createdAt: n.created_at,
+          updatedAt: n.updated_at
+        }))}
+        currentUserId={user.userId}
+        canDeleteAny={callerRole === "owner"}
+      />
 
       <Card>
         <div className="flex items-center justify-between mb-3">

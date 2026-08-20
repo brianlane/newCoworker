@@ -45,6 +45,7 @@ import {
   fireTagChangeEvents
 } from "@/lib/contacts/edit-events";
 import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
+import { deleteNotesForContact } from "@/lib/notes/db";
 import { classifyContactKey } from "../../../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
@@ -342,6 +343,10 @@ export async function DELETE(
     const existing = await getCustomerMemory(businessId, customerE164);
     if (existing) {
       await deleteContactLinkedDocuments(businessId, existing.id);
+      // The person's authored notes go with the profile: the FK's SET NULL
+      // would otherwise leave unreachable orphan rows (soft-deleted ones
+      // included), same reasoning as the documents cleanup above.
+      await deleteNotesForContact(businessId, existing.id);
     }
     // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
     // it alias-aware to the surviving row. Delete by that row's PRIMARY

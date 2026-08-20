@@ -94,6 +94,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.leadAssignment",
       "dashboard.leadClaim",
       "dashboard.nav",
+      "dashboard.notes",
       "dashboard.pages",
       "dashboard.phoneDeliverability",
       "dashboard.planCard",

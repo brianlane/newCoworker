@@ -31,7 +31,8 @@ export type ActivityKind =
   | "chat"
   | "aiflow"
   | "customer"
-  | "alert";
+  | "alert"
+  | "note";
 
 export type ActivityItem = {
   /** Stable React key, unique across all sources. */
@@ -140,6 +141,19 @@ export type ActivityCustomerRow = {
   created_at: string;
 };
 
+/**
+ * One `contact_notes` row for the feed (see src/lib/notes/db.ts). The
+ * business-wide fetch resolves `contact_e164` from the embedded contact
+ * join; contact-scoped callers stamp the key they already hold.
+ */
+export type ActivityNoteRow = {
+  author_label: string;
+  body: string;
+  created_at: string;
+  /** The contact KEY (E.164 / short code / `email:` key), when known. */
+  contact_e164?: string | null;
+};
+
 export type ActivityAlertRow = {
   /**
    * The coworker_logs id. Dispatched notifications carry it as
@@ -181,7 +195,8 @@ export const ACTIVITY_KINDS: readonly ActivityKind[] = [
   "email_outbound",
   "chat",
   "customer",
-  "alert"
+  "alert",
+  "note"
 ] as const;
 
 /**
@@ -214,6 +229,7 @@ export type ActivityFeedInput = {
   flows: ActivityFlowRow[];
   customers: ActivityCustomerRow[];
   alerts: ActivityAlertRow[];
+  notes: ActivityNoteRow[];
   /**
    * E.164 → known contact name (owner/employee/customer/override), from the
    * shared {@link resolveContactNames} resolver. Numbers absent from the map
@@ -233,6 +249,19 @@ function flowName(join: ActivityFlowRow["ai_flows"]): string {
 function payloadString(payload: Record<string, unknown> | null, key: string): string | null {
   const raw = payload?.[key];
   return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+/** How much of a note body the feed label shows before eliding. */
+export const NOTE_EXCERPT_MAX = 80;
+
+/**
+ * One-line excerpt of a note body for the feed label: newlines and runs of
+ * whitespace collapse to single spaces, then cap at {@link NOTE_EXCERPT_MAX}
+ * chars with an ellipsis.
+ */
+function noteExcerpt(body: string): string {
+  const flat = body.replace(/\s+/g, " ").trim();
+  return flat.length > NOTE_EXCERPT_MAX ? `${flat.slice(0, NOTE_EXCERPT_MAX)}…` : flat;
 }
 
 /** Human label for an urgent coworker_logs entry (urgent caller capture etc.). */
@@ -388,6 +417,21 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
     });
   });
 
+  input.notes.forEach((r, i) => {
+    const key = r.contact_e164 ?? null;
+    // An email-keyed contact with no resolver name would surface the raw
+    // internal `email:` prefix; show the bare address instead.
+    const person = key ? named(key).replace(/^email:/, "") : null;
+    items.push({
+      id: `note:${i}:${r.created_at}`,
+      kind: "note",
+      label: `Note${person ? ` on ${person}` : ""} by ${r.author_label}: ${noteExcerpt(r.body)}`,
+      href: key ? `/dashboard/customers/${encodeURIComponent(key)}` : "/dashboard/customers",
+      at: r.created_at,
+      ...(key ? { contactE164: key } : {})
+    });
+  });
+
   return items;
 }
 
@@ -449,7 +493,8 @@ function cappedSourceBoundaries(input: ActivityFeedInput): string[] {
     oldestOfCapped(input.chat, "created_at"),
     oldestOfCapped(input.flows, "created_at"),
     oldestOfCapped(input.customers, "created_at"),
-    oldestOfCapped(input.alerts, "created_at")
+    oldestOfCapped(input.alerts, "created_at"),
+    oldestOfCapped(input.notes, "created_at")
   ].filter((x): x is string => Boolean(x));
 }
 
@@ -586,7 +631,7 @@ async function fetchActivityFeedInput(
         ? "inbound"
         : "outbound";
 
-  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, chatRes, flowsRes, custRes, alertRes] =
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, chatRes, flowsRes, custRes, alertRes, noteRes] =
     await Promise.all([
       !wants("call")
         ? none
@@ -722,6 +767,21 @@ async function fetchActivityFeedInput(
             "created_at"
           )
             .order("created_at", { ascending: false })
+            .limit(limit),
+      // Team notes on contacts. The embedded contacts join resolves the
+      // person's key for the label / deep link; soft-deleted notes stay out.
+      !wants("note")
+        ? none
+        : beforeLt(
+            db
+              .from("contact_notes")
+              .select("author_label, body, created_at, contacts(customer_e164)")
+              .eq("business_id", businessId)
+              .is("deleted_at", null)
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
             .limit(limit)
     ]);
 
@@ -730,6 +790,16 @@ async function fetchActivityFeedInput(
   const smsReplies = rowsOf<ActivitySmsReplyRow>(smsReplyRes);
   const smsOutbound = rowsOf<ActivitySmsOutboundRow>(smsOutRes);
   const customers = rowsOf<ActivityCustomerRow>(custRes);
+  // Flatten the embedded contact join (object/array/null shapes, same as the
+  // ai_flows join) into the plain contact_e164 the collector reads.
+  const notes = rowsOf<
+    ActivityNoteRow & {
+      contacts?: { customer_e164: string } | { customer_e164: string }[] | null;
+    }
+  >(noteRes).map(({ contacts: joined, ...row }) => {
+    const contact = Array.isArray(joined) ? joined[0] : joined;
+    return { ...row, contact_e164: contact?.customer_e164 ?? null };
+  });
 
   // Resolve every phone number the feed will show to a known contact name
   // (owner/employee/customer/override) via the shared converter, so the SMS
@@ -740,7 +810,8 @@ async function fetchActivityFeedInput(
     ...smsInbound.map((r) => customerE164FromPayload(r.payload)),
     ...smsReplies.map((r) => customerE164FromPayload(r.payload)),
     ...smsOutbound.map((r) => r.to_e164),
-    ...customers.map((r) => r.customer_e164)
+    ...customers.map((r) => r.customer_e164),
+    ...notes.map((r) => r.contact_e164)
   ].filter((x): x is string => Boolean(x));
   const contactNames = await resolveContactNames(businessId, e164s, db).catch(
     () => new Map<string, ContactName>()
@@ -756,6 +827,7 @@ async function fetchActivityFeedInput(
     flows: rowsOf<ActivityFlowRow>(flowsRes),
     customers,
     alerts: rowsOf<ActivityAlertRow>(alertRes),
+    notes,
     contactNames,
     limit
   };
@@ -841,12 +913,14 @@ export type ContactActivityTarget = {
   e164s: string[];
   /** Linked email address; adds email_log traffic to the timeline. */
   email?: string | null;
+  /** The contacts row id; adds the team's contact_notes to the timeline. */
+  contactId?: string | null;
 };
 
 /**
  * One person's unified activity timeline: their calls, texts (both
- * directions), email traffic, and the AiFlow runs where they are the lead,
- * newest first, capped at `limit`. This is the contact-page/task-card
+ * directions), email traffic, team notes, and the AiFlow runs where they are
+ * the lead, newest first, capped at `limit`. This is the contact-page/task-card
  * counterpart of {@link getRecentActivity}: same sources, same item shapes,
  * scoped to one contact's numbers + email instead of the whole business.
  *
@@ -863,7 +937,8 @@ export async function getContactActivity(
 ): Promise<ActivityItem[]> {
   const numbers = [...new Set(target.e164s.filter(Boolean))];
   const email = target.email?.trim() || null;
-  if (numbers.length === 0 && !email) return [];
+  const contactId = target.contactId ?? null;
+  if (numbers.length === 0 && !email && !contactId) return [];
 
   const db = client ?? (await createSupabaseServiceClient());
   const limit = opts.limit ?? DEFAULT_CONTACT_ACTIVITY_LIMIT;
@@ -871,7 +946,7 @@ export async function getContactActivity(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
   const none = Promise.resolve({ data: [], error: null });
 
-  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, flowRes] = await Promise.all([
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, flowRes, noteRes] = await Promise.all([
     numbers.length === 0
       ? none
       : db
@@ -938,7 +1013,19 @@ export async function getContactActivity(
           .eq("business_id", businessId)
           .gte("created_at", since)
           .order("created_at", { ascending: false })
-          .limit(CONTACT_ACTIVITY_RUN_SCAN)
+          .limit(CONTACT_ACTIVITY_RUN_SCAN),
+    // Team notes are keyed by the contacts row id, not a phone number.
+    !contactId
+      ? none
+      : db
+          .from("contact_notes")
+          .select("author_label, body, created_at")
+          .eq("business_id", businessId)
+          .eq("contact_id", contactId)
+          .is("deleted_at", null)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(limit)
   ]);
 
   // Keep only the runs whose lead is this contact, stamping the lead number
@@ -951,6 +1038,14 @@ export async function getContactActivity(
     () => new Map<string, ContactName>()
   );
 
+  // Stamp the profile's primary key on each note so the item deep-links and
+  // labels the same person the rest of the timeline does.
+  const primaryKey = numbers[0] ?? null;
+  const notes = rowsOf<ActivityNoteRow>(noteRes).map((r) => ({
+    ...r,
+    contact_e164: primaryKey
+  }));
+
   const items = collectActivityItems({
     calls: rowsOf<ActivityCallRow>(callsRes),
     smsInbound: rowsOf<ActivitySmsInboundRow>(smsInRes),
@@ -961,6 +1056,7 @@ export async function getContactActivity(
     flows,
     customers: [],
     alerts: [],
+    notes,
     contactNames,
     limit
   });
@@ -1051,6 +1147,7 @@ export async function getActivityForContacts(
     flows: [],
     customers: [],
     alerts: [],
+    notes: [],
     contactNames: opts.contactNames,
     limit: scanLimit
   }).sort(byRecency);
