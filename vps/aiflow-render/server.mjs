@@ -22,6 +22,27 @@
  *                                                        failure responses
  *   ... + { actions: [...] }                          -> ACTION mode (below)
  *
+ * DEMONSTRATION mode (dashboard "teach it by doing it once"; engine in
+ * ./demo.mjs, and like the dry run it is its own PATH so a box that predates
+ * it answers 404 instead of misreading the request):
+ *   POST /demo/start { businessId, url, auth? }       -> { demoId, finalUrl, html,
+ *                                                        text, screenshotBase64,
+ *                                                        loggedIn } (persistent page)
+ *   POST /demo/act   { businessId, demoId, action,    -> { recorded, actionsCount,
+ *                      confirm? }                        finalUrl, html, text,
+ *                                                        screenshotBase64 }
+ *                                                        The action EXECUTES for
+ *                                                        real and is recorded as a
+ *                                                        normal browse action; point
+ *                                                        kinds (click_point/
+ *                                                        fill_point) are resolved to
+ *                                                        one first. Destructive
+ *                                                        labels return needs_confirm
+ *                                                        until confirm: true.
+ *   POST /demo/stop  { businessId, demoId }           -> { ok: true } (idempotent)
+ *   An unknown/expired demoId answers HTTP 200 { error: "unknown_demo" }, NEVER
+ *   404: the app reads a demo-path 404 as "box not redeployed yet".
+ *
  * IMPORTANT, application-level failures (action_failed / login_failed /
  * auth_config_error / render_failed) are returned with HTTP **200** and an
  * `{ error, detail }` body, NOT a 5xx. This service runs behind a Cloudflare
@@ -71,6 +92,7 @@ import { chromium } from "playwright";
 import {
   capForEachList,
   condenseError,
+  MAX_ACTIONS,
   NAV_TIMEOUT_MS,
   parseActions,
   performActions,
@@ -82,6 +104,20 @@ import {
 // the 2026-08-19 one for why a submitted login must be WAITED OUT before any
 // re-navigation (waitForLoginToResolve).
 import { looksLikeLogin, performLogin, waitForLoginToResolve } from "./login.mjs";
+// DEMONSTRATION mode (persistent-page sessions, point-to-action derivation,
+// the confirm gate) lives in ./demo.mjs so it can be unit-tested without a
+// browser (tests/aiflow-render-demo.test.ts), same split as the two above.
+import {
+  createDemoStore,
+  DEMO_SWEEP_INTERVAL_MS,
+  DEMO_TEXT_MAX_CHARS,
+  diagnosticsMarks,
+  isConfirmRequired,
+  parseDemoAction,
+  resolveDemoPointAction,
+  sliceDiagnostics
+} from "./demo.mjs";
+import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.PORT ?? 8080);
 /**
@@ -448,6 +484,105 @@ async function fetchCredentials(businessId, label) {
 // looksLikeLogin / performLogin live in login.mjs so they can be unit-tested
 // against a stub page (see tests/aiflow-render-login.test.ts), the same split
 // ACTION mode already uses.
+
+/**
+ * Ensure the page's portal session is authenticated, driving the stored-
+ * credential login form when the page looks login-shaped.
+ *
+ * Extracted from renderHandler and shared with /demo/start so the two paths
+ * cannot drift (the same reason /check-actions reuses renderHandler): a demo
+ * that logged in differently from the flows it teaches would prove nothing.
+ *
+ * The caller has already navigated to `url` and settled. On a performed login
+ * this re-navigates to `url` and settles again. Credential lookup / login-form
+ * failures are permanent SETUP errors (missing AIFLOW_PLATFORM_URL/token,
+ * integration not found, wrong selectors), reported as `auth_config_error` so
+ * the worker fails the run immediately instead of retrying as transient IO. A
+ * navigation failure here THROWS, which callers report as render_failed,
+ * exactly as before the extraction.
+ *
+ * Returns { ok: true }, or { ok: false, error, detail } with error
+ * "auth_config_error" | "login_failed". Both failures poison the shared
+ * session entry at the CALLER, which owns the refcount.
+ */
+async function ensureLoggedIn(page, { url, businessId, label, login }) {
+  if (!(await looksLikeLogin(page, login))) return { ok: true };
+  let loginDiagnostics = null;
+  let loginResolve = null;
+  try {
+    const creds = await fetchCredentials(businessId, label);
+    loginDiagnostics = await performLogin(page, creds, login);
+    // Wait for the submitted login to actually RESOLVE before touching the
+    // page again. The old wait here was waitForLoadState("networkidle"),
+    // which is a NO-OP on a page that finished loading before the click
+    // (load states are reached once per document), so the re-goto below
+    // fired instantly and CANCELLED the in-flight authentication. Amy's
+    // Clever login failed deterministically through this service, with
+    // correct credentials and a landed click, for exactly that reason:
+    // login.listwithclever.com hands the agents.listwithclever.com session
+    // to a cross-subdomain redirect the re-goto kept aborting.
+    loginResolve = await waitForLoginToResolve(page, login);
+    // Let the post-login redirect chain and app boot finish before the
+    // re-goto, so the target navigation starts from a settled session.
+    await settlePage(page);
+  } catch (e) {
+    return { ok: false, error: "auth_config_error", detail: String(e).slice(0, 200) };
+  }
+  await page.goto(url, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+  // Settle before the second login check, or a slow re-render reads as
+  // "logged in" and the extractor gets the shell.
+  await settlePage(page);
+  // An email-first login that never reached its password step did NOT
+  // authenticate, and the re-check below cannot be trusted to notice: a
+  // logged-out portal often redirects to a marketing page that is not
+  // login-shaped at all (HomeLight sends you to the /referrals signup
+  // funnel). Without this, a stalled advance falls through as success and
+  // the funnel goes to the extractor, which is precisely the silent-success
+  // bug the email-first support exists to close. We KNOW we did not log in,
+  // so say so rather than asking the page.
+  const stalledAdvance = loginDiagnostics?.passwordStepReached === false;
+  if (stalledAdvance || (await looksLikeLogin(page, login))) {
+    // Say WHY. A bare `login_failed` sent someone reading portal markup by
+    // hand for a day (Clever, 2026-08-17) to discover that the submit
+    // control was `type="button"` and shipped `disabled`. Action failures
+    // already persist a screenshot and page source; login failures used to
+    // persist nothing, and that asymmetry was the actual bug.
+    const detail = loginDiagnostics
+      ? (loginDiagnostics.steps === 2
+          ? `steps=2 advance=${loginDiagnostics.selectors.advance ?? "none"} ` +
+            `passwordStep=${loginDiagnostics.passwordStepReached} `
+          : "") +
+        `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
+        `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
+        (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "") +
+        // How the post-submit wait ended. "timeout" with a landed click
+        // usually means the portal rejected the credentials; "navigation"
+        // followed by a login-shaped page means the session did not stick.
+        (loginResolve ? ` resolve=${loginResolve.via}:${loginResolve.waitedMs}ms` : "")
+      : "no login diagnostics";
+    return { ok: false, error: "login_failed", detail };
+  }
+  return { ok: true };
+}
+
+/**
+ * The login_failed response body, shared by /render and /demo/start: the page
+ * itself is the only real explanation of a failed login, so both carry it.
+ */
+async function loginFailedBody(page, detail) {
+  const screenshotBase64 = await captureScreenshot(page);
+  const text = await readPageText(page).catch(() => "");
+  return {
+    error: "login_failed",
+    detail,
+    ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
+    finalUrl: page.url(),
+    // Bounded: enough to spot "invalid password" / MFA / a bot challenge
+    // without shipping a whole SPA back through the tunnel.
+    pageTextExcerpt: String(text).slice(0, 600),
+    ...(screenshotBase64 ? { screenshotBase64 } : {})
+  };
+}
 
 app.use((req, res, next) => {
   if (!RENDER_TOKEN) return next();
@@ -1018,84 +1153,25 @@ const renderHandler = async (req, res) => {
     // page had already painted by this line; settling here is what restores it.
     await settlePage(page);
 
-    if (await looksLikeLogin(page, auth?.login)) {
-      // Credential lookup / login-form failures are permanent SETUP errors
-      // (missing AIFLOW_PLATFORM_URL/token, integration not found, wrong
-      // selectors). Report them as `auth_config_error` so the worker fails the
-      // run immediately instead of retrying as transient IO.
-      let creds;
-      let loginDiagnostics = null;
-      let loginResolve = null;
-      try {
-        creds = await fetchCredentials(businessId, label);
-        loginDiagnostics = await performLogin(page, creds, auth?.login);
-        // Wait for the submitted login to actually RESOLVE before touching the
-        // page again. The old wait here was waitForLoadState("networkidle"),
-        // which is a NO-OP on a page that finished loading before the click
-        // (load states are reached once per document), so the re-goto below
-        // fired instantly and CANCELLED the in-flight authentication. Amy's
-        // Clever login failed deterministically through this service, with
-        // correct credentials and a landed click, for exactly that reason:
-        // login.listwithclever.com hands the agents.listwithclever.com session
-        // to a cross-subdomain redirect the re-goto kept aborting.
-        loginResolve = await waitForLoginToResolve(page, auth?.login);
-        // Let the post-login redirect chain and app boot finish before the
-        // re-goto, so the target navigation starts from a settled session.
-        await settlePage(page);
-      } catch (e) {
-        poisoned = true;
-        console.error(`[render] auth_config_error for ${key}: ${String(e).slice(0, 200)}`);
+    // The login itself lives in ensureLoggedIn (shared with /demo/start, so
+    // the two paths cannot drift). Failures poison the session entry HERE,
+    // where the refcount lives.
+    const loginOutcome = await ensureLoggedIn(page, {
+      url: safe,
+      businessId,
+      label,
+      login: auth?.login
+    });
+    if (!loginOutcome.ok) {
+      poisoned = true;
+      if (loginOutcome.error === "auth_config_error") {
+        console.error(`[render] auth_config_error for ${key}: ${loginOutcome.detail}`);
         return res
           .status(200)
-          .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
+          .json({ error: "auth_config_error", detail: loginOutcome.detail });
       }
-      await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
-      // Same reason as above: settle before the second login check, or a slow
-      // re-render reads as "logged in" and the extractor gets the shell.
-      await settlePage(page);
-      // An email-first login that never reached its password step did NOT
-      // authenticate, and the re-check below cannot be trusted to notice: a
-      // logged-out portal often redirects to a marketing page that is not
-      // login-shaped at all (HomeLight sends you to the /referrals signup
-      // funnel). Without this, a stalled advance falls through as success and
-      // the funnel goes to the extractor, which is precisely the silent-success
-      // bug the email-first support exists to close. We KNOW we did not log in,
-      // so say so rather than asking the page.
-      const stalledAdvance = loginDiagnostics?.passwordStepReached === false;
-      if (stalledAdvance || (await looksLikeLogin(page, auth?.login))) {
-        poisoned = true;
-        // Say WHY. A bare `login_failed` sent someone reading portal markup by
-        // hand for a day (Clever, 2026-08-17) to discover that the submit
-        // control was `type="button"` and shipped `disabled`. Action failures
-        // already persist a screenshot and page source; login failures used to
-        // persist nothing, and that asymmetry was the actual bug.
-        const detail = loginDiagnostics
-          ? (loginDiagnostics.steps === 2
-              ? `steps=2 advance=${loginDiagnostics.selectors.advance ?? "none"} ` +
-                `passwordStep=${loginDiagnostics.passwordStepReached} `
-              : "") +
-            `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
-            `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
-            (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "") +
-            // How the post-submit wait ended. "timeout" with a landed click
-            // usually means the portal rejected the credentials; "navigation"
-            // followed by a login-shaped page means the session did not stick.
-            (loginResolve ? ` resolve=${loginResolve.via}:${loginResolve.waitedMs}ms` : "")
-          : "no login diagnostics";
-        console.error(`[render] login_failed for ${key}: ${detail}`);
-        const screenshotBase64 = await captureScreenshot(page);
-        const text = await readPageText(page).catch(() => "");
-        return res.status(200).json({
-          error: "login_failed",
-          detail,
-          ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
-          finalUrl: page.url(),
-          // Bounded: enough to spot "invalid password" / MFA / a bot challenge
-          // without shipping a whole SPA back through the tunnel.
-          pageTextExcerpt: String(text).slice(0, 600),
-          ...(screenshotBase64 ? { screenshotBase64 } : {})
-        });
-      }
+      console.error(`[render] login_failed for ${key}: ${loginOutcome.detail}`);
+      return res.status(200).json(await loginFailedBody(page, loginOutcome.detail));
     }
 
     // The SPA has already been settled: every path to this line settles right
@@ -1163,6 +1239,236 @@ app.post("/render", renderHandler);
 app.post("/check-actions", (req, res) => {
   req.body = { ...(req.body ?? {}), checkOnly: true };
   return renderHandler(req, res);
+});
+
+/**
+ * DEMONSTRATION mode (module doc up top; engine in ./demo.mjs).
+ *
+ * Its own PATHS, same rule as /check-actions: a box that predates this code
+ * 404s, which the app reads as "not updated yet". Sessions hold a PERSISTENT
+ * page between requests, which is the one deliberate exception to the
+ * page-per-request rule above; every exit path funnels through the store's
+ * exactly-once release so the auth-context refcount can never leak (evictStale
+ * never touches inUse > 0, so a leaked hold would pin a context forever).
+ */
+const demoStore = createDemoStore();
+const demoSweepTimer = setInterval(() => {
+  demoStore.sweep().catch(() => {});
+}, DEMO_SWEEP_INTERVAL_MS);
+// The sweep must never hold the process open (or a test importing this).
+demoSweepTimer.unref?.();
+
+/**
+ * The page-state fields every demo turn returns. No settle here: callers
+ * settle exactly once per navigation-like event, same discipline as /render.
+ */
+async function demoPageState(page, marks) {
+  const html = (await capturePageSource(page)) ?? "";
+  const text = (await readPageText(page)).slice(0, DEMO_TEXT_MAX_CHARS);
+  const screenshotBase64 = await captureScreenshot(page);
+  const fresh = sliceDiagnostics(page.__diag, marks ?? {});
+  return {
+    finalUrl: page.url(),
+    html,
+    text,
+    ...(screenshotBase64 ? { screenshotBase64 } : {}),
+    ...(fresh ? { diagnostics: fresh } : {})
+  };
+}
+
+/** The wire shape of a recorded action: value only where the kind carries one. */
+function publicDemoAction(recorded) {
+  const wantsValue =
+    recorded.kind === "fill_selector" ||
+    recorded.kind === "fill_placeholder" ||
+    recorded.kind === "select_option" ||
+    recorded.kind === "click_role";
+  return {
+    kind: recorded.kind,
+    target: recorded.target,
+    ...(wantsValue ? { value: recorded.value ?? "" } : {})
+  };
+}
+
+app.post("/demo/start", async (req, res) => {
+  demoStore.sweep().catch(() => {});
+  const safe = safeUrl(String(req.body?.url ?? ""));
+  if (!safe) return res.status(400).json({ error: "invalid_or_unsafe_url" });
+  // Required even for a public page: the demoId is BOUND to the business at
+  // creation, and act/stop answer a mismatch exactly like an unknown id.
+  const businessId =
+    typeof req.body?.businessId === "string" && req.body.businessId.length > 0
+      ? req.body.businessId
+      : null;
+  if (!businessId) return res.status(400).json({ error: "missing_business" });
+  const auth = req.body?.auth;
+  const label = auth?.integrationLabel;
+  if (auth && !label) return res.status(400).json({ error: "missing_business_or_label" });
+
+  let key = null;
+  let entry = null;
+  let ownedContext = null;
+  let page = null;
+  let released = false;
+  // Exactly-once teardown for every path out of this handler and, once the
+  // session is registered, for the store's release too. Poisoning applies
+  // only to the shared auth entry, same rule as renderHandler.
+  const releaseResources = async (poisoned) => {
+    if (released) return;
+    released = true;
+    if (page) await page.close().catch(() => {});
+    if (entry) finishSession(key, entry, poisoned);
+    else if (ownedContext) await ownedContext.close().catch(() => {});
+  };
+
+  let session = null;
+  try {
+    const browser = await getBrowser();
+    let context;
+    if (label) {
+      key = `${businessId}:${label}`;
+      entry = await acquireSession(key);
+      context = entry.context;
+    } else {
+      ownedContext = await browser.newContext({ userAgent: uaFor(browser) });
+      context = ownedContext;
+    }
+    page = await context.newPage();
+    await attachSsrfGuard(page);
+    await alignClientHints(page, browser);
+    page.__diag = attachDiagnostics(page);
+    await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+    await settlePage(page);
+    if (label) {
+      const loginOutcome = await ensureLoggedIn(page, {
+        url: safe,
+        businessId,
+        label,
+        login: auth?.login
+      });
+      if (!loginOutcome.ok) {
+        if (loginOutcome.error === "auth_config_error") {
+          console.error(`[render] demo auth_config_error for ${key}: ${loginOutcome.detail}`);
+          await releaseResources(true);
+          return res
+            .status(200)
+            .json({ error: "auth_config_error", detail: loginOutcome.detail });
+        }
+        console.error(`[render] demo login_failed for ${key}: ${loginOutcome.detail}`);
+        const body = await loginFailedBody(page, loginOutcome.detail);
+        await releaseResources(true);
+        return res.status(200).json(body);
+      }
+    }
+    const demoId = randomUUID();
+    session = await demoStore.create({
+      demoId,
+      businessId,
+      page,
+      close: () => releaseResources(false)
+    });
+    if (!session) {
+      await releaseResources(false);
+      return res.status(200).json({ error: "demo_limit" });
+    }
+    console.log(`[render] demo ${demoId} started for ${businessId} on ${page.url()}`);
+    const state = await demoPageState(page, {});
+    return res.json({ demoId, loggedIn: Boolean(label), ...state });
+  } catch (e) {
+    console.error(`[render] demo start failed for ${businessId}: ${String(e).slice(0, 300)}`);
+    if (session) await demoStore.release(session);
+    else await releaseResources(true);
+    return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+  }
+});
+
+app.post("/demo/act", async (req, res) => {
+  demoStore.sweep().catch(() => {});
+  const businessId = typeof req.body?.businessId === "string" ? req.body.businessId : "";
+  const demoId = typeof req.body?.demoId === "string" ? req.body.demoId : "";
+  if (!businessId || !demoId) return res.status(400).json({ error: "unknown_demo_request" });
+  const action = parseDemoAction(req.body?.action);
+  if (!action) return res.status(400).json({ error: "invalid_action" });
+  const confirm = req.body?.confirm === true;
+  const session = demoStore.get(demoId, businessId);
+  // Unknown, expired, a restarted box, or another business's id: one answer,
+  // HTTP 200. A 404 here would read app-side as "box not redeployed yet".
+  if (!session) return res.status(200).json({ error: "unknown_demo" });
+  if (session.actionsCount >= MAX_ACTIONS) return res.status(200).json({ error: "action_cap" });
+  demoStore.touch(session);
+  const page = session.page;
+  const marks = diagnosticsMarks(page.__diag);
+  try {
+    let recorded;
+    let label;
+    if (action.kind === "click_point" || action.kind === "fill_point") {
+      const resolved = await resolveDemoPointAction(page, action);
+      if (!resolved.ok) {
+        // Nothing executed, nothing recorded: the owner picks a different
+        // spot or falls back to the control list.
+        return res.status(200).json({
+          error: "resolve_failed",
+          reason: resolved.reason,
+          ...(resolved.detail ? { detail: resolved.detail } : {}),
+          ...(resolved.options ? { options: resolved.options } : {})
+        });
+      }
+      recorded = resolved.action;
+      label = resolved.label;
+    } else {
+      recorded = action;
+      label = action.value ? `${action.target} -> ${action.value}` : action.target;
+    }
+    if (!confirm && isConfirmRequired(recorded)) {
+      // Not executed, not recorded. The panel re-sends the RESOLVED action
+      // with confirm: true once the owner says yes, so a point click only
+      // pays the resolution once. Sidecar-side on purpose: no dashboard bug
+      // can click a destructive-labeled control without a confirm.
+      return res.status(200).json({
+        error: "needs_confirm",
+        resolved: publicDemoAction(recorded),
+        label
+      });
+    }
+    const acted = await performActions(page, [recorded]);
+    if (acted.error) {
+      console.error(`[render] demo action_failed (${demoId}): ${acted.error}`);
+      await settlePage(page);
+      const state = await demoPageState(page, marks);
+      return res.status(200).json({ error: "action_failed", detail: acted.error, ...state });
+    }
+    session.actionsCount += 1;
+    await settlePage(page);
+    const state = await demoPageState(page, marks);
+    return res.json({
+      recorded: publicDemoAction(recorded),
+      actionsCount: session.actionsCount,
+      ...state
+    });
+  } catch (e) {
+    // A dead page or context (browser crash, memory pressure) cannot be
+    // recovered mid-demo. Release NOW so the auth-context refcount never
+    // leaks behind a dead page; the recorded list lives client-side and
+    // survives.
+    console.error(`[render] demo ${demoId} died mid-act: ${String(e).slice(0, 300)}`);
+    await demoStore.release(session);
+    return res
+      .status(200)
+      .json({ error: "demo_gone", detail: condenseError(String(e?.message ?? e)) });
+  }
+});
+
+app.post("/demo/stop", async (req, res) => {
+  const businessId = typeof req.body?.businessId === "string" ? req.body.businessId : "";
+  const demoId = typeof req.body?.demoId === "string" ? req.body.demoId : "";
+  if (!businessId || !demoId) return res.status(400).json({ error: "unknown_demo_request" });
+  const session = demoStore.get(demoId, businessId);
+  // Idempotent: stopping an already-gone session is success, not an error.
+  if (!session) return res.json({ ok: true });
+  const actionsCount = session.actionsCount;
+  await demoStore.release(session);
+  console.log(`[render] demo ${demoId} stopped after ${actionsCount} action(s)`);
+  return res.json({ ok: true, actionsCount });
 });
 
 app.listen(PORT, () => console.log(`aiflow-render listening on :${PORT}`));

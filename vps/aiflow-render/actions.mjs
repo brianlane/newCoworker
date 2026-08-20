@@ -758,8 +758,13 @@ export async function checkActions(page, actions, { totalAppearMs } = {}) {
  * the fastest way to make owners stop trusting the button. The cost is bounded:
  * only an action that is genuinely absent waits out the timeout, so a healthy
  * sequence returns fast and the slow case is the one being diagnosed.
+ *
+ * Exported for demo.mjs: a demonstrated point click is recorded only after the
+ * derived action resolves BACK to the very element the owner clicked, and that
+ * verification must use the same per-kind resolution the engine replays with,
+ * or the recording could pass its own check and then click something else.
  */
-async function locateActionTarget(page, a, opts = {}) {
+export async function locateActionTarget(page, a, opts = {}) {
   if (a.kind === "click_text" || a.kind === "click_text_while_present") {
     return await resolveClickTarget(page, a.target, {
       allowExactTextAnywhere: a.kind === "click_text",

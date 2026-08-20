@@ -165,8 +165,31 @@ if ! grep -q respondWithActionChecks "$DEST/server.mjs"; then
   echo "ERROR: server.mjs has no dry-run responder; a checkOnly request would PERFORM the actions" >&2
   exit 1
 fi
+# Demonstration mode is its own set of PATHS (same stale-box rule as the dry
+# run). A box missing any of these answers /demo/* with 404, which the app
+# reads honestly as "not updated"; a PARTIAL sync (server.mjs new, demo.mjs
+# missing, or the Dockerfile not copying it) instead kills the container at
+# startup with ERR_MODULE_NOT_FOUND, the 2026-08-17 login.mjs failure mode.
+# Verify all the pieces landed together before the rebuild.
+if ! grep -q 'from "./demo.mjs"' "$DEST/server.mjs"; then
+  echo "ERROR: server.mjs does not import ./demo.mjs, stale build?" >&2
+  exit 1
+fi
+if ! grep -q '"/demo/act"' "$DEST/server.mjs"; then
+  echo "ERROR: server.mjs has no /demo routes; the dashboard demo panel would get 404s forever" >&2
+  exit 1
+fi
+if ! grep -q deriveDemoCandidates "$DEST/demo.mjs"; then
+  echo "ERROR: deriveDemoCandidates not found in synced demo.mjs" >&2
+  exit 1
+fi
+if ! grep -q 'demo\.mjs' "$DEST/Dockerfile"; then
+  echo "ERROR: Dockerfile does not COPY demo.mjs; the image would die at startup (ERR_MODULE_NOT_FOUND)" >&2
+  exit 1
+fi
 echo "click_text_while_present present in actions.mjs, server.mjs imports it"
 echo "dry-run responder present, so a checkOnly request cannot fall through to a real click"
+echo "demo responder present (demo.mjs synced, routed, and copied into the image)"
 echo "== confirm render token (redacted; len=0 means the auth gate is OFF) =="
 awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env, auth gate OFF"}' "$DEST/.env" || true
 echo "== rebuild aiflow-render container only =="

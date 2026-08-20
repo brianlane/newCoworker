@@ -99,6 +99,11 @@ export function checkAction(
   action: RenderAction,
   opts?: { appearTimeoutMs?: number }
 ): Promise<ActionCheck>;
+export function locateActionTarget(
+  page: RenderPage,
+  action: { kind: string; target: string; value?: string },
+  opts?: { appearTimeoutMs?: number }
+): Promise<unknown>;
 export function checkActions(
   page: RenderPage,
   actions: readonly RenderAction[],

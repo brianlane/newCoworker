@@ -736,8 +736,17 @@ describe("server.mjs fails a stalled advance without asking the page", () => {
   });
 
   it("drops the session, so the next call cannot reuse a logged-out context", () => {
-    const guardAt = source.indexOf("const stalledAdvance");
-    expect(source.slice(guardAt, guardAt + 200)).toContain("poisoned = true");
+    // The stalled-advance guard lives in ensureLoggedIn (shared with
+    // /demo/start), which cannot poison anything itself: the refcount is
+    // owned by each caller. So the property is asserted where it now lives,
+    // at BOTH call sites: /render poisons its session entry, and /demo/start
+    // releases its hold as poisoned.
+    const renderCall = source.indexOf("if (!loginOutcome.ok) {");
+    expect(renderCall).toBeGreaterThan(-1);
+    expect(source.slice(renderCall, renderCall + 120)).toContain("poisoned = true");
+    const demoCall = source.indexOf("demo login_failed");
+    expect(demoCall).toBeGreaterThan(-1);
+    expect(source.slice(demoCall, demoCall + 400)).toContain("releaseResources(true)");
   });
 });
 
