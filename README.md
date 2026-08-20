@@ -2108,6 +2108,20 @@ deliberate.
 The **send window is ignored**, exactly as it is for the single Send button:
 the owner is choosing this moment.
 
+**The cap is the owner's own setting, so the UI has to say so.** It is
+`daily_cap` on `outreach_settings`, edited as "Emails per day" on this very
+page, anywhere from 0 to 200. Nothing about it is a platform limit, so every
+message about hitting it names the field that raises it rather than saying
+"raise the cap" and leaving the owner to go looking.
+
+**Both send controls behave the same once it is spent.** Per-row Send used to
+stay live and simply fail while Send all disabled itself. The server refuses
+either way, so the live button only bought a click that always failed, and two
+controls for one action disagreeing about whether it is available reads as a bug
+in whichever the owner tried second. Gating on the client is safe here because
+`sendAllowanceLeft` is computed server-side and every action refreshes it, so
+raising the cap and saving re-enables both at once.
+
 The **daily cap is enforced**. A few hundred cold emails leaving one mailbox in
 a burst is how a sending domain gets rate limited, and the cap is the tenant's
 own deliverability rule; a button that quietly suspended it would be doing them
