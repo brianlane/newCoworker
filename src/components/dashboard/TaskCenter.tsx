@@ -240,6 +240,7 @@ function TaskCard({
           initialOwnerEmployeeId={task.ownerEmployeeId}
           employees={employees}
           implicitOwnerEmployeeId={implicitOwnerEmployeeId}
+          hasActiveRuns={task.runs.length > 0}
           onSaved={() => {
             setEditing(false);
             onChanged();
