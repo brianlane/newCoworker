@@ -4405,7 +4405,7 @@ visible only in the first. The `net` schema is not exposed to PostgREST, so
 `cron_http_failures(since_minutes)` is a `security definer` function with a
 pinned `search_path`, returning failures only and capped at 200 rows.
 
-Five kinds of finding, each with its own remediation line in the email,
+Six kinds of finding, each with its own remediation line in the email,
 because the useful next command differs completely by kind:
 
 - **missing** (a sweep stopped): start with `tsx debug/read-cron-jobs.ts`,
@@ -4423,16 +4423,32 @@ because the useful next command differs completely by kind:
   failures: an infrastructure problem parked there would come back on the
   next run misclassified as a silent 200, with per-tenant remediation for
   what is really a missing migration or grant.
-- **http**: match by time against the schedules, since these rows carry no
-  job.
+- **burst**: HTTP anomalies clustering past the pager bar. Match by time
+  against the schedules, since these rows carry no job.
 
 Only **cron-sourced** rows count toward liveness (see the `source` column
 above), so webhook-driven runs of `messenger-worker` cannot stand in for a
 dead cron job.
 
-**A healthy fleet sends no email.** An alert that arrives nightly stops being
-read, and this one has to still mean something on the night a sweep actually
-stops.
+**The email is a pager: it only fires when a human must act.** A healthy
+fleet sends nothing, and two noise classes that used to page are now
+absorbed:
+
+- **A lone HTTP anomaly is counted, not paged.** Six solo anomalies between
+  Aug 6 and Aug 20 were each verified harmless by hand, because every real
+  victim already pages through the ledger: a crashed run pages as `failed`,
+  a stopped schedule as `missing` once its gap passes. Isolated timeouts and
+  transport errors land in the watchdog's own summary row (`suppressedHttp`)
+  and stay one `tsx debug/cron-http-stats.ts` away. A **burst** still pages:
+  three anomalies inside an hour, or five in the ~6h window
+  (`HTTP_BURST_*` in `src/lib/cron/sweep-watchdog.ts`), is infra degradation
+  worth a human even before it costs a recorded run.
+- **A brand-new sweep gets one night of grace, with memory.** A sweep with no
+  ledger row at all is logged (summary `graced`) rather than paged the first
+  night, and pages the second: each run stores the sweeps it saw missing in
+  its own summary row, and the next run reads that back. The memory FAILS
+  OPEN, so an unreadable or pre-upgrade yesterday row means no grace and a
+  page: a memory problem can only ever page too much, never mute.
 
 Two guards worth knowing:
 
@@ -4451,21 +4467,21 @@ discovered fleet **exactly** in both directions: a sweep missing from it is
 never watched, and a stale entry pages forever about a job that no longer
 exists.
 
-**Shipping a NEW daily or weekly sweep: merge it BEFORE its UTC slot, not
-after.** The watchdog starts expecting a sweep the moment its migration
-lands, but the sweep cannot record a run until its first scheduled tick. A
-daily sweep merged after its slot has already passed that day therefore
-produces exactly one "STOPPED: no run recorded" ACTION REQUIRED email at the
-next 03:30 UTC check, self-resolving at its first real tick. This happened
-twice in the watchdog's first ten days (vps-contract-upgrade-sweep, merged
-16:00 UTC against a 10:30 slot; priority-support-nudge-sweep, merged 20:49
-UTC against a 15:35 slot); both ran clean on their first tick. This is a
-known cost, not a bug: a "no rows ever means awaiting first run" grace was
-considered and rejected, because it would permanently mute a sweep whose
-recording never worked, and that silence is worse than one honest email.
-When the email arrives anyway, the check is one query: the sweep's row in
-`cron_sweep_runs` after its first tick, or `tsx debug/read-cron-jobs.ts` to
-confirm the job is live and waiting.
+**Shipping a NEW daily or weekly sweep: merging before its UTC slot is still
+the tidy habit, but no longer buys silence it did not have.** The watchdog
+starts expecting a sweep the moment its migration lands, and one merged
+after its slot cannot record a run until the next day. That used to cost
+exactly one ACTION REQUIRED email (it did, twice: vps-contract-upgrade-sweep
+merged 16:00 UTC against a 10:30 slot, priority-support-nudge-sweep merged
+20:49 UTC against a 15:35 slot; both ran clean on their first tick). The
+first-night grace above absorbs that night now: logged in the summary, paged
+only if the sweep is STILL absent the following night. A permanent "no rows
+ever means awaiting first run" grace remains rejected, because it would mute
+a sweep whose recording never worked; the shipped version is bounded to one
+night by the watchdog's own memory and fails open when that memory cannot be
+read. If a new sweep does page on night two, the check is one query: its row
+in `cron_sweep_runs` after its first tick, or `tsx debug/read-cron-jobs.ts`
+to confirm the job is live and waiting.
 
 ### Post-merge: what CI does vs what you still do
 

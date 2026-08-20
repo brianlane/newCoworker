@@ -30,20 +30,24 @@ type QueryResult = { data: unknown; error: { message: string } | null };
 function mockSupabase(opts: {
   runs?: QueryResult;
   oldest?: QueryResult;
+  prevSummary?: QueryResult;
   rpc?: QueryResult;
   insert?: { error: { message: string } | null };
 }) {
   const neq = vi.fn();
   const gte = vi.fn();
+  // Chained table reads in route order: the oldest-row probe, then
+  // yesterday's watchdog summary (the grace memory).
   const results = [
-    opts.oldest ?? { data: [], error: null }
+    opts.oldest ?? { data: [], error: null },
+    opts.prevSummary ?? { data: [], error: null }
   ];
   let call = 0;
 
   function chain(): Record<string, unknown> {
     const result = results[Math.min(call++, results.length - 1)];
     const self: Record<string, unknown> = {};
-    for (const m of ["select", "order", "limit"]) {
+    for (const m of ["select", "order", "limit", "eq"]) {
       self[m] = vi.fn().mockReturnValue(self);
     }
     self.gte = vi.fn((...args: unknown[]) => {
@@ -155,13 +159,71 @@ describe("api/internal/cron-sweep-watchdog route", () => {
     expect(gte).not.toHaveBeenCalled();
   });
 
+  it("does not email for a lone HTTP anomaly, but records it as suppressed", async () => {
+    mockSupabase({
+      runs: { data: healthyRows(), error: null },
+      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null },
+      rpc: {
+        data: [{ id: 1, status_code: 502, timed_out: false, error_msg: null, created: new Date().toISOString() }],
+        error: null
+      }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.findings).toBe(0);
+    expect(body.data.suppressedHttp).toBe(1);
+    expect(body.data.emailed).toBe(false);
+    expect(sendOpsCronSweepHealthEmail).not.toHaveBeenCalled();
+  });
+
+  it("graces a first-night absentee when yesterday's memory clears it, and remembers it", async () => {
+    mockSupabase({
+      runs: { data: healthyRows().filter((r) => r.sweep !== "subscription-grace-sweep"), error: null },
+      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null },
+      prevSummary: { data: [{ summary: { missing: [] } }], error: null }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.findings).toBe(0);
+    expect(body.data.graced).toEqual(["subscription-grace-sweep"]);
+    // Tomorrow's memory: still absent tomorrow means page.
+    expect(body.data.missing).toEqual(["subscription-grace-sweep"]);
+    expect(sendOpsCronSweepHealthEmail).not.toHaveBeenCalled();
+  });
+
+  it("pages on night two, when yesterday's memory already lists the absentee", async () => {
+    mockSupabase({
+      runs: { data: healthyRows().filter((r) => r.sweep !== "subscription-grace-sweep"), error: null },
+      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null },
+      prevSummary: { data: [{ summary: { missing: ["subscription-grace-sweep"] } }], error: null }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.byKind.missing).toBe(1);
+    expect(body.data.emailed).toBe(true);
+    expect(sendOpsCronSweepHealthEmail).toHaveBeenCalled();
+  });
+
+  it("fails open when yesterday's summary is unreadable: no grace, page", async () => {
+    mockSupabase({
+      runs: { data: healthyRows().filter((r) => r.sweep !== "subscription-grace-sweep"), error: null },
+      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null },
+      prevSummary: { data: null, error: { message: "boom" } }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.byKind.missing).toBe(1);
+    expect(body.data.emailed).toBe(true);
+  });
+
   it("counts only cron-sourced rows, so webhook kicks cannot stand in for a dead cron", async () => {
     const { neq } = mockSupabase({ runs: { data: healthyRows(), error: null } });
     await POST(makeRequest());
-    // The oldest-row probe still excludes direct runs client-side; the run
-    // window's source filter lives inside cron_sweep_run_evidence (pinned by
+    // The oldest-row probe and the grace-memory read both exclude direct
+    // runs client-side; the run window's source filter lives inside
+    // cron_sweep_run_evidence (pinned by
     // tests/worker-integration/cron-sweep-run-evidence.itest.ts).
-    expect(neq).toHaveBeenCalledTimes(1);
+    expect(neq).toHaveBeenCalledTimes(2);
     expect(neq).toHaveBeenCalledWith("source", "direct");
   });
 
@@ -190,25 +252,28 @@ describe("api/internal/cron-sweep-watchdog route", () => {
     expect(body.data.emailed).toBe(true);
   });
 
-  it("reports HTTP-layer failures that no sweep could report about itself", async () => {
+  it("pages an HTTP burst that no sweep could report about itself", async () => {
+    // Three anomalies inside an hour: past the pager bar. A lone anomaly is
+    // covered by the suppression test above.
+    const now = Date.now();
     mockSupabase({
       runs: { data: healthyRows(), error: null },
-      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null },
+      oldest: { data: [{ finished_at: new Date(now - 86_400_000 * 30).toISOString() }], error: null },
       rpc: {
-        data: [
-          {
-            id: 1,
-            status_code: null,
-            timed_out: true,
-            error_msg: null,
-            created: "2026-08-08T02:50:01Z"
-          }
-        ],
+        data: [0, 15, 30].map((m, i) => ({
+          id: i + 1,
+          status_code: null,
+          timed_out: true,
+          error_msg: null,
+          created: new Date(now - m * 60_000).toISOString()
+        })),
         error: null
       }
     });
     const body = await (await POST(makeRequest())).json();
-    expect(body.data.httpFailures).toBe(1);
+    expect(body.data.httpFailures).toBe(3);
+    expect(body.data.byKind.burst).toBe(1);
+    expect(body.data.suppressedHttp).toBe(0);
     expect(body.data.emailed).toBe(true);
   });
 

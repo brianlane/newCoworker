@@ -39,11 +39,15 @@ const HEADINGS: Record<FindingKind, string> = {
   errors: "PARTIAL FAILURE: answered ok with errors inside",
   degraded: "INCOMPLETE: the watchdog could not read one of its two sources",
   slow: "SLOW: approaching the 150s ceiling",
+  burst: "HTTP BURST: anomalies clustering past the pager bar",
+  // Retired as an emailed kind: solo HTTP anomalies are suppressed and
+  // counted (the evaluator pages a "burst" instead), but the kind stays in
+  // the union for the summary's byKind history.
   http: "HTTP LAYER: timeout or transport error"
 };
 
 /** Worst first: a sweep that stopped outranks one that merely got slow. */
-const ORDER: FindingKind[] = ["missing", "failed", "errors", "degraded", "slow", "http"];
+const ORDER: FindingKind[] = ["missing", "failed", "errors", "degraded", "slow", "burst", "http"];
 
 /** Only called for a kind the caller already found findings for. */
 function section(kind: FindingKind, findings: Finding[]): string {

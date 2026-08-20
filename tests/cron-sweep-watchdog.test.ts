@@ -42,9 +42,28 @@ function evaluate(
   runs: SweepRunRow[],
   httpFailures: HttpFailureRow[] = [],
   ledgerOldestAt: string | null = minutesBefore(60 * 24 * 30),
-  httpReadError: string | null = null
+  httpReadError: string | null = null,
+  previouslyMissing: string[] | null = null
 ) {
-  return evaluateSweepHealth({ runs, httpFailures, ledgerOldestAt, httpReadError, now: NOW });
+  return evaluateSweepHealth({
+    runs,
+    httpFailures,
+    ledgerOldestAt,
+    httpReadError,
+    previouslyMissing,
+    now: NOW
+  });
+}
+
+function httpRow(minutesAgoCreated: number, over: Partial<HttpFailureRow> = {}): HttpFailureRow {
+  return {
+    id: 1,
+    status_code: 502,
+    timed_out: false,
+    error_msg: null,
+    created: minutesBefore(minutesAgoCreated),
+    ...over
+  };
 }
 
 describe("latestRuns", () => {
@@ -213,34 +232,31 @@ describe("evaluateSweepHealth", () => {
     expect(result.findings[0].action).toContain("cron_http_failures(integer)");
   });
 
-  it("surfaces HTTP-layer failures, which no sweep can report about itself", () => {
+  it("carries each anomaly's detail inside a burst finding, since no sweep can report them", () => {
+    // Three inside an hour: past the pager bar, so the finding must let the
+    // operator see every row without a second query.
     const failures: HttpFailureRow[] = [
-      {
-        id: 1,
-        status_code: null,
-        timed_out: true,
-        error_msg: null,
-        created: "2026-08-08T02:50:01Z"
-      },
+      { id: 1, status_code: null, timed_out: true, error_msg: null, created: minutesBefore(10) },
       {
         id: 2,
         status_code: 502,
         timed_out: false,
         error_msg: "failed sending data to the peer",
-        created: "2026-08-08T01:35:02Z"
-      }
+        created: minutesBefore(25)
+      },
+      { id: 3, status_code: 500, timed_out: false, error_msg: null, created: minutesBefore(40) }
     ];
     const findings = evaluate(healthyFleet(), failures).findings;
-    expect(findings).toHaveLength(2);
-    expect(findings[0].kind).toBe("http");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].kind).toBe("burst");
     expect(findings[0].sweep).toBe("(fleet)");
     expect(findings[0].detail).toContain("TIMED OUT");
     expect(findings[0].detail).toContain("status none");
-    expect(findings[1].detail).toContain("502");
-    expect(findings[1].detail).toContain("failed sending data to the peer");
+    expect(findings[0].detail).toContain("502");
+    expect(findings[0].detail).toContain("failed sending data to the peer");
   });
 
-  it("orders findings worst first: stopped, crashed, partial, slow, http", () => {
+  it("orders findings worst first: stopped, crashed, partial, slow, burst", () => {
     const runs = healthyFleet()
       .filter((r) => r.sweep !== "vps-orphan-sweep")
       .map((r) => {
@@ -249,12 +265,15 @@ describe("evaluateSweepHealth", () => {
         if (r.sweep === "blog-publish-sweep") return { ...r, duration_ms: SWEEP_SLOW_MS + 1 };
         return r;
       });
+    // A burst (three in an hour), so the HTTP layer still appears, last.
     const failures: HttpFailureRow[] = [
-      { id: 9, status_code: 504, timed_out: true, error_msg: null, created: "2026-08-08T03:00:00Z" }
+      { id: 9, status_code: 504, timed_out: true, error_msg: null, created: minutesBefore(5) },
+      { id: 10, status_code: 502, timed_out: false, error_msg: null, created: minutesBefore(20) },
+      { id: 11, status_code: 502, timed_out: false, error_msg: null, created: minutesBefore(35) }
     ];
     expect(
       evaluate(runs, failures, minutesBefore(60 * 24 * 30), "boom").findings.map((f) => f.kind)
-    ).toEqual(["missing", "failed", "errors", "degraded", "slow", "http"]);
+    ).toEqual(["missing", "failed", "errors", "degraded", "slow", "burst"]);
   });
 });
 
@@ -324,5 +343,105 @@ describe("SWEEP_EXPECTATIONS covers exactly the scheduled pass-through fleet", (
     for (const [sweep, { maxGapMinutes }] of Object.entries(SWEEP_EXPECTATIONS)) {
       expect(maxGapMinutes, `${sweep} has an unusable max gap`).toBeGreaterThanOrEqual(15);
     }
+  });
+});
+
+/**
+ * The pager contract: an email means act. Solo HTTP anomalies have been
+ * checked by hand six times (Aug 6-20) and were harmless every time, because
+ * every real victim already pages through the ledger (a crashed run pages as
+ * "failed", a stopped schedule pages as "missing" after its gap). So lone
+ * anomalies are counted, not paged; only a BURST pages, which is the "two in
+ * a row is a pattern" prose finally enforced with numbers.
+ */
+describe("HTTP anomalies page only in bursts", () => {
+  it("suppresses a lone anomaly instead of paging", () => {
+    const result = evaluate(healthyFleet(), [httpRow(30)]);
+    expect(result.findings).toEqual([]);
+    expect(result.suppressedHttp).toBe(1);
+  });
+
+  it("suppresses two anomalies hours apart", () => {
+    const result = evaluate(healthyFleet(), [httpRow(30), httpRow(200)]);
+    expect(result.findings).toEqual([]);
+    expect(result.suppressedHttp).toBe(2);
+  });
+
+  it("pages one burst finding when three land inside an hour", () => {
+    const result = evaluate(healthyFleet(), [httpRow(10), httpRow(30), httpRow(50)]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe("burst");
+    expect(result.findings[0].detail).toContain("3 anomalies");
+    expect(result.suppressedHttp).toBe(0);
+  });
+
+  it("pages when five accumulate even without any dense hour", () => {
+    const rows = [httpRow(10), httpRow(80), httpRow(150), httpRow(220), httpRow(290)];
+    const result = evaluate(healthyFleet(), rows);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe("burst");
+  });
+});
+
+/**
+ * A brand-new daily sweep merged after its UTC slot cannot record a run
+ * until the next day, which produced a false ACTION REQUIRED twice in the
+ * watchdog's first ten days. Grace: a sweep with no row at all is logged on
+ * night one and pages on night two, using yesterday's own missing-set as
+ * memory. The memory FAILS OPEN: if yesterday cannot be read, there is no
+ * grace, because muting is the worse error.
+ */
+describe("new-sweep first-night grace", () => {
+  const sweep = "subscription-grace-sweep";
+  const runsWithout = () => healthyFleet().filter((r) => r.sweep !== sweep);
+
+  it("logs but does not page a first-night absentee", () => {
+    const result = evaluate(runsWithout(), [], minutesBefore(60 * 24 * 30), null, []);
+    expect(result.findings).toEqual([]);
+    expect(result.graced).toEqual([sweep]);
+    // Tomorrow's memory must carry it so night two escalates.
+    expect(result.missingSweeps).toContain(sweep);
+  });
+
+  it("pages on night two, when yesterday already saw it missing", () => {
+    const result = evaluate(runsWithout(), [], minutesBefore(60 * 24 * 30), null, [sweep]);
+    expect(result.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
+    expect(result.graced).toEqual([]);
+  });
+
+  it("fails open: no yesterday means no grace", () => {
+    const result = evaluate(runsWithout(), [], minutesBefore(60 * 24 * 30), null, null);
+    expect(result.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
+  });
+
+  it("remembers youth-skipped sweeps as missing, so a pruned ledger cannot grant grace", () => {
+    // Night after a prune: the ledger is younger than every gap, so absentees
+    // are not paged. But storing missing: [] would hand the NEXT night
+    // positive-looking evidence they were fine, and grace would mute a sweep
+    // that has been dead since before the prune. The youth-skip must land in
+    // the memory as missing.
+    const young = minutesBefore(5);
+    const nightOne = evaluate(runsWithout(), [], young, null, []);
+    expect(nightOne.findings).toEqual([]);
+    expect(nightOne.missingSweeps).toContain(sweep);
+    // Night two, ledger old enough: yesterday's memory denies the grace.
+    const nightTwo = evaluate(
+      runsWithout(),
+      [],
+      minutesBefore(60 * 24 * 30),
+      null,
+      nightOne.missingSweeps
+    );
+    expect(nightTwo.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
+    expect(nightTwo.graced).toEqual([]);
+  });
+
+  it("never graces a sweep that HAS history and stopped", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === sweep ? run({ sweep, finished_at: minutesBefore(3000) }) : r
+    );
+    const result = evaluate(runs, [], minutesBefore(60 * 24 * 30), null, []);
+    expect(result.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
+    expect(result.graced).toEqual([]);
   });
 });
