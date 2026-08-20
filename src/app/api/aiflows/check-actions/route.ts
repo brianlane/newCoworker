@@ -25,6 +25,14 @@ import {
   browseActionAllowedForBusiness
 } from "@/lib/plans/browse-action";
 
+/**
+ * The platform budget must EXCEED `checkBrowseActions`'s own 120s abort, or
+ * the request is cut before the dry run can answer and a slow portal login
+ * reads as "the page could not be opened". Found alongside the same omission
+ * on the demonstration routes (Bugbot, PR #1554).
+ */
+export const maxDuration = 150;
+
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   url: z.string().min(1).max(2000),
