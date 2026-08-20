@@ -181,6 +181,24 @@ describe("listDealsWithContacts", () => {
     expect(deals[0]).toMatchObject({ contactE164: null, contactName: null });
   });
 
+  it("chunks the contacts lookup so the .in() URL stays bounded", async () => {
+    const linked = Array.from({ length: 151 }, (_, i) => ({
+      ...ROW,
+      id: `d${i}`,
+      contact_id: `c${i}`
+    }));
+    const db = mockDb([
+      { data: linked, error: null },
+      { data: [], error: null }, // chunk 1
+      { data: [], error: null } // chunk 2
+    ]);
+    const deals = await listDealsWithContacts("biz-1", db as never);
+    expect(deals).toHaveLength(151);
+    expect(db.from).toHaveBeenCalledTimes(3);
+    expect(db.chains[1].in.mock.calls[0][1]).toHaveLength(150);
+    expect(db.chains[2].in.mock.calls[0][1]).toHaveLength(1);
+  });
+
   it("a name-resolution blip degrades to the stored label instead of failing", async () => {
     const db = mockDb([
       { data: [{ ...ROW, contact_id: "c1" }], error: null },
@@ -225,8 +243,11 @@ describe("createDeal", () => {
     });
   });
 
-  it("a deal created straight into won carries its stamp", async () => {
-    const db = mockDb([{ data: { ...ROW, status: "won" }, error: null }]);
+  it("a deal created straight into won carries its stamp, after the in-business contact check", async () => {
+    const db = mockDb([
+      { data: { id: "c1" }, error: null }, // in-business contact lookup
+      { data: { ...ROW, status: "won" }, error: null }
+    ]);
     await createDeal(
       "biz-1",
       {
@@ -241,18 +262,59 @@ describe("createDeal", () => {
       null,
       db as never
     );
-    const insert = db.chains[0].insert.mock.calls[0][0];
+    expect(db.chains[0].eq).toHaveBeenCalledWith("business_id", "biz-1");
+    expect(db.chains[0].eq).toHaveBeenCalledWith("id", "c1");
+    const insert = db.chains[1].insert.mock.calls[0][0];
     expect(insert.status).toBe("won");
     expect(typeof insert.won_at).toBe("string");
     expect(insert.lost_at).toBeNull();
     expect(insert.contact_id).toBe("c1");
   });
 
-  it("maps a broken contact FK onto the invalid error; other failures throw plainly", async () => {
-    const fk = mockDb([{ data: null, error: { code: "23503", message: "fk" } }]);
+  it("refuses a contact outside this business (the bare FK is not a tenant check)", async () => {
+    const otherTenant = mockDb([{ data: null, error: null }]);
     await expect(
-      createDeal("biz-1", { title: "x", contactId: "c-gone" }, null, fk as never)
+      createDeal("biz-1", { title: "x", contactId: "c-other-tenant" }, null, otherTenant as never)
     ).rejects.toMatchObject({ code: "invalid" });
+    // The insert never ran: the lookup was the only query.
+    expect(otherTenant.from).toHaveBeenCalledTimes(1);
+
+    const lookupDown = mockDb([{ data: null, error: { message: "down" } }]);
+    await expect(
+      createDeal("biz-1", { title: "x", contactId: "c1" }, null, lookupDown as never)
+    ).rejects.toThrow("deals contact lookup: down");
+  });
+
+  it("maps only the contact-FK race onto invalid; other failures throw plainly", async () => {
+    // Contact deleted between the in-business check and the insert.
+    const race = mockDb([
+      { data: { id: "c1" }, error: null },
+      {
+        data: null,
+        error: { code: "23503", message: 'violates foreign key constraint "deals_contact_id_fkey"' }
+      }
+    ]);
+    await expect(
+      createDeal("biz-1", { title: "x", contactId: "c1" }, null, race as never)
+    ).rejects.toMatchObject({ code: "invalid" });
+
+    // A 23503 that does NOT name the contact linkage (business FK) is not
+    // the contact's fault and must surface plainly.
+    const bizFk = mockDb([
+      {
+        data: null,
+        error: { code: "23503", message: 'violates foreign key constraint "deals_business_id_fkey"' }
+      }
+    ]);
+    await expect(createDeal("biz-1", { title: "x" }, null, bizFk as never)).rejects.toThrow(
+      "createDeal: violates foreign key"
+    );
+
+    // A 23503 with no message at all cannot be attributed to the contact.
+    const bareFk = mockDb([{ data: null, error: { code: "23503" } }]);
+    await expect(createDeal("biz-1", { title: "x" }, null, bareFk as never)).rejects.toThrow(
+      "createDeal:"
+    );
 
     const down = mockDb([{ data: null, error: { message: "down" } }]);
     await expect(createDeal("biz-1", { title: "x" }, null, down as never)).rejects.toThrow(
@@ -277,6 +339,7 @@ describe("updateDeal", () => {
   it("patches fields without touching the status stamps", async () => {
     const db = mockDb([
       { data: ROW, error: null },
+      { data: { id: "c1" }, error: null }, // in-business contact lookup
       { data: { ...ROW, title: "Bigger roof job" }, error: null }
     ]);
     const deal = await updateDeal(
@@ -294,7 +357,7 @@ describe("updateDeal", () => {
       db as never
     );
     expect(deal.title).toBe("Bigger roof job");
-    const update = db.chains[1].update.mock.calls[0][0];
+    const update = db.chains[2].update.mock.calls[0][0];
     expect(update).toMatchObject({
       title: "Bigger roof job",
       contact_id: "c1",
@@ -305,6 +368,17 @@ describe("updateDeal", () => {
     // Status equals the current one: no transition, no stamp rewrite.
     expect(update).not.toHaveProperty("status");
     expect(update).not.toHaveProperty("won_at");
+  });
+
+  it("clearing the contact link writes null without any contact lookup", async () => {
+    const db = mockDb([
+      { data: { ...ROW, contact_id: "c1" }, error: null },
+      { data: { ...ROW, contact_id: null }, error: null }
+    ]);
+    await updateDeal("biz-1", "deal-1", { contactId: null }, db as never);
+    expect(db.from).toHaveBeenCalledTimes(2);
+    const update = db.chains[1].update.mock.calls[0][0];
+    expect(update.contact_id).toBeNull();
   });
 
   it("a legal close stamps won_at and clears lost_at", async () => {
@@ -344,13 +418,41 @@ describe("updateDeal", () => {
       updateDeal("biz-1", "deal-x", { title: "x" }, missing as never)
     ).rejects.toMatchObject({ code: "not_found" });
 
-    const fk = mockDb([
+    // A contact outside this business is refused by the lookup, before any
+    // write happens.
+    const otherTenant = mockDb([
       { data: ROW, error: null },
-      { data: null, error: { code: "23503", message: "fk" } }
+      { data: null, error: null }
     ]);
     await expect(
-      updateDeal("biz-1", "deal-1", { contactId: "c-gone" }, fk as never)
+      updateDeal("biz-1", "deal-1", { contactId: "c-other-tenant" }, otherTenant as never)
     ).rejects.toMatchObject({ code: "invalid" });
+    expect(otherTenant.from).toHaveBeenCalledTimes(2);
+
+    // Contact deleted between the in-business check and the write.
+    const race = mockDb([
+      { data: ROW, error: null },
+      { data: { id: "c1" }, error: null },
+      {
+        data: null,
+        error: { code: "23503", message: 'violates foreign key constraint "deals_contact_id_fkey"' }
+      }
+    ]);
+    await expect(
+      updateDeal("biz-1", "deal-1", { contactId: "c1" }, race as never)
+    ).rejects.toMatchObject({ code: "invalid" });
+
+    // A 23503 that does not name the contact linkage surfaces plainly.
+    const bizFk = mockDb([
+      { data: ROW, error: null },
+      {
+        data: null,
+        error: { code: "23503", message: 'violates foreign key constraint "deals_business_id_fkey"' }
+      }
+    ]);
+    await expect(updateDeal("biz-1", "deal-1", { title: "x" }, bizFk as never)).rejects.toThrow(
+      "updateDeal: violates foreign key"
+    );
 
     const writeDown = mockDb([
       { data: ROW, error: null },

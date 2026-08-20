@@ -24,6 +24,13 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
  */
 export const DEALS_LIST_LIMIT = 500;
 
+/**
+ * Contact ids per .in() chunk: a PostgREST .in() rides the GET URL, and a
+ * few hundred uuids can blow past common URI limits (same bound the deals
+ * analytics scan uses).
+ */
+const CONTACT_CHUNK = 150;
+
 /** Typed failure the API routes map onto 4xx responses. */
 export class DealError extends Error {
   constructor(
@@ -109,12 +116,13 @@ export async function listDealsWithContacts(
   const contactIds = [...new Set(deals.map((d) => d.contactId).filter((id): id is string => !!id))];
 
   const contacts = new Map<string, { e164: string; displayName: string | null }>();
-  if (contactIds.length > 0) {
+  for (let i = 0; i < contactIds.length; i += CONTACT_CHUNK) {
+    const chunk = contactIds.slice(i, i + CONTACT_CHUNK);
     const { data, error } = await db
       .from("contacts")
       .select("id, customer_e164, display_name")
       .eq("business_id", businessId)
-      .in("id", contactIds);
+      .in("id", chunk);
     if (error) throw new Error(`listDealsWithContacts: contacts: ${error.message}`);
     for (const row of (data ?? []) as {
       id: string;
@@ -144,6 +152,38 @@ export async function listDealsWithContacts(
 }
 
 /**
+ * Cross-tenant guard, the same lookup the documents routes run before
+ * linking: a contact being linked must exist IN THIS BUSINESS. The bare FK
+ * only proves the uuid exists somewhere, which would let a caller link
+ * another tenant's contact to their deal. No-op when no link is being
+ * written (undefined = untouched, null = clearing).
+ */
+async function assertContactInBusiness(
+  db: SupabaseClient,
+  businessId: string,
+  contactId: string | null | undefined
+): Promise<void> {
+  if (!contactId) return;
+  const { data, error } = await db
+    .from("contacts")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("id", contactId)
+    .maybeSingle();
+  if (error) throw new Error(`deals contact lookup: ${error.message}`);
+  if (!data) throw new DealError("invalid", "That contact does not exist.");
+}
+
+/**
+ * True only for the FK failure that names the contact linkage (the delete
+ * race after assertContactInBusiness passed); a business_id FK failure
+ * must throw plainly instead of being blamed on the contact.
+ */
+function isContactFkViolation(error: { code?: string; message?: string } | null): boolean {
+  return error?.code === "23503" && (error.message ?? "").includes("contact_id");
+}
+
+/**
  * Insert a new deal. A deal created straight into won/lost (backfilling
  * closed business) gets its terminal stamp at creation.
  */
@@ -154,6 +194,7 @@ export async function createDeal(
   client?: SupabaseClient
 ): Promise<Deal> {
   const db = client ?? (await createSupabaseServiceClient());
+  await assertContactInBusiness(db, businessId, input.contactId);
   const status: DealStatus = input.status ?? "open";
   const { data, error } = await db
     .from("deals")
@@ -172,8 +213,8 @@ export async function createDeal(
     .select(DEAL_COLUMNS)
     .single();
   if (error || !data) {
-    // A bogus contactId (23503) is caller input, not an outage.
-    if ((error as { code?: string } | null)?.code === "23503") {
+    // The contact passed the in-business check but was deleted mid-flight.
+    if (isContactFkViolation(error as { code?: string; message?: string } | null)) {
       throw new DealError("invalid", "That contact does not exist.");
     }
     throw new Error(`createDeal: ${error?.message ?? "insert returned no row"}`);
@@ -203,6 +244,10 @@ export async function updateDeal(
   if (readError) throw new Error(`updateDeal: read: ${readError.message}`);
   if (!currentRow) throw new DealError("not_found", "Deal not found.");
   const current = toDeal(currentRow as DealRow);
+
+  // Re-linking is a cross-tenant surface exactly like creating; clearing
+  // the link (null) needs no lookup.
+  await assertContactInBusiness(db, businessId, patch.contactId);
 
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -235,7 +280,8 @@ export async function updateDeal(
     .select(DEAL_COLUMNS)
     .maybeSingle();
   if (error) {
-    if ((error as { code?: string }).code === "23503") {
+    // The contact passed the in-business check but was deleted mid-flight.
+    if (isContactFkViolation(error as { code?: string; message?: string })) {
       throw new DealError("invalid", "That contact does not exist.");
     }
     throw new Error(`updateDeal: ${error.message}`);
