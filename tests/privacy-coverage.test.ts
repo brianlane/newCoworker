@@ -146,6 +146,8 @@ const EXEMPT: Record<string, string> = {
   social_posts: "owner marketing content",
   sessions: "legacy channel session ledger: channel + timestamps only",
   tenant_mailboxes: "the tenant's own mailbox provisioning",
+  todos:
+    "the team's own work checklist (title/details/due/assignee, same boundary as business_documents and deals); the person linkage is contact_id, which detaches via on delete set null when erasure deletes the contact",
   white_glove_intakes: "the buyer's own intake (account scope)",
   white_glove_offers: "offer records addressed to the buyer (account scope)",
 
