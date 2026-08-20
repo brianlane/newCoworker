@@ -21,7 +21,15 @@
  * back as needs_confirm instead of executing.
  */
 import { useRef, useState } from "react";
-import { AlertTriangle, CircleDot, GraduationCap, Plus, Trash2, Undo2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CircleDot,
+  GraduationCap,
+  Plus,
+  Sparkles,
+  Trash2,
+  Undo2
+} from "lucide-react";
 import type { PageControl, PageDigest } from "@/lib/ai-flows/page-controls";
 import { PAGE_CONTROL_GROUPS } from "@/lib/ai-flows/page-controls";
 import type { EditorAction, PageDiagnostics } from "@/lib/ai-flows/action-check-view";
@@ -50,11 +58,20 @@ type Props = {
   existingActionsCount: number;
   /** Hand the recording to the step being edited. */
   onFinish: (actions: EditorAction[], mode: "replace" | "append") => void;
+  /**
+   * The palette's in-scope placeholders for this step, so the suggest call
+   * can map typed literals to variables. The lib clamps against exactly this
+   * list, and each mapping is an individually-accepted chip.
+   */
+  varsInScope: string[];
+  /** Apply an accepted "Proof it worked" suggestion to the step. */
+  onSetExpectText: (text: string) => void;
 };
 
 type TurnState = {
   finalUrl: string;
   digest: PageDigest;
+  pageText: string;
   screenshotBase64?: string;
   diagnostics?: PageDiagnostics;
 };
@@ -65,6 +82,7 @@ type ActData = {
   actionsCount?: number;
   finalUrl?: string;
   digest?: PageDigest;
+  pageText?: string;
   screenshotBase64?: string;
   diagnostics?: PageDiagnostics;
   resolved?: DemoRecordedAction;
@@ -72,6 +90,11 @@ type ActData = {
   reason?: DemoResolveFailureReason;
   detail?: string;
   options?: string[];
+};
+
+type DemoSuggestions = {
+  fills: { index: number; placeholder: string }[];
+  expectText?: string;
 };
 
 const inputClass =
@@ -89,7 +112,9 @@ export function BrowseActionDemoPanel({
   businessId,
   integrationLabel,
   existingActionsCount,
-  onFinish
+  onFinish,
+  varsInScope,
+  onSetExpectText
 }: Props) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
@@ -109,6 +134,9 @@ export function BrowseActionDemoPanel({
   } | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [fillDrafts, setFillDrafts] = useState<Record<string, string>>({});
+  const [suggestions, setSuggestions] = useState<DemoSuggestions | null>(null);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const [acceptedExpect, setAcceptedExpect] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   const live = demoId !== null && !gone;
@@ -140,6 +168,8 @@ export function BrowseActionDemoPanel({
     setPendingConfirm(null);
     setConfirmCancel(false);
     setFillDrafts({});
+    setSuggestions(null);
+    setAcceptedExpect(false);
     setError(null);
   };
 
@@ -174,6 +204,7 @@ export function BrowseActionDemoPanel({
         setTurn({
           finalUrl: json.data.finalUrl,
           digest: json.data.digest,
+          pageText: json.data.pageText ?? "",
           ...(json.data.screenshotBase64 ? { screenshotBase64: json.data.screenshotBase64 } : {}),
           ...(json.data.diagnostics ? { diagnostics: json.data.diagnostics } : {})
         });
@@ -225,9 +256,13 @@ export function BrowseActionDemoPanel({
             return next;
           });
         }
+        // A new action makes any earlier suggestions stale (their indexes
+        // and the final page both changed).
+        setSuggestions(null);
         setTurn({
           finalUrl: data.finalUrl ?? "",
           digest: data.digest ?? { controls: [], links: [], headings: [] },
+          pageText: data.pageText ?? "",
           ...(data.screenshotBase64 ? { screenshotBase64: data.screenshotBase64 } : {}),
           ...(data.diagnostics ? { diagnostics: data.diagnostics } : {})
         });
@@ -254,6 +289,7 @@ export function BrowseActionDemoPanel({
           setTurn({
             finalUrl: data.finalUrl ?? "",
             digest: data.digest,
+            pageText: data.pageText ?? "",
             ...(data.screenshotBase64 ? { screenshotBase64: data.screenshotBase64 } : {}),
             ...(data.diagnostics ? { diagnostics: data.diagnostics } : {})
           });
@@ -318,6 +354,48 @@ export function BrowseActionDemoPanel({
     await stopSession();
     setBusy(false);
     reset();
+  };
+
+  const fetchSuggestions = async () => {
+    setSuggestBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/aiflows/demo/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          actions: recorded,
+          varsInScope,
+          afterPageText: turn?.pageText ?? ""
+        })
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { suggestions: DemoSuggestions };
+        error?: { message: string };
+      };
+      if (json.ok && json.data) {
+        setSuggestions(json.data.suggestions);
+        setAcceptedExpect(false);
+        if (json.data.suggestions.fills.length === 0 && !json.data.suggestions.expectText) {
+          setNotice("Nothing to suggest: the recording already looks general enough.");
+        }
+      } else {
+        setError(json.error?.message ?? "Suggestions could not be generated this time.");
+      }
+    } catch {
+      setError("Suggestions could not be generated this time.");
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
+
+  const acceptFill = (index: number, placeholder: string) => {
+    setRecorded((prev) => prev.map((a, i) => (i === index ? { ...a, value: placeholder } : a)));
+    setSuggestions((prev) =>
+      prev ? { ...prev, fills: prev.fills.filter((f) => f.index !== index) } : prev
+    );
   };
 
   const clickPoint = (e: React.MouseEvent<HTMLImageElement>) => {
@@ -611,6 +689,8 @@ export function BrowseActionDemoPanel({
                     onClick={() => {
                       if (i < recorded.length - 1) setRemovedMidList(true);
                       setRecorded((prev) => prev.filter((_, xi) => xi !== i));
+                      // Suggestions point at indexes, which just shifted.
+                      setSuggestions(null);
                     }}
                     disabled={busy}
                     className="mt-0.5 shrink-0 text-parchment/40 hover:text-spark-orange disabled:opacity-40"
@@ -629,6 +709,7 @@ export function BrowseActionDemoPanel({
                   <button
                     onClick={() => {
                       setRecorded((prev) => prev.slice(0, -1));
+                      setSuggestions(null);
                     }}
                     disabled={busy}
                     className="flex items-center gap-1 text-[11px] text-parchment/50 hover:text-parchment disabled:opacity-40"
@@ -647,6 +728,66 @@ export function BrowseActionDemoPanel({
                     </p>
                   )}
                 </>
+              )}
+
+              {recorded.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  <button
+                    onClick={() => void fetchSuggestions()}
+                    disabled={busy || suggestBusy}
+                    className="flex items-center gap-1 text-[11px] text-signal-teal hover:underline disabled:opacity-40"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    {suggestBusy
+                      ? "Looking at the recording..."
+                      : "Suggest improvements (map typed values to variables, propose a proof)"}
+                  </button>
+                  {suggestions && suggestions.fills.length > 0 && (
+                    <div className="space-y-1">
+                      {suggestions.fills.map((fill) => {
+                        const action = recorded[fill.index];
+                        if (!action) return null;
+                        return (
+                          <div
+                            key={`${fill.index}:${fill.placeholder}`}
+                            className="flex flex-wrap items-center gap-2"
+                          >
+                            <span className="min-w-0 break-words text-[11px] text-parchment/60">
+                              Step {fill.index + 1}: use{" "}
+                              <span className="font-mono">{fill.placeholder}</span> instead of
+                              &quot;{action.value}&quot; so it works for every record
+                            </span>
+                            <button
+                              onClick={() => acceptFill(fill.index, fill.placeholder)}
+                              disabled={busy}
+                              className="rounded-full border border-parchment/15 px-2 py-0.5 text-[10px] text-signal-teal hover:border-signal-teal disabled:opacity-40"
+                            >
+                              use it
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {suggestions?.expectText && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-0 break-words text-[11px] text-parchment/60">
+                        Set &quot;Proof it worked&quot; to &quot;{suggestions.expectText}&quot; (the
+                        page showed it after your last step)
+                      </span>
+                      <button
+                        onClick={() => {
+                          onSetExpectText(suggestions.expectText ?? "");
+                          setAcceptedExpect(true);
+                        }}
+                        disabled={busy || acceptedExpect}
+                        className="rounded-full border border-parchment/15 px-2 py-0.5 text-[10px] text-signal-teal hover:border-signal-teal disabled:opacity-40"
+                      >
+                        {acceptedExpect ? "set" : "set it"}
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
 
               {recorded.length > 0 && (

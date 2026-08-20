@@ -1936,6 +1936,32 @@ export function AiFlowsManager({
                     documents={documents}
                     agents={agents}
                     examples={examples}
+                    suggestVars={
+                      // Same scope as the VariablesPalette above, for the
+                      // demonstration panel's literal-to-variable suggestions.
+                      VOICE_STEP_TYPE_SET.has(selectedStep.type)
+                        ? []
+                        : (() => {
+                            const groups = variablesPaletteGroups({
+                              steps: editor.steps,
+                              stepId: selectedStep.id,
+                              channels: [
+                                editor.channel,
+                                ...editor.extraTriggers.map((t) => t.channel)
+                              ]
+                            });
+                            return [
+                              ...groups.trigger,
+                              ...groups.earlier,
+                              ...groups.always
+                            ].flatMap((entry) => [
+                              entry.placeholder,
+                              ...(entry.nameParts
+                                ? [entry.nameParts.first, entry.nameParts.last]
+                                : [])
+                            ]);
+                          })()
+                    }
                   />
                 )}
                 {!VOICE_STEP_TYPE_SET.has(selectedStep.type) && (
@@ -2727,6 +2753,28 @@ export function AiFlowsManager({
                 documents={documents}
                 agents={agents}
                 examples={examples}
+                suggestVars={
+                  // The same scope the VariablesPalette above renders, as
+                  // plain placeholders (name-part variants included), for the
+                  // demonstration panel's literal-to-variable suggestions.
+                  VOICE_STEP_TYPE_SET.has(step.type)
+                    ? []
+                    : (() => {
+                        const groups = variablesPaletteGroups({
+                          steps: editor.steps,
+                          stepId: step.id,
+                          channels: [editor.channel, ...editor.extraTriggers.map((t) => t.channel)]
+                        });
+                        return [...groups.trigger, ...groups.earlier, ...groups.always].flatMap(
+                          (entry) => [
+                            entry.placeholder,
+                            ...(entry.nameParts
+                              ? [entry.nameParts.first, entry.nameParts.last]
+                              : [])
+                          ]
+                        );
+                      })()
+                }
               />
               {/* Voice steps have no `when` guard (they run on the real-time call
                   path, not the var-producing batch engine), so hide it for them. */}
@@ -3448,13 +3496,20 @@ function StepFields({
   people,
   documents,
   agents,
-  examples
+  examples,
+  suggestVars
 }: {
   /** Owner's business, for the browse-step page picker's probe call. */
   businessId: string;
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
+  /**
+   * The variables palette's in-scope placeholders for THIS step, for the
+   * demonstration panel's suggest call (map typed literals to variables).
+   * Computed at the call site, which owns the whole flow and its channels.
+   */
+  suggestVars: string[];
   /**
    * Ids of the steps BEFORE this one, for approval_gate's redraft picker. A
    * gate re-runs from its target, so pointing forward would skip the work it
@@ -5208,6 +5263,10 @@ function StepFields({
             patchStep(index, {
               actions: mode === "replace" ? actions : [...step.actions, ...actions]
             })
+          }
+          varsInScope={suggestVars}
+          onSetExpectText={(text) =>
+            patchStep(index, { expectText: text.trim() ? text.trim() : undefined })
           }
         />
         <Field
