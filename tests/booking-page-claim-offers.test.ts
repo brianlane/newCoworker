@@ -19,7 +19,8 @@ vi.mock("@/lib/logger", () => ({
 import {
   BOOKING_CLAIM_WINDOW_MS,
   broadcastBookingClaim,
-  findDedupeRowId
+  findDedupeRowId,
+  findInvitedPhonesForBooking
 } from "@/lib/booking-page/claim-offers";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { sendTelnyxSms } from "@/lib/telnyx/messaging";
@@ -286,5 +287,106 @@ describe("opt-out lookup failure", () => {
       db
     );
     expect(texted).toEqual(["+14805550111"]);
+  });
+});
+
+describe("findInvitedPhonesForBooking", () => {
+  function offersDb(rows: Array<{ recipients: string[] | null }> | null, err: { message: string } | null = null) {
+    return {
+      from: (table: string) =>
+        table === "calendar_booking_dedupe"
+          ? {
+              select: () => ({
+                eq: () => ({
+                  eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: "row-9" }, error: null }) }) })
+                })
+              })
+            }
+          : {
+              select: () => ({
+                eq: () => ({
+                  eq: async () => ({ data: rows, error: err })
+                })
+              })
+            }
+    } as never;
+  }
+
+  it("unions every claim row's recipients for the booking", async () => {
+    const out = await findInvitedPhonesForBooking(
+      BIZ,
+      "k",
+      "s",
+      offersDb([
+        { recipients: ["+1a", "+1b"] },
+        { recipients: ["+1b", null as never] },
+        { recipients: null }
+      ])
+    );
+    expect(out.sort()).toEqual(["+1a", "+1b"]);
+  });
+
+  it("answers [] with no dedupe row, no rows, a read error, or a throw", async () => {
+    const noDedupe = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) })
+        })
+      })
+    } as never;
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s", noDedupe)).toEqual([]);
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s", offersDb(null))).toEqual([]);
+    expect(
+      await findInvitedPhonesForBooking(BIZ, "k", "s", offersDb(null, { message: "boom" }))
+    ).toEqual([]);
+    const throwing = {
+      from() {
+        throw new Error("reset");
+      }
+    } as never;
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s", throwing)).toEqual([]);
+  });
+
+  it("its own catch (not the dedupe lookup's) handles an offers read that throws", async () => {
+    // The all-throwing client above is swallowed by findDedupeRowId's catch;
+    // this one succeeds on the dedupe read and then throws on the offers
+    // read, in both Error and bare-string shapes.
+    const offersThrow = (thrown: unknown) =>
+      ({
+        from: (table: string) =>
+          table === "calendar_booking_dedupe"
+            ? {
+                select: () => ({
+                  eq: () => ({
+                    eq: () => ({
+                      eq: () => ({ maybeSingle: async () => ({ data: { id: "row-9" }, error: null }) })
+                    })
+                  })
+                })
+              }
+            : {
+                select: () => {
+                  throw thrown;
+                }
+              }
+      }) as never;
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s", offersThrow(new Error("boom")))).toEqual([]);
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s", offersThrow("reset"))).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-claim: invited-phones lookup threw",
+      expect.objectContaining({ error: "boom" })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-claim: invited-phones lookup threw",
+      expect.objectContaining({ error: "reset" })
+    );
+  });
+
+  it("builds its own client when none is passed", async () => {
+    const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      offersDb([{ recipients: ["+1a"] }]) as never
+    );
+    expect(await findInvitedPhonesForBooking(BIZ, "k", "s")).toEqual(["+1a"]);
   });
 });

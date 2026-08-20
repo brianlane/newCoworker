@@ -120,6 +120,51 @@ export async function broadcastBookingClaim(
 }
 
 /**
+ * The phones already invited to claim THIS booking, for the resubmit path:
+ * a retry cannot know whether the first attempt's invites went out before
+ * it died, and the claim rows are the durable record of exactly who was
+ * texted. [] on anything unreadable, which degrades to the pre-broadcast
+ * alert behavior rather than suppressing it.
+ */
+export async function findInvitedPhonesForBooking(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const dedupeId = await findDedupeRowId(businessId, attendeeKey, startIso, db);
+    if (!dedupeId) return [];
+    const { data, error } = await db
+      .from("booking_claim_offers")
+      .select("recipients")
+      .eq("business_id", businessId)
+      .eq("dedupe_claim_id", dedupeId);
+    if (error) {
+      logger.warn("booking-claim: invited-phones lookup failed", {
+        businessId,
+        error: error.message
+      });
+      return [];
+    }
+    const phones = new Set<string>();
+    for (const row of (data ?? []) as Array<{ recipients: string[] | null }>) {
+      for (const r of row.recipients ?? []) {
+        if (r) phones.add(r);
+      }
+    }
+    return [...phones];
+  } catch (err) {
+    logger.warn("booking-claim: invited-phones lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return [];
+  }
+}
+
+/**
  * The dedupe-ledger row a claim assigns, located the way the stamp
  * functions match it (business, attendee key, start).
  */

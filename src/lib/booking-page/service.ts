@@ -48,7 +48,11 @@ import {
   parseAssignmentMode,
   resolveBroadcastAssignment
 } from "@/lib/booking-page/assignment";
-import { broadcastBookingClaim, findDedupeRowId } from "@/lib/booking-page/claim-offers";
+import {
+  broadcastBookingClaim,
+  findDedupeRowId,
+  findInvitedPhonesForBooking
+} from "@/lib/booking-page/claim-offers";
 import { businessOwnerNumbers } from "@/lib/db/contact-names";
 import type { TeamMemberRow } from "@/lib/db/employees";
 import {
@@ -821,9 +825,10 @@ export async function submitPublicBooking(
     // existed, and re-inviting risks texting the whole team twice for one
     // booking. Only a direct pick (round robin, fixed, or the solo-owner
     // collapse) repairs a genuine assignment gap here.
-    const retryAssignee = await resolveAssignee(context, start, effective, phone)
-      .then((r) => r.memberId)
-      .catch(() => null);
+    const retryResolution = await resolveAssignee(context, start, effective, phone).catch(
+      () => null
+    );
+    const retryAssignee = retryResolution?.memberId ?? null;
     // Set only when THIS retry filled a genuine gap, so the owner alert below
     // can tell a repair from a no-op.
     let retryFilledAssignment: string | null = null;
@@ -843,8 +848,11 @@ export async function submitPublicBooking(
         retryFilledAssignment = retryAssignee;
         await markMemberOffered(retryAssignee).catch(() => {});
         // The gap-fill is the first time this booking had an owner, so the
-        // owner has never heard about it either.
-        if (context.page.notify_assignee) {
+        // owner has never heard about it either. A solo-owner broadcast pick
+        // skips the text here for the same reason the first-submit path
+        // does: the assignee IS the owner, and the owner alert below already
+        // reaches them, so this would page the same person twice.
+        if (context.page.notify_assignee && !retryResolution?.soloOwnerPick) {
           await notifyAssigneeOfBooking(context.businessId, retryAssignee, {
             visitorName: name,
             visitorPhone: phone,
@@ -904,6 +912,15 @@ export async function submitPublicBooking(
       return { claimed: false, assigneeMemberId: null };
     });
     if (alertClaim.claimed || retryFilledAssignment) {
+      // The first attempt's broadcast invites may have gone out before it
+      // died; the claim rows are the durable record of who was texted, so
+      // the employee leg cannot text the same teammates a second time. []
+      // on anything unreadable degrades to the pre-broadcast behavior.
+      const alreadyInvited = await findInvitedPhonesForBooking(
+        context.businessId,
+        bookingAttendeeKey(phone, email, name),
+        start.toISOString()
+      );
       await maybeAlertUnassignedBooking(context.businessId, {
         attendeeName: name,
         attendeePhone: phone,
@@ -911,6 +928,7 @@ export async function submitPublicBooking(
         startIso: start.toISOString(),
         startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
         summary,
+        employeesAlreadyInvited: alreadyInvited,
         // The retry cannot reconstruct the provider event id from the
         // ledger, and the alert only carries it for diagnostics.
         eventId: null,
