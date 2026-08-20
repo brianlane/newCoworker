@@ -323,8 +323,44 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     const cat = (v: string) =>
       (steps.find((s) => s.id === "s_classify")?.categories ?? []).find((c) => c.value === v)
         ?.description ?? "";
-    expect(cat("automated_notice")).toMatch(/hosting renewals/i);
+    expect(cat("automated_notice")).toMatch(/hosting renewal/i);
     expect(cat("automated_review")).not.toMatch(/renewal/i);
+  });
+
+  /**
+   * Aug 20 2026: "Your KVM 8 srv1632631.hstgr.cloud has been canceled as we
+   * have not received payment for the renewal" texted a billing alert about a
+   * box we had deliberately flagged never_renew in July.
+   *
+   * The carve-out has to survive that wording in ALL THREE tiers that page
+   * the owner, not just the one that happened to win. Fixing only `billing`
+   * hands the same mail to `automated_important`, which texts as well, and
+   * the false alarm looks fixed while it moves one category sideways.
+   */
+  it("keeps a hosting plan canceled for non-payment out of every paging tier", () => {
+    const cat = (v: string) =>
+      (steps.find((s) => s.id === "s_classify")?.categories ?? []).find((c) => c.value === v)
+        ?.description ?? "";
+
+    // The routine tier owns it in the sender's own vocabulary.
+    expect(cat("automated_notice")).toMatch(/canceled/i);
+    // ...and keeps owning it even though the mail DOES ask for something. The
+    // general "asks nothing of us" rule still opens the tier (it is the right
+    // test for everything else), so hosting has to be named as the exception
+    // rather than the rule being deleted.
+    expect(cat("automated_notice")).toMatch(/asks nothing of us/i);
+    expect(cat("automated_notice")).toMatch(/asking us to restore/i);
+
+    // Both tiers that TEXT disclaim it. Excluding only one moves the false
+    // alarm to the other rather than ending it.
+    expect(cat("billing")).toMatch(/NOT any hosting or server notice/i);
+    expect(cat("automated_important")).toMatch(/NOT hosting notices/i);
+
+    // The guard must not swallow real money problems: no cron owns a declined
+    // card, a dispute or an invoice we owe, so billing still claims those.
+    expect(cat("billing")).toMatch(/declined card/i);
+    expect(cat("billing")).toMatch(/dispute or chargeback/i);
+    expect(cat("billing")).toMatch(/invoice we owe/i);
   });
 
   it("keeps a platform outcome that still asks us something OUT of the review tier", () => {
