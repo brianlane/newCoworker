@@ -1733,6 +1733,28 @@
     "confirmEmail": "Confirm email"
   },
   "dashboard": {
+    "bulk": {
+      "selectAllVisible": "Select all shown ({count})",
+      "selectContact": "Select {name}",
+      "selectedCount": "{count, plural, one {# contact selected} other {# contacts selected}}",
+      "addTag": "Add tag",
+      "removeTag": "Remove tag",
+      "assignOwner": "Assign owner",
+      "exportCsv": "Export CSV",
+      "clearSelection": "Clear selection",
+      "tagPlaceholder": "Tag name",
+      "apply": "Apply",
+      "applying": "Applying…",
+      "addTagHint": "Adding a tag can start automations (AiFlows).",
+      "chooseTag": "Choose a tag",
+      "chooseOwner": "Choose an employee",
+      "confirmAddTag": "Add the tag \"{tag}\" to {count, plural, one {# contact} other {# contacts}}? Adding a tag can start automations (AiFlows) for every selected contact.",
+      "confirmRemoveTag": "Remove the tag \"{tag}\" from {count, plural, one {# contact} other {# contacts}}?",
+      "confirmAssignOwner": "Assign {name} as the owner of {count, plural, one {# contact} other {# contacts}}?",
+      "requestFailed": "The request failed. Try again.",
+      "resultSummary": "{updated} updated, {failed} failed",
+      "moreFailures": "and {count, plural, one {# more failure} other {# more failures}}"
+    },
     "companion": {
       "launcher": {
         "open": "Ask AI",

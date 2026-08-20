@@ -48,6 +48,7 @@ import {
   isEmailContactKey
 } from "../../../supabase/functions/_shared/contact_key";
 import { parseCsv, serializeCsv } from "./csv";
+import { CONTACTS_EXPORT_HEADERS } from "./contacts-export-shape";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -63,20 +64,10 @@ export type CsvImportSummary = {
   errors: CsvImportError[];
 };
 
-export const CONTACTS_EXPORT_HEADERS = [
-  "phone",
-  "name",
-  "type",
-  "email",
-  "sms_reply_mode",
-  "pinned_notes",
-  "tags",
-  "aliases",
-  "last_channel",
-  "last_interaction_at",
-  "total_interactions",
-  "created_at"
-] as const;
+// Column contract shared with the client-side selected-rows export; the
+// list lives in contacts-export-shape.ts (client-safe, no service client)
+// and is re-exported here for the server-side consumers.
+export { CONTACTS_EXPORT_HEADERS };
 
 const CONTACT_COLUMNS =
   "id,customer_e164,display_name,type,email,sms_reply_mode,pinned_md,tags," +

@@ -80,6 +80,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.billing.autoReload",
       "dashboard.billing.prioritySupport",
       "dashboard.bookings",
+      "dashboard.bulk",
       "dashboard.companion",
       "dashboard.contacts",
       "dashboard.deals",

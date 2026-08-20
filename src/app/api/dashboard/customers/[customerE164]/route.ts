@@ -36,13 +36,14 @@ import {
   CONTACT_TYPES,
   MAX_CONTACT_TAGS,
   MAX_CONTACT_TAG_LENGTH,
-  SMS_REPLY_MODES,
-  normalizeContactTags
+  SMS_REPLY_MODES
 } from "@/lib/customer-memory/types";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getTeamMember } from "@/lib/db/employees";
-import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
-import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import {
+  fireOwnerAssignedEvent,
+  fireTagChangeEvents
+} from "@/lib/contacts/edit-events";
 import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
 import { classifyContactKey } from "../../../../../../supabase/functions/_shared/contact_key";
 
@@ -269,60 +270,27 @@ export async function PATCH(
 
     // Goal Events + tag_changed triggers: tags the edit ADDED or REMOVED (vs.
     // the pre-edit row) may fast-forward parked runs to a "tag added" goal
-    // and/or start flows watching for the change. Diffed against the same
-    // normalization the write used; best-effort inside both hooks, so a
-    // trigger failure never fails the save.
+    // and/or start flows watching for the change. The diff-and-fire contract
+    // lives in src/lib/contacts/edit-events.ts, SHARED with the bulk-action
+    // path; best-effort inside both hooks, so a trigger failure never fails
+    // the save.
     if (body.tags !== undefined) {
-      // Both sides of the diff go through the SAME normalization the write
-      // used, comparing raw stored tags would make a legacy spelling or
-      // stray whitespace look "new" and fire a spurious event.
-      const nextTags = normalizeContactTags(body.tags);
-      const previousTags = normalizeContactTags(existing.tags ?? []);
-      const before = new Set(previousTags.map((t) => t.toLowerCase()));
-      const after = new Set(nextTags.map((t) => t.toLowerCase()));
-      const eventStamp = Date.now();
-      // Runs match goal events by the exact number they were triggered with,
-      // which after a profile merge may be an ALIAS, fire for every linked
-      // number so a parked run keyed on the old number still jumps.
-      const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
-      for (const tag of nextTags) {
-        if (before.has(tag.toLowerCase())) continue;
-        for (const number of goalNumbers) {
-          await fireGoalEvent(businessId, number, { kind: "tag_added", tag });
-        }
-        await fireContactEvent(businessId, {
-          kind: "tag_changed",
-          contact: { e164: canonicalE164, tags: nextTags },
-          tag,
-          change: "added",
-          dedupeKey: `ce:tag:${canonicalE164}:${tag.toLowerCase()}:added:${eventStamp}`
-        });
-      }
-      for (const tag of previousTags) {
-        if (after.has(tag.toLowerCase())) continue;
-        await fireContactEvent(businessId, {
-          kind: "tag_changed",
-          contact: { e164: canonicalE164, tags: nextTags },
-          tag,
-          change: "removed",
-          dedupeKey: `ce:tag:${canonicalE164}:${tag.toLowerCase()}:removed:${eventStamp}`
-        });
-      }
+      await fireTagChangeEvents(businessId, {
+        canonicalE164,
+        aliasE164s: existing.alias_e164s ?? [],
+        previousTags: existing.tags ?? [],
+        nextTags: body.tags
+      });
     }
 
     // owner_assigned triggers: a manual owner pick (not a clear) may start
-    // flows, but only when the owner actually CHANGED to someone new.
-    if (
-      body.ownerEmployeeId !== undefined &&
-      body.ownerEmployeeId !== null &&
-      body.ownerEmployeeId !== existing.owner_employee_id
-    ) {
-      const member = await getTeamMember(businessId, body.ownerEmployeeId).catch(() => null);
-      await fireContactEvent(businessId, {
-        kind: "owner_assigned",
-        contact: { e164: canonicalE164 },
-        ...(member?.name ? { ownerName: member.name } : {}),
-        dedupeKey: `ce:owner:${canonicalE164}:${body.ownerEmployeeId}:${Date.now()}`
+    // flows, but only when the owner actually CHANGED to someone new (the
+    // shared helper enforces both conditions).
+    if (body.ownerEmployeeId !== undefined) {
+      await fireOwnerAssignedEvent(businessId, {
+        canonicalE164,
+        previousOwnerEmployeeId: existing.owner_employee_id,
+        ownerEmployeeId: body.ownerEmployeeId
       });
     }
 

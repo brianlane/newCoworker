@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
@@ -18,6 +20,9 @@ import {
   type ContactSegment,
   type SegmentFilters
 } from "@/lib/segments/core";
+import { BULK_MAX_CONTACTS } from "@/lib/contacts/bulk-constants";
+import { selectedContactsCsv } from "@/lib/csv/contacts-export-shape";
+import { MAX_CONTACT_TAG_LENGTH } from "@/lib/customer-memory/types";
 
 /**
  * One contact row, pre-resolved on the server: `name`/`type` already account for
@@ -139,6 +144,8 @@ export function CustomersList({
    */
   implicitOwner?: { id: string; name: string } | null;
 }) {
+  const tBulk = useTranslations("dashboard.bulk");
+  const router = useRouter();
   const [sort, setSort] = usePersistentSort(
     "dashboard.contacts.sort",
     { field: "lastInteractionAt", dir: "desc" },
@@ -161,6 +168,23 @@ export function CustomersList({
     activityDays: 5,
     createdDays: ""
   });
+  // Multi-select + bulk action bar. Selection is keyed by the contact key
+  // and survives filter changes; the count and every action cover ALL
+  // selected rows, visible or not, so "12 selected" always acts on 12.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState<null | "add_tag" | "remove_tag" | "assign_owner">(
+    null
+  );
+  const [bulkTag, setBulkTag] = useState("");
+  const [bulkRemoveTag, setBulkRemoveTag] = useState("");
+  const [bulkOwnerId, setBulkOwnerId] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkOutcome, setBulkOutcome] = useState<null | {
+    updated: number;
+    failed: number;
+    /** The first few failures, for the honesty line under the summary. */
+    failures: Array<{ key: string; error: string }>;
+  }>(null);
 
   const saveSegment = async () => {
     if (!businessId) return;
@@ -248,6 +272,133 @@ export function CustomersList({
       (!ownerFilter || r.ownerName === ownerFilter)
   );
   const sorted = sortRows(filtered, (r) => sortValue(r, sort.field), sort.dir);
+
+  // Bulk selection needs a businessId to post against; the customers page
+  // always passes one, so this only hides the checkboxes on a mount that
+  // could not act on them anyway.
+  const bulkEnabled = Boolean(businessId);
+  const selectedRows = rows.filter((r) => selectedKeys.has(r.e164));
+  const selectedCount = selectedRows.length;
+  const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selectedKeys.has(r.e164));
+  const nameByKey = new Map(rows.map((r) => [r.e164, r.name]));
+  // The remove-tag picker offers only tags that actually exist on the
+  // selected rows (case-insensitive identity, first spelling wins).
+  const selectedRowTags = Array.from(
+    new Map(
+      selectedRows.flatMap((r) => r.tags).map((tag) => [tag.toLowerCase(), tag])
+    ).values()
+  ).sort((a, b) => a.localeCompare(b));
+
+  const toggleSelected = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) for (const r of sorted) next.delete(r.e164);
+      else for (const r of sorted) next.add(r.e164);
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedKeys(new Set());
+    setBulkMode(null);
+  };
+
+  /**
+   * Run one bulk action over every selected contact, after a plain-words
+   * confirm. Adding a tag can start automations (AiFlows) for each contact,
+   * so that confirm says so; remove/assign get the simple count confirm.
+   * Requests go up in server-cap-sized chunks, sequentially, and the
+   * outcome reports totals plus the first few failures. Failed contacts
+   * stay selected so a retry is one click away.
+   */
+  const runBulkAction = async (
+    body:
+      | { action: "add_tag"; tag: string }
+      | { action: "remove_tag"; tag: string }
+      | { action: "assign_owner"; employeeId: string }
+  ) => {
+    if (!businessId || selectedRows.length === 0) return;
+    const count = selectedRows.length;
+    let confirmText: string;
+    if (body.action === "add_tag") {
+      confirmText = tBulk("confirmAddTag", { tag: body.tag, count });
+    } else if (body.action === "remove_tag") {
+      confirmText = tBulk("confirmRemoveTag", { tag: body.tag, count });
+    } else {
+      const ownerName = owners.find((o) => o.id === body.employeeId)?.name ?? "";
+      confirmText = tBulk("confirmAssignOwner", { name: ownerName, count });
+    }
+    if (!window.confirm(confirmText)) return;
+    setBulkBusy(true);
+    setBulkOutcome(null);
+    try {
+      const keys = selectedRows.map((r) => r.e164);
+      let updated = 0;
+      const failures: Array<{ key: string; error: string }> = [];
+      for (let i = 0; i < keys.length; i += BULK_MAX_CONTACTS) {
+        const chunk = keys.slice(i, i + BULK_MAX_CONTACTS);
+        try {
+          const res = await fetch(
+            `/api/dashboard/contacts/bulk?businessId=${encodeURIComponent(businessId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...body, contactKeys: chunk })
+            }
+          );
+          const json = (await res.json().catch(() => null)) as {
+            ok?: boolean;
+            data?: {
+              results: Array<{ key: string; ok: boolean; error?: string }>;
+              updated: number;
+            };
+            error?: { message?: string };
+          } | null;
+          if (!res.ok || !json?.ok || !json.data) {
+            const message = json?.error?.message ?? tBulk("requestFailed");
+            for (const key of chunk) failures.push({ key, error: message });
+            continue;
+          }
+          updated += json.data.updated;
+          for (const r of json.data.results) {
+            if (!r.ok) failures.push({ key: r.key, error: r.error ?? tBulk("requestFailed") });
+          }
+        } catch {
+          for (const key of chunk) failures.push({ key, error: tBulk("requestFailed") });
+        }
+      }
+      setBulkOutcome({ updated, failed: failures.length, failures: failures.slice(0, 3) });
+      setSelectedKeys(new Set(failures.map((f) => f.key)));
+      setBulkMode(null);
+      setBulkTag("");
+      setBulkRemoveTag("");
+      setBulkOwnerId("");
+      router.refresh();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  /** Client-side CSV of the selected rows, in the full export's columns. */
+  const exportSelectedCsv = () => {
+    if (selectedRows.length === 0) return;
+    const csv = selectedContactsCsv(selectedRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "contacts-selected.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   const chipBase =
     "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors";
@@ -436,12 +587,26 @@ export function CustomersList({
       ) : (
         <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <SearchControl
-          value={query}
-          onChange={setQuery}
-          placeholder="Search by name or number…"
-          idPrefix="customer-search"
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          {bulkEnabled && (
+            <label className="flex items-center gap-1.5 text-xs text-parchment/60">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleAllVisible}
+                disabled={bulkBusy}
+                className="h-4 w-4 accent-signal-teal"
+              />
+              {tBulk("selectAllVisible", { count: sorted.length })}
+            </label>
+          )}
+          <SearchControl
+            value={query}
+            onChange={setQuery}
+            placeholder="Search by name or number…"
+            idPrefix="customer-search"
+          />
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {allTags.length > 0 && (
             <select
@@ -482,6 +647,171 @@ export function CustomersList({
           />
         </div>
       </div>
+      {bulkEnabled && selectedCount > 0 && (
+        <div className="space-y-2 rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-semibold text-signal-teal">
+              {tBulk("selectedCount", { count: selectedCount })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setBulkMode((m) => (m === "add_tag" ? null : "add_tag"))}
+              disabled={bulkBusy}
+              className={`${chipBase} ${
+                bulkMode === "add_tag"
+                  ? "border-signal-teal bg-signal-teal/10 text-signal-teal"
+                  : "border-parchment/15 text-parchment/70 hover:border-parchment/40"
+              }`}
+            >
+              {tBulk("addTag")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setBulkMode((m) => (m === "remove_tag" ? null : "remove_tag"))}
+              disabled={bulkBusy}
+              className={`${chipBase} ${
+                bulkMode === "remove_tag"
+                  ? "border-signal-teal bg-signal-teal/10 text-signal-teal"
+                  : "border-parchment/15 text-parchment/70 hover:border-parchment/40"
+              }`}
+            >
+              {tBulk("removeTag")}
+            </button>
+            {owners.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setBulkMode((m) => (m === "assign_owner" ? null : "assign_owner"))
+                }
+                disabled={bulkBusy}
+                className={`${chipBase} ${
+                  bulkMode === "assign_owner"
+                    ? "border-signal-teal bg-signal-teal/10 text-signal-teal"
+                    : "border-parchment/15 text-parchment/70 hover:border-parchment/40"
+                }`}
+              >
+                {tBulk("assignOwner")}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={exportSelectedCsv}
+              disabled={bulkBusy}
+              className={`${chipBase} border-parchment/15 text-parchment/70 hover:border-parchment/40`}
+            >
+              {tBulk("exportCsv")}
+            </button>
+            <button
+              type="button"
+              onClick={clearSelection}
+              disabled={bulkBusy}
+              className={`${chipBase} border-parchment/15 text-parchment/50 hover:border-parchment/40`}
+            >
+              {tBulk("clearSelection")}
+            </button>
+          </div>
+          {bulkMode === "add_tag" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={bulkTag}
+                maxLength={MAX_CONTACT_TAG_LENGTH}
+                onChange={(ev) => setBulkTag(ev.target.value)}
+                placeholder={tBulk("tagPlaceholder")}
+                className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment placeholder:text-parchment/30"
+              />
+              <button
+                type="button"
+                onClick={() => void runBulkAction({ action: "add_tag", tag: bulkTag.trim() })}
+                disabled={bulkBusy || !bulkTag.trim()}
+                className="rounded-md bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+              >
+                {bulkBusy ? tBulk("applying") : tBulk("apply")}
+              </button>
+              <span className="text-[11px] text-parchment/50">{tBulk("addTagHint")}</span>
+            </div>
+          )}
+          {bulkMode === "remove_tag" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={bulkRemoveTag}
+                onChange={(ev) => setBulkRemoveTag(ev.target.value)}
+                aria-label={tBulk("chooseTag")}
+                className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment"
+              >
+                <option value="">{tBulk("chooseTag")}</option>
+                {selectedRowTags.map((tag) => (
+                  <option key={tag} value={tag}>
+                    {tag}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() =>
+                  void runBulkAction({ action: "remove_tag", tag: bulkRemoveTag })
+                }
+                disabled={bulkBusy || !bulkRemoveTag}
+                className="rounded-md bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+              >
+                {bulkBusy ? tBulk("applying") : tBulk("apply")}
+              </button>
+            </div>
+          )}
+          {bulkMode === "assign_owner" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={bulkOwnerId}
+                onChange={(ev) => setBulkOwnerId(ev.target.value)}
+                aria-label={tBulk("chooseOwner")}
+                className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment"
+              >
+                <option value="">{tBulk("chooseOwner")}</option>
+                {owners.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() =>
+                  void runBulkAction({ action: "assign_owner", employeeId: bulkOwnerId })
+                }
+                disabled={bulkBusy || !bulkOwnerId}
+                className="rounded-md bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+              >
+                {bulkBusy ? tBulk("applying") : tBulk("apply")}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {bulkOutcome && (
+        <div className="space-y-0.5 text-xs">
+          <p
+            className={
+              bulkOutcome.failed > 0 ? "text-amber-300/90" : "text-claw-green/90"
+            }
+          >
+            {tBulk("resultSummary", {
+              updated: bulkOutcome.updated,
+              failed: bulkOutcome.failed
+            })}
+          </p>
+          {bulkOutcome.failures.map((f) => (
+            <p key={f.key} className="text-rose-300/90">
+              {nameByKey.get(f.key) ?? f.key}: {f.error}
+            </p>
+          ))}
+          {bulkOutcome.failed > bulkOutcome.failures.length && (
+            <p className="text-rose-300/90">
+              {tBulk("moreFailures", {
+                count: bulkOutcome.failed - bulkOutcome.failures.length
+              })}
+            </p>
+          )}
+        </div>
+      )}
       <Card padding="sm">
         {sorted.length === 0 && (
           <div className="py-6 text-center text-sm text-parchment/50">
@@ -496,10 +826,20 @@ export function CustomersList({
           {sorted.map((c) => {
             const channelLabel = contactChannelLabel(c.lastChannel);
             return (
-              <li key={c.e164}>
+              <li key={c.e164} className="flex items-center gap-1">
+                {bulkEnabled && (
+                  <input
+                    type="checkbox"
+                    checked={selectedKeys.has(c.e164)}
+                    onChange={() => toggleSelected(c.e164)}
+                    disabled={bulkBusy}
+                    className="ml-1 h-4 w-4 shrink-0 accent-signal-teal"
+                    aria-label={tBulk("selectContact", { name: c.name })}
+                  />
+                )}
                 <Link
                   href={`/dashboard/customers/${encodeURIComponent(c.e164)}`}
-                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
+                  className="flex min-w-0 flex-1 items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
