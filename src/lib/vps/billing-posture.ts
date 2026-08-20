@@ -131,11 +131,13 @@ export type BillingPostureDeps = {
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   enableAutoRenewal: (subscriptionId: string) => Promise<unknown>;
   /**
-   * Mark an inventory row `retired`. The lapsed-pool reaper is the only
-   * direction in this module that writes to vps_inventory at all, and it
-   * only ever moves a row that is already dead out of `available`.
+   * Retire a lapsed pool row, but only while it is still `available`.
+   * Resolves false when the row was claimed between this run's inventory
+   * read and the write, which is a benign race, not a failure. The
+   * lapsed-pool reaper is the only direction in this module that writes to
+   * vps_inventory at all.
    */
-  retireVps: (vmId: number, reason: string) => Promise<void>;
+  retireLapsedPoolVps: (vmId: number, reason: string) => Promise<boolean>;
 };
 
 /**
@@ -431,15 +433,16 @@ export async function checkVpsBillingPosture(
       const vmState = vm ? `VM state ${vm.state}` : "VM absent from the Hostinger account";
       const subState = sub ? `subscription ${sub.id} is ${sub.status}` : "no billing subscription";
       let retired = false;
+      let claimedMidRun = false;
       let detail =
         `pooled box lapsed on ${row.expires_at} (${vmState}, ${subState}), ` +
         "so it can never be adopted again";
       try {
-        await deps.retireVps(
+        retired = await deps.retireLapsedPoolVps(
           row.vm_id,
           `lapsed pool box retired by the billing-posture cron: paid through ${row.expires_at}, ${vmState}, ${subState}`
         );
-        retired = true;
+        claimedMidRun = !retired;
         detail +=
           "; its vps_inventory row was retired, so the pool no longer counts it as spare capacity";
       } catch (err) {
@@ -447,6 +450,20 @@ export async function checkVpsBillingPosture(
           `; retiring its vps_inventory row FAILED (${err instanceof Error ? err.message : String(err)}), ` +
           "so the row still reads available and overstates the pool, retire it by hand";
       }
+
+      // The row stopped being `available` between this run's inventory read
+      // and the guarded write, so a provision claimed it and it is no longer
+      // ours to retire. Nothing is wrong and nothing needs doing, so this
+      // stays out of the digest: an ops email that reports non-problems is
+      // one nobody reads on the day it is right.
+      if (claimedMidRun) {
+        logger.info("vps billing posture: lapsed pool box was claimed mid-run, leaving it alone", {
+          vmId: row.vm_id,
+          expiresAt: row.expires_at
+        });
+        continue;
+      }
+
       findings.push({
         kind: "pool_box_lapsed_retired",
         vmId: row.vm_id,

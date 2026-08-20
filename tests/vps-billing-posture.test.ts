@@ -51,7 +51,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     listVirtualMachines: vi.fn().mockResolvedValue([]),
     listBillingSubscriptions: vi.fn().mockResolvedValue([]),
     enableAutoRenewal: vi.fn().mockResolvedValue(undefined),
-    retireVps: vi.fn().mockResolvedValue(undefined),
+    // Resolves TRUE by default: the guarded write matched the row and
+    // retired it. False means a provision claimed the row mid-run.
+    retireLapsedPoolVps: vi.fn().mockResolvedValue(true),
     ...overrides
   };
 }
@@ -650,7 +652,7 @@ describe("checkVpsBillingPosture, pool direction", () => {
  *
  * A pooled row whose paid period ended could never be cleaned up by anything:
  * `claimAvailableVps` skips candidates under a 72h runway floor and the only
- * caller of `retireVps` is the adopt path's catch block, so the row was never
+ * caller of `retireLapsedPoolVps` is the adopt path's catch block, so the row was never
  * claimed, never adopted, never failed, and never retired. Four such rows
  * accumulated in production and made the admin pool advertise five available
  * boxes when one was adoptable.
@@ -677,8 +679,8 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).toHaveBeenCalledTimes(1);
-    expect(deps.retireVps).toHaveBeenCalledWith(
+    expect(deps.retireLapsedPoolVps).toHaveBeenCalledTimes(1);
+    expect(deps.retireLapsedPoolVps).toHaveBeenCalledWith(
       1800985,
       expect.stringContaining("lapsed pool box retired by the billing-posture cron")
     );
@@ -713,7 +715,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).toHaveBeenCalledWith(
+    expect(deps.retireLapsedPoolVps).toHaveBeenCalledWith(
       1806114,
       expect.stringContaining("VM absent from the Hostinger account")
     );
@@ -743,7 +745,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -759,7 +761,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -779,7 +781,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -802,7 +804,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -821,7 +823,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -842,7 +844,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     // Without the listing we cannot tell dead hardware from live, and
     // retiring a live box would hide it from adopt-first.
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.findings).toEqual([]);
   });
 
@@ -857,7 +859,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
       listBillingSubscriptions: vi
         .fn()
         .mockResolvedValue([{ id: "hsub-z", status: "cancelled", is_auto_renewed: false }]),
-      retireVps: vi.fn().mockRejectedValue(new Error("postgrest down"))
+      retireLapsedPoolVps: vi.fn().mockRejectedValue(new Error("postgrest down"))
     });
 
     const result = await checkVpsBillingPosture(deps);
@@ -889,7 +891,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
       listBillingSubscriptions: vi
         .fn()
         .mockResolvedValue([{ id: "hsub-z", status: "cancelled", is_auto_renewed: false }]),
-      retireVps: vi.fn().mockRejectedValue("connection reset")
+      retireLapsedPoolVps: vi.fn().mockRejectedValue("connection reset")
     });
 
     const result = await checkVpsBillingPosture(deps);
@@ -901,6 +903,33 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
         detail: expect.stringContaining("connection reset")
       })
     );
+  });
+
+  // The guarded write is what makes this safe. claimSpecificAvailableVps can
+  // assign ANY `available` row by id without consulting runway, so a claim
+  // CAN land between this run's inventory read and the write. When it does,
+  // the row is no longer ours and the digest must stay quiet about it.
+  it("stays silent when a provision claims the row between the read and the write", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1815606, hostinger_billing_subscription_id: "hsub-r", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1815606, state: "suspended" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-r", status: "cancelled", is_auto_renewed: false }]),
+      // The state guard matched zero rows: someone claimed it first.
+      retireLapsedPoolVps: vi.fn().mockResolvedValue(false)
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireLapsedPoolVps).toHaveBeenCalledTimes(1);
+    // Nothing went wrong, so nothing is reported, and in particular the row
+    // is NOT claimed to have been retired.
+    expect(result.findings).toEqual([]);
   });
 
   it("never reaps an assigned or retired row, however lapsed it looks", async () => {
@@ -931,7 +960,7 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.checkedPoolBoxes).toBe(0);
     expect(result.findings).toEqual([]);
   });

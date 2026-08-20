@@ -17,7 +17,11 @@ import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listBusinessIdsWithLiveSubscription } from "@/lib/db/subscriptions";
-import { listVpsInventory, refreshVpsInventoryExpiresAt, retireVps } from "@/lib/db/vps-inventory";
+import {
+  listVpsInventory,
+  refreshVpsInventoryExpiresAt,
+  retireLapsedPoolVps
+} from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
@@ -68,7 +72,7 @@ async function runSweep(request: Request): Promise<Response> {
       listVirtualMachines: () => hostinger.listVirtualMachines(),
       listBillingSubscriptions: async () => billingSubs,
       enableAutoRenewal: (subscriptionId) => hostinger.enableBillingAutoRenewal(subscriptionId),
-      retireVps: (vmId, reason) => retireVps(vmId, reason)
+      retireLapsedPoolVps: (vmId, reason) => retireLapsedPoolVps(vmId, reason)
     });
 
     if (result.findings.length > 0) {
