@@ -18,6 +18,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOpsCronSweepHealthEmail } from "@/lib/email/ops-notify";
 import {
   SWEEP_EXPECTATIONS,
+  WATCHDOG_SWEEP,
   evaluateSweepHealth,
   type HttpFailureRow,
   type SweepRunRow
@@ -62,7 +63,7 @@ async function runSweep(request: Request): Promise<Response> {
     // seven healthy dailies reported STOPPED. The RPC aggregates
     // server-side (latest row per sweep, plus every failing row, both
     // bounded) so its result cannot grow with fleet chatter.
-    const [runsResult, oldestResult, httpResult] = await Promise.all([
+    const [runsResult, oldestResult, httpResult, prevResult] = await Promise.all([
       supabase.rpc("cron_sweep_run_evidence", { since_minutes: LOOKBACK_MINUTES }),
       // The ledger's own age. Without it, every sweep looks "missing" on the
       // day this ships, and again any time a prune empties the table.
@@ -72,7 +73,19 @@ async function runSweep(request: Request): Promise<Response> {
         .neq("source", DIRECT_SOURCE)
         .order("finished_at", { ascending: true })
         .limit(1),
-      supabase.rpc("cron_http_failures", { since_minutes: HTTP_LOOKBACK_MINUTES })
+      supabase.rpc("cron_http_failures", { since_minutes: HTTP_LOOKBACK_MINUTES }),
+      // Yesterday's own summary row, the memory behind the new-sweep
+      // first-night grace: its `missing` array is what this run graced or
+      // paged last time. This run's row is written AFTER the handler
+      // returns (withSweepRun), so the latest existing row IS yesterday.
+      // Explicit .limit(1): bounded by construction.
+      supabase
+        .from("cron_sweep_runs")
+        .select("summary")
+        .eq("sweep", WATCHDOG_SWEEP)
+        .neq("source", DIRECT_SOURCE)
+        .order("finished_at", { ascending: false })
+        .limit(1)
     ]);
 
     if (runsResult.error) {
@@ -99,6 +112,16 @@ async function runSweep(request: Request): Promise<Response> {
       // what is really a missing migration or grant.
       httpReadError: httpResult.error ? httpResult.error.message : null,
       ledgerOldestAt: oldestResult.data?.[0]?.finished_at ?? null,
+      // FAILS OPEN: an unreadable or pre-upgrade yesterday row (no `missing`
+      // key) yields null, which the evaluator treats as "no grace", so a
+      // memory problem can only ever page too much, never mute.
+      previouslyMissing: (() => {
+        const summary = prevResult.error ? null : (prevResult.data?.[0]?.summary ?? null);
+        const missing = (summary as { missing?: unknown } | null)?.missing;
+        return Array.isArray(missing) && missing.every((m) => typeof m === "string")
+          ? (missing as string[])
+          : null;
+      })(),
       now: startedAt
     });
 
@@ -120,7 +143,14 @@ async function runSweep(request: Request): Promise<Response> {
         return acc;
       }, {}),
       healthy: result.healthy.length,
-      httpFailures: result.findings.filter((f) => f.kind === "http").length,
+      // Tomorrow's previouslyMissing. Includes graced sweeps, so a graced
+      // absentee that is STILL absent tomorrow escalates to a page.
+      missing: result.missingSweeps,
+      graced: result.graced,
+      suppressedHttp: result.suppressedHttp,
+      // Raw anomaly count from the HTTP window, whether it paged as a burst
+      // or was suppressed as isolated noise.
+      httpFailures: httpResult.error ? 0 : (httpResult.data ?? []).length,
       emailed,
       // Deliberately not named "errors": that key is the per-tenant work
       // failure list the recorder counts. This run did its work fine, it

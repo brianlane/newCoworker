@@ -106,7 +106,21 @@ export type HttpFailureRow = {
   created: string;
 };
 
-export type FindingKind = "missing" | "failed" | "errors" | "degraded" | "slow" | "http";
+export type FindingKind = "missing" | "failed" | "errors" | "degraded" | "slow" | "burst" | "http";
+
+/**
+ * The pager contract for the HTTP layer. Six solo anomalies between Aug 6
+ * and Aug 20 were each verified harmless by hand: every real victim already
+ * pages through the ledger (a crashed run as "failed", a stopped schedule as
+ * "missing" once its gap passes), so a lone timeout or transport error is
+ * counted and suppressed. A BURST pages: three anomalies inside one hour, or
+ * five anywhere in the ~6h retention window, is the "two in a row is a
+ * pattern" prose finally enforced with numbers, and catches infra decay that
+ * has not yet cost a recorded run.
+ */
+export const HTTP_BURST_WINDOW_MS = 3_600_000;
+export const HTTP_BURST_IN_WINDOW = 3;
+export const HTTP_BURST_TOTAL = 5;
 
 export type Finding = {
   kind: FindingKind;
@@ -140,6 +154,14 @@ export type WatchdogInput = {
    * again after any prune that empties the table.
    */
   ledgerOldestAt: string | null;
+  /**
+   * The sweeps YESTERDAY's watchdog run saw as missing (its own summary row
+   * carries them), or null when yesterday cannot be read. Enables the
+   * new-sweep first-night grace: a sweep with no row at all is logged rather
+   * than paged the first night, and pages the second. Null FAILS OPEN to "no
+   * grace": muting a sweep whose recording never worked is the worse error.
+   */
+  previouslyMissing: string[] | null;
   /** Evaluation time, injected so the decision stays pure. */
   now: number;
 };
@@ -149,6 +171,15 @@ export type WatchdogResult = {
   /** Sweeps that reported in and looked fine, for the "all clear" line. */
   healthy: string[];
   checked: number;
+  /** First-night absentees, logged rather than paged. */
+  graced: string[];
+  /** Lone HTTP anomalies counted but below the burst bar. */
+  suppressedHttp: number;
+  /**
+   * Every sweep this run saw as missing, paged AND graced, for the run's own
+   * summary row: tomorrow's watchdog reads it back as previouslyMissing.
+   */
+  missingSweeps: string[];
 };
 
 function minutesAgo(iso: string, now: number): number {
@@ -177,6 +208,8 @@ export function latestRuns(runs: SweepRunRow[]): Map<string, SweepRunRow> {
 export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
   const latest = latestRuns(input.runs);
   const missing: Finding[] = [];
+  const graced: string[] = [];
+  const missingSweeps: string[] = [];
   const failed: Finding[] = [];
   const withErrors: Finding[] = [];
   const slow: Finding[] = [];
@@ -192,6 +225,16 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
       // Not enough recorded history to distinguish "stopped" from "we only
       // started watching an hour ago".
       if (sweep === WATCHDOG_SWEEP || ledgerAgeMinutes < maxGapMinutes) continue;
+      // First-night grace for a sweep with no row at all: a new daily sweep
+      // merged after its UTC slot cannot have run yet. Grace requires
+      // POSITIVE evidence it was not missing yesterday; an unreadable
+      // yesterday gives no grace.
+      if (input.previouslyMissing !== null && !input.previouslyMissing.includes(sweep)) {
+        graced.push(sweep);
+        missingSweeps.push(sweep);
+        continue;
+      }
+      missingSweeps.push(sweep);
       missing.push({
         kind: "missing",
         sweep,
@@ -206,6 +249,7 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
 
     const age = minutesAgo(run.finished_at, input.now);
     if (age > maxGapMinutes && sweep !== WATCHDOG_SWEEP) {
+      missingSweeps.push(sweep);
       missing.push({
         kind: "missing",
         sweep,
@@ -274,23 +318,46 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
           }
         ];
 
-  const http: Finding[] = input.httpFailures.map((row) => ({
-    kind: "http" as const,
-    sweep: "(fleet)",
-    detail:
-      `${row.created}: status ${row.status_code ?? "none"}` +
-      `${row.timed_out ? ", TIMED OUT" : ""}` +
-      `${row.error_msg ? `, ${row.error_msg}` : ""}`,
-    action:
-      `net._http_response has no job column, so match it by time against the schedules above. A ` +
-      `timed_out row means pg_cron hung up on its own request: compare the job's ` +
-      `timeout_milliseconds against the chain's reachable budget. Isolated DNS or peer errors ` +
-      `have been transient here before (2026-08-06, 2026-08-07); two in a row is a pattern.`
-  }));
+  // HTTP anomalies page only as a burst; see HTTP_BURST_* above.
+  const anomalyLine = (row: HttpFailureRow) =>
+    `${row.created}: status ${row.status_code ?? "none"}` +
+    `${row.timed_out ? ", TIMED OUT" : ""}` +
+    `${row.error_msg ? `, ${row.error_msg}` : ""}`;
+  const times = input.httpFailures
+    .map((row) => Date.parse(row.created))
+    .sort((a, b) => a - b);
+  const denseHour = times.some(
+    (t, i) =>
+      i + HTTP_BURST_IN_WINDOW - 1 < times.length &&
+      times[i + HTTP_BURST_IN_WINDOW - 1] - t <= HTTP_BURST_WINDOW_MS
+  );
+  const isBurst = input.httpFailures.length >= HTTP_BURST_TOTAL || denseHour;
+  const burst: Finding[] = isBurst
+    ? [
+        {
+          kind: "burst" as const,
+          sweep: "(fleet)",
+          detail:
+            `${input.httpFailures.length} anomalies in the HTTP window, past the ` +
+            `${HTTP_BURST_IN_WINDOW}-per-hour / ${HTTP_BURST_TOTAL}-per-window pager bar:\n` +
+            input.httpFailures.map((row) => `      ${anomalyLine(row)}`).join("\n"),
+          action:
+            `No recorded sweep has failed yet (that would page on its own), so this is infra ` +
+            `degradation in the pg_net worker or the network path: DNS hangs and instant bridge ` +
+            `failures clustering instead of arriving as the usual isolated one-offs. Read ` +
+            `\`tsx debug/cron-http-stats.ts\` while the rows are inside the ~6h retention, and if ` +
+            `the cluster is DNS, raise it with Supabase; nothing in this repo resolves names.`
+        }
+      ]
+    : [];
+  const suppressedHttp = isBurst ? 0 : input.httpFailures.length;
 
   return {
-    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...http],
+    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...burst],
     healthy: healthy.sort(),
-    checked: Object.keys(SWEEP_EXPECTATIONS).length
+    checked: Object.keys(SWEEP_EXPECTATIONS).length,
+    graced: graced.sort(),
+    suppressedHttp,
+    missingSweeps: missingSweeps.sort()
   };
 }
