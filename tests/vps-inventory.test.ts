@@ -11,6 +11,7 @@ import {
   recordVpsAssigned,
   releaseVpsToPool,
   retireVps,
+  retireLapsedPoolVps,
   getLastAcquiredAtForBusiness,
   getVpsInventoryByVmId,
   listVpsInventory,
@@ -611,6 +612,64 @@ describe("vps_inventory DB layer", () => {
       chain.eq.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await retireVps(42, "x");
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The reaper's retire, guarded on `state = 'available'`.
+   *
+   * retireVps above is unconditional because the adopt path legitimately
+   * retires a row it holds as `assigned`. The billing-posture reaper decides
+   * from an earlier snapshot instead, and claimSpecificAvailableVps can
+   * assign any available row by id without consulting runway, so an
+   * unguarded write could clear assigned_business_id out from under a live
+   * signup.
+   */
+  describe("retireLapsedPoolVps", () => {
+    it("retires the row and reports true when the guard matches", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
+      const db = makeDb(chain);
+
+      await expect(
+        retireLapsedPoolVps(42, "lapsed at Hostinger", db as never)
+      ).resolves.toBe(true);
+
+      const updateArg = chain.update.mock.calls[0][0];
+      expect(updateArg.state).toBe("retired");
+      expect(updateArg.assigned_business_id).toBeNull();
+      expect(updateArg.notes).toBe("lapsed at Hostinger");
+      expect(chain.eq).toHaveBeenCalledWith("vm_id", 42);
+      // The guard itself: without this the write would also hit a row a
+      // provision had just claimed.
+      expect(chain.eq).toHaveBeenCalledWith("state", "available");
+    });
+
+    it("reports false when the row is no longer available, without erroring", async () => {
+      const chain = makeChain();
+      // PostgREST returns no error for an update matching zero rows, which is
+      // exactly why the caller has to read the boolean.
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      const db = makeDb(chain);
+
+      await expect(retireLapsedPoolVps(42, "x", db as never)).resolves.toBe(false);
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ error: { message: "guard boom" } });
+      const db = makeDb(chain);
+      await expect(retireLapsedPoolVps(42, "x", db as never)).rejects.toThrow(
+        /retireLapsedPoolVps: guard boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await retireLapsedPoolVps(42, "x");
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

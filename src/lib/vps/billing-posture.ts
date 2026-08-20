@@ -40,6 +40,23 @@
  * inventory read and the write, and turning renewal off under a
  * just-adopted tenant is the exact failure this module exists to prevent.
  *
+ * Direction 2b (stale inventory, REAPED): a pooled box whose paid period has
+ * already ended is dead hardware still advertised as `available`, and nothing
+ * else in the codebase can ever clean it up. `claimAvailableVps` refuses any
+ * candidate under a 72h runway floor, and the only caller of `retireVps` is
+ * the adopt path's catch block, so a lapsed row is never claimed, never
+ * adopted, never fails, and never retires: the filter that makes these rows
+ * harmless is the same filter that makes them permanent. Four rows had been
+ * stuck that way since Aug 2026 (vm 1800980, 1800985, 1806114, 1815606),
+ * making the admin pool read as five available boxes when exactly one was
+ * adoptable, which overstates spare capacity to anyone planning against it.
+ * This pass retires such a row in place. The bar is deliberately high (a
+ * paid-through in the past AND a VM that is suspended or gone AND a billing
+ * subscription that is cancelled or gone) because retiring a row that still
+ * has live hardware behind it would hide a reusable box from adopt-first and
+ * cost a real purchase. Hostinger SUSPENDS a lapsed box rather than deleting
+ * it, so "absent from the account" alone would miss every real case.
+ *
  * All dependencies are injected; the internal route wires production
  * implementations.
  */
@@ -58,6 +75,12 @@ export type BillingPostureFinding = {
     | "stripeless_tenant_auto_renew_off"
     | "never_renew_tenant_migration_needed"
     | "pool_box_auto_renew_on"
+    /**
+     * A pooled box whose paid period has ended and whose hardware is gone.
+     * Its inventory row was retired by this run so the pool stops counting
+     * it as spare capacity.
+     */
+    | "pool_box_lapsed_retired"
     /** A Hostinger VM the account owns that vps_inventory has never heard of. */
     | "untracked_vm"
     /** A live tenant with no hostinger_vps_id at all. */
@@ -107,6 +130,14 @@ export type BillingPostureDeps = {
   listVirtualMachines: () => Promise<VirtualMachine[]>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   enableAutoRenewal: (subscriptionId: string) => Promise<unknown>;
+  /**
+   * Retire a lapsed pool row, but only while it is still `available`.
+   * Resolves false when the row was claimed between this run's inventory
+   * read and the write, which is a benign race, not a failure. The
+   * lapsed-pool reaper is the only direction in this module that writes to
+   * vps_inventory at all.
+   */
+  retireLapsedPoolVps: (vmId: number, reason: string) => Promise<boolean>;
 };
 
 /**
@@ -144,6 +175,38 @@ function tenantVmId(business: BusinessRow): number | null {
 /** A subscription that will NOT renew: flag says off, or a terminal status. */
 function isNotRenewing(sub: BillingSubscription): boolean {
   return sub.is_auto_renewed === false || sub.status === "non_renewing" || sub.status === "cancelled";
+}
+
+/**
+ * True when a pooled row describes hardware that is already gone: its paid
+ * period ended, its VM is suspended (Hostinger's lapse state) or absent from
+ * the account entirely, and its billing subscription is cancelled or absent.
+ *
+ * Every clause is a veto and every default leans toward leaving the row
+ * alone, because a wrong retire is the expensive direction: it hides a
+ * reusable box from adopt-first and the next signup buys hardware we already
+ * own. In particular an UNKNOWN paid-through is not lapsed. `hasPoolRunway`
+ * treats a null expiry as eligible, so adopt-first still claims those rows
+ * and the adopt path retires them itself when the box turns out to be
+ * missing; that is the one cleanup path that already works, and reaping
+ * underneath it would only race it.
+ */
+function isLapsedPoolBox(
+  row: VpsInventoryRow,
+  vm: VirtualMachine | null,
+  sub: BillingSubscription | null,
+  nowMs: number
+): boolean {
+  if (!row.expires_at) return false;
+  const expiresMs = Date.parse(row.expires_at);
+  if (!Number.isFinite(expiresMs) || expiresMs > nowMs) return false;
+  // A running or stopped box still has a disk and can be resumed, so it is
+  // adoptable hardware however lapsed its billing looks.
+  if (vm !== null && vm.state !== "suspended") return false;
+  // A subscription still in any non-terminal state means Hostinger has not
+  // finished winding the box down, so the paid-through we hold may be stale.
+  if (sub !== null && sub.status !== "cancelled") return false;
+  return true;
 }
 
 export async function checkVpsBillingPosture(
@@ -322,6 +385,24 @@ export async function checkVpsBillingPosture(
   }
 
   // ---- Direction 2: available pool boxes should not renew (report-only). ----
+
+  // The Hostinger VM listing is fetched before the inventory read so the
+  // reaper below and the untracked-VM check further down share one snapshot
+  // instead of paying Hostinger for two. A failure is tolerated (the posture
+  // heal above is the reason this cron exists) but disables both consumers:
+  // without the listing we cannot tell dead hardware from live, and neither
+  // guessing direction is safe.
+  let allVms: VirtualMachine[] | null = null;
+  try {
+    allVms = await deps.listVirtualMachines();
+  } catch (err) {
+    logger.warn(
+      "billing posture: listVirtualMachines failed; skipping the untracked-VM and lapsed-pool checks",
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+  }
+  const vmById = new Map((allVms ?? []).map((vm) => [vm.id, vm]));
+
   // The inventory is read HERE, after the (potentially minutes-long,
   // sequential-Hostinger-calls) tenant pass, not at function start: a box
   // adopted mid-run flips to `assigned` in vps_inventory, and a fresh read
@@ -330,12 +411,77 @@ export async function checkVpsBillingPosture(
   // remaining millisecond-scale window is acceptable because this
   // direction is report-only, the email asks for a manual hPanel review,
   // it never flips billing itself.
+  //
+  // Reading it AFTER the VM listing above is deliberate for the reaper too:
+  // the inventory is what decides whether anyone is using a box, so it must
+  // be the fresher of the pair. A box adopted between the two reads comes
+  // back `assigned` and every pass below skips it.
   const inventory = await deps.listInventory();
   const availableBoxes = inventory.filter((row) => row.state === "available");
+  const nowMs = Date.now();
   for (const row of availableBoxes) {
     const sub = row.hostinger_billing_subscription_id
       ? subsById.get(row.hostinger_billing_subscription_id) ?? null
       : null;
+    const vm = vmById.get(row.vm_id) ?? null;
+
+    // Reap BEFORE the auto-renew check. A lapsed box is non-renewing by
+    // definition, so the `continue` below would step straight past it and
+    // the row would stay `available` forever, which is the exact state this
+    // reaper exists to end.
+    if (allVms !== null && isLapsedPoolBox(row, vm, sub, nowMs)) {
+      const vmState = vm ? `VM state ${vm.state}` : "VM absent from the Hostinger account";
+      const subState = sub ? `subscription ${sub.id} is ${sub.status}` : "no billing subscription";
+      let retired = false;
+      let claimedMidRun = false;
+      let detail =
+        `pooled box lapsed on ${row.expires_at} (${vmState}, ${subState}), ` +
+        "so it can never be adopted again";
+      try {
+        retired = await deps.retireLapsedPoolVps(
+          row.vm_id,
+          `lapsed pool box retired by the billing-posture cron: paid through ${row.expires_at}, ${vmState}, ${subState}`
+        );
+        claimedMidRun = !retired;
+        detail +=
+          "; its vps_inventory row was retired, so the pool no longer counts it as spare capacity";
+      } catch (err) {
+        detail +=
+          `; retiring its vps_inventory row FAILED (${err instanceof Error ? err.message : String(err)}), ` +
+          "so the row still reads available and overstates the pool, retire it by hand";
+      }
+
+      // The row stopped being `available` between this run's inventory read
+      // and the guarded write, so a provision claimed it and it is no longer
+      // ours to retire. Nothing is wrong and nothing needs doing, so this
+      // stays out of the digest: an ops email that reports non-problems is
+      // one nobody reads on the day it is right.
+      if (claimedMidRun) {
+        logger.info("vps billing posture: lapsed pool box was claimed mid-run, leaving it alone", {
+          vmId: row.vm_id,
+          expiresAt: row.expires_at
+        });
+        continue;
+      }
+
+      findings.push({
+        kind: "pool_box_lapsed_retired",
+        vmId: row.vm_id,
+        businessId: null,
+        businessName: null,
+        hostingerBillingSubscriptionId: sub?.id ?? row.hostinger_billing_subscription_id,
+        expiresAt: row.expires_at,
+        autoHealed: retired,
+        detail
+      });
+      logger.warn("vps billing posture: lapsed pool box", {
+        vmId: row.vm_id,
+        expiresAt: row.expires_at,
+        retired
+      });
+      continue;
+    }
+
     if (!sub || isNotRenewing(sub)) continue;
     findings.push({
       kind: "pool_box_auto_renew_on",
@@ -365,16 +511,14 @@ export async function checkVpsBillingPosture(
   // provision purchases another one. Report only: auto-pooling on a schedule
   // is exactly the risk reconcile-orphans.ts:148 warns about, since a box
   // belonging to a concurrent in-flight provision would be stolen.
-  let untrackedVms: VirtualMachine[] = [];
-  try {
-    const allVms = await deps.listVirtualMachines();
-    const knownVmIds = new Set(inventory.map((row) => Number(row.vm_id)));
-    untrackedVms = allVms.filter((vm) => !knownVmIds.has(vm.id));
-  } catch (err) {
-    logger.warn("billing posture: listVirtualMachines failed; skipping untracked-VM check", {
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
+  //
+  // Reuses the snapshot taken above; a failed listing leaves it null and this
+  // check reports nothing rather than calling every owned box untracked.
+  // Membership is tested against the inventory read BEFORE the reaper ran, so
+  // a row this run just retired is still "known" and does not resurface here
+  // as an untracked VM.
+  const knownVmIds = new Set(inventory.map((row) => Number(row.vm_id)));
+  const untrackedVms = (allVms ?? []).filter((vm) => !knownVmIds.has(vm.id));
   // A VM can be missing from vps_inventory and STILL be a live tenant's box
   // (inventory drift: the purchase-time record failed while the business row
   // was repointed). Telling ops to retire that box would take a tenant down,

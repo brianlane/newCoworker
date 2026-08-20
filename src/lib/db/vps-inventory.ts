@@ -345,6 +345,47 @@ export async function retireVps(
 }
 
 /**
+ * Retire a pooled row whose hardware is gone, but ONLY while it is still
+ * `available`. Returns true when a row was actually retired.
+ *
+ * The state guard is the whole difference from {@link retireVps}, which
+ * retires unconditionally because its caller (the adopt path) is retiring a
+ * box it just claimed and legitimately holds as `assigned`. The billing
+ * posture reaper has no such claim: it decides from a snapshot taken earlier
+ * in the run, and {@link claimSpecificAvailableVps} can assign ANY
+ * `available` row by id without consulting runway. Without the guard, a
+ * claim landing between the reaper's read and this write would clear
+ * `assigned_business_id` out from under a live signup, and the purchase
+ * cooldown (which reads assigned rows) would then let the term sweep buy
+ * that tenant a second box.
+ *
+ * PostgREST reports no error for an update that matches zero rows, so the
+ * boolean is load-bearing: a caller that assumed success would report a
+ * retire that never happened.
+ */
+export async function retireLapsedPoolVps(
+  vmId: number,
+  reason: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_inventory")
+    .update({
+      state: "retired",
+      assigned_business_id: null,
+      notes: reason,
+      updated_at: new Date().toISOString()
+    })
+    .eq("vm_id", vmId)
+    .eq("state", "available")
+    .select("vm_id")
+    .maybeSingle();
+  if (error) throw new Error(`retireLapsedPoolVps: ${error.message}`);
+  return data !== null;
+}
+
+/**
  * Single-row lookup by Hostinger VM id. Null when the box was never tracked
  * (pre-inventory purchases, --adopt-vm orphans). Used by the adopt path to
  * honor `never_renew` regardless of how the adopt was initiated.
