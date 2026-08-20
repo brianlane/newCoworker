@@ -23,7 +23,15 @@
  *     (route_to_team claim finalization);
  *   - Next.js: `appointment_booked` (calendar tool bookings), `tag_added`
  *     (dashboard contact edits), imported the same Node<->Deno way as
- *     contact_ref.ts.
+ *     contact_ref.ts;
+ *   - segment-action-sweep: `tag_added` (a Smart List's nightly action).
+ *
+ * That last one is the only caller that can RETRY a delivery: it announces
+ * before it persists the tag, so a night that dies mid-write re-announces the
+ * same milestone the next night. A delivery may therefore carry a
+ * `dedupeKey` naming the milestone (not the attempt), and a keyed delivery is
+ * at-most-once PER RUN: see `goalKeyConsumed`. Without a key, nothing about
+ * this module changes, which is every other caller above.
  *
  * Runs parked on a HUMAN (`awaiting_approval` / `awaiting_agent`) are
  * deliberately left alone: an approval prompt or live teammate offer is
@@ -61,10 +69,28 @@ export function goalReachedVar(stepId: string): string {
   return `__goal_${stepId}`;
 }
 
+/**
+ * Engine var stamped on a run a KEYED delivery fast-forwarded (value = the
+ * event kind), so a retry of the same milestone can recognise its own work.
+ * Underscore-prefixed like the goal-reached marker, so `presentableVars`
+ * hides it from the dashboard's var listing.
+ */
+function goalEventKeyVar(dedupeKey: string): string {
+  return `__goal_evt_${dedupeKey}`;
+}
+
 /** An observed external milestone. `tag` is set for tag_added only. */
 export type ObservedGoalEvent = {
   kind: GoalEventKind;
   tag?: string;
+  /**
+   * Exactly-once name for the MILESTONE, not for the attempt, from a caller
+   * whose delivery can be retried (today only the segment-action sweep, whose
+   * `ce:segact:<segment>:<contact>:<tag>` key is also what the contact-event
+   * enqueue dedupes on). Omitted everywhere else, and then this module
+   * behaves exactly as it always has.
+   */
+  dedupeKey?: string;
 };
 
 type GoalStep = Extract<FlowStep, { type: "goal" }>;
@@ -108,7 +134,33 @@ type CandidateRun = {
   current_step: number;
   context: Record<string, unknown> | null;
   revision: number;
+  /** The key the run was ENQUEUED under, when it came from an event. */
+  dedupe_key: string | null;
 };
+
+/**
+ * Has this run already consumed this exact keyed delivery? Two marks, both
+ * already durable on the run row, so the check costs no extra read:
+ *
+ *  - the run was ENQUEUED by this same milestone (`enqueueContactEventRuns`
+ *    stores the key on the row it inserts). A flow started BY the event has
+ *    to play its authored steps, not be jumped past them by the event that
+ *    started it. That is the `excludeRunIds` rule, for the runs a caller
+ *    cannot enumerate because a previous night created them.
+ *  - a previous delivery of this key already fast-forwarded this run and
+ *    stamped the marker var, in the same update as the jump. Without this, a
+ *    retry could fast-forward the run AGAIN, on to a later goal watching the
+ *    same tag, skipping everything in between.
+ *
+ * A run that was a candidate and did NOT jump needs no mark: nothing about it
+ * changed, so a repeat delivery finds the same absence of a matching goal
+ * ahead of it and is a no-op a second time.
+ */
+function goalKeyConsumed(run: CandidateRun, dedupeKey: string): boolean {
+  if (run.dedupe_key === dedupeKey) return true;
+  const vars = (run.context?.vars ?? {}) as Record<string, unknown>;
+  return vars[goalEventKeyVar(dedupeKey)] !== undefined;
+}
 
 /**
  * Apply an observed milestone to every jumpable run for this lead. Never
@@ -174,7 +226,7 @@ export async function applyGoalEvent(
   try {
     const { data, error } = await supabase
       .from("ai_flow_runs")
-      .select("id, flow_id, business_id, status, current_step, context, revision")
+      .select("id, flow_id, business_id, status, current_step, context, revision, dedupe_key")
       .eq("business_id", businessId)
       .in("status", [...JUMPABLE_STATUSES])
       .or(runMatchFilter(leadKey))
@@ -193,6 +245,7 @@ export async function applyGoalEvent(
     let jumped = 0;
     for (const run of runs) {
       if (excludeRunIds.includes(run.id)) continue;
+      if (event.dedupeKey && goalKeyConsumed(run, event.dedupeKey)) continue;
       const steps = definitions.get(run.flow_id);
       if (!steps) continue; // flow disabled / missing / malformed
       if (await jumpRunToGoal(supabase, run, steps, event)) jumped += 1;
@@ -275,12 +328,19 @@ async function jumpRunToGoal(
       ? { [waitingCall.marker]: "1" }
       : {})
   };
+  // A keyed delivery records the key on the run in the SAME update as the
+  // jump, so the mark and the jump share fate: either both landed and a retry
+  // of this milestone leaves the run alone, or neither did and the retry is
+  // the delivery. Only jumped runs are marked, which is also the only write
+  // this module makes.
+  const keyVars = event.dedupeKey ? { [goalEventKeyVar(event.dedupeKey)]: event.kind } : {};
   const nextContext = {
     ...(run.context ?? {}),
     vars: {
       ...prevVars,
       [goalReachedVar(goalStep.id)]: event.kind,
       ...markerVars,
+      ...keyVars,
       // The jump moves current_step outside the worker's loop, so refresh the
       // resume marker to the goal step, a stale marker would relocate the
       // next claim back to wherever the run previously parked.

@@ -396,12 +396,20 @@ describe("runSegmentActionSweep", () => {
       tags: ["Existing", "Follow up"],
       updated_at: NOW_ISO
     });
-    // Goal events fan out over the unique linked numbers.
+    // Goal events fan out over the unique linked numbers, all naming the same
+    // application, so one run reachable by two of the contact's own numbers
+    // cannot be jumped twice.
     expect(applyGoalEvent.mock.calls.map((c) => c[2])).toEqual([
       "+15550001111",
       "+15550002222"
     ]);
-    expect(applyGoalEvent.mock.calls[0][3]).toEqual({ kind: "tag_added", tag: "Follow up" });
+    for (const call of applyGoalEvent.mock.calls) {
+      expect(call[3]).toEqual({
+        kind: "tag_added",
+        tag: "Follow up",
+        dedupeKey: "ce:segact:seg-1:c1:follow up"
+      });
+    }
     expect(enqueueContactEventRuns).toHaveBeenCalledTimes(1);
     expect(enqueueContactEventRuns.mock.calls[0][2]).toEqual({
       kind: "tag_changed",
@@ -475,6 +483,42 @@ describe("runSegmentActionSweep", () => {
         (c) => (c[2] as { dedupeKey: string }).dedupeKey
       );
       expect(keys).toEqual(["ce:segact:seg-1:c1:follow up", "ce:segact:seg-1:c1:follow up"]);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("the repaired night's goal event names the same application, so it cannot jump twice", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Same crash as above, watched from the OTHER hook. applyGoalEvent
+      // inserts nothing, so there is no unique index to catch a repeat: it
+      // dedupes on the runs it would move, and it can only do that if both
+      // nights hand it the same key. (That the key then stops the second
+      // jump is pinned by tests/ai-flows-goal-events.test.ts.)
+      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }], {
+        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 1 }
+      });
+      await runSegmentActionSweep(night1.db, NOW);
+      const night2 = makeDb([
+        { data: [segRow()] },
+        { data: [contactRow()] },
+        { data: null }, // tag write
+        { data: null } // stamp
+      ]);
+      const r2 = await runSegmentActionSweep(night2.db, NOW + DAY);
+      expect(r2.tagsWritten).toBe(1);
+      // One delivery per night, both naming the tag APPLICATION rather than
+      // the night it was attempted.
+      expect(applyGoalEvent).toHaveBeenCalledTimes(2);
+      expect(applyGoalEvent.mock.calls.map((c) => c[3])).toEqual([
+        { kind: "tag_added", tag: "Follow up", dedupeKey: "ce:segact:seg-1:c1:follow up" },
+        { kind: "tag_added", tag: "Follow up", dedupeKey: "ce:segact:seg-1:c1:follow up" }
+      ]);
+      // And the enqueue keeps carrying the same key, so the pair stays in
+      // step: one application, one identity, both hooks.
+      expect(enqueueContactEventRuns.mock.calls.map((c) => (c[2] as { dedupeKey: string }).dedupeKey))
+        .toEqual(["ce:segact:seg-1:c1:follow up", "ce:segact:seg-1:c1:follow up"]);
     } finally {
       errSpy.mockRestore();
     }

@@ -97,6 +97,8 @@ function runRow(over: Partial<Record<string, unknown>> = {}) {
     current_step: 0,
     context: { vars: {}, trigger: { from: LEAD } },
     revision: 5,
+    // What the run was enqueued under; null for anything not event-started.
+    dedupe_key: null,
     ...over
   };
 }
@@ -481,5 +483,103 @@ describe("applyGoalEvent", () => {
       { data: null, error: null } // r2 skip row
     ]);
     expect(await applyGoalEvent(db, BIZ, LEAD, { kind: "claimed" })).toEqual({ jumpedRuns: 1 });
+  });
+});
+
+/**
+ * A KEYED delivery, for the one caller that can retry the same milestone: the
+ * segment-action sweep announces before it persists the tag, so a night that
+ * dies mid-write re-announces the next night. The key names the tag
+ * APPLICATION, so the retry has to recognise the work the first attempt did.
+ */
+describe("applyGoalEvent with a dedupeKey (a retryable delivery)", () => {
+  const KEY = "ce:segact:seg-1:c1:won";
+  // Pinned literally: this is the mark a later night looks for.
+  const KEY_VAR = "__goal_evt_ce:segact:seg-1:c1:won";
+  const WON = { kind: "tag_added", tag: "Won", dedupeKey: KEY } as const;
+
+  it("stamps the key on the run it fast-forwards", async () => {
+    const steps = [sms("s0"), sms("s1"), goal("g1", [{ kind: "tag_added", tag: "Won" }])];
+    const { db, calls } = makeDb([
+      { data: [runRow()], error: null },
+      { data: [flowRow("f1", steps)], error: null },
+      { data: [{ id: "r1" }], error: null }, // jump landed
+      { data: null, error: null }, // s0 skip row
+      { data: null, error: null } // s1 skip row
+    ]);
+    expect(await applyGoalEvent(db, BIZ, LEAD, WON)).toEqual({ jumpedRuns: 1 });
+    const update = calls.find((c) => c.name === "update" && c.table === "ai_flow_runs")!
+      .args[0] as Record<string, unknown>;
+    const ctx = update.context as { vars: Record<string, unknown> };
+    // Same update as the jump, so the mark and the jump share fate.
+    expect(ctx.vars[KEY_VAR]).toBe("tag_added");
+    expect(ctx.vars[goalReachedVar("g1")]).toBe("tag_added");
+  });
+
+  it("a retry leaves a run it already jumped alone, even with a later goal on the same tag", async () => {
+    // The exact hazard: night one jumped the run to g1 and then died before
+    // the tag column landed. Night two re-announces the same application, and
+    // without the mark it would fast-forward the run AGAIN, this time to g2,
+    // skipping every follow-up in between.
+    const steps = [
+      sms("s0"),
+      goal("g1", [{ kind: "tag_added", tag: "Won" }]),
+      sms("s2"),
+      goal("g2", [{ kind: "tag_added", tag: "Won" }])
+    ];
+    const jumped = runRow({
+      current_step: 1,
+      context: {
+        vars: { [goalReachedVar("g1")]: "tag_added", [KEY_VAR]: "tag_added" },
+        trigger: { from: LEAD }
+      }
+    });
+    const retry = makeDb([
+      { data: [jumped], error: null },
+      { data: [flowRow("f1", steps)], error: null }
+    ]);
+    expect(await applyGoalEvent(retry.db, BIZ, LEAD, WON)).toEqual({ jumpedRuns: 0 });
+    expect(retry.calls.some((c) => c.name === "update")).toBe(false);
+
+    // Opt-in only: an unkeyed delivery (every other caller) is unchanged, and
+    // that is what makes the run above jumpable in the first place.
+    const unkeyed = makeDb([
+      { data: [jumped], error: null },
+      { data: [flowRow("f1", steps)], error: null },
+      { data: [{ id: "r1" }], error: null },
+      { data: null, error: null }, // g1 skip row
+      { data: null, error: null } // s2 skip row
+    ]);
+    expect(
+      await applyGoalEvent(unkeyed.db, BIZ, LEAD, { kind: "tag_added", tag: "Won" })
+    ).toEqual({ jumpedRuns: 1 });
+    const update = unkeyed.calls.find((c) => c.name === "update" && c.table === "ai_flow_runs")!
+      .args[0] as Record<string, unknown>;
+    expect(update.current_step).toBe(3);
+  });
+
+  it("never jumps a run its own enqueue created, and only that run", async () => {
+    // The contact-event enqueue stores the same key on the run it inserts. On
+    // a repair night that run already exists, and a flow started BY this tag
+    // has to play its own steps, not be jumped past them by the event that
+    // started it.
+    const steps = [sms("s0"), goal("g1", [{ kind: "tag_added", tag: "Won" }])];
+    const { db, calls } = makeDb([
+      {
+        data: [
+          runRow({ id: "rEnqueued", dedupe_key: KEY }),
+          // A different run for the same lead, untouched by night one.
+          runRow({ id: "rOther", context: null })
+        ],
+        error: null
+      },
+      { data: [flowRow("f1", steps)], error: null },
+      { data: [{ id: "rOther" }], error: null }, // rOther jump landed
+      { data: null, error: null } // rOther skip row
+    ]);
+    expect(await applyGoalEvent(db, BIZ, LEAD, WON)).toEqual({ jumpedRuns: 1 });
+    const updates = calls.filter((c) => c.name === "eq" && c.table === "ai_flow_runs");
+    expect(updates.some((c) => c.args[1] === "rEnqueued")).toBe(false);
+    expect(updates.some((c) => c.args[1] === "rOther")).toBe(true);
   });
 });

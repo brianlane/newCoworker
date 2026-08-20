@@ -43,8 +43,9 @@
  *  - The automations are announced BEFORE the tag column is persisted. The
  *    persisted tag is the only record this sweep keeps of what it already
  *    did, so it has to be written last: a half-finished run must not be
- *    able to retire a contact whose automation never got enqueued. Full
- *    reasoning at the write site.
+ *    able to retire a contact whose automation never got enqueued. Both
+ *    hooks carry the same tag-application key so the night that repairs one
+ *    cannot deliver either of them twice. Full reasoning at the write site.
  *
  * Everything is dependency-injected (client + clock) and never throws, so
  * the whole surface is unit-testable under the shared 100% coverage gate.
@@ -513,10 +514,24 @@ async function sweepBusiness(
       //
       // With the order flipped, a death anywhere above the write leaves the
       // tag absent, so the next night re-evaluates the contact and finishes
-      // the job. The repair cannot fire an automation twice: the dedupe key
-      // below identifies the tag APPLICATION, not the night it was tried,
-      // so the second delivery is a benign 23505 against the ai_flow_runs
-      // (flow_id, dedupe_key) index and the matching meta_capi_events one.
+      // the job. That repair re-delivers BOTH hooks, so both have to be
+      // exactly-once, and both are keyed by the same string: the tag
+      // APPLICATION (segment, contact, tag), never the night it was tried.
+      // They enforce it in different places, because they write to different
+      // things:
+      //  - the contact-event enqueue dedupes in the DATABASE. A repeat is a
+      //    benign 23505 against the ai_flow_runs (flow_id, dedupe_key) index
+      //    and the matching meta_capi_events one, so no flow is enrolled a
+      //    second time.
+      //  - the goal jump dedupes on the RUNS it would move, since it inserts
+      //    nothing to collide. A keyed delivery stamps every run it moves and
+      //    skips a run already carrying that stamp, so a repair cannot
+      //    fast-forward the same run again, on to a later goal watching the
+      //    same tag. It also skips runs enqueued UNDER this key,
+      //    which on a repair night already exist: a flow started by this tag
+      //    has to play its own steps rather than be jumped past them by the
+      //    event that started it. Same key on every number below, so the
+      //    alias fan-out cannot double-jump one run either.
       // A normal repeat night never even reaches here, because the tag is
       // already carried and the contact is skipped above.
       //
@@ -539,25 +554,38 @@ async function sweepBusiness(
           )
         )
       ];
-      // The same hooks, in the same order, as update_contact's tag write.
-      for (const tag of finalPlan.added) {
-        for (const number of numbers) {
-          await applyGoalEvent(supabase, businessId, number, { kind: "tag_added", tag });
-        }
-      }
-      for (const tag of finalPlan.added) {
+      // One identity per tag application, built once and handed to BOTH
+      // hooks, so a repair night names the same thing they did.
+      const applications = finalPlan.added.map((tag) => {
         const source = candidates.find(
           (c) => c.tag.trim().slice(0, MAX_TAG_LENGTH).toLowerCase() === tag.toLowerCase()
         )!.segment;
+        return {
+          tag,
+          source,
+          dedupeKey: `ce:segact:${source.id}:${contact.id}:${tag.toLowerCase()}`
+        };
+      });
+      // The same hooks, in the same order, as update_contact's tag write.
+      for (const application of applications) {
+        for (const number of numbers) {
+          await applyGoalEvent(supabase, businessId, number, {
+            kind: "tag_added",
+            tag: application.tag,
+            dedupeKey: application.dedupeKey
+          });
+        }
+      }
+      for (const application of applications) {
         await enqueueContactEventRuns(supabase, businessId, {
           kind: "tag_changed",
           // The post-write list, which is what the contact is about to
           // carry; hydrateContactEventContact leaves caller tags alone.
           contact: { e164: primary, tags: finalPlan.next },
-          tag,
+          tag: application.tag,
           change: "added",
-          note: `Smart List "${source.name}" nightly action`,
-          dedupeKey: `ce:segact:${source.id}:${contact.id}:${tag.toLowerCase()}`
+          note: `Smart List "${application.source.name}" nightly action`,
+          dedupeKey: application.dedupeKey
         });
       }
 
