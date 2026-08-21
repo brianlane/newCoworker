@@ -773,6 +773,67 @@ describe("summarizeCustomerMemory, joinSmsHistory branch coverage", () => {
     expect(user).toContain("[2026-05-05T08:00:00Z SMS AI assistant]: Hi Liz, re your inquiry...");
     expect(user).not.toContain("[2026-05-05T08:00:00Z SMS Customer]:");
   });
+
+  it("attributes owner-typed sends (owner_manual / owner_scheduled) to the business owner, not the AI", async () => {
+    // The thread composer logs verbatim owner replies to sms_outbound_log
+    // with source 'owner_manual' (scheduled sends: 'owner_scheduled').
+    // Labeling those "AI assistant" told the summary model the AI said
+    // things the owner wrote; flow sends must keep the AI attribution.
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "j1",
+          inboundText: "Which plan did we discuss?",
+          assistantReply: null,
+          receivedAt: "2026-05-05T08:00:00Z"
+        },
+        {
+          jobId: "o1",
+          inboundText: "",
+          assistantReply: "Standard, month to month.",
+          receivedAt: "2026-05-05T08:01:00Z",
+          source: "owner_manual" as const
+        },
+        {
+          jobId: "o2",
+          inboundText: "",
+          assistantReply: "Reminder: call tomorrow at 9.",
+          receivedAt: "2026-05-05T08:02:00Z",
+          source: "owner_scheduled" as const
+        },
+        {
+          jobId: "o3",
+          inboundText: "",
+          assistantReply: "Hi, following up on your inquiry.",
+          receivedAt: "2026-05-05T08:03:00Z",
+          source: "ai_flow" as const
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    const args = (callRowboatChat.mock.calls as unknown as Array<[{
+      messages: Array<{ role: string; content: string }>;
+    }]>)[0]?.[0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const user = args.messages[1]?.content ?? "";
+    expect(user).toContain("[2026-05-05T08:01:00Z SMS Business owner]: Standard, month to month.");
+    expect(user).toContain("[2026-05-05T08:02:00Z SMS Business owner]: Reminder: call tomorrow at 9.");
+    expect(user).toContain("[2026-05-05T08:03:00Z SMS AI assistant]: Hi, following up on your inquiry.");
+    expect(user).not.toContain("[2026-05-05T08:01:00Z SMS AI assistant]:");
+    expect(user).not.toContain("[2026-05-05T08:02:00Z SMS AI assistant]:");
+  });
 });
 
 describe("summarizeCustomerMemory, per-contact email feed (scoped, never business-wide)", () => {

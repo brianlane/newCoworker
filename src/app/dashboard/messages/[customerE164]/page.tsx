@@ -28,6 +28,7 @@ import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { ContactLanguageEditor } from "@/components/dashboard/ContactLanguageEditor";
 import { getContactLanguage } from "@/lib/db/contact-language";
 import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
+import { smsSourceLabel } from "@/components/dashboard/sms-source-label";
 import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 
@@ -217,29 +218,7 @@ export default async function SmsThreadPage({
                   ].join(" ")}
                 >
                   <div className="text-[10px] uppercase tracking-wide text-parchment/50 mb-1 flex items-center gap-2">
-                    <span>
-                      {isInbound
-                        ? inboundLabel
-                        : m.source === "ai_flow"
-                          ? "AiFlow"
-                          : m.source === "agent_offer"
-                            ? "AiFlow · team offer"
-                            : m.source === "owner_notify"
-                              ? "AiFlow · notification"
-                              : m.source === "owner_manual"
-                                ? "You"
-                                : m.source === "owner_scheduled"
-                                  ? "You · scheduled"
-                                  : m.source === "voice_follow_up"
-                                    ? "Assistant · call follow-up"
-                                    : m.source === "mcp"
-                                      ? "Claude connector"
-                                      : m.source === "mcp_chatgpt"
-                                        ? "ChatGPT app"
-                                      : m.source === "owner_alert"
-                                        ? "Coworker · urgent alert"
-                                        : "Assistant"}
-                    </span>
+                    <span>{isInbound ? inboundLabel : smsSourceLabel(m.source)}</span>
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />
                     </span>

@@ -719,10 +719,12 @@ export type SmsHistoryEntry = {
   assistantReply: string | null;
   receivedAt: string;
   /**
-   * Set for worker-initiated sends from `sms_outbound_log` (AiFlow lead
-   * intros, voice-call follow-up texts etc.), those rows have no inbound
-   * side; `assistantReply` carries the outbound body. Values mirror the
-   * `sms_outbound_log_source_check` constraint.
+   * Set for sends logged in `sms_outbound_log`; those rows have no inbound
+   * side and `assistantReply` carries the outbound body. Values mirror the
+   * `sms_outbound_log_source_check` constraint and are NOT all AI-authored:
+   * `owner_manual` / `owner_scheduled` are owner-typed, so render sites must
+   * label by value (see `smsSourceLabel`), never treat "has a source" as
+   * "sent by a flow".
    */
   source?: string;
 };
