@@ -95,6 +95,30 @@ describe("readMovedRows", () => {
     ).rejects.toBeInstanceOf(ResidencyReadError);
   });
 
+  it("surfaces an OLDER box refusing a new filter op, rather than dropping it", async () => {
+    // The property that makes widening the box grammar safe to roll out.
+    // A box deployed before `contains`/`overlaps`/negation returns
+    // invalid_request; that must reach the caller as a loud ResidencyReadError
+    // and never as a silently narrower result set. The message has to carry
+    // the box's own words, or the operator cannot tell "stale box" from
+    // "genuinely bad query".
+    const api = apiStub(async () => ({
+      ok: false,
+      error: "invalid_request",
+      message: "unknown filter op: contains"
+    }));
+    await expect(
+      readMovedRows(
+        BIZ,
+        {
+          table: "email_log",
+          filters: [{ column: "labels", op: "contains", value: ["urgent"] }]
+        },
+        { makeDataApi: () => api }
+      )
+    ).rejects.toThrow(/unknown filter op: contains/);
+  });
+
   it("wraps transport failures (down box) in the typed error", async () => {
     const api = apiStub(async () => {
       throw new DataApiTransportError("unreachable");

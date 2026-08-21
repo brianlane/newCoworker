@@ -188,7 +188,12 @@ describe("GET /api/dashboard/tasks on a residency tenant", () => {
     expect(boxRequests("contacts")[0]).toMatchObject({
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
-        { column: "customer_e164", op: "in", value: [PRIMARY] }
+        {
+          or: [
+            [{ column: "customer_e164", op: "in", value: [PRIMARY] }],
+            [{ column: "alias_e164s", op: "overlaps", value: [PRIMARY] }]
+          ]
+        }
       ]
     });
     expect(boxRequests("ai_flows")[0]).toMatchObject({
@@ -200,43 +205,37 @@ describe("GET /api/dashboard/tasks on a residency tenant", () => {
   });
 
   /**
-   * The documented trade (same one PR #1547 made for this filter): the box
-   * grammar has no OR and no array overlap, so an alias-keyed run finds no
-   * contact and stays an unresolved card. Unresolved is the safe failure;
-   * being folded onto the wrong person's profile is not.
+   * The trade PR #1547 and #1565 both made here is retired. The box grammar
+   * gained OR groups and array overlap, so an alias-keyed run resolves onto
+   * its surviving primary exactly as it does centrally. The two cases below
+   * used to differ on purpose, one asserting the box gave up completeness and
+   * the other asserting central kept it; they now assert the same outcome,
+   * which is the point.
    */
-  it("leaves an alias-keyed lead unresolved instead of mis-attributing it", async () => {
+  it("resolves an alias-keyed lead onto its surviving primary, like central", async () => {
     centralDb({ ai_flow_runs: [runRow(ALIAS)] });
-    // Asked about ALIAS, the box finds nothing (ALIAS is nobody's primary);
-    // the tagged sweep still returns the surviving contact.
+    // The box is asked with an OR group, so it finds the surviving contact by
+    // its alias and returns it for both the by-phone and the tagged read.
     vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
-      const req = request as { table: string; filters: Array<{ op: string }> };
+      const req = request as { table: string };
       if (req.table === "ai_flows") return [FLOW] as never;
-      const byPhone = req.filters.some((f) => f.op === "in");
-      return (byPhone ? [] : [contactRow()]) as never;
+      return [contactRow()] as never;
     });
 
     const data = await jsonOf(await tasksGET(new Request(`http://x/?businessId=${BIZ}`)));
-    type Card = { e164: string; name: string; hasContact: boolean; runs: unknown[] };
-    const cards: Record<string, Card> = Object.fromEntries(
-      (data.tasks as Card[]).map((t) => [t.e164, t])
-    );
-    // Two cards: the alias lead, unresolved, and the surviving contact.
-    expect(Object.keys(cards).sort()).toEqual([PRIMARY, ALIAS].sort());
-    expect(cards[ALIAS]).toMatchObject({ name: ALIAS, hasContact: false, tags: [] });
-    expect(cards[ALIAS].runs).toHaveLength(1);
-    // Crucially it was NOT re-keyed onto, or labeled with, the other person.
-    expect(cards[PRIMARY]).toMatchObject({ name: "Larry Lead" });
-    expect(cards[PRIMARY].runs).toEqual([]);
+    // One card, re-keyed onto the surviving primary and carrying the run,
+    // rather than a second unresolved card keyed on the dead alias.
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0]).toMatchObject({ e164: PRIMARY, name: "Larry Lead", hasContact: true });
+    expect(data.tasks[0].runs).toHaveLength(1);
   });
 
-  it("central mode DOES resolve that alias, the completeness the box gives up", async () => {
+  it("central mode resolves that alias identically", async () => {
     vi.mocked(isVpsReadMode).mockResolvedValue(false);
     centralDb({ ai_flow_runs: [runRow(ALIAS)], contacts: [contactRow()], ai_flows: [FLOW] });
 
     const data = await jsonOf(await tasksGET(new Request(`http://x/?businessId=${BIZ}`)));
     expect(readMovedRows).not.toHaveBeenCalled();
-    // One card, re-keyed onto the surviving primary, carrying the run.
     expect(data.tasks).toHaveLength(1);
     expect(data.tasks[0]).toMatchObject({ e164: PRIMARY, name: "Larry Lead" });
     expect(data.tasks[0].runs).toHaveLength(1);

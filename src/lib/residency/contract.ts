@@ -31,24 +31,62 @@ export const DATA_API_PREFIX = "/v1";
 /** Hostname prefix on the tenant tunnel, alongside `voice-` / `render-`. */
 export const DATA_API_HOSTNAME_PREFIX = "data-";
 
-export type DataApiFilterOp =
-  | "eq"
-  | "neq"
-  | "gt"
-  | "gte"
-  | "lt"
-  | "lte"
-  | "like"
-  | "ilike"
-  | "in"
-  | "is";
+/**
+ * Runtime list, so the box's own copy can be lockstep-tested against it
+ * (vps/data-api/server.mjs has no build step against this repo). The type is
+ * derived from the list rather than written twice.
+ */
+export const DATA_API_FILTER_OPS = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "like",
+  "ilike",
+  "in",
+  "is",
+  /** Array containment, `col @> value[]`, for text[] columns. */
+  "contains",
+  /** Array overlap, `col && value[]`, for text[] columns. */
+  "overlaps"
+] as const;
 
-export type DataApiFilter = {
+export type DataApiFilterOp = (typeof DATA_API_FILTER_OPS)[number];
+
+export type DataApiFilterCondition = {
   column: string;
   op: DataApiFilterOp;
-  /** `is` accepts null; `in` accepts an array; everything else a scalar. */
+  /**
+   * `is` accepts null; `in`, `contains` and `overlaps` accept an array;
+   * everything else a scalar.
+   */
   value: string | number | boolean | null | Array<string | number>;
+  /**
+   * Negate this condition. `{ op: "is", value: null, negate: true }` is the
+   * only way to express IS NOT NULL, which PostgREST callers write as
+   * `.not(col, "is", null)` and which the grammar previously could not say
+   * at all.
+   */
+  negate?: boolean;
 };
+
+/**
+ * A disjunction. The inner arrays are ANDed within themselves and ORed with
+ * each other, so `{ or: [[a], [b]] }` is `(a) OR (b)`.
+ *
+ * ONE LEVEL ONLY, deliberately: a group may not contain another group. Every
+ * central query this replaces is a flat `.or("a,b")`, and unbounded nesting
+ * would let a caller build an arbitrarily deep parse tree on a tenant box
+ * whose whole point is to be small and predictable.
+ */
+export type DataApiFilterGroup = {
+  or: DataApiFilterCondition[][];
+};
+
+export type DataApiFilter = DataApiFilterCondition | DataApiFilterGroup;
+
 
 export type DataApiOrder = {
   column: string;
@@ -129,6 +167,15 @@ export type DataApiHealthResponse = {
   ok: boolean;
   /** Applied datastore schema revision (from the versioned DDL). */
   schemaVersion: string;
+  /**
+   * Filter ops this box understands, and whether it can compile OR groups.
+   * Absent on a box deployed before the grammar widened, which is exactly
+   * what makes it useful: `debug/residency-parity.ts` can refuse to pass a
+   * tenant whose box cannot speak what the code now sends, instead of
+   * discovering it on the first dashboard read after the flip.
+   */
+  ops?: string[];
+  orGroups?: boolean;
 };
 
 export function dataApiHostname(businessId: string, hostnameSuffix: string): string {
