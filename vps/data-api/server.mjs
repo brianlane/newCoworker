@@ -31,6 +31,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import pg from "pg";
+import {
+  assertColumns,
+  compileFilters,
+  quoteIdent,
+  SUPPORTED_FILTER_OPS
+} from "./filters.mjs";
 
 const PORT = Number(process.env.DATA_API_PORT ?? 8091);
 const TOKENS = (process.env.DATA_API_TOKENS ?? "")
@@ -72,101 +78,6 @@ const MOVED_TABLES = new Set([
   "aiflow_url_memory"
 ]);
 
-const FILTER_OPS = {
-  eq: "=",
-  neq: "<>",
-  gt: ">",
-  gte: ">=",
-  lt: "<",
-  lte: "<=",
-  like: "LIKE",
-  ilike: "ILIKE"
-};
-
-const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
-
-/**
- * Quote an identifier for SQL interpolation. Every identifier is ALSO
- * validated against IDENT_RE first (assertColumns / compileFilters), so this
- * is defense-in-depth: pg's escapeIdentifier double-quotes the name and
- * escapes embedded quotes, making the interpolation inert even if a
- * validator regression let a hostile name through.
- */
-function quoteIdent(name) {
-  return pg.escapeIdentifier(name);
-}
-
-const pool = new pg.Pool({
-  connectionString: DATABASE_URL,
-  // The box serves exactly one tenant; a handful of connections is ample and
-  // keeps the memory-capped Postgres comfortably inside its mem_limit.
-  max: 5,
-  idleTimeoutMillis: 30_000
-});
-
-/** Timing-safe bearer check against every configured token (sha256-padded). */
-function bearerOk(header) {
-  if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
-  const presented = createHash("sha256").update(header.slice(7).trim(), "utf8").digest();
-  let ok = false;
-  for (const token of TOKENS) {
-    const expected = createHash("sha256").update(token, "utf8").digest();
-    // Constant-length digests -> timingSafeEqual never throws; OR-accumulate
-    // so every token is compared regardless of early matches.
-    if (timingSafeEqual(presented, expected)) ok = true;
-  }
-  return ok;
-}
-
-function clientError(res, status, error, message) {
-  return res.status(status).json({ ok: false, error, message });
-}
-
-/**
- * Validate + compile a filter list into a parameterized WHERE clause.
- * Returns { sql, values } or throws { code, message }.
- */
-function compileFilters(filters, values) {
-  if (filters == null) return "";
-  if (!Array.isArray(filters)) {
-    throw { code: "invalid_request", message: "filters must be an array" };
-  }
-  const parts = [];
-  for (const f of filters) {
-    if (f == null || typeof f !== "object") {
-      throw { code: "invalid_request", message: "filter entries must be objects" };
-    }
-    const { column, op, value } = f;
-    if (typeof column !== "string" || !IDENT_RE.test(column)) {
-      throw { code: "invalid_request", message: `invalid filter column: ${String(column)}` };
-    }
-    if (op === "is") {
-      if (value !== null) {
-        throw { code: "invalid_request", message: "filter op 'is' only supports null" };
-      }
-      parts.push(`${quoteIdent(column)} IS NULL`);
-    } else if (op === "in") {
-      if (!Array.isArray(value) || value.length === 0) {
-        throw { code: "invalid_request", message: "filter op 'in' needs a non-empty array" };
-      }
-      const placeholders = value.map((v) => {
-        values.push(v);
-        return `$${values.length}`;
-      });
-      parts.push(`${quoteIdent(column)} IN (${placeholders.join(", ")})`);
-    } else if (op in FILTER_OPS) {
-      if (value === null || value === undefined || Array.isArray(value)) {
-        throw { code: "invalid_request", message: `filter op '${op}' needs a scalar value` };
-      }
-      values.push(value);
-      parts.push(`${quoteIdent(column)} ${FILTER_OPS[op]} $${values.length}`);
-    } else {
-      throw { code: "invalid_request", message: `unknown filter op: ${String(op)}` };
-    }
-  }
-  return parts.length > 0 ? ` WHERE ${parts.join(" AND ")}` : "";
-}
-
 function requireTable(body) {
   const requested = body?.table;
   // Resolve to the SET's own member (not the request string) so the value
@@ -177,14 +88,6 @@ function requireTable(body) {
     throw { code: "unknown_table", message: `unknown table: ${String(requested)}` };
   }
   return table;
-}
-
-function assertColumns(cols, label) {
-  for (const c of cols) {
-    if (typeof c !== "string" || !IDENT_RE.test(c)) {
-      throw { code: "invalid_request", message: `invalid ${label}: ${String(c)}` };
-    }
-  }
 }
 
 const app = express();
@@ -209,7 +112,15 @@ app.get("/v1/health", async (_req, res) => {
     const meta = await pool.query(
       "select value from residency_schema_meta where key = 'generated_at'"
     );
-    res.json({ ok: true, schemaVersion: meta.rows[0]?.value ?? "unknown" });
+    res.json({
+      ok: true,
+      schemaVersion: meta.rows[0]?.value ?? "unknown",
+      // Lets debug/residency-parity.ts refuse a tenant whose box cannot
+      // speak what the code now sends, BEFORE the flip, rather than finding
+      // out on the first dashboard read after it.
+      ops: SUPPORTED_FILTER_OPS,
+      orGroups: true
+    });
   } catch (err) {
     // Health must be honest: a broken datastore is NOT healthy, but keep the
     // status 200 so the tunnel doesn't mask the body (see header comment).

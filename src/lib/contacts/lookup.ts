@@ -47,15 +47,15 @@ export type ContactLookupContext = {
  * Contacts whose PRIMARY number, or (central only) one of whose merge
  * aliases, is in `phones`.
  *
- * BOX PATH TRADE: the box filter grammar is AND-only, with no OR and no
- * array-overlap operator (`src/lib/residency/contract.ts`), so the central
- * `alias_e164s.ov.{...}` leg cannot be expressed and the box matches primary
- * numbers only. A lead keyed on a merged-away alias therefore resolves to NO
- * contact row on a vps tenant: it renders unresolved (no display name, and
- * its runs are not re-keyed onto the surviving primary) rather than being
- * attributed to whoever the widened scan happened to return. PR #1547 made
- * the same trade for the same filter in the team-performance card. Less
- * complete, never wrong, and never mis-attributed to another person.
+ * Both paths now match aliases too. This used to be a documented degradation:
+ * the box grammar had no OR and no array-overlap operator, so the box matched
+ * primary numbers only and a lead keyed on a merged-away alias resolved to NO
+ * contact row on a vps tenant (unresolved rather than mis-attributed, which
+ * was the least-bad option available). The grammar gained `or` groups and
+ * `overlaps`, so the box now expresses central's
+ * `customer_e164.in.(...) OR alias_e164s.ov.{...}` exactly and the trade is
+ * gone. PR #1547 made the same trade in the team-performance card; it can be
+ * retired the same way.
  */
 export async function listContactsByLeadPhone<Row>(
   ctx: ContactLookupContext,
@@ -74,7 +74,12 @@ export async function listContactsByLeadPhone<Row>(
       columns: [...args.columns],
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "customer_e164", op: "in", value: [...args.phones] }
+        {
+          or: [
+            [{ column: "customer_e164", op: "in", value: [...args.phones] }],
+            [{ column: "alias_e164s", op: "overlaps", value: [...args.phones] }]
+          ]
+        }
       ]
     });
   }
@@ -165,20 +170,16 @@ export async function listTaggedContacts<Row extends { updated_at: string }>(
       value: owner.employeeId
     };
     if (!owner.includeUnowned) return await boxRead([mineFilter]);
-    // The box grammar has no OR, so central's "mine OR unclaimed" leg
-    // becomes two reads merged here. This one IS exact, unlike the alias
-    // lookup above: the two legs are disjoint (a row is either stamped with
-    // this owner or carries no owner at all), and the top `limit` of their
-    // union is always contained in the union of each leg's own top `limit`,
-    // so the merge returns precisely the rows the single central query
-    // would have.
-    const [mine, unowned] = await Promise.all([
-      boxRead([mineFilter]),
-      boxRead([{ column: "owner_employee_id", op: "is", value: null }])
+    // Central's "mine OR unclaimed" leg, now expressible directly. This used
+    // to be two reads merged and re-sorted in JS; that merge was exact (the
+    // legs are disjoint, so the top `limit` of the union is contained in the
+    // union of each leg's own top `limit`), but it cost a second tunnel
+    // round-trip and a sort the database was already doing.
+    return await boxRead([
+      {
+        or: [[mineFilter], [{ column: "owner_employee_id", op: "is", value: null }]]
+      }
     ]);
-    return [...mine, ...unowned]
-      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0))
-      .slice(0, args.limit);
   }
   let query = db
     .from("contacts")

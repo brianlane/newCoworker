@@ -278,7 +278,10 @@ describe("listEmailLog organize filters", () => {
       folder: "Sales",
       limit: 10
     });
-    expect(rows.map((r) => r.id)).toEqual(["a"]);
+    // Both rows come back now: the box applied the label filter itself, so
+    // whatever it returns IS the answer. Row "b" is only in the stub to prove
+    // this function no longer second-guesses the query it sent.
+    expect(rows.map((r) => r.id)).toEqual(["a", "b"]);
   });
 
   it("pushes archived_at is null on the VPS inbox filter", async () => {
@@ -297,7 +300,11 @@ describe("listEmailLog organize filters", () => {
     );
   });
 
-  it("pushes archived_at gte on the VPS archived filter", async () => {
+  it("pushes a real IS NOT NULL on the VPS archived filter", async () => {
+    // Was a `gte "1970-01-01"` sentinel, because the box grammar could not
+    // say IS NOT NULL at all. `negate` on the is-null op says it directly, so
+    // the box and central's `.not(archived_at, "is", null)` now agree by
+    // construction rather than by an argument about timestamp ranges.
     vi.mocked(isVpsReadMode).mockResolvedValue(true);
     vi.mocked(readMovedRows).mockResolvedValue([]);
     await listEmailLog(BIZ, { inbox: false, limit: 5 });
@@ -305,12 +312,28 @@ describe("listEmailLog organize filters", () => {
       BIZ,
       expect.objectContaining({
         filters: expect.arrayContaining([
-          {
-            column: "archived_at",
-            op: "gte",
-            value: "1970-01-01T00:00:00.000Z"
-          }
+          { column: "archived_at", op: "is", value: null, negate: true }
         ])
+      })
+    );
+  });
+
+  it("pushes the label filter to the box instead of over-fetching and filtering in JS", async () => {
+    // The box used to lack an array-containment op, so this over-fetched
+    // limit*4 rows and filtered labels in JS: short results whenever more
+    // than 4x the page lacked the label, and case-INSENSITIVE where central's
+    // `.contains()` is case-sensitive. Both gone.
+    vi.mocked(isVpsReadMode).mockResolvedValue(true);
+    vi.mocked(readMovedRows).mockResolvedValue([]);
+    await listEmailLog(BIZ, { label: "Sales", limit: 10 });
+    expect(readMovedRows).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        filters: expect.arrayContaining([
+          { column: "labels", op: "contains", value: ["Sales"] }
+        ]),
+        // No more limit * 4.
+        limit: 10
       })
     );
   });

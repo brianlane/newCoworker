@@ -142,37 +142,36 @@ describe("email-log vps reads", () => {
     });
   });
 
-  it("listEmailLogForAddress merges from/to selects, dedupes, sorts, limits", async () => {
+  it("listEmailLogForAddress asks the box ONE OR query, and still exact-matches in JS", async () => {
     const addr = "joe_smith@x.com";
-    const a = { id: "e1", created_at: "2026-07-01T00:00:00Z", from_email: addr, to_email: null };
     const b = { id: "e2", created_at: "2026-07-03T00:00:00Z", from_email: null, to_email: "JOE_SMITH@X.COM" };
     const c = { id: "e3", created_at: "2026-07-02T00:00:00Z", from_email: addr, to_email: null };
-    const dupe = { id: "e1", created_at: "2026-07-01T00:00:00Z", from_email: addr, to_email: null };
     // A wildcard near-miss (joeXsmith) that a broken ILIKE-escape would let
-    // through, the JS exact-match post-filter must drop it.
+    // through; the JS exact-match post-filter must still drop it.
     const nearMiss = {
       id: "e9",
       created_at: "2026-07-04T00:00:00Z",
       from_email: "joeXsmith@x.com",
       to_email: null
     };
-    // Merge order e2, e1, e3 makes the desc sort exercise BOTH comparator
-    // directions (e1 sorts after e2, e3 sorts before e1).
-    vi.mocked(readMovedRows)
-      .mockResolvedValueOnce([b, nearMiss] as never)
-      .mockResolvedValueOnce([a, c, dupe] as never);
-    const rows = await listEmailLogForAddress(BIZ, "joe_smith@x.com", { limit: 2 }, centralDb({}));
+    // The box now orders and limits, so the mock returns what a single
+    // ordered query would: newest first, one row per id.
+    vi.mocked(readMovedRows).mockResolvedValueOnce([nearMiss, b, c] as never);
+    const rows = await listEmailLogForAddress(BIZ, "joe_smith@x.com", { limit: 3 }, centralDb({}));
     expect(rows.map((r) => r.id)).toEqual(["e2", "e3"]);
-    // LIKE metachars in the local-part are escaped for the box's ILIKE.
+
+    // One round-trip, not two: the OR group replaced the merge-in-JS.
     const calls = vi.mocked(readMovedRows).mock.calls;
+    expect(calls).toHaveLength(1);
+    // LIKE metachars in the local-part are still escaped for the box's ILIKE.
     expect(calls[0][1]).toMatchObject({
       filters: expect.arrayContaining([
-        { column: "from_email", op: "ilike", value: "joe\\_smith@x.com" }
-      ])
-    });
-    expect(calls[1][1]).toMatchObject({
-      filters: expect.arrayContaining([
-        { column: "to_email", op: "ilike", value: "joe\\_smith@x.com" }
+        {
+          or: [
+            [{ column: "from_email", op: "ilike", value: "joe\\_smith@x.com" }],
+            [{ column: "to_email", op: "ilike", value: "joe\\_smith@x.com" }]
+          ]
+        }
       ])
     });
   });
@@ -1230,22 +1229,33 @@ describe("dashboard route vps reads", () => {
       label: "tasks"
     });
 
-    it("matches lead phones on the box by PRIMARY number only", async () => {
+    it("matches lead phones on the box by primary number OR alias, like central", async () => {
+      // This used to be a documented degradation: the box grammar had no OR
+      // and no array-overlap, so a lead keyed on a merged-away alias resolved
+      // to no contact at all. `or` + `overlaps` retired the trade, and this
+      // asserts the box now sends exactly what central's
+      // `customer_e164.in.(...),alias_e164s.ov.{...}` means.
       vi.mocked(readMovedRows).mockResolvedValue([
-        { customer_e164: PHONE, alias_e164s: null }
+        { customer_e164: OTHER, alias_e164s: [PHONE] }
       ] as never);
       const { db, chains } = trackedDb({ data: [], error: null });
       const rows = await listContactsByLeadPhone<{ customer_e164: string }>(ctx(true, db), {
         columns: ["customer_e164", "alias_e164s"],
         phones: [PHONE, OTHER]
       });
-      expect(rows).toEqual([{ customer_e164: PHONE, alias_e164s: null }]);
+      // The merged-away alias resolves to its surviving primary row.
+      expect(rows).toEqual([{ customer_e164: OTHER, alias_e164s: [PHONE] }]);
       expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
         table: "contacts",
         columns: ["customer_e164", "alias_e164s"],
         filters: [
           { column: "business_id", op: "eq", value: BIZ },
-          { column: "customer_e164", op: "in", value: [PHONE, OTHER] }
+          {
+            or: [
+              [{ column: "customer_e164", op: "in", value: [PHONE, OTHER] }],
+              [{ column: "alias_e164s", op: "overlaps", value: [PHONE, OTHER] }]
+            ]
+          }
         ]
       });
       expect(chains).toHaveLength(0);
@@ -1381,21 +1391,14 @@ describe("dashboard route vps reads", () => {
       });
     });
 
-    it("splits the one-person-roster OR into two capped box reads and merges", async () => {
-      vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
-        const filters = (request as { filters: Array<{ op: string }> }).filters;
-        const owned = filters.some((f) => f.op === "eq" && "value" in f && f.value === "m-dave");
-        return (
-          owned
-            ? [{ customer_e164: PHONE, updated_at: "2026-07-02T00:00:00Z" }]
-            : [
-                { customer_e164: OTHER, updated_at: "2026-07-03T00:00:00Z" },
-                // Ties with the owned row below, so the merge's tie-break
-                // (stable, owned leg first) is exercised too.
-                { customer_e164: "+16025550777", updated_at: "2026-07-02T00:00:00Z" }
-              ]
-        ) as never;
-      });
+    it("sends the one-person-roster OR to the box as a single query", async () => {
+      // Was two capped reads merged and re-sorted in JS. That merge was
+      // exact, but it cost a second tunnel round-trip and a sort the database
+      // was already doing; the OR group replaced both.
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { customer_e164: OTHER, updated_at: "2026-07-03T00:00:00Z" },
+        { customer_e164: PHONE, updated_at: "2026-07-02T00:00:00Z" }
+      ] as never);
       const { db } = trackedDb({ data: [], error: null });
       const rows = await listTaggedContacts<{ customer_e164: string; updated_at: string }>(
         ctx(true, db),
@@ -1405,13 +1408,16 @@ describe("dashboard route vps reads", () => {
           owner: { employeeId: "m-dave", includeUnowned: true }
         }
       );
-      // Merged newest-first and re-capped: exactly the rows the single
-      // central `eq OR is null` query would have returned.
       expect(rows.map((r) => r.customer_e164)).toEqual([OTHER, PHONE]);
-      expect(readMovedRows).toHaveBeenCalledTimes(2);
-      expect(vi.mocked(readMovedRows).mock.calls[1][1]).toMatchObject({
+      expect(readMovedRows).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
         filters: expect.arrayContaining([
-          { column: "owner_employee_id", op: "is", value: null }
+          {
+            or: [
+              [{ column: "owner_employee_id", op: "eq", value: "m-dave" }],
+              [{ column: "owner_employee_id", op: "is", value: null }]
+            ]
+          }
         ]),
         limit: 2
       });

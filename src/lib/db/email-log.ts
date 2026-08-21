@@ -198,12 +198,7 @@ export async function listEmailLog(
       filters.push({ column: "direction", op: "eq", value: options.direction });
     }
     if (options.inbox === false) {
-      // Data API has no "is not null"; any real timestamp beats null in gte.
-      filters.push({
-        column: "archived_at",
-        op: "gte",
-        value: "1970-01-01T00:00:00.000Z"
-      });
+      filters.push({ column: "archived_at", op: "is", value: null, negate: true });
     }
     if (options.unreadOnly) {
       filters.push({ column: "is_read", op: "eq", value: false });
@@ -214,20 +209,17 @@ export async function listEmailLog(
     if (options.sources?.length) {
       filters.push({ column: "source", op: "in", value: options.sources });
     }
-    // Box path has no contains-array filter; filter labels in JS after fetch.
+    if (options.label) {
+      filters.push({ column: "labels", op: "contains", value: [options.label] });
+    }
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
       columns: EMAIL_LOG_COLUMNS,
       filters,
       order: [{ column: "created_at", ascending: false }],
-      limit: options.label ? Math.min(limit * 4, EMAIL_LOG_MAX_LIMIT) : limit
+      limit
     });
-    let out = rows.map(normalizeEmailLogRow);
-    if (options.label) {
-      const wanted = options.label.toLowerCase();
-      out = out.filter((r) => r.labels.some((l) => l.toLowerCase() === wanted)).slice(0, limit);
-    }
-    return out.slice(0, limit);
+    return rows.map(normalizeEmailLogRow);
   }
   let q = db
     .from("email_log")
@@ -375,48 +367,36 @@ export async function listEmailLogForAddress(
   if (vpsReadMode) {
     // The generic data-api contract has no OR filter groups, so the
     // from/to disjunction becomes two selects merged + deduped by id.
-    // Two tunnel round-trips for a profile rollup is acceptable; adding
-    // OR to the wire contract for one call site is not.
+    // One query now that the wire grammar has OR groups: this used to be two
+    // round-trips merged in JS, with a comment saying adding OR "for one call
+    // site is not" worth it. It is now three call sites, and this mirrors
+    // central's .or(from_email.ilike,to_email.ilike) exactly.
     const likeValue = escapeLikeLiteral(normalized);
-    const base = {
-      table: "email_log" as const,
+    const rows = await readMovedRows<EmailLogRow>(businessId, {
+      table: "email_log",
       columns: EMAIL_LOG_COLUMNS,
       order: [{ column: "created_at", ascending: false }],
-      limit
-    };
-    const [fromRows, toRows] = await Promise.all([
-      readMovedRows<EmailLogRow>(businessId, {
-        ...base,
-        filters: [
-          { column: "business_id", op: "eq", value: businessId },
-          { column: "deleted_at", op: "is", value: null },
-          { column: "from_email", op: "ilike", value: likeValue }
-        ]
-      }),
-      readMovedRows<EmailLogRow>(businessId, {
-        ...base,
-        filters: [
-          { column: "business_id", op: "eq", value: businessId },
-          { column: "deleted_at", op: "is", value: null },
-          { column: "to_email", op: "ilike", value: likeValue }
-        ]
-      })
-    ]);
-    const byId = new Map<string, EmailLogRow>();
-    for (const row of [...fromRows, ...toRows]) byId.set(row.id, row);
+      limit,
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null },
+        {
+          or: [
+            [{ column: "from_email", op: "ilike", value: likeValue }],
+            [{ column: "to_email", op: "ilike", value: likeValue }]
+          ]
+        }
+      ]
+    });
     // Belt-and-braces exact match (case-insensitive): the escaped ILIKE is
     // already literal under PostgreSQL's default backslash escape, but the
     // rollup must never show someone else's mail if a server setting ever
     // changes LIKE escape semantics, mirror findCustomerByEmail's JS
     // re-check.
     const wanted = normalized.toLowerCase();
-    return [...byId.values()]
-      .filter(
-        (row) =>
-          row.from_email?.toLowerCase() === wanted || row.to_email?.toLowerCase() === wanted
-      )
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
-      .slice(0, limit);
+    return rows.filter(
+      (row) => row.from_email?.toLowerCase() === wanted || row.to_email?.toLowerCase() === wanted
+    );
   }
   // See listCustomerMemories for the full rationale on this two-step escape.
   const escapedForLike = normalized.replace(/[%_]/g, (m) => `\\${m}`);

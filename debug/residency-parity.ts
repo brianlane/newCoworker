@@ -35,6 +35,40 @@ const { DataApiClient } = await import("../src/lib/residency/client.ts");
 const db = await createSupabaseServiceClient();
 const api = new DataApiClient(businessId, baseUrl ? { baseUrl } : {});
 
+/**
+ * Grammar check, BEFORE counting anything.
+ *
+ * The platform's routed reads use `or` groups, `contains`/`overlaps` and
+ * negation. A box deployed before the grammar widened refuses those with
+ * invalid_request, which surfaces as a ResidencyReadError on the very first
+ * dashboard read after the flip. Counts would still match perfectly, so the
+ * parity gate would happily say PASS and the flip would break the dashboard
+ * anyway. Ask the box what it speaks first.
+ */
+async function assertBoxSpeaksCurrentGrammar(): Promise<void> {
+  const { DATA_API_FILTER_OPS } = await import("../src/lib/residency/contract.ts");
+  const health = await api.health();
+  const ops: string[] = Array.isArray(health.ops) ? health.ops : [];
+  if (ops.length === 0) {
+    console.error(
+      "\n[parity] FAIL, this box predates the filter-grammar handshake (/v1/health has no `ops`). " +
+        "Redeploy it before flipping: the routed reads use OR groups and array operators it cannot compile."
+    );
+    process.exit(1);
+  }
+  const missing = DATA_API_FILTER_OPS.filter((op) => !ops.includes(op));
+  if (missing.length > 0 || health.orGroups !== true) {
+    console.error(
+      `\n[parity] FAIL, box grammar is behind the platform: missing ops [${missing.join(", ")}]` +
+        `${health.orGroups === true ? "" : ", no OR-group support"}. Redeploy the data-api.`
+    );
+    process.exit(1);
+  }
+  console.log(`[parity] box grammar OK (${ops.length} ops, OR groups)`);
+}
+
+await assertBoxSpeaksCurrentGrammar();
+
 /** Tables whose business scoping goes through a parent id list. */
 const CHILD_PARENT: Record<string, { parent: string; fk: string }> = {
   dashboard_chat_messages: { parent: "dashboard_chat_threads", fk: "thread_id" },
