@@ -16,6 +16,8 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { LocalTime } from "@/components/LocalTime";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { INDUSTRY_OPTIONS, type IntakeAnswers } from "@/lib/white-glove/template";
 import { buildIntakeApplyPlan } from "@/lib/white-glove/apply";
 
@@ -38,19 +40,6 @@ export type ApplyBusinessOption = {
   name: string;
   ownerEmail: string;
 };
-
-/**
- * "8/21/2026, 12:56 PM" in the admin's own timezone. The completion moment
- * matters (a build should start while the prospect is warm), so the date
- * alone undersells how fresh a submission is.
- */
-function formatCompletedAt(iso: string): string {
-  const d = new Date(iso);
-  return `${d.toLocaleDateString()}, ${d.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit"
-  })}`;
-}
 
 /**
  * Preview + confirm for applying a completed intake to a tenant. The preview
@@ -388,17 +377,29 @@ export function WhiteGloveIntakesPanel({
                     )}
                   </p>
                   <p className="text-xs text-parchment/40">
-                    {i.status === "completed"
-                      ? `Completed ${
-                          i.completed_at ? formatCompletedAt(i.completed_at) : ""
-                        }${
-                          i.applied_at
-                            ? `, applied ${new Date(i.applied_at).toLocaleDateString()}`
-                            : ""
-                        }`
-                      : i.status === "revoked"
-                        ? "Revoked"
-                        : `Created ${new Date(i.created_at).toLocaleDateString()}, waiting for answers`}
+                    {/* LocalTime/LocalDateTime render hydration-safe local
+                        timestamps: a bare toLocaleString here would SSR in
+                        UTC and mismatch the browser's first paint. The
+                        completion stamp carries the TIME, the build should
+                        start while the prospect is still warm. */}
+                    {i.status === "completed" ? (
+                      <>
+                        Completed{" "}
+                        {i.completed_at ? <LocalTime iso={i.completed_at} /> : null}
+                        {i.applied_at ? (
+                          <>
+                            , applied <LocalDateTime iso={i.applied_at} style="date" />
+                          </>
+                        ) : null}
+                      </>
+                    ) : i.status === "revoked" ? (
+                      "Revoked"
+                    ) : (
+                      <>
+                        Created <LocalDateTime iso={i.created_at} style="date" />,
+                        waiting for answers
+                      </>
+                    )}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">
