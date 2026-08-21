@@ -117,7 +117,11 @@ describe.each(CATALOGS)("comparison copy (%s)", (_locale, compare) => {
 describe("competitor claims", () => {
   it("carries the sourcing note that keeps figures honest", () => {
     const page = (en.marketing as Catalog).comparePage as Record<string, string>;
-    expect(page.tableSubtitle).toContain("July 2026");
+    // The note is shared by every entry, so it has to name every month any
+    // entry was sourced in: July 2026 for the first four, August 2026 for
+    // Follow Up Boss. Adding an entry sourced later means widening this.
+    expect(page.tableSubtitle).toContain("July and August 2026");
+    expect(page.sourcedNote).toContain("July and August 2026");
     expect(page.sourcedNote).toContain("{name}");
   });
 });

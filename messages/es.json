@@ -523,6 +523,35 @@
           "description": "Elige exactamente qué eventos te llegan (por SMS, correo o panel) y cuándo."
         }
       },
+      "pipeline": {
+        "eyebrow": "Pipeline",
+        "title": "El prospecto, el negocio y quién lo tiene",
+        "subtitle": "Un lugar donde aterriza el trabajo que empieza tu coworker: negocios, tareas, notas y reclamo de prospectos. Nuevo en agosto de 2026.",
+        "deals": {
+          "title": "Negocios sobre un prospecto",
+          "description": "Ponle un valor, una fecha de cierre y una comisión a un prospecto, muévelo de abierto a bajo contrato y a ganado o perdido, y ve qué cerró realmente cada responsable."
+        },
+        "todos": {
+          "title": "Tareas asignables",
+          "description": "Dale a un compañero una tarea con fecha límite, ligada a un negocio, y ve qué está vencido. Quien la recibe llega por mensaje, así que nunca necesita acceso al panel."
+        },
+        "notes": {
+          "title": "Notas de contacto",
+          "description": "Notas de verdad, con autor y fecha, en la misma línea de tiempo que las llamadas, los mensajes y los correos, en lugar de un solo bloque que todos sobrescriben."
+        },
+        "claiming": {
+          "title": "Reclama un prospecto sin dueño",
+          "description": "Filtra el tablero a los prospectos que nadie tiene y reclama uno con un clic, o deja que un compañero lo reclame respondiendo 1 al mensaje de aviso. Un contacto, un responsable."
+        },
+        "bulk": {
+          "title": "Acciones masivas de contactos",
+          "description": "Selecciona muchos contactos y etiquétalos, quítales la etiqueta, asígnales responsable o expórtalos de una vez, hasta 200 por tanda. Cambiar etiquetas dispara tus automatizaciones, y te lo decimos antes de confirmar."
+        },
+        "crmImport": {
+          "title": "Importa desde Follow Up Boss",
+          "description": "Sube el CSV que exportas de Follow Up Boss y traemos tus contactos, etiquetas, etapa y fuente del prospecto, después de mostrarte qué trae el archivo. Las notas y los negocios no vienen en esa exportación, así que no llegan con él."
+        }
+      },
       "platform": {
         "eyebrow": "Plataforma",
         "title": "Una plataforma privada, no un bot compartido",
@@ -1472,6 +1501,71 @@
         "ctaTitle": "Deja de aprobar borradores",
         "ctaSubtitle": "Listo en minutos, con garantía de devolución de 30 días."
       },
+      "followUpBoss": {
+        "name": "Follow Up Boss",
+        "teaser": "Un CRM maduro donde trabajan tus agentes, frente a un coworker que trabaja el prospecto solo.",
+        "metaTitle": "New Coworker frente a Follow Up Boss",
+        "metaDescription": "Follow Up Boss es un CRM inmobiliario desde $69 por usuario al mes que organiza los prospectos de tu equipo. New Coworker contesta el teléfono y agenda la cita por un precio fijo por negocio. Una comparación honesta y con fuentes, incluidas las dos filas donde gana Follow Up Boss.",
+        "ogTitle": "New Coworker frente a Follow Up Boss",
+        "ogDescription": "Un CRM donde trabajan tus agentes frente a un coworker que hace el trabajo. Una comparación honesta.",
+        "heroEyebrow": "New Coworker frente a Follow Up Boss",
+        "heroTitle": "Ellos organizan el trabajo.",
+        "heroHighlight": "Nosotros lo hacemos.",
+        "heroSubtitle": "Follow Up Boss es un CRM inmobiliario maduro que reparte los prospectos entre tus agentes y les insiste hasta que alguien llama. New Coworker es el que de verdad contesta, califica y agenda. Si tienes un equipo completo trabajando prospectos todo el día, Follow Up Boss es la mejor compra, y esta página lo dice sin rodeos.",
+        "themColumn": "Follow Up Boss",
+        "row1": {
+          "label": "Qué estás comprando",
+          "us": "Un coworker con IA que contesta el teléfono, responde por mensaje y agenda en tu calendario por su cuenta.",
+          "them": "Un CRM donde trabajan tus agentes. Organiza los prospectos y le recuerda a la gente, pero las llamadas las siguen haciendo las personas."
+        },
+        "row2": {
+          "label": "Precio",
+          "us": "Starter desde {starterMonthly} y Standard desde {standardMonthly} con plazo de 24 meses, con precio por negocio y no por asiento.",
+          "them": "Grow cuesta $69 por usuario al mes, o $58 con pago anual. Pro cuesta $499 al mes para 10 usuarios, o $416 anual. Platform cuesta $1,000 al mes para 30 usuarios, o $833 anual. Sin contrato."
+        },
+        "row3": {
+          "label": "Quién hace el trabajo",
+          "us": "El coworker contesta a las 2 de la mañana, califica a quien llama, agenda la cita y da seguimiento, y después te cuenta qué pasó.",
+          "them": "El trabajo lo hacen tus agentes. Follow Up Boss reparte el prospecto, inicia un plan de acción y le insiste a quien lo tenga asignado."
+        },
+        "row4": {
+          "label": "Profundidad de CRM para un equipo",
+          "us": "Negocios, tareas, notas de contacto, reclamo de prospectos y segmentos guardados, todo lanzado en agosto de 2026 y a propósito en su primera versión.",
+          "them": "Años de listas inteligentes, planes de acción, bandejas de equipo, reportes por agente y equipos dentro de equipos. Es en lo que son mejores."
+        },
+        "row5": {
+          "label": "Integraciones y móvil",
+          "us": "Zapier, Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, una API REST y webhooks. El panel es solo web, sin app móvil.",
+          "them": "Más de 250 integraciones, además de apps maduras de iPhone y Android donde tus agentes pueden trabajar todo el día."
+        },
+        "row6": {
+          "label": "Dónde viven tus datos",
+          "us": "Tu propio servidor dedicado, uno por negocio.",
+          "them": "Infraestructura de nube compartida, con los contactos ilimitados, la exportación a CSV y la API abierta que esperarías."
+        },
+        "themCardTitle": "Dónde Follow Up Boss es la mejor compra",
+        "themCard1": "Tienes un equipo de verdad y quieres que los prospectos los trabajen personas, no software. Sus listas inteligentes, planes de acción y reportes por agente les tomaron años, y los nuestros son nuevos.",
+        "themCard2": "Tus agentes viven en el teléfono. Sus apps de iPhone y Android son maduras y rápidas. Nosotros no tenemos app móvil.",
+        "themCard3": "Necesitas algo puntual de su catálogo de más de 250 integraciones, o ya dependes mucho de sus planes de acción y no quieres rehacerlos.",
+        "usCardTitle": "Dónde New Coworker es la mejor compra",
+        "usCard1": "Nadie contesta. El coworker atiende la llamada, responde por mensaje la que se perdió, califica y agenda, a las 2 de la mañana y en domingo, sin que nadie inicie sesión.",
+        "usCard2": "Estás pagando por asiento por agentes que casi no entran. Nosotros cobramos por negocio, así que un solo precio cubre a todos. Diez asientos en su plan Pro cuestan $416 al mes con pago anual.",
+        "usCard3": "Quieres probarlo sin comprometerte a una migración. Exporta tú mismo tus contactos de Follow Up Boss, sube el archivo aquí y deja Follow Up Boss funcionando mientras comparas.",
+        "faq1": {
+          "q": "¿Puedo pasar mis datos de Follow Up Boss?",
+          "a": "Tus contactos, sí. Los exportas tú mismo desde Follow Up Boss (People y luego Export con la casilla \"Export All Columns\" marcada) y subes ese archivo aquí. Te mostramos qué trae, incluidas las columnas que no pudimos reconocer, antes de escribir nada. Pasan los nombres, teléfonos, correos, etiquetas, etapa y fuente del prospecto. Las notas y los negocios no, porque Follow Up Boss no los incluye en esa exportación, ni tampoco las listas inteligentes ni los planes de acción. Cuenta con volver a crear esos como segmentos y AiFlows. Nunca te pedimos tu contraseña ni tu clave de API de Follow Up Boss."
+        },
+        "faq2": {
+          "q": "¿New Coworker reemplaza a Follow Up Boss?",
+          "a": "Para un agente solo o un equipo pequeño, muchas veces sí. Para una inmobiliaria que funciona con listas inteligentes, planes de acción y reportes por agente, no. Nuestros negocios, tareas y notas se lanzaron en agosto de 2026 y son deliberadamente simples. Mucha gente usa los dos: Follow Up Boss como sistema de registro y New Coworker como el que contesta."
+        },
+        "faq3": {
+          "q": "¿Mis compañeros de equipo necesitan su propio acceso?",
+          "a": "En Starter y Standard, no. El dueño asigna un prospecto y el compañero recibe un mensaje al que puede responder, así que una lista de agentes puede trabajar prospectos por teléfono sin iniciar sesión nunca. El acceso al panel para compañeros de equipo es una función Enterprise."
+        },
+        "ctaTitle": "Prueba al coworker sin dejar tu CRM",
+        "ctaSubtitle": "Sube el CSV que exportas de Follow Up Boss, mira exactamente qué trae y deja Follow Up Boss funcionando mientras comparas."
+      },
       "answeringService": {
         "name": "Servicios de contestación telefónica",
         "teaser": "Un centro de llamadas con personas que toma un recado, frente a un coworker con IA que agenda la cita.",
@@ -1553,11 +1647,11 @@
       "ctaLabel": "Comenzar",
       "tableEyebrow": "Lado a lado",
       "tableTitle": "New Coworker frente a {name}",
-      "tableSubtitle": "Sus datos reflejan los precios que publican, a julio de 2026. Donde son mejores, lo decimos.",
+      "tableSubtitle": "Sus datos reflejan los precios que publican, revisados en julio y agosto de 2026. Donde son mejores, lo decimos.",
       "usColumn": "New Coworker",
       "diffEyebrow": "La diferencia real",
       "diffTitle": "Dos cosas distintas que comprar",
-      "sourcedNote": "Las cifras de {name} provienen de sus precios publicados en julio de 2026 y pueden cambiar. Revisa sus precios actuales antes de decidir y avísanos si algo aquí quedó desactualizado.",
+      "sourcedNote": "Las cifras de {name} provienen de sus precios publicados, revisados en julio y agosto de 2026, y pueden cambiar. Revisa sus precios actuales antes de decidir y avísanos si algo aquí quedó desactualizado.",
       "faqEyebrow": "Preguntas",
       "faqTitle": "Lo que preguntan antes de cambiar"
     },

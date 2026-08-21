@@ -1,16 +1,21 @@
 import type { Metadata } from "next";
 import {
   AlarmClockCheck,
+  ArrowDownToLine,
   BarChart3,
   Bell,
   BookOpenCheck,
   Brain,
   CalendarCheck,
   Globe,
+  Handshake,
   LayoutDashboard,
+  ListChecks,
+  ListFilter,
   Mail,
   MessageSquareText,
   MessagesSquare,
+  NotebookPen,
   Phone,
   PhoneForwarded,
   PhoneIncoming,
@@ -19,6 +24,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  UserCheck,
   Users,
   Workflow,
   Zap
@@ -50,7 +56,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 type GroupDef = {
-  key: "voice" | "messaging" | "intelligence" | "automation" | "platform";
+  key: "voice" | "messaging" | "intelligence" | "automation" | "pipeline" | "platform";
   features: { key: string; Icon: Feature["Icon"] }[];
 };
 
@@ -97,6 +103,17 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "browser", Icon: Globe },
       { key: "routing", Icon: Users },
       { key: "notifications", Icon: Bell }
+    ]
+  },
+  {
+    key: "pipeline",
+    features: [
+      { key: "deals", Icon: Handshake },
+      { key: "todos", Icon: ListChecks },
+      { key: "notes", Icon: NotebookPen },
+      { key: "claiming", Icon: UserCheck },
+      { key: "bulk", Icon: ListFilter },
+      { key: "crmImport", Icon: ArrowDownToLine }
     ]
   },
   {
