@@ -2407,7 +2407,10 @@ carries no send step at all, and a test pins that.
   platform's.
 - Every pitch and every follow-up carries a working prospect-scoped
   unsubscribe link. Unsubscribing stamps BOTH the ledger row and any contact
-  holding that address, so a later campaign cannot reach them either.
+  holding that address, so a later campaign cannot reach them either. An
+  opt-out is honored WHATEVER state the ledger row is in: the request is about
+  the future, so a person who already answered us once and then asks to stop
+  is suppressed like anyone else. Only an already-suppressed row short-circuits.
 - Weekdays only, inside a per-tenant window in the tenant's timezone, under a
   per-tenant daily cap (12 by default) that counts follow-ups too.
 - One follow-up per prospect, ever, and any reply cancels it. Opt-out
