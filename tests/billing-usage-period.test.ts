@@ -42,6 +42,22 @@ describe("monthlyUsageResetAt", () => {
     expect(at).toBe("2027-02-28T00:00:00.000Z");
   });
 
+  it("returns null when the anchor is in the future", () => {
+    // A scheduled plan change can leave the period start ahead of now. The
+    // window has not begun and sms_billing_window_start falls back to the
+    // calendar month there, so promising the anchored end would name a reset
+    // the meter is not going to perform.
+    expect(
+      monthlyUsageResetAt("2026-12-01T00:00:00.000Z", Date.parse("2026-08-21T00:00:00.000Z"))
+    ).toBeNull();
+  });
+
+  it("still resolves an anchor that starts exactly now", () => {
+    expect(
+      monthlyUsageResetAt("2026-08-21T00:00:00.000Z", Date.parse("2026-08-21T00:00:00.000Z"))
+    ).toBe("2026-09-21T00:00:00.000Z");
+  });
+
   it("returns null without a usable period anchor", () => {
     expect(monthlyUsageResetAt(null, Date.now())).toBeNull();
     expect(monthlyUsageResetAt(undefined, Date.now())).toBeNull();

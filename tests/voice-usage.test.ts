@@ -232,8 +232,6 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
       reservedIncludedInflight: 100,
       includedHeadroomSeconds: 400,
       bonusSecondsAvailable: 120,
-      // End of the month-window the period start opens.
-      includedResetAt: "2026-05-01T00:00:00.000Z",
       // The one grant holding minutes carries no expiry in this fixture, and
       // the other holds none, so there is no date to show.
       bonusSoonestExpiresAt: null
@@ -278,8 +276,6 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
     });
     const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
     expect(snap?.stripePeriodStart).toBe("2026-07-01T00:00:00.000Z");
-    // ...and the reset date shown is that window's end, not the term end.
-    expect(snap?.includedResetAt).toBe("2026-08-01T00:00:00.000Z");
   });
 
   it("coerces missing reserved_included_seconds to zero", async () => {

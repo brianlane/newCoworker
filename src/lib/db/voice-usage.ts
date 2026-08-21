@@ -17,11 +17,6 @@ export type VoiceBillingSnapshot = {
   includedHeadroomSeconds: number;
   bonusSecondsAvailable: number;
   /**
-   * End of the month-window `stripePeriodStart` opens, i.e. when the included
-   * allowance refills. Null only when the period anchor is unparseable.
-   */
-  includedResetAt: string | null;
-  /**
    * Expiry of the soonest-expiring bonus grant that still HOLDS minutes.
    * Packs expire in tranches, so this is the next date the displayed bonus
    * balance drops. Null when no live pack has minutes left.
@@ -119,7 +114,6 @@ export async function getVoiceBillingSnapshotForBusiness(
     reservedIncludedInflight: reservedSum,
     includedHeadroomSeconds: headroom,
     bonusSecondsAvailable: bonus,
-    includedResetAt: quotaWindow.endIso,
     bonusSoonestExpiresAt: soonestExpiryAt(liveExpiries)
   };
 }

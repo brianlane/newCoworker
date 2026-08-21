@@ -11,6 +11,14 @@
  *     month. See supabase/functions/_shared/billing_period_window.ts: this
  *     is the same window the reserve RPCs key their usage rows with, so the
  *     date shown here is the date enforcement actually flips.
+ *
+ *     This has to hold DURING the text window's changeover too. The
+ *     migration floors the first anchored window at the changeover date, so
+ *     the window start only ever moves forward and the next date it changes
+ *     is the next anniversary: the same date this returns. An earlier
+ *     revision instead held tenants on the calendar window until their
+ *     anniversary, which rolled the meter on the 1st on the way there and
+ *     made this function promise a date a week late.
  *     Texts run on this same window: they used to be metered per UTC calendar
  *     month, and moved onto the anchor in the
  *     `sms_billing_window_start` migration so a tenant has one reset date
@@ -39,7 +47,14 @@ export function monthlyUsageResetAt(
   nowMs: number
 ): string | null {
   if (!periodStartIso) return null;
-  if (!Number.isFinite(new Date(periodStartIso).getTime())) return null;
+  const startMs = new Date(periodStartIso).getTime();
+  if (!Number.isFinite(startMs)) return null;
+  // Anchor in the FUTURE (a scheduled plan change, an early webhook): the
+  // window has not begun, and `sms_billing_window_start` falls back to the
+  // calendar month for exactly this case. Returning the anchored end here
+  // would promise a reset the meter is not going to perform, so hand back
+  // null and let the caller fall back the same way Postgres does.
+  if (startMs > nowMs) return null;
   return deriveMonthlyQuotaWindow(periodStartIso, nowMs).endIso;
 }
 

@@ -403,12 +403,12 @@ export default async function BillingPage(props: {
   //
   // Bonus packs are the exception and keep their own per-grant expiry.
   const nowMs = now.getTime();
-  const anchoredResetAt =
-    snapshot?.includedResetAt ??
-    monthlyUsageResetAt(subscription?.stripe_current_period_start ?? null, nowMs);
-  // Without a Stripe anchor every meter falls back to the UTC calendar month,
-  // matching sms_billing_window_start and getChatSpendSnapshotForBusiness.
-  const usageResetAt = anchoredResetAt ?? calendarMonthResetAt(nowMs);
+  const usageResetAt =
+    monthlyUsageResetAt(subscription?.stripe_current_period_start ?? null, nowMs) ??
+    // No usable Stripe anchor: every meter falls back to the UTC calendar
+    // month, matching sms_billing_window_start and
+    // getChatSpendSnapshotForBusiness.
+    calendarMonthResetAt(nowMs);
   const fmtPeriodDate = (iso: string) => formatUsagePeriodDate(iso, locale);
   const planStatus: "active" | "active_cancel_at_period_end" | "canceled_in_grace" | "pending" | "canceled" | "wiped" =
     !subscription

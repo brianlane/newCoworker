@@ -36,18 +36,27 @@ declare
   v_now_utc timestamp := (now() at time zone 'utc');
   v_n int;
   v_start date;
-  -- Changeover date. Every tenant keeps the CALENDAR window they are already
-  -- being measured against until their own anniversary next comes round, then
-  -- switches to it. Without this, flipping mid-cycle either drags pre-change
-  -- usage into the new window (blocking a tenant's texts the instant this
-  -- deploys) or drops it (their usage reads as zero and they get a second
-  -- allowance). Holding the old window until the anniversary arrives does
-  -- neither: the count never jumps, and the first anchored reset lands
-  -- exactly on the tenant's own reset date.
+  -- Changeover floor: the first anchored window never reaches back before the
+  -- date this shipped.
+  --
+  -- Re-slicing a usage window mid-cycle has no free option. Reaching back to
+  -- the anniversary drags pre-change sends into the current window and can
+  -- put a tenant over cap the instant this deploys, with their texts blocked
+  -- and no warning. Holding the old CALENDAR window until the anniversary
+  -- arrives avoids that but rolls the meter on the 1st on the way there, so
+  -- the tile would promise the anniversary while the meter reset a week
+  -- earlier (and reset twice). A floor takes the third option: the window
+  -- start only ever moves FORWARD, so the count can never jump up and no
+  -- tenant is blocked, and the next date `greatest()` changes value is
+  -- exactly the next anniversary, which is the date the billing page shows.
+  -- Display and enforcement therefore agree on every day of the transition.
+  --
+  -- The cost, paid once: sends made before this date stop counting, so a
+  -- tenant gets part of an extra allowance in their transition window.
   --
   -- Self-retiring: once every tenant has passed one anniversary (at most a
-  -- month), no anchored start predates this and the branch is dead. Safe to
-  -- delete after 2026-09-30.
+  -- month), every anchored start is later than this and the floor never
+  -- binds again. Safe to delete after 2026-09-30.
   v_changeover constant date := date '2026-08-21';
 begin
   select s.stripe_current_period_start
@@ -90,11 +99,7 @@ begin
     v_start := (v_anchor_utc + make_interval(months => v_n))::date;
   end if;
 
-  if v_start < v_changeover then
-    return date_trunc('month', v_now_utc)::date;
-  end if;
-
-  return v_start;
+  return greatest(v_start, v_changeover);
 end;
 $function$;
 
