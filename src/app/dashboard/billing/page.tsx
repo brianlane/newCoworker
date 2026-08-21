@@ -32,7 +32,6 @@ import {
 } from "@/lib/billing/usage-period";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
-import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import {
   getVoiceBonusBestUsdPerMinute,
   listVoiceBonusPacks
@@ -561,26 +560,6 @@ export default async function BillingPage(props: {
         packAddonOptions={packAddonOptions}
         currentPackAddons={currentPackAddons}
       />
-
-      {business?.tier && (
-        <Card>
-          <h2 className="text-sm font-semibold text-parchment mb-3">{t("includedUsage")}</h2>
-          <p className="text-xs text-parchment/60 leading-relaxed">
-            {voiceMinutesLine(
-              business.tier as PlanTier,
-              business.tier === "enterprise" ? business.enterprise_limits : undefined,
-              locale
-            )}
-            <br />
-            {smsMonthlyLine(
-              business.tier as PlanTier,
-              business.tier === "enterprise" ? business.enterprise_limits : undefined,
-              locale,
-              smsMonthlyCap ?? undefined
-            )}
-          </p>
-        </Card>
-      )}
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">{t("voiceBalance")}</h2>
