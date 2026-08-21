@@ -11,6 +11,7 @@ import {
   ResidencyValidationError,
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
+import { assertResidencyReplayCronScheduled } from "@/lib/residency/keep-window";
 import { assertHipaaModeAllowed } from "@/lib/hipaa/tier-gate";
 import {
   assertVpsProviderAllowed,
@@ -634,6 +635,12 @@ export async function updateBusinessBranding(
  * Flip a tenant's data-residency rollout mode. Enterprise-only for any
  * forward mode; flipping BACK to 'supabase' is always allowed (see
  * assertResidencyModeAllowed) so a downgraded tenant can never be wedged.
+ *
+ * Moving FORWARD also requires the replay cron to be running. It is
+ * currently unscheduled by design (zero residency tenants), and 'dual'
+ * replicates nothing without it: the journal just grows. README step 0 said
+ * to re-schedule it first and nothing enforced that, so this path happily
+ * offered a flip that silently did no replication at all.
  */
 export async function updateDataResidencyMode(
   id: string,
@@ -642,6 +649,7 @@ export async function updateDataResidencyMode(
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   await assertResidencyModeAllowed(id, mode, db);
+  await assertResidencyReplayCronScheduled(db, mode);
   const { error } = await db
     .from("businesses")
     .update({ data_residency_mode: mode })

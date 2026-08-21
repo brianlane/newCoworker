@@ -28,7 +28,11 @@ function mockDb() {
   return {
     from: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockResolvedValue({ error: null })
+    eq: vi.fn().mockResolvedValue({ error: null }),
+    // Moving forward also checks that the replay cron is running: without it
+    // 'dual' journals writes that never drain. Active by default here so the
+    // existing cases still exercise the tier gate and the write.
+    rpc: vi.fn().mockResolvedValue({ data: true, error: null })
   };
 }
 
@@ -42,6 +46,7 @@ describe("updateDataResidencyMode", () => {
     const db = mockDb();
     await updateDataResidencyMode("uuid-biz-1", "dual", db as never);
     expect(assertResidencyModeAllowed).toHaveBeenCalledWith("uuid-biz-1", "dual", db);
+    expect(db.rpc).toHaveBeenCalledWith("residency_replay_cron_active");
     expect(db.from).toHaveBeenCalledWith("businesses");
     expect(db.update).toHaveBeenCalledWith({ data_residency_mode: "dual" });
     expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
@@ -55,6 +60,25 @@ describe("updateDataResidencyMode", () => {
       updateDataResidencyMode("uuid-biz-1", "vps", db as never)
     ).rejects.toThrow("not enterprise");
     expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it("does not write when the replay cron is not running", async () => {
+    // The failure this prevents is silent: the flip succeeds, the journal
+    // fills, and nothing ever replicates to the box.
+    const db = mockDb();
+    db.rpc.mockResolvedValue({ data: false, error: null });
+    await expect(
+      updateDataResidencyMode("uuid-biz-1", "dual", db as never)
+    ).rejects.toThrow(/edge-residency-replay/);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it("still allows turning residency back OFF with the cron down", async () => {
+    // A tenant must never be wedged forward, the same posture as the tier gate.
+    const db = mockDb();
+    db.rpc.mockResolvedValue({ data: false, error: null });
+    await updateDataResidencyMode("uuid-biz-1", "supabase", db as never);
+    expect(db.update).toHaveBeenCalledWith({ data_residency_mode: "supabase" });
   });
 
   it("falls back to the service client and throws on write error", async () => {

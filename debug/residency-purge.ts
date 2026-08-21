@@ -36,6 +36,22 @@ if (!businessId || !Number.isInteger(keepHours) || keepHours < 0) {
   process.exit(2);
 }
 
+// The engine reads several purged tables over fixed recency windows, the
+// widest of them exactly the 72h default. Cutting inside one does not error,
+// it just removes rows the coworker was about to read. Checked here for a
+// readable message; the RPC enforces it again, because it is callable
+// without this wrapper.
+const { assertKeepHoursCoversEngineWindows, ResidencyKeepWindowError } = await import(
+  "../src/lib/residency/keep-window.ts"
+);
+try {
+  assertKeepHoursCoversEngineWindows(keepHours);
+} catch (err) {
+  if (!(err instanceof ResidencyKeepWindowError)) throw err;
+  console.error(`[purge] ABORT: ${err.message}`);
+  process.exit(2);
+}
+
 const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
 const db = await createSupabaseServiceClient();
 
