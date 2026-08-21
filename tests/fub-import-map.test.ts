@@ -1,367 +1,248 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  FUB_EXTERNAL_SOURCE,
+  FUB_HEADER_PATTERNS,
   FUB_STAGE_TO_LIFECYCLE_TAG,
-  dealStatusFromStageName,
   fubStageTag,
-  mapFubDeal,
-  mapFubNote,
-  mapFubPerson,
-  stripHtml
+  hasIdentityColumn,
+  mapFubCsvRow,
+  matchFubHeaders,
+  splitTagCell,
+  type FubHeaderMap
 } from "@/lib/fub-import/map";
-import { NOTE_AUTHOR_LABEL_MAX, NOTE_BODY_MAX } from "@/lib/notes/core";
-import { MAX_DEAL_TITLE_LENGTH, MAX_DEAL_VALUE_CENTS } from "@/lib/deals/core";
+import { normalizeHeader } from "@/lib/csv/csv";
 
-const NOW = "2026-08-20T12:00:00.000Z";
+/** Headers the way parseCsv hands them over (lowercased, spaces to _). */
+function headers(...raw: string[]): string[] {
+  return raw.map(normalizeHeader);
+}
+
+function mapOf(...raw: string[]): FubHeaderMap {
+  return matchFubHeaders(headers(...raw)).map;
+}
 
 describe("fubStageTag", () => {
-  it("maps every fixed FUB stage to its lifecycle tag, case-insensitively", () => {
-    expect(fubStageTag("Lead")).toBe("New Lead");
-    expect(fubStageTag("HOT PROSPECT")).toBe("Engaged");
-    expect(fubStageTag("nurture")).toBe("Contacted");
-    expect(fubStageTag("Attempted Contact")).toBe("Contacted");
-    expect(fubStageTag("contacted")).toBe("Contacted");
-    expect(fubStageTag("Active Client")).toBe("Engaged");
-    expect(fubStageTag("Pending")).toBe("Booked");
-    // The table is the contract: every key resolves.
-    for (const key of Object.keys(FUB_STAGE_TO_LIFECYCLE_TAG)) {
-      expect(fubStageTag(key)).toBe(FUB_STAGE_TO_LIFECYCLE_TAG[key]);
+  it("maps every documented FUB default stage onto a lifecycle tag", () => {
+    // The map is the contract; asserting the table itself would restate it,
+    // so this walks every key through the function callers actually use.
+    for (const [stage, tag] of Object.entries(FUB_STAGE_TO_LIFECYCLE_TAG)) {
+      expect(fubStageTag(stage)).toBe(tag);
     }
   });
 
-  it("falls back to a fub:<stage> tag, clamped to the tag length cap", () => {
-    expect(fubStageTag("Past Client")).toBe("fub:past client");
-    expect(fubStageTag(`Very${"y".repeat(60)} Custom`)).toHaveLength(40);
+  it("is case and whitespace insensitive", () => {
+    expect(fubStageTag("  Hot Prospect ")).toBe("Engaged");
+    expect(fubStageTag("LEAD")).toBe("New Lead");
   });
 
-  it("returns null for blank stages", () => {
-    expect(fubStageTag("")).toBeNull();
+  it("keeps an unmapped custom stage as a fub: tag rather than dropping it", () => {
+    expect(fubStageTag("Past Client")).toBe("fub:past client");
+  });
+
+  it("clamps a very long custom stage to the tag length cap", () => {
+    const tag = fubStageTag("x".repeat(200));
+    expect(tag).toHaveLength(40);
+    expect(tag?.startsWith("fub:xxx")).toBe(true);
+  });
+
+  it("returns null for blank, null and undefined", () => {
     expect(fubStageTag("   ")).toBeNull();
     expect(fubStageTag(null)).toBeNull();
     expect(fubStageTag(undefined)).toBeNull();
   });
 });
 
-describe("mapFubPerson", () => {
-  it("keys by the first phone that normalizes, keeping the email on the side", () => {
-    const mapped = mapFubPerson({
-      id: 7,
-      name: "Jane Doe",
-      stage: "Lead",
-      source: "Zillow",
-      tags: ["buyer"],
-      emails: [{ value: "Jane@Example.com" }],
-      phones: [{ value: "not-a-number" }, { value: "(602) 555-1234" }]
-    });
-    expect(mapped).toEqual({
-      ok: true,
-      value: {
-        key: "+16025551234",
-        email: "jane@example.com",
-        name: "Jane Doe",
-        leadSource: "Zillow",
-        tags: ["New Lead", "buyer"]
-      }
-    });
-  });
-
-  it("keys by email when there is no usable phone", () => {
-    const mapped = mapFubPerson({
-      id: 8,
-      firstName: "Sam",
-      lastName: "Okoye",
-      emails: [{ value: "sam@example.com" }]
-    });
-    expect(mapped).toEqual({
-      ok: true,
-      value: {
-        key: "email:sam@example.com",
-        email: "sam@example.com",
-        name: "Sam Okoye",
-        leadSource: null,
-        tags: []
-      }
-    });
-  });
-
-  it("skips a person with no usable phone or email, naming them in the reason", () => {
-    const mapped = mapFubPerson({ id: 9, phones: [{ value: "abc" }], emails: [{ value: "nope" }] });
-    expect(mapped).toEqual({
-      ok: false,
-      reason: "person 9: no usable phone number or email address"
-    });
-  });
-
-  it("tolerates missing arrays and empty values", () => {
-    const mapped = mapFubPerson({ id: 10, phones: [{ value: null }, {}], emails: null });
-    expect(mapped.ok).toBe(false);
-    const nullEmailValues = mapFubPerson({
-      id: 10,
-      phones: [{ value: "+16025559999" }],
-      emails: [{ value: null }, {}]
-    });
-    expect(nullEmailValues.ok && nullEmailValues.value.email).toBeNull();
-  });
-
-  it("builds the name from first/last only when the full name is blank, else null", () => {
-    const fromParts = mapFubPerson({
-      id: 11,
-      name: "  ",
-      firstName: " Ana ",
-      phones: [{ value: "+16025550000" }]
-    });
-    expect(fromParts.ok && fromParts.value.name).toBe("Ana");
-    const nameless = mapFubPerson({ id: 12, phones: [{ value: "+16025550001" }] });
-    expect(nameless.ok && nameless.value.name).toBeNull();
-  });
-
-  it("clamps lead source to the column cap and drops blanks", () => {
-    const long = mapFubPerson({
-      id: 13,
-      source: "s".repeat(300),
-      phones: [{ value: "+16025550002" }]
-    });
-    expect(long.ok && long.value.leadSource).toHaveLength(120);
-    const blank = mapFubPerson({ id: 14, source: "  ", phones: [{ value: "+16025550003" }] });
-    expect(blank.ok && blank.value.leadSource).toBeNull();
-  });
-
-  it("normalizes stage tag + passthrough tags together (dedup, first spelling wins)", () => {
-    const mapped = mapFubPerson({
-      id: 15,
-      stage: "Lead",
-      tags: ["new lead", "VIP", "vip"],
-      phones: [{ value: "+16025550004" }]
-    });
-    expect(mapped.ok && mapped.value.tags).toEqual(["New Lead", "VIP"]);
-  });
-});
-
-describe("stripHtml", () => {
-  it("turns breaks and block closers into newlines and drops other tags", () => {
-    expect(stripHtml("<p>Hello<br/>there</p><div>friend</div>")).toBe("Hello\nthere\nfriend");
-  });
-
-  it("decodes the common entities and collapses whitespace", () => {
-    expect(stripHtml("A &amp; B &lt;c&gt; &nbsp; &#39;d&#039; &quot;e&quot;   \n\n\n\nf")).toBe(
-      "A & B <c>   'd' \"e\"\n\nf"
+describe("matchFubHeaders", () => {
+  it("matches the plain export headers", () => {
+    const { map } = matchFubHeaders(
+      headers("First Name", "Last Name", "Email", "Phone", "Stage", "Source", "Tags")
     );
+    expect(map.firstName).toEqual(["first_name"]);
+    expect(map.lastName).toEqual(["last_name"]);
+    expect(map.email).toEqual(["email"]);
+    expect(map.phone).toEqual(["phone"]);
+    expect(map.stage).toEqual(["stage"]);
+    expect(map.source).toEqual(["source"]);
+    expect(map.tags).toEqual(["tags"]);
   });
 
-  it("decodes every supported entity exactly once, case-insensitively", () => {
-    const entities: [string, string][] = [
-      ["&nbsp;", " "],
-      ["&amp;", "&"],
-      ["&lt;", "<"],
-      ["&gt;", ">"],
-      ["&quot;", '"'],
-      ["&#39;", "'"],
-      ["&#039;", "'"]
-    ];
-    for (const [entity, decoded] of entities) {
-      expect(stripHtml(`x${entity}x`)).toBe(`x${decoded}x`);
-      expect(stripHtml(`x${entity.toUpperCase()}x`)).toBe(`x${decoded}x`);
-    }
+  it("collects every numbered phone and email column in file order", () => {
+    const map = mapOf("Phone 1", "Phone 2", "Email 1", "Email 2", "Mobile Phone");
+    expect(map.phone).toEqual(["phone_1", "phone_2", "mobile_phone"]);
+    expect(map.email).toEqual(["email_1", "email_2"]);
   });
 
-  it("strips nested tag constructions down to text, leaving no tag behind", () => {
-    const out = stripHtml("<scr<script>ipt>alert(1)</script>");
-    expect(out).not.toMatch(/<[^>]*>/);
-    expect(out).not.toContain("<script");
-    expect(out).toBe("ipt>alert(1)");
+  it("accepts the label variants an export or a hand-edited sheet uses", () => {
+    expect(mapOf("Full Name").name).toEqual(["full_name"]);
+    expect(mapOf("Contact Name").name).toEqual(["contact_name"]);
+    expect(mapOf("Lead Source").source).toEqual(["lead_source"]);
+    expect(mapOf("Lead Stage").stage).toEqual(["lead_stage"]);
+    expect(mapOf("Email Address").email).toEqual(["email_address"]);
+    expect(mapOf("Cell").phone).toEqual(["cell"]);
+    expect(mapOf("Tag").tags).toEqual(["tag"]);
+    expect(mapOf("First").firstName).toEqual(["first"]);
   });
 
-  it("decodes an escaped entity once: &amp;lt; stays the text &lt;", () => {
-    expect(stripHtml("&amp;lt;")).toBe("&lt;");
-    expect(stripHtml("&amp;lt;script&amp;gt;")).toBe("&lt;script&gt;");
-    expect(stripHtml("&amp;amp;")).toBe("&amp;");
+  it("keeps the FIRST column for a single-value field, so a later one cannot shadow it", () => {
+    const map = mapOf("Name", "Contact Name");
+    expect(map.name).toEqual(["name"]);
   });
 
-  it("keeps comparison text intact: entities decode after tags are stripped", () => {
-    expect(stripHtml("5 &lt; 10 &gt; 3")).toBe("5 < 10 > 3");
+  it("reports every column nothing claimed, so a dropped column is visible", () => {
+    const { unmatched } = matchFubHeaders(
+      headers("Phone", "Background", "Birthday", "Assigned Agent")
+    );
+    expect(unmatched).toEqual(["background", "birthday", "assigned_agent"]);
+  });
+
+  it("claims a header for exactly one field", () => {
+    // "name" also matches nothing else, but first_name must not be eaten by
+    // the `name` pattern before firstName sees it.
+    const map = mapOf("First Name");
+    expect(map.firstName).toEqual(["first_name"]);
+    expect(map.name).toEqual([]);
+  });
+
+  it("has a pattern for every field it declares", () => {
+    const map = mapOf();
+    expect(Object.keys(map).sort()).toEqual(Object.keys(FUB_HEADER_PATTERNS).sort());
   });
 });
 
-describe("mapFubNote", () => {
-  it("joins subject and body, strips HTML bodies, and keeps FUB timestamps", () => {
-    const mapped = mapFubNote(
+describe("hasIdentityColumn", () => {
+  it("is true when either a phone or an email column exists", () => {
+    expect(hasIdentityColumn(mapOf("Phone"))).toBe(true);
+    expect(hasIdentityColumn(mapOf("Email"))).toBe(true);
+  });
+
+  it("is false for a file with names but nothing to key a person by", () => {
+    expect(hasIdentityColumn(mapOf("First Name", "Last Name", "Stage"))).toBe(false);
+  });
+});
+
+describe("splitTagCell", () => {
+  it("splits on comma, semicolon and pipe, trimming and dropping blanks", () => {
+    expect(splitTagCell("buyer, seller ;; vip|  ")).toEqual(["buyer", "seller", "vip"]);
+  });
+
+  it("returns nothing for an empty cell", () => {
+    expect(splitTagCell("   ")).toEqual([]);
+  });
+});
+
+describe("mapFubCsvRow", () => {
+  const map = mapOf(
+    "First Name",
+    "Last Name",
+    "Phone 1",
+    "Phone 2",
+    "Email 1",
+    "Stage",
+    "Source",
+    "Tags"
+  );
+
+  it("keys on the first usable phone and keeps the address on email", () => {
+    const out = mapFubCsvRow(
       {
-        id: 42,
-        subject: "Call recap",
-        body: "<p>Went&nbsp;great</p>",
-        isHtml: true,
-        createdBy: "Agent Amy",
-        created: "2026-01-02T03:04:05Z",
-        updated: "2026-01-03T03:04:05Z"
+        first_name: "Jane",
+        last_name: "Doe",
+        phone_1: "not a number",
+        phone_2: "(602) 555-1234",
+        email_1: "jane@example.com",
+        stage: "Lead",
+        source: "Zillow",
+        tags: "buyer, vip"
       },
-      NOW
+      map,
+      2
     );
-    expect(mapped).toEqual({
-      ok: true,
-      value: {
-        author_label: "Agent Amy",
-        body: "Call recap\n\nWent great",
-        external_source: FUB_EXTERNAL_SOURCE,
-        external_id: "42",
-        created_at: "2026-01-02T03:04:05Z",
-        updated_at: "2026-01-03T03:04:05Z"
-      }
-    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.key).toBe("+16025551234");
+    expect(out.value.email).toBe("jane@example.com");
+    expect(out.value.name).toBe("Jane Doe");
+    expect(out.value.leadSource).toBe("Zillow");
+    expect(out.value.tags).toContain("New Lead");
+    expect(out.value.tags).toContain("buyer");
+    expect(out.value.tags).toContain("vip");
   });
 
-  it("skips notes that are empty once stripped", () => {
-    expect(mapFubNote({ id: 43, body: "<p>  </p>", isHtml: true }, NOW)).toEqual({
-      ok: false,
-      reason: "note 43: empty body"
-    });
+  it("falls back to the email key when no phone cell holds a number", () => {
+    const out = mapFubCsvRow({ email_1: "sam@example.com", first_name: "Sam" }, map, 3);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.key).toBe("email:sam@example.com");
+    expect(out.value.email).toBe("sam@example.com");
   });
 
-  it("keeps a subject-only note (no body at all)", () => {
-    const mapped = mapFubNote({ id: 47, subject: "Left voicemail" }, NOW);
-    expect(mapped.ok && mapped.value.body).toBe("Left voicemail");
+  it("reports the file row when a person has no usable identity at all", () => {
+    const out = mapFubCsvRow({ first_name: "Ghost", phone_1: "n/a", email_1: "nope" }, map, 7);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toContain("row 7");
+    expect(out.reason).toContain("no usable phone number or email address");
   });
 
-  it("falls back: author to a generic label, created to now, updated to created", () => {
-    const mapped = mapFubNote({ id: 44, body: "plain", created: "garbage" }, NOW);
-    expect(mapped.ok && mapped.value.author_label).toBe("Follow Up Boss");
-    expect(mapped.ok && mapped.value.created_at).toBe(NOW);
-    expect(mapped.ok && mapped.value.updated_at).toBe(NOW);
-    const withCreated = mapFubNote({ id: 45, body: "x", created: "2026-01-01T00:00:00Z" }, NOW);
-    expect(withCreated.ok && withCreated.value.updated_at).toBe("2026-01-01T00:00:00Z");
-  });
-
-  it("clamps body and author label to the platform caps", () => {
-    const mapped = mapFubNote(
-      { id: 46, body: "b".repeat(NOTE_BODY_MAX + 50), createdBy: "a".repeat(200) },
-      NOW
+  it("prefers a full name column over first plus last", () => {
+    const withFull = mapOf("Name", "First Name", "Last Name", "Phone");
+    const out = mapFubCsvRow(
+      { name: "Dr. Jane Doe", first_name: "Jane", last_name: "Doe", phone: "+16025551234" },
+      withFull,
+      2
     );
-    expect(mapped.ok && mapped.value.body).toHaveLength(NOTE_BODY_MAX);
-    expect(mapped.ok && mapped.value.author_label).toHaveLength(NOTE_AUTHOR_LABEL_MAX);
+    expect(out.ok && out.value.name).toBe("Dr. Jane Doe");
   });
-});
 
-describe("dealStatusFromStageName", () => {
-  it("checks lost before won/closed so Closed Lost never reads as a win", () => {
-    expect(dealStatusFromStageName("Closed Lost")).toBe("lost");
-    expect(dealStatusFromStageName("Lost")).toBe("lost");
-    expect(dealStatusFromStageName("Closed Won")).toBe("won");
-    expect(dealStatusFromStageName("Won!")).toBe("won");
-    expect(dealStatusFromStageName("Closed")).toBe("won");
-    expect(dealStatusFromStageName("Under Contract")).toBe("under_contract");
-    expect(dealStatusFromStageName("Pending Inspection")).toBe("under_contract");
-    expect(dealStatusFromStageName("Showing Homes")).toBe("open");
-    expect(dealStatusFromStageName(null)).toBe("open");
-    expect(dealStatusFromStageName(undefined)).toBe("open");
-  });
-});
-
-describe("mapFubDeal", () => {
-  const stages = { "3": "Closed Won", "4": "Under Contract" };
-
-  it("maps an active deal: dollars to cents, stage heuristic, close date, ids", () => {
-    const mapped = mapFubDeal(
-      {
-        id: 88,
-        name: "123 Main St",
-        price: 350000.4,
-        stageId: 4,
-        people: [{ id: 12 }],
-        projectedCloseDate: "2026-09-15T00:00:00Z",
-        status: "Active",
-        createdAt: "2026-05-01T00:00:00Z"
-      },
-      stages,
-      NOW
+  it("falls back to first plus last when the full name cell is blank", () => {
+    const withFull = mapOf("Name", "First Name", "Last Name", "Phone");
+    const out = mapFubCsvRow(
+      { name: "   ", first_name: "Jane", last_name: "Doe", phone: "+16025551234" },
+      withFull,
+      2
     );
-    expect(mapped).toEqual({
-      ok: true,
-      value: {
-        title: "123 Main St",
-        value_cents: 35000040,
-        currency: "USD",
-        expected_close_date: "2026-09-15",
-        status: "under_contract",
-        won_at: null,
-        lost_at: null,
-        external_source: FUB_EXTERNAL_SOURCE,
-        external_id: "88",
-        created_at: "2026-05-01T00:00:00Z",
-        updated_at: NOW,
-        personId: 12
-      }
-    });
+    expect(out.ok && out.value.name).toBe("Jane Doe");
   });
 
-  it("stamps won_at from enteredStageAt, then createdAt, then now", () => {
-    const base = { id: 89, stageId: 3, status: "Active" };
-    const entered = mapFubDeal(
-      { ...base, enteredStageAt: "2026-06-01T00:00:00Z", createdAt: "2026-05-01T00:00:00Z" },
-      stages,
-      NOW
+  it("leaves name, leadSource and tags empty when the file has no such columns", () => {
+    const bare = mapOf("Phone");
+    const out = mapFubCsvRow({ phone: "+16025551234" }, bare, 2);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.name).toBeNull();
+    expect(out.value.leadSource).toBeNull();
+    expect(out.value.tags).toEqual([]);
+    expect(out.value.email).toBeNull();
+  });
+
+  it("tolerates a row missing a cell the header row promised", () => {
+    // parseCsv fills every header key on every row, so this only happens to a
+    // direct caller; the guard exists so one does not read `undefined.trim()`.
+    // The header row promises a name column here and the row omits it, which
+    // is the case the full-name read has to survive.
+    const withFull = mapOf("Name", "Phone 1", "Source", "Tags");
+    const out = mapFubCsvRow({ phone_1: "+16025551234" }, withFull, 2);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.name).toBeNull();
+    expect(out.value.leadSource).toBeNull();
+    expect(out.value.tags).toEqual([]);
+  });
+
+  it("clamps a very long lead source to the column's limit", () => {
+    const out = mapFubCsvRow({ phone_1: "+16025551234", source: "x".repeat(500) }, map, 2);
+    expect(out.ok && out.value.leadSource).toHaveLength(120);
+  });
+
+  it("keeps an unmapped stage as its fub: tag alongside the file's own tags", () => {
+    const out = mapFubCsvRow(
+      { phone_1: "+16025551234", stage: "Past Client", tags: "sphere" },
+      map,
+      2
     );
-    expect(entered.ok && entered.value.won_at).toBe("2026-06-01T00:00:00Z");
-    const created = mapFubDeal({ ...base, createdAt: "2026-05-01T00:00:00Z" }, stages, NOW);
-    expect(created.ok && created.value.won_at).toBe("2026-05-01T00:00:00Z");
-    const bare = mapFubDeal(base, stages, NOW);
-    expect(bare.ok && bare.value.won_at).toBe(NOW);
-    expect(bare.ok && bare.value.created_at).toBe(NOW);
-  });
-
-  it("stamps lost_at for lost stages", () => {
-    const mapped = mapFubDeal(
-      { id: 90, stageId: 5, status: "Active", enteredStageAt: "2026-06-02T00:00:00Z" },
-      { "5": "Closed Lost" },
-      NOW
-    );
-    expect(mapped.ok && mapped.value.status).toBe("lost");
-    expect(mapped.ok && mapped.value.lost_at).toBe("2026-06-02T00:00:00Z");
-    expect(mapped.ok && mapped.value.won_at).toBeNull();
-  });
-
-  it("skips archived and deleted records, naming the state", () => {
-    expect(mapFubDeal({ id: 91, status: "Archived" }, stages, NOW)).toEqual({
-      ok: false,
-      reason: "deal 91: archived in Follow Up Boss"
-    });
-    expect(mapFubDeal({ id: 92, status: "Deleted" }, stages, NOW).ok).toBe(false);
-  });
-
-  it("treats a missing record status as active", () => {
-    expect(mapFubDeal({ id: 93 }, stages, NOW).ok).toBe(true);
-  });
-
-  it("falls back to a generated title, clamped to the deal title cap", () => {
-    const untitled = mapFubDeal({ id: 94, name: "  " }, stages, NOW);
-    expect(untitled.ok && untitled.value.title).toBe("Follow Up Boss deal 94");
-    const long = mapFubDeal({ id: 95, name: "x".repeat(500) }, stages, NOW);
-    expect(long.ok && long.value.title).toHaveLength(MAX_DEAL_TITLE_LENGTH);
-  });
-
-  it("treats zero, negative, or junk prices as unsized and caps huge ones", () => {
-    expect(mapFubDeal({ id: 96, price: 0 }, stages, NOW).ok && null).toBeFalsy();
-    const zero = mapFubDeal({ id: 96, price: 0 }, stages, NOW);
-    expect(zero.ok && zero.value.value_cents).toBeNull();
-    const negative = mapFubDeal({ id: 97, price: -5 }, stages, NOW);
-    expect(negative.ok && negative.value.value_cents).toBeNull();
-    const junk = mapFubDeal({ id: 98, price: Number.NaN }, stages, NOW);
-    expect(junk.ok && junk.value.value_cents).toBeNull();
-    const huge = mapFubDeal({ id: 99, price: 10 ** 16 }, stages, NOW);
-    expect(huge.ok && huge.value.value_cents).toBe(MAX_DEAL_VALUE_CENTS);
-  });
-
-  it("drops close dates that are not date-shaped", () => {
-    const bad = mapFubDeal({ id: 100, projectedCloseDate: "soon" }, stages, NOW);
-    expect(bad.ok && bad.value.expected_close_date).toBeNull();
-  });
-
-  it("handles unknown stages, missing stageId, and missing people", () => {
-    const unknownStage = mapFubDeal({ id: 101, stageId: 999 }, stages, NOW);
-    expect(unknownStage.ok && unknownStage.value.status).toBe("open");
-    const noStage = mapFubDeal({ id: 102 }, stages, NOW);
-    expect(noStage.ok && noStage.value.status).toBe("open");
-    expect(noStage.ok && noStage.value.personId).toBeNull();
-    const emptyPeople = mapFubDeal({ id: 103, people: [] }, stages, NOW);
-    expect(emptyPeople.ok && emptyPeople.value.personId).toBeNull();
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.tags).toContain("fub:past client");
+    expect(out.value.tags).toContain("sphere");
   });
 });
