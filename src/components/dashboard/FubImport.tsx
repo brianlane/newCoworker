@@ -3,50 +3,46 @@
 /**
  * "Import from Follow Up Boss" card on /dashboard/import-export.
  *
- * Flow: paste the FUB API key (password field, never echoed back), run the
- * DRY RUN (counts + a smart-list / action-plan inventory, nothing written),
- * then confirm to run the real import. The run endpoint works in resumable
- * chunks, so this component keeps POSTing /run until the job reports done,
- * polling GET status in between for live progress. A "delete saved key"
- * button wipes the stored (encrypted) key while keeping the result report.
+ * Flow: pick the CSV you exported from Follow Up Boss (People, then Export
+ * with "Export All Columns" checked), PREVIEW it, then import. The preview
+ * writes nothing and names every column it could not place, so a column the
+ * owner cares about is never dropped without them seeing it.
+ *
+ * The file never leaves the browser until a button is pressed, and the
+ * server never stores it: the preview and the import each send it once.
+ * There is no API key on this surface, deliberately. See
+ * src/lib/fub-import/run.ts for why.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
-import { CloudDownload, KeyRound, Trash2 } from "lucide-react";
+import { CloudDownload, FileSpreadsheet } from "lucide-react";
 
 type Props = { businessId: string };
 
-type DryRunCounts = {
-  people: number | null;
-  notes: number | null;
-  deals: number | null;
-  stages: { name: string; peopleCount: number | null }[];
-  smartLists: string[];
-  actionPlans: { name: string; status: string | null }[];
-  sourcesSample: string[];
+type Preview = {
+  totalRows: number;
+  importable: number;
+  unusable: number;
+  mapping: Record<string, string[]>;
+  ignoredColumns: string[];
+  problems: string[];
 };
 
-type RunCounts = {
-  contactsCreated: number;
-  contactsUpdated: number;
-  contactsSkipped: number;
-  notesImported: number;
-  notesSkipped: number;
-  dealsImported: number;
-  dealsSkipped: number;
-  failureCount: number;
-  failures: { scope: string; reason: string }[];
+type Summary = {
+  totalRows: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  failures: string[];
 };
 
 type PublicJob = {
   id: string;
   status: "pending" | "dry_run_done" | "running" | "done" | "failed";
   dryRun: boolean;
-  hasApiKey: boolean;
-  counts: { dryRun?: DryRunCounts; run?: RunCounts };
-  progress: { phase: string; offset: number };
+  counts: { preview?: Preview; summary?: Summary };
   error: string | null;
 };
 
@@ -57,15 +53,28 @@ async function readError(res: Response): Promise<string> {
   return json?.error?.message || `HTTP ${res.status}`;
 }
 
-const STATUS_POLL_MS = 4000;
+/** Field keys the server reports, in the order the card lists them. */
+const FIELD_ORDER = [
+  "name",
+  "firstName",
+  "lastName",
+  "phone",
+  "email",
+  "stage",
+  "source",
+  "tags"
+] as const;
 
 export function FubImport({ businessId }: Props) {
   const t = useTranslations("dashboard.fubImport");
   const [job, setJob] = useState<PublicJob | null>(null);
-  const [apiKey, setApiKey] = useState("");
-  const [busy, setBusy] = useState<"dryRun" | "run" | "delete" | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState<"preview" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [keyDeleted, setKeyDeleted] = useState(false);
+  // The preview the buttons act on, held here rather than read back off the
+  // job row: it belongs to the file currently picked, and picking a new file
+  // must invalidate it even though the old job row still exists.
+  const [preview, setPreview] = useState<Preview | null>(null);
   const stopped = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -85,100 +94,34 @@ export function FubImport({ businessId }: Props) {
     };
   }, [refresh]);
 
-  async function runDryRun() {
-    if (!apiKey.trim()) {
-      setError(t("keyMissing"));
+  async function send(dryRun: boolean) {
+    if (!file) {
+      setError(t("fileMissing"));
       return;
     }
-    setBusy("dryRun");
+    setBusy(dryRun ? "preview" : "import");
     setError(null);
-    setKeyDeleted(false);
     try {
-      const res = await fetch("/api/dashboard/import/fub", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, apiKey: apiKey.trim() })
-      });
+      const csv = await file.text();
+      const res = await fetch(
+        `/api/dashboard/import/fub?businessId=${encodeURIComponent(businessId)}&dryRun=${dryRun}`,
+        { method: "POST", headers: { "Content-Type": "text/csv" }, body: csv }
+      );
       if (!res.ok) throw new Error(await readError(res));
       const json = (await res.json()) as { data?: { job?: PublicJob } };
-      if (json.data?.job) setJob(json.data.job);
-      // The key now lives encrypted on the server; drop it from the browser.
-      setApiKey("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function runImport(jobId: string) {
-    setBusy("run");
-    setError(null);
-    const poll = setInterval(() => void refresh(), STATUS_POLL_MS);
-    try {
-      // Each POST imports as much as its time budget allows and persists a
-      // cursor; keep calling until the job reports done.
-      for (;;) {
-        const res = await fetch("/api/dashboard/import/fub/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ businessId, jobId })
-        });
-        if (!res.ok) throw new Error(await readError(res));
-        const json = (await res.json()) as {
-          data?: { status?: string; job?: PublicJob | null };
-        };
-        if (json.data?.job && !stopped.current) setJob(json.data.job);
-        if (stopped.current || json.data?.status !== "running") break;
+      if (json.data?.job && !stopped.current) {
+        setJob(json.data.job);
+        setPreview(json.data.job.counts.preview ?? null);
       }
     } catch (e) {
       if (!stopped.current) setError(e instanceof Error ? e.message : String(e));
-      await refresh();
     } finally {
-      clearInterval(poll);
       if (!stopped.current) setBusy(null);
     }
   }
 
-  async function deleteKey(jobId: string) {
-    setBusy("delete");
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/dashboard/import/fub?businessId=${encodeURIComponent(businessId)}&jobId=${encodeURIComponent(jobId)}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error(await readError(res));
-      setKeyDeleted(true);
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  const dryRun = job?.counts.dryRun;
-  const run = job?.counts.run;
-  const running = busy === "run" || job?.status === "running";
-  // Resume offer, matching what the run endpoint accepts: a failed REAL run
-  // still has a valid cursor, while a job that never got past its preview
-  // (dryRun still true, because the server flips it the moment a real run
-  // starts) has nothing to resume and has to be started again.
-  const canRun =
-    !!job &&
-    job.hasApiKey &&
-    (job.status === "dry_run_done" ||
-      job.status === "running" ||
-      (job.status === "failed" && !job.dryRun));
-  const phaseLabel = (phase: string) =>
-    phase === "people"
-      ? t("phasePeople")
-      : phase === "notes"
-        ? t("phaseNotes")
-        : phase === "deals"
-          ? t("phaseDeals")
-          : t("phaseDone");
+  const summary = job?.counts.summary;
+  const imported = job?.status === "done" && !job.dryRun;
 
   return (
     <Card>
@@ -186,7 +129,8 @@ export function FubImport({ businessId }: Props) {
         <CloudDownload className="h-4 w-4" />
         {t("title")}
       </h3>
-      <p className="text-xs text-parchment/50 mt-1 mb-4">{t("blurb")}</p>
+      <p className="text-xs text-parchment/50 mt-1">{t("blurb")}</p>
+      <p className="text-[11px] text-parchment/40 mt-1 mb-4">{t("howToExport")}</p>
 
       {error && (
         <p className="text-xs text-red-300 border border-red-400/30 bg-red-400/5 rounded-lg px-3 py-2 mb-3">
@@ -201,131 +145,107 @@ export function FubImport({ businessId }: Props) {
 
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex-1 min-w-[220px]">
-          <span className="block text-xs text-parchment/70 mb-1">{t("keyLabel")}</span>
+          <span className="block text-xs text-parchment/70 mb-1">{t("fileLabel")}</span>
           <input
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={t("keyPlaceholder")}
-            className="w-full rounded-lg bg-deep-ink/60 border border-parchment/20 px-3 py-2 text-xs text-parchment placeholder:text-parchment/30"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              // A new file makes the old preview meaningless.
+              setPreview(null);
+              setError(null);
+            }}
+            className="w-full rounded-lg bg-deep-ink/60 border border-parchment/20 px-3 py-2 text-xs text-parchment file:mr-3 file:rounded file:border-0 file:bg-parchment/10 file:px-2 file:py-1 file:text-xs file:text-parchment"
           />
         </label>
         <button
           type="button"
-          onClick={() => void runDryRun()}
-          disabled={busy !== null}
+          onClick={() => void send(true)}
+          disabled={busy !== null || !file}
           className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
         >
-          <KeyRound className="h-3.5 w-3.5" />
-          {busy === "dryRun" ? t("dryRunRunning") : t("dryRunButton")}
+          <FileSpreadsheet className="h-3.5 w-3.5" />
+          {busy === "preview" ? t("previewRunning") : t("previewButton")}
         </button>
       </div>
-      <p className="text-[11px] text-parchment/40 mt-2">{t("keyHelp")}</p>
 
-      {dryRun && (
+      {preview && (
         <div className="mt-4 rounded-lg border border-parchment/10 bg-deep-ink/40 px-3 py-3 space-y-2">
-          <p className="text-xs font-semibold text-parchment">{t("dryRunTitle")}</p>
-          <div className="overflow-x-auto">
-            <table className="text-xs text-parchment/80">
-              <tbody>
-                <tr>
-                  <td className="pr-4 py-0.5">{t("dryRunPeople")}</td>
-                  <td className="text-right">{dryRun.people ?? "?"}</td>
-                </tr>
-                <tr>
-                  <td className="pr-4 py-0.5">{t("dryRunNotes")}</td>
-                  <td className="text-right">{dryRun.notes ?? "?"}</td>
-                </tr>
-                <tr>
-                  <td className="pr-4 py-0.5">{t("dryRunDeals")}</td>
-                  <td className="text-right">{dryRun.deals ?? "?"}</td>
-                </tr>
-              </tbody>
-            </table>
+          <p className="text-xs font-semibold text-parchment">{t("previewTitle")}</p>
+          <p className="text-xs text-parchment/80">
+            {t("previewRows", {
+              total: preview.totalRows,
+              importable: preview.importable,
+              unusable: preview.unusable
+            })}
+          </p>
+          <div>
+            <p className="text-[11px] text-parchment/60">{t("previewMapping")}</p>
+            <ul className="mt-1 space-y-0.5">
+              {FIELD_ORDER.filter((f) => preview.mapping[f]?.length).map((f) => (
+                <li key={f} className="text-[11px] text-parchment/70">
+                  {t(`field.${f}`)}: {preview.mapping[f].join(", ")}
+                </li>
+              ))}
+            </ul>
           </div>
-          {dryRun.stages.length > 0 && (
+          {preview.ignoredColumns.length > 0 && (
             <p className="text-[11px] text-parchment/60">
-              {t("dryRunStages")}:{" "}
-              {dryRun.stages
-                .map((s) => `${s.name}${s.peopleCount !== null ? ` (${s.peopleCount})` : ""}`)
-                .join(", ")}
+              {t("previewIgnored")}: {preview.ignoredColumns.join(", ")}
             </p>
           )}
-          {dryRun.sourcesSample.length > 0 && (
-            <p className="text-[11px] text-parchment/60">
-              {t("dryRunSources")}: {dryRun.sourcesSample.join(", ")}
-            </p>
+          {preview.problems.length > 0 && (
+            <div>
+              <p className="text-[11px] text-amber-300">{t("previewProblems")}</p>
+              <ul className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                {preview.problems.map((p, i) => (
+                  <li key={i} className="text-[11px] text-amber-300/80">
+                    {p}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-          {dryRun.smartLists.length > 0 && (
-            <p className="text-[11px] text-parchment/60">
-              {t("dryRunSmartLists")}: {dryRun.smartLists.join(", ")}
-            </p>
-          )}
-          {dryRun.actionPlans.length > 0 && (
-            <p className="text-[11px] text-parchment/60">
-              {t("dryRunActionPlans")}:{" "}
-              {dryRun.actionPlans.map((p) => p.name).join(", ")}
-            </p>
-          )}
-          <p className="text-[11px] text-parchment/40">{t("inventoryNote")}</p>
+          <p className="text-[11px] text-parchment/40">{t("notesDealsNote")}</p>
         </div>
       )}
 
-      {job && canRun && (
+      {preview && preview.importable > 0 && (
         <div className="mt-4 space-y-2">
           <button
             type="button"
-            onClick={() => void runImport(job.id)}
+            onClick={() => void send(false)}
             disabled={busy !== null}
             className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
           >
             <CloudDownload className="h-3.5 w-3.5" />
-            {running
-              ? t("runRunning")
-              : job.status === "failed"
-                ? t("resumeButton")
-                : t("runButton")}
+            {busy === "import"
+              ? t("importRunning")
+              : t("importButton", { count: preview.importable })}
           </button>
           <p className="text-[11px] text-parchment/40">{t("automationsNote")}</p>
-          {running && (
-            <p className="text-xs text-signal-teal">
-              {t("progress", {
-                phase: phaseLabel(job.progress.phase),
-                count: job.progress.offset
-              })}
-            </p>
-          )}
         </div>
       )}
 
-      {run && (job?.status === "done" || run.contactsCreated + run.contactsUpdated > 0) && (
+      {summary && imported && (
         <div className="mt-4 rounded-lg border border-parchment/10 bg-deep-ink/40 px-3 py-3 space-y-1">
-          <p className="text-xs font-semibold text-parchment">
-            {job?.status === "done" ? t("resultTitleDone") : t("resultTitleProgress")}
-          </p>
+          <p className="text-xs font-semibold text-parchment">{t("resultTitleDone")}</p>
           <p className="text-xs text-parchment/80">
             {t("resultContacts", {
-              created: run.contactsCreated,
-              updated: run.contactsUpdated,
-              skipped: run.contactsSkipped
+              created: summary.created,
+              updated: summary.updated,
+              skipped: summary.skipped
             })}
           </p>
-          <p className="text-xs text-parchment/80">
-            {t("resultNotes", { imported: run.notesImported, skipped: run.notesSkipped })}
-          </p>
-          <p className="text-xs text-parchment/80">
-            {t("resultDeals", { imported: run.dealsImported, skipped: run.dealsSkipped })}
-          </p>
-          {run.failureCount > 0 && (
+          {summary.failures.length > 0 && (
             <div className="pt-1">
               <p className="text-[11px] text-red-300">
-                {t("failuresTitle", { count: run.failureCount })}
+                {t("failuresTitle", { count: summary.skipped })}
               </p>
               <ul className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
-                {run.failures.map((f, i) => (
+                {summary.failures.map((f, i) => (
                   <li key={i} className="text-[11px] text-red-300/80">
-                    {f.reason}
+                    {f}
                   </li>
                 ))}
               </ul>
@@ -333,21 +253,6 @@ export function FubImport({ businessId }: Props) {
           )}
         </div>
       )}
-
-      {job?.hasApiKey && (
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => void deleteKey(job.id)}
-            disabled={busy !== null}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/40 text-red-300 px-3 py-2 text-xs hover:bg-red-400/10 transition-colors disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {busy === "delete" ? t("deleteKeyDeleting") : t("deleteKeyButton")}
-          </button>
-        </div>
-      )}
-      {keyDeleted && <p className="text-xs text-claw-green mt-2">{t("deleteKeyDone")}</p>}
     </Card>
   );
 }
