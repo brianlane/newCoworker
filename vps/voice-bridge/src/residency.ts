@@ -3,11 +3,20 @@
  *
  * The bridge is the ONE caller that does not have to leave the box. It runs
  * on the tenant's own VPS, and for a residency tenant the datastore runs on
- * that same VPS, bound to 127.0.0.1:8091 by
- * vps/data-api/docker-compose.yml. So where the dashboard reaches the data
- * API across a Cloudflare tunnel and the Deno workers reach it across the
- * public internet, this is a loopback call: no tunnel, no DNS, no egress,
- * and no central round-trip to look up a credential.
+ * that same VPS. So where the dashboard reaches the data API across a
+ * Cloudflare tunnel and the Deno workers reach it across the public
+ * internet, this is a hop between two containers on one host: no tunnel, no
+ * public egress, and no central round-trip to look up a credential.
+ *
+ * NOT 127.0.0.1, and this is the trap. The data API publishes
+ * `127.0.0.1:8091` for cloudflared, which is a HOST process. The bridge is a
+ * CONTAINER, so its own 127.0.0.1 is itself, and `host.docker.internal`
+ * lands on the docker-bridge IP where nothing is listening. That exact
+ * mistake caused the May 2026 outage documented in
+ * vps/voice-bridge/docker-compose.yml, where every Rowboat fetch hung 30s
+ * before failing. Sibling containers use Docker DNS on the shared
+ * `rowboat_default` network, the same way this service already reaches
+ * `rowboat:3000`.
  *
  * The credential is already here too. deploy-client.sh sets
  * `DATA_API_TOKENS=${DATA_API_TOKENS:-${ROWBOAT_GATEWAY_TOKEN}}`, and the
@@ -25,7 +34,7 @@
  * FAILURE POSTURE: every read here is best-effort and returns null on any
  * failure, which each caller already treats as "that source is missing".
  * A live phone call must never fail because a history lookup did, and the
- * loopback hop makes the failure narrow anyway: if the datastore on this box
+ * on-host hop makes the failure narrow anyway: if the datastore on this box
  * is down, the bridge on the same box has larger problems already.
  *
  * Dependency-free on purpose, like its sibling modules here, so repo-root
@@ -33,8 +42,11 @@
  * deps.
  */
 
-/** Loopback address the data API binds on this box. */
-export const DEFAULT_DATA_API_BASE_URL = "http://127.0.0.1:8091";
+/**
+ * Docker DNS name of the data API on the shared `rowboat_default` network.
+ * See the header: 127.0.0.1 is this container, not the host.
+ */
+export const DEFAULT_DATA_API_BASE_URL = "http://data-api:8091";
 
 export type VoiceDataApiFilterOp =
   | "eq"
@@ -136,16 +148,23 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  * deliberately distinguishable from `[]`: an empty array means the datastore
  * answered and had nothing, which is a fact the timeline can act on.
  *
- * The timeout is 5s rather than the 10s the off-box clients use. This is a
- * loopback call placed while a caller is on the line; if it has not answered
+ * The timeout is 5s rather than the 10s the off-box clients use. This is an
+ * on-host call placed while a caller is on the line; if it has not answered
  * in five seconds it is not going to help this call.
  */
 export async function voiceReadMovedRowsOrNull<Row = Record<string, unknown>>(
   request: VoiceDataApiSelectRequest,
   deps: VoiceResidencyDeps = {}
 ): Promise<Row[] | null> {
-  const token = deps.token ?? process.env.DATA_API_TOKENS?.split(",")[0]?.trim() ??
-    process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // `??` would NOT fall through here: deploy-client.sh writes a literal
+  // `DATA_API_TOKENS=` on every non-residency box, and "" is not nullish, so
+  // nullish-coalescing would pin the bearer to the empty string and every
+  // read would return null with the fallback never consulted.
+  const firstNonEmpty = (...candidates: Array<string | undefined>): string =>
+    candidates.map((c) => c?.split(",")[0]?.trim() ?? "").find((c) => c.length > 0) ?? "";
+  const token =
+    deps.token ??
+    firstNonEmpty(process.env.DATA_API_TOKENS, process.env.ROWBOAT_GATEWAY_TOKEN);
   if (!token) {
     console.error(`[residency] no data-api token on this box for ${request.table}`);
     return null;

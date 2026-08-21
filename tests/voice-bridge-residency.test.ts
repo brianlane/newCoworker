@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -78,7 +80,13 @@ describe("voiceIsVpsReadMode", () => {
 });
 
 describe("voiceReadMovedRowsOrNull", () => {
-  it("calls the box over LOOPBACK, not a tunnel", async () => {
+  it("reaches the box by Docker DNS, never 127.0.0.1", async () => {
+    // Bugbot, PR #1578. The bridge is a CONTAINER: its 127.0.0.1 is itself,
+    // and the data API publishes only on the HOST loopback for cloudflared.
+    // host.docker.internal is no better, it lands on the docker-bridge IP
+    // where nothing listens. That is the May 2026 outage in the bridge's own
+    // compose header. Sibling containers must use the shared-network DNS
+    // name, exactly as this service already reaches rowboat:3000.
     process.env.ROWBOAT_GATEWAY_TOKEN = "gw-1";
     const fetchImpl = okFetch([{ body: "hi" }]);
     const rows = await voiceReadMovedRowsOrNull(
@@ -88,11 +96,64 @@ describe("voiceReadMovedRowsOrNull", () => {
     expect(rows).toEqual([{ body: "hi" }]);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${DEFAULT_DATA_API_BASE_URL}/v1/select`);
-    expect(url.startsWith("http://127.0.0.1")).toBe(true);
+    expect(url).toBe("http://data-api:8091/v1/select");
+    expect(url).not.toContain("127.0.0.1");
+    expect(url).not.toContain("host.docker.internal");
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer gw-1");
   });
 
-  it("prefers DATA_API_TOKENS, which is what the deploy actually sets", async () => {
+  it("the data-api and the bridge actually share a network", () => {
+    // The DNS name above only resolves if both containers are on
+    // rowboat_default. Asserting the code without asserting the topology
+    // would be a test that passes while production cannot connect.
+    const dataApi = readFileSync(
+      join(__dirname, "..", "vps", "data-api", "docker-compose.yml"),
+      "utf8"
+    );
+    const bridge = readFileSync(
+      join(__dirname, "..", "vps", "voice-bridge", "docker-compose.yml"),
+      "utf8"
+    );
+    expect(dataApi).toContain("rowboat_default");
+    expect(bridge).toContain("rowboat_default");
+    // And the service name the DNS entry comes from.
+    expect(dataApi).toContain("container_name: data-api");
+    // Postgres must NOT be exposed on that shared network. Anchor on the
+    // SERVICE definition (two-space indent), not the first mention: the
+    // first is inside data-api's own depends_on, and slicing from there
+    // captured data-api's networks and failed for the wrong reason.
+    const pgStart = dataApi.indexOf("\n  residency-postgres:");
+    expect(pgStart, "residency-postgres service block not found").toBeGreaterThan(-1);
+    const pgBlock = dataApi.slice(pgStart, dataApi.indexOf("\nnetworks:"));
+    expect(pgBlock).not.toContain("rowboat_default");
+    expect(pgBlock, "postgres must never publish a host port").not.toContain("ports:");
+  });
+
+  it("falls through a BLANK DATA_API_TOKENS to the gateway token", async () => {
+    // Bugbot, PR #1578. deploy-client.sh writes a literal `DATA_API_TOKENS=`
+    // on every box where the var is unset, and "" is not nullish, so `??`
+    // pinned the bearer to the empty string and never consulted the
+    // fallback: every read returned null with no error. I introduced that
+    // blank line in this same change, so the guard and the hole shipped
+    // together.
+    process.env.DATA_API_TOKENS = "";
+    process.env.ROWBOAT_GATEWAY_TOKEN = "gw-1";
+    const fetchImpl = okFetch([]);
+    await voiceReadMovedRowsOrNull({ table: "sms_outbound_log" }, { fetchImpl: fetchImpl as never });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer gw-1");
+  });
+
+  it("falls through a whitespace-only value too", async () => {
+    process.env.DATA_API_TOKENS = "   ";
+    process.env.ROWBOAT_GATEWAY_TOKEN = "gw-1";
+    const fetchImpl = okFetch([]);
+    await voiceReadMovedRowsOrNull({ table: "sms_outbound_log" }, { fetchImpl: fetchImpl as never });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer gw-1");
+  });
+
+  it("prefers DATA_API_TOKENS when it is actually set", async () => {
     // deploy-client.sh: DATA_API_TOKENS=${DATA_API_TOKENS:-${ROWBOAT_GATEWAY_TOKEN}}
     process.env.DATA_API_TOKENS = "primary , secondary";
     process.env.ROWBOAT_GATEWAY_TOKEN = "gw-1";
