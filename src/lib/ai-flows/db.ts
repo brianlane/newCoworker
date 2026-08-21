@@ -162,11 +162,12 @@ export async function listAiFlows(
   client?: SupabaseClient
 ): Promise<AiFlowRow[]> {
   const db = await resolveDb(client);
-  // `ai_flows` is residency-moved, so a vps tenant's flows live on their own
-  // box and the central read below returns nothing. An empty list here is
-  // indistinguishable from "this business has no flows", which is why the
-  // box read is allowed to throw: a ResidencyReadError reaches the page as a
-  // failure instead of an empty AiFlows list that reads as "you have none".
+  // `ai_flows` is residency-moved, so a vps tenant's flows are served from
+  // their own box. Central still holds them too (the purge KEEPS ai_flows,
+  // see RESIDENCY_CENTRAL_PURGED_TABLES), so this is on-box serving rather
+  // than a correctness fix. The box read is still allowed to throw: an
+  // unreachable box must reach the page as a failure, not as an empty
+  // AiFlows list that reads as "you have none".
   const fetchFlows = async (): Promise<AiFlowRow[]> => {
     if (await isVpsReadMode(businessId, db)) {
       return await readMovedRows<AiFlowRow>(businessId, {
@@ -236,10 +237,24 @@ const FLOW_GATE_COLUMNS = ["definition", "deleted_at"] as const;
  * The named flows behind a set of runs.
  *
  * `ai_flows` is a residency-moved table, so for a tenant in vps mode the
- * definitions live on that tenant's box and a central read returns nothing,
- * which on the Task Center meant every card labeling its workflow "AiFlow"
- * with no step position. `vpsReadMode` is resolved once by the caller and
- * passed in, so a route running several routed reads makes one decision.
+ * definitions are served from that tenant's own box. `vpsReadMode` is
+ * resolved once by the caller and passed in, so a route running several
+ * routed reads makes one decision.
+ *
+ * CORRECTION (2026-08-20): this comment used to say a central read "returns
+ * nothing" for a vps tenant. That is wrong. `residency_purge_business()`
+ * (20260707192939_residency_purge.sql) deliberately KEEPS `ai_flows`
+ * central, along with contacts, threads, chat and url memory, "until the
+ * engine's own reads are residency-routed". Central holds every row, and
+ * because central is still the write ingress it is the FRESHER copy.
+ *
+ * That matters here, because this file does not agree with itself:
+ * `getAiFlow`, `listAiFlows` and `createAiFlow` below all read central. A
+ * create followed immediately by a list therefore misses the new row until
+ * the journal replayer's next tick. Routing this one reader bought no
+ * compliance and cost that window. Whether to fix it by routing the rest or
+ * by returning this reader to central is an open decision, recorded in
+ * MIXED_ROUTING_EXCEPTIONS in tests/residency-read-coverage.test.ts.
  */
 export async function listAiFlowDefinitions(
   businessId: string,

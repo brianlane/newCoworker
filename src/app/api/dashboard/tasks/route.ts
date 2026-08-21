@@ -158,9 +158,10 @@ export async function GET(request: Request) {
     const db = await createSupabaseServiceClient();
 
     // `contacts` and `ai_flows` are both residency-moved, so for a tenant in
-    // vps mode the rows behind this board live on that tenant's own box and
-    // a central read comes back empty (an empty board, no error). One mode
-    // lookup up front, reused by every routed read below.
+    // vps mode the rows behind this board are served from that tenant's own
+    // box. Both are tables the purge KEEPS central, so this is on-box
+    // serving, not a fix for missing rows. One mode lookup up front, reused
+    // by every routed read below.
     const vpsReadMode = await isVpsReadMode(businessId, db);
 
     // The roster member the caller IS (drives scope=mine): their explicit
