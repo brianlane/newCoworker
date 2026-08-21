@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTACT_TIMELINE_LOOKBACK_HOURS as SHARED_LOOKBACK,
@@ -99,6 +101,18 @@ describe("loader parity (same wire shape against the same fake client)", () => {
     let idx = 0;
     const next = () => results[idx++] ?? { data: null, error: null };
     const from = (table: string) => {
+      // The loaders resolve data_residency_mode before reading content
+      // now, so a residency tenant's rows come from their own box.
+      // Answered out of band, and not recorded: these fakes are
+      // SEQUENTIAL queues, so letting the mode lookup take a scripted
+      // result would silently shift every content read after it.
+      if (table === "businesses") {
+        const mode: Record<string, unknown> = {};
+        for (const m of ["select", "eq"]) mode[m] = () => mode;
+        mode["maybeSingle"] = () =>
+          Promise.resolve({ data: { data_residency_mode: "supabase" }, error: null });
+        return mode;
+      }
       const builder: Record<string, unknown> = {};
       for (const m of ["select", "eq", "neq", "is", "in", "or", "gte", "order", "limit"]) {
         builder[m] = (...args: unknown[]) => {
@@ -165,6 +179,31 @@ describe("loader parity (same wire shape against the same fake client)", () => {
           )
         );
     expect(wire(voice.calls)).toEqual(wire(shared.calls));
+  });
+
+  it("the shared loader is residency-aware and the voice bridge deliberately is not", () => {
+    // The one divergence, stated rather than filtered away. The shared edge
+    // loader routes a vps tenant's purged reads to their box; the voice
+    // bridge is a separate deployable, rsynced to the VPS and redeployed by
+    // hand, so it still reads central. That is a gap on the VOICE path, not
+    // a mistake here, and it is recorded in the read-coverage registry.
+    //
+    // The DATA rules this file exists to pin are unaffected: the central
+    // path above is byte-identical between the two, which is what the wire
+    // comparison asserts.
+    const sharedSrc = readFileSync(
+      join(__dirname, "..", "supabase", "functions", "_shared", "contact_context.ts"),
+      "utf8"
+    );
+    const voiceSrc = readFileSync(
+      join(__dirname, "..", "vps", "voice-bridge", "src", "contact-context.ts"),
+      "utf8"
+    );
+    expect(sharedSrc).toContain("edgeIsVpsReadMode");
+    expect(
+      voiceSrc.includes("edgeIsVpsReadMode"),
+      "the voice bridge became residency-aware: delete this test and pin the parity instead"
+    ).toBe(false);
   });
 
   it("both return null for an empty window and on a blown-up client", async () => {

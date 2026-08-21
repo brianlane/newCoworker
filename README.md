@@ -324,15 +324,40 @@ construction, which is why
 [20260804000000_residency_write_journal.sql](supabase/migrations/20260804000000_residency_write_journal.sql)
 chose triggers over call-site wrappers.
 
+**The engine reads the box too, on the inbound text path.** The Deno workers
+cannot import `@/lib/*`, so `supabase/functions/_shared/residency.ts` mirrors
+the routing layer (pinned by `tests/residency-edge-lockstep.test.ts`). What a
+residency tenant's coworker KNOWS about a customer now comes from their own
+box: the cross-channel timeline, the automation's recent sends, the last
+assistant message, and the contact identity that feeds them.
+
+The failure posture there is deliberately not uniform. `edgeReadMovedRows`
+throws; `edgeReadMovedRowsOrNull` returns null so a caller can fall back to a
+documented safe default. A read that only SUPPRESSES something (a dedupe, a
+repage guard) swallows, because failing a whole conversation to avoid a
+duplicate alert is the wrong trade. A read the reply DEPENDS on lets the
+error out, and `sms_inbound_jobs` retries the job: answering late beats
+answering confidently from data that is not there.
+
+Three sites on that path stay central for stated reasons, not for lack of
+effort: the `notifications` dedupe reads filter on JSON-path columns
+(`payload->>taskType`) that the box's identifier validator rejects, and
+relaxing it would open a SQL-injection surface to save a duplicate alert; the
+`sms_owner_reply_prompts` reads are the read half of a compare-and-swap whose
+write is central, so read and write must move together or not at all; and the
+international gateway's router read RESOLVES the business id, so there is no
+tenant to route to yet. The voice bridge vendors its own mirror of the
+timeline loader and is still central, which is a gap on the VOICE path.
+
 `tests/residency-read-coverage.test.ts` holds every read to one of those
 rules, plus the shapes a source scan cannot see on its own: `.from(expr)` with
 a computed table name (`WEBHOOK_EVENT_SOURCES` resolves to three purged
 tables), and the SQL functions whose bodies touch a moved table and therefore
 cannot be routed at all, since they execute in central Postgres.
 `npx tsx debug/residency-read-report.ts` prints the current state. As of
-2026-08-20 that is 56 central reads of a purged table: 4 cross-tenant fleet
-queries that cannot be routed to any single box, 30 held at engine posture in
-the Deno workers, and 22 dashboard-side, which is the list that shrinks.
+2026-08-21 that is 52 central reads of a purged table: 4 cross-tenant fleet
+queries that cannot be routed to any single box, 26 in the Deno workers (the
+six named above plus voice, sweeps and digests), and 22 dashboard-side.
 
 DR: a 6h systemd timer on the box streams `pg_dump → gzip → AES-256` and
 uploads **ciphertext only** to `business-backups/residency/<id>/`; the

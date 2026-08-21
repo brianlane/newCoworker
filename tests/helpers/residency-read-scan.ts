@@ -47,8 +47,23 @@ export const SCAN_EXCLUDED = ["src/lib/residency/"] as const;
 const READ_VERBS = new Set(["select"]);
 const WRITE_VERBS = new Set(["insert", "update", "upsert", "delete"]);
 
-/** Routing helpers whose `table:` argument marks a site routed. */
-const ROUTING_HELPERS = new Set(["readMovedRows", "countMovedRows"]);
+/**
+ * Routing helpers whose `table:` argument marks a site routed.
+ *
+ * Both sides, because the Deno edge workers cannot import `@/lib/*` and so
+ * call their own mirror (supabase/functions/_shared/residency.ts). Listing
+ * only the Next-side names made this guard blind to edge routing: it read a
+ * newly-routed edge site as still-central debt and stayed green because the
+ * registry entry was also still there, which is a false pass in both
+ * directions at once.
+ */
+const ROUTING_HELPERS = new Set([
+  "readMovedRows",
+  "countMovedRows",
+  "edgeReadMovedRows",
+  "edgeReadMovedRowsOrNull",
+  "edgeCountMovedRows"
+]);
 
 /** Opt-in marker for the shape where the box branch lives in a sibling helper. */
 export const ROUTED_MARKER = "residency: routed";

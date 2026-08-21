@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   FLOW_CONTEXT_LOOKBACK_HOURS as SHARED_LOOKBACK,
@@ -132,6 +134,19 @@ function makeDb(results: Scripted[]) {
   let idx = 0;
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
+    // loadFlowRunContextDetailed resolves data_residency_mode before reading
+    // sms_outbound_log, so a residency tenant's automated sends come from
+    // their own box. Answered out of band, and not recorded: this fake is a
+    // SEQUENTIAL queue, so letting the mode lookup take a scripted result
+    // would shift every content read after it, and recording it would break
+    // the parity comparison for a query the voice bridge does not make.
+    if (table === "businesses") {
+      const mode: Record<string, unknown> = {};
+      for (const m of ["select", "eq"]) mode[m] = () => mode;
+      mode["maybeSingle"] = () =>
+        Promise.resolve({ data: { data_residency_mode: "supabase" }, error: null });
+      return mode;
+    }
     const builder: Record<string, unknown> = {};
     for (const m of ["select", "eq", "gte", "or", "in", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {
@@ -176,6 +191,27 @@ describe("loadVoiceFlowContext", () => {
     await loadVoiceFlowContext(voiceDb.db, BIZ, LEAD);
     await loadFlowRunContext(sharedDb.db, BIZ, LEAD);
     expect(normalized(voiceDb.calls)).toEqual(normalized(sharedDb.calls));
+  });
+
+  it("the shared loader is residency-aware and the voice bridge deliberately is not", () => {
+    // Same one divergence as tests/voice-bridge-contact-context.test.ts: the
+    // shared edge loader routes a vps tenant's PURGED sms_outbound_log read
+    // to their box, while the voice bridge is a separately-deployed mirror
+    // that still reads central. Stated here rather than filtered away, so a
+    // reader of the parity test knows the queries differ on exactly one axis.
+    const sharedSrc = readFileSync(
+      join(__dirname, "..", "supabase", "functions", "_shared", "ai_flows", "run_context.ts"),
+      "utf8"
+    );
+    const voiceSrc = readFileSync(
+      join(__dirname, "..", "vps", "voice-bridge", "src", "flow-run-context.ts"),
+      "utf8"
+    );
+    expect(sharedSrc).toContain("edgeIsVpsReadMode");
+    expect(
+      voiceSrc.includes("edgeIsVpsReadMode"),
+      "the voice bridge became residency-aware: delete this test and pin the parity instead"
+    ).toBe(false);
   });
 
   it("assembles runs + names + last automated text into the voice block", async () => {
