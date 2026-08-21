@@ -100,14 +100,26 @@ if (ALL) {
  *
  * Deliberately NOT `owner_chat_model_spend.fuse_tripped_at`. The workers
  * route on current-period `spend >= effectiveCap` (base cap PLUS purchased
- * credit), which is what `getChatSpendSnapshotForBusiness` computes, and it
- * also resolves the right period window. `fuse_tripped_at` disagrees with
- * that in two directions: it is sticky once set, so a mid-period credit
- * top-up restores Gemini while the stamp stays, and the newest row can be a
- * PRIOR period whose trip says nothing about today.
+ * credit), which is what `getChatSpendSnapshotForBusiness` resolves, and it
+ * also picks the right period window. `fuse_tripped_at` disagrees with that
+ * in two directions: it is sticky once set, so a mid-period credit top-up
+ * restores Gemini while the stamp stays, and the newest row can be a PRIOR
+ * period whose trip says nothing about today.
  *
- * Returns null when it cannot be read: unknown must not be downgraded to
- * "safe to restart".
+ * The spend row is re-read HERE rather than taken from the snapshot, because
+ * `getChatSpendSnapshotForBusiness` ignores a failed spend query and returns
+ * `spendMicros: 0`. That is fine for the billing page, and wrong for a gate:
+ * a database hiccup would read as "under budget" and we would restart Ollama
+ * on a box that is mid-turn. Reading it here keeps the error an error.
+ *
+ * Returns null for unknown, and unknown SKIPS. A MISSING row is not unknown:
+ * the row is created lazily on a period's first metered turn, so its absence
+ * genuinely means zero spend this period (Scar Fairy's subscription window
+ * opened 2026-08-10 and their newest spend row is from July). Calling that
+ * unknown would block a demonstrably idle box and push the operator to
+ * --force, which defeats the gate. The snapshot's own credit read is safe to
+ * lean on, since a failed credit read shrinks the effective cap, which biases
+ * this toward "over budget", which biases toward skipping.
  */
 async function overAiBudget(
   businessId: string,
@@ -115,7 +127,23 @@ async function overAiBudget(
 ): Promise<boolean | null> {
   try {
     const snap = await getChatSpendSnapshotForBusiness(businessId, db, tier);
-    return snap.spendMicros >= snap.effectiveCapMicros;
+    const { data, error } = await db
+      .from("owner_chat_model_spend")
+      .select("spend_micros")
+      .eq("business_id", businessId)
+      .eq("period_start", snap.periodStart)
+      .maybeSingle();
+    if (error) {
+      console.error(`  ! could not read owner_chat_model_spend: ${error.message}`);
+      return null;
+    }
+    if (!data) return false; // no row yet this period, so nothing spent
+    const spend = Number((data as { spend_micros: number | string }).spend_micros);
+    if (!Number.isFinite(spend)) {
+      console.error("  ! spend_micros is not a number");
+      return null;
+    }
+    return spend >= snap.effectiveCapMicros;
   } catch (err) {
     console.error(
       `  ! could not read the chat spend snapshot: ${err instanceof Error ? err.message : String(err)}`
