@@ -267,14 +267,32 @@ Escalation is **manual by design**; the system advises, the operator moves:
   emails. A self-expiring DB lease (`vps_migration_locks`, 30 min) blocks
   overlapping runs with a 409. Replaces `debug/migrate-vps-size.ts`.
 - **Escalation advisor cron (PR #372)**: daily 14:00 UTC scan of every active
-  starter/standard tenant over a rolling 7-day window. Signals: ≥2 days at
-  the concurrency cap, voice pace ≥80% of the included pool, month-to-date
-  SMS ≥80% of cap, ≥25 error-level on-box logs (rowboat/ollama/voice). One
-  ops digest email per run with the recommended next rung
-  (kvm1→kvm2→kvm4→kvm8) and a deep link to the admin panel; per-tenant weekly
-  dedupe; a warn `system_logs` row lands on the tenant's admin page after the
-  digest sends. Deployed + scheduled in prod; smoke-invoked Jul 6
-  (`scanned:1, flagged:0`).
+  starter/standard tenant over a rolling 7-day window. One ops digest email
+  per run, per-tenant weekly dedupe, and a warn `system_logs` row on the
+  tenant's admin page after the digest sends. Deployed + scheduled in prod;
+  smoke-invoked Jul 6 (`scanned:1, flagged:0`).
+
+  **Rewritten Aug 2026.** As shipped, every signal produced a size
+  recommendation, including the two that measure a Stripe entitlement rather
+  than a machine. Voice pace at ≥80% of the INCLUDED pool told the operator
+  to buy a bigger box for a tenant whose box was idle and whose reloadable
+  packs and auto-reload already covered the overage; worse, running out of
+  minutes makes a box do LESS work, since the calls are refused. Signals now
+  carry a category, and the digest has two sections:
+
+  - **hardware** (the only ones that recommend a rung and link to
+    migrate-size): ≥2 days at the concurrency cap; sustained CPU load per
+    core from the heartbeat's hourly `vps_posture_reports.metrics`;
+    memory/swap pressure from the same aggregate; ANY turn generated on the
+    box's own Ollama model (or refused for lack of one on kvm1), which is
+    the AI budget's real hardware consequence; ≥25 error-level on-box logs.
+  - **usage** (link to billing, no rung): voice pace and month-to-date SMS,
+    both now measured against included PLUS unexpired pack grants, and both
+    suppressed entirely for a tenant whose auto-reload is armed on a live
+    card. The SMS signal also moved from `daily_usage.sms_sent` (messages)
+    to `sms_text_units` (carrier parts), which is the ledger the cap is
+    denominated in: at ~2.5 parts per message it had been firing ~2.5x too
+    late.
 - **Customer-driven tier changes** (starter → standard checkout) still move
   hardware automatically via the change-plan orchestrator and email ops at
   the start (PR #363) — that path is entitlements + hardware; the admin
@@ -321,6 +339,6 @@ Escalation is **manual by design**; the system advises, the operator moves:
 | Starter test tenant | Live on srv1806097 |
 | Starter caps 100 SMS / 25 min + browser copy + KVM2 standard default | Merged — PR #369; prod migration applied; voice Edge fns redeployed |
 | KVM4 size + admin migrate-size panel + in-flight lease | Merged — PR #371; prod migrations applied |
-| Hardware-escalation advisor cron + ops digest | Merged — PR #372; deployed + scheduled (14:00 UTC daily); smoke-invoked OK |
+| Hardware-escalation advisor cron + ops digest | Merged — PR #372; deployed + scheduled (14:00 UTC daily); smoke-invoked OK. Rewritten Aug 2026: hardware vs usage split, CPU/memory signals from the heartbeat, pack-aware allowances, SMS in text units |
 | Telnyx RCS agent registration | Testing phase live (HQ tenant, Jul 18 2026); production provisioning DEFERRED ($600 + $100/mo) — Enterprise-only per the RCS decision above |
 | **Starter $19.99 renewal on pricing page + Stripe** | **Remaining** |

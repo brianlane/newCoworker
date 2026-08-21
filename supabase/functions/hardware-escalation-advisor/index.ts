@@ -33,11 +33,14 @@ import {
   ADVISOR_WINDOW_DAYS,
   DEFAULT_THRESHOLDS,
   ON_BOX_ERROR_SOURCES,
+  adviceLogMessage,
   buildEscalationAdviceEmail,
   evaluateEscalationSignals,
   isAdvisorFleetCandidate,
   weeklyPeriodKey,
+  type AdvisorAutoReload,
   type AdvisorBusiness,
+  type AdvisorHostMetrics,
   type BusinessAdvice,
   type CallInterval,
   type DailyUsageRow
@@ -154,12 +157,20 @@ serve(async (req: Request) => {
 
   // daily_usage feeds only the month-to-date SMS total, its voice/peak
   // columns have no live writer (see _shared/hardware_escalation.ts).
+  //
+  // `sms_text_units`, NOT `sms_sent`. The caps are denominated in carrier
+  // parts and Postgres enforces them on units, while `sms_sent` counts
+  // MESSAGES. The fleet averages ~2.5 parts per message, so summing
+  // `sms_sent` against a unit cap fired ~2.5x too late and put two different
+  // ledgers next to each other in the operator's email (Amy, Aug 2026: 1019
+  // messages read as 20% of the 5000-unit cap, the real figure was 2601
+  // units, 52%).
   let usageRows: DailyUsageRow[];
   try {
     usageRows = await fetchAllPages<DailyUsageRow>((from, to) =>
       supabase
         .from("daily_usage")
-        .select("business_id, usage_date, sms_sent")
+        .select("business_id, usage_date, sms_text_units")
         .in("business_id", ids)
         .gte("usage_date", monthStartDate)
         .order("usage_date", { ascending: true })
@@ -264,8 +275,194 @@ serve(async (req: Request) => {
   for (const row of usageRows) {
     smsMonthToDate.set(
       row.business_id,
-      (smsMonthToDate.get(row.business_id) ?? 0) + row.sms_sent
+      (smsMonthToDate.get(row.business_id) ?? 0) + Number(row.sms_text_units ?? 0)
     );
+  }
+
+  // Host CPU/memory aggregates. This is the read that lets the advisor say
+  // anything about the machine at all: before it existed, every "is this box
+  // too small" answer came from a Stripe entitlement. A box whose heartbeat
+  // predates the metrics block reports null here, which must read as "not
+  // measured" and fire nothing, never as a quiet box.
+  let postureRows: Array<{ business_id: string; metrics: AdvisorHostMetrics | null }>;
+  try {
+    postureRows = await fetchAllPages<{
+      business_id: string;
+      metrics: AdvisorHostMetrics | null;
+    }>((from, to) =>
+      supabase
+        .from("vps_posture_reports")
+        .select("business_id, metrics")
+        .in("business_id", ids)
+        .not("metrics", "is", null)
+        .gte("created_at", isoDaysAgo(WINDOW_DAYS, now))
+        .order("created_at", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("vps_posture_reports select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const metricsByBiz = new Map<string, AdvisorHostMetrics[]>();
+  for (const row of postureRows) {
+    if (!row.metrics) continue;
+    const list = metricsByBiz.get(row.business_id) ?? [];
+    list.push(row.metrics);
+    metricsByBiz.set(row.business_id, list);
+  }
+
+  // Replies actually generated on the box's own model. The AI budget's real
+  // hardware consequence: over cap, the local twin agents take SMS, owner
+  // chat, and webchat, so the work moves onto the tenant's own CPU.
+  let localTurnRows: Array<{ business_id: string }>;
+  try {
+    localTurnRows = await fetchAllPages<{ business_id: string }>((from, to) =>
+      supabase
+        .from("ai_reply_reasoning")
+        .select("business_id, created_at")
+        .in("business_id", ids)
+        .eq("model", "local")
+        .gte("created_at", isoDaysAgo(WINDOW_DAYS, now))
+        .order("created_at", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("ai_reply_reasoning select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const localTurnsByBiz = new Map<string, number>();
+  for (const row of localTurnRows) {
+    localTurnsByBiz.set(row.business_id, (localTurnsByBiz.get(row.business_id) ?? 0) + 1);
+  }
+
+  // Turns REFUSED for lack of a local model (kvm1). Not a slowdown: the
+  // customer got silence, so it belongs in the hardware section with its own
+  // wording rather than folded into the local-turn count.
+  let refusedRows: Array<{ business_id: string }>;
+  try {
+    refusedRows = await fetchAllPages<{ business_id: string }>((from, to) =>
+      supabase
+        .from("system_logs")
+        .select("business_id, created_at")
+        .in("business_id", ids)
+        .eq("event", "sms_reply_suppressed_over_ai_budget")
+        .gte("created_at", isoDaysAgo(WINDOW_DAYS, now))
+        .order("created_at", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("suppressed-reply system_logs select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const refusedByBiz = new Map<string, number>();
+  for (const row of refusedRows) {
+    refusedByBiz.set(row.business_id, (refusedByBiz.get(row.business_id) ?? 0) + 1);
+  }
+
+  // Purchased packs. Without these the usage signals fire at a tenant who
+  // has already bought their way past the limit, which is exactly the defect
+  // 20260822061519_voice_low_balance_counts_bonus.sql fixed for the
+  // low-balance email. Unexpired and unvoided only, matching
+  // voice_bonus_seconds_available().
+  const nowIso = now.toISOString();
+  let voiceGrantRows: Array<{ business_id: string; seconds_remaining: number | null }>;
+  let smsGrantRows: Array<{ business_id: string; texts_remaining: number | null }>;
+  try {
+    voiceGrantRows = await fetchAllPages<{
+      business_id: string;
+      seconds_remaining: number | null;
+    }>((from, to) =>
+      supabase
+        .from("voice_bonus_grants")
+        .select("business_id, seconds_remaining")
+        .in("business_id", ids)
+        .is("voided_at", null)
+        .gt("expires_at", nowIso)
+        .order("business_id", { ascending: true })
+        .range(from, to)
+    );
+    smsGrantRows = await fetchAllPages<{ business_id: string; texts_remaining: number | null }>(
+      (from, to) =>
+        supabase
+          .from("sms_bonus_grants")
+          .select("business_id, texts_remaining")
+          .in("business_id", ids)
+          .is("voided_at", null)
+          .gt("expires_at", nowIso)
+          .order("business_id", { ascending: true })
+          .range(from, to)
+    );
+  } catch (err) {
+    console.error("bonus grant select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const voiceBonusByBiz = new Map<string, number>();
+  for (const row of voiceGrantRows) {
+    voiceBonusByBiz.set(
+      row.business_id,
+      (voiceBonusByBiz.get(row.business_id) ?? 0) + Number(row.seconds_remaining ?? 0)
+    );
+  }
+  const smsBonusByBiz = new Map<string, number>();
+  for (const row of smsGrantRows) {
+    smsBonusByBiz.set(
+      row.business_id,
+      (smsBonusByBiz.get(row.business_id) ?? 0) + Number(row.texts_remaining ?? 0)
+    );
+  }
+
+  // Auto-reload posture. An armed tenant with a live card cannot run out, so
+  // telling the operator they are near a limit is noise: billing tops them
+  // up automatically, with recorded consent.
+  let reloadRuleRows: Array<{
+    business_id: string;
+    category: string;
+    enabled: boolean | null;
+    paused_at: string | null;
+    disabled_reason: string | null;
+  }>;
+  let reloadCardRows: Array<{ business_id: string; revoked_at: string | null }>;
+  try {
+    reloadRuleRows = await fetchAllPages<{
+      business_id: string;
+      category: string;
+      enabled: boolean | null;
+      paused_at: string | null;
+      disabled_reason: string | null;
+    }>((from, to) =>
+      supabase
+        .from("usage_pack_auto_reload_rules")
+        .select("business_id, category, enabled, paused_at, disabled_reason")
+        .in("business_id", ids)
+        .order("business_id", { ascending: true })
+        .range(from, to)
+    );
+    reloadCardRows = await fetchAllPages<{ business_id: string; revoked_at: string | null }>(
+      (from, to) =>
+        supabase
+          .from("usage_pack_auto_reload_cards")
+          .select("business_id, revoked_at")
+          .in("business_id", ids)
+          .is("revoked_at", null)
+          .order("business_id", { ascending: true })
+          .range(from, to)
+    );
+  } catch (err) {
+    console.error("auto-reload select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const cardOnFile = new Set(reloadCardRows.map((r) => r.business_id));
+  const reloadByBiz = new Map<string, AdvisorAutoReload>();
+  for (const id of ids) {
+    reloadByBiz.set(id, { voiceArmed: false, smsArmed: false, hasCard: cardOnFile.has(id) });
+  }
+  for (const rule of reloadRuleRows) {
+    const armed = rule.enabled === true && rule.paused_at == null && rule.disabled_reason == null;
+    if (!armed) continue;
+    const entry = reloadByBiz.get(rule.business_id);
+    if (!entry) continue;
+    if (rule.category === "voice") entry.voiceArmed = true;
+    if (rule.category === "sms") entry.smsArmed = true;
   }
 
   const flagged: BusinessAdvice[] = [];
@@ -277,8 +474,14 @@ serve(async (req: Request) => {
       windowStartYmd: windowStartDate,
       windowEndYmd: now.toISOString().slice(0, 10),
       windowVoiceSeconds: voiceSecondsByBiz.get(biz.id) ?? 0,
-      monthToDateSms: smsMonthToDate.get(biz.id) ?? 0,
+      monthToDateSmsUnits: smsMonthToDate.get(biz.id) ?? 0,
       onBoxErrorCount: errorCounts.get(biz.id) ?? 0,
+      hostMetrics: metricsByBiz.get(biz.id) ?? [],
+      localModelTurns: localTurnsByBiz.get(biz.id) ?? 0,
+      refusedOverBudgetTurns: refusedByBiz.get(biz.id) ?? 0,
+      voiceBonusSeconds: voiceBonusByBiz.get(biz.id) ?? 0,
+      smsBonusUnits: smsBonusByBiz.get(biz.id) ?? 0,
+      autoReload: reloadByBiz.get(biz.id) ?? null,
       limits: {
         maxConcurrentCalls: limits.maxConcurrentCalls,
         voiceIncludedSecondsPerStripePeriod: limits.voiceIncludedSecondsPerStripePeriod,
@@ -351,12 +554,21 @@ serve(async (req: Request) => {
               source: "platform",
               level: "warn",
               event: "hardware_escalation_advice",
-              message:
-                `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")}, ` +
-                (advice.recommendedSize
-                  ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
-                  : `already on ${advice.currentSize} (largest box)`),
-              payload: { signals: advice.signals, period_key: periodKey }
+              // Must say the same thing the digest says. `recommendedSize`
+              // is now null in TWO cases, and they mean opposite things: a
+              // usage-only tenant has no hardware advice at all, while a
+              // hardware-flagged tenant on kvm8 has run out of ladder.
+              // Reading every null as "largest box" would label an idle
+              // kvm2 as maxed-out hardware, which is the same conflation of
+              // plan limits with machine limits this cron was rewritten to
+              // stop making.
+              message: adviceLogMessage(advice),
+              payload: {
+                signals: advice.signals,
+                hardware_signals: advice.hardwareSignals.map((sig) => sig.kind),
+                usage_signals: advice.usageSignals.map((sig) => sig.kind),
+                period_key: periodKey
+              }
             });
           }
         }
