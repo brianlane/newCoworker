@@ -1,6 +1,6 @@
 /**
- * The box datastore must carry every `contacts` column the dashboard reads
- * through the residency layer.
+ * The box datastore must carry every column the dashboard reads through the
+ * residency layer, for every table that layer routes.
  *
  * Why this exists: vps/data-api/schema.sql is GENERATED from a central
  * schema snapshot (2026-07-07) and then hand-patched, so a column added
@@ -67,6 +67,37 @@ const REQUIRED_CONTACT_COLUMNS: Array<{ column: string; readers: string }> = [
   { column: "tags", readers: "lead-sources, quote-funnel" },
   { column: "owner_employee_id", readers: "lead-sources, deals" }
 ];
+
+/**
+ * Every `ai_flows` column the routed readers project or filter on. The flows
+ * table joined the residency layer after `contacts` did, and its
+ * `enabled_changed_at` was missing from the box for exactly the reason this
+ * whole file exists: it landed centrally after the snapshot.
+ */
+const REQUIRED_AI_FLOW_COLUMNS: Array<{ column: string; readers: string }> = [
+  { column: "id", readers: "listAiFlows, getAiFlow, listAiFlowDefinitions" },
+  { column: "business_id", readers: "every routed flow read's tenant filter" },
+  { column: "name", readers: "listAiFlows, getAiFlow, listAiFlowDefinitions" },
+  { column: "enabled", readers: "listAiFlows, getAiFlow" },
+  { column: "definition", readers: "listAiFlowDefinitions, enqueue gates" },
+  { column: "created_by", readers: "listAiFlows, getAiFlow" },
+  { column: "created_at", readers: "listAiFlows order, getAiFlow" },
+  { column: "updated_at", readers: "listAiFlows, getAiFlow" },
+  { column: "enabled_changed_at", readers: "listAiFlows, getAiFlow" },
+  { column: "deleted_at", readers: "listAiFlows and getAiFlow filters, enqueue soft-delete gate" }
+];
+
+describe("vps/data-api/schema.sql covers the ai_flows columns the dashboard reads", () => {
+  const columns = boxColumns(readFileSync(SCHEMA_PATH, "utf8"), "ai_flows");
+
+  it("parses the generated DDL (guards the parser itself, not just the columns)", () => {
+    expect(columns.size).toBeGreaterThan(5);
+  });
+
+  it.each(REQUIRED_AI_FLOW_COLUMNS)("declares $column (read by $readers)", ({ column }) => {
+    expect([...columns].includes(column)).toBe(true);
+  });
+});
 
 describe("vps/data-api/schema.sql covers the contacts columns the dashboard reads", () => {
   const columns = boxColumns(readFileSync(SCHEMA_PATH, "utf8"), "contacts");

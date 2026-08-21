@@ -487,6 +487,12 @@ alter table ai_flows add column if not exists created_at timestamp with time zon
 alter table ai_flows add column if not exists updated_at timestamp with time zone not null default now();
 alter table ai_flows add column if not exists deleted_at timestamp with time zone;
 alter table ai_flows add column if not exists deleted_by uuid;
+-- Landed centrally after the 2026-07-07 snapshot this file was generated
+-- from, so it needs the same hand-patch the soft-delete columns above got.
+-- listAiFlows and getAiFlow project it, and a SELECT naming a column the box
+-- does not have fails the WHOLE read, so without this the AiFlows list and
+-- detail pages go dark for a vps tenant instead of being fixed.
+alter table ai_flows add column if not exists enabled_changed_at timestamp with time zone;
 
 create index if not exists ai_flows_business_enabled_idx ON public.ai_flows USING btree (business_id) WHERE enabled;
 create index if not exists ai_flows_business_id_idx ON public.ai_flows USING btree (business_id);
