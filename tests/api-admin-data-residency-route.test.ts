@@ -13,6 +13,7 @@ import { POST } from "@/app/api/admin/data-residency/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness, updateDataResidencyMode } from "@/lib/db/businesses";
 import { ResidencyValidationError } from "@/lib/residency/tier-gate";
+import { ResidencyReplayCronError } from "@/lib/residency/keep-window";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -53,6 +54,23 @@ describe("api/admin/data-residency route", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error.message).toContain("Enterprise plan feature");
+  });
+
+  it("surfaces the replay-cron rejection with its runbook fix, not a bare 500", async () => {
+    // The case for failing closed on the cron check is that the block is
+    // recoverable in a minute. That only holds if the admin can SEE which
+    // step to run, so a generic 500 here would defeat the whole gate.
+    vi.mocked(updateDataResidencyMode).mockRejectedValue(
+      new ResidencyReplayCronError(
+        "cannot flip data residency to 'dual': the edge-residency-replay cron is not active. " +
+          "Run step 0 of the residency runbook."
+      )
+    );
+    const res = await POST(makeRequest({ businessId: BIZ_ID, mode: "dual" }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.message).toContain("edge-residency-replay");
+    expect(json.error.message).toContain("step 0");
   });
 
   it("rejects unknown modes", async () => {
