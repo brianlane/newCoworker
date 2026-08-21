@@ -25,7 +25,8 @@ import {
   markRecipient,
   patchEmailCampaign,
   skipAllPendingRecipients,
-  transitionEmailCampaign
+  transitionEmailCampaign,
+  listCampaignAudienceBoards
 } from "@/lib/campaigns/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -288,5 +289,49 @@ describe("recipients", () => {
     await expect(
       skipAllPendingRecipients(CAMPAIGN, "x", makeDb(chain({ error: { message: "sp" } })))
     ).rejects.toThrow(/sp/);
+  });
+});
+
+describe("listCampaignAudienceBoards", () => {
+  it("groups the tenant's stages into boards", async () => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) chain[m] = () => chain;
+    chain.order = async () => ({
+      data: [
+        { id: "a", pipeline_id: "p1", name: "New Lead", position: 0 },
+        { id: "b", pipeline_id: "p1", name: "Won", position: 4 }
+      ],
+      error: null
+    });
+    const db = { from: () => chain } as never;
+    const boards = await listCampaignAudienceBoards(BIZ, db);
+    expect(boards).toHaveLength(1);
+    expect(boards[0].map((s) => s.name)).toEqual(["New Lead", "Won"]);
+  });
+
+  it("answers no boards on a read error, so the closed rule cannot apply", async () => {
+    // Fail-OPEN on purpose, the opposite of the outreach nudge: an owner
+    // approved a recipient count, so mailing fewer than promised is worse
+    // than mailing the count they saw.
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) chain[m] = () => chain;
+    chain.order = async () => ({ data: null, error: { message: "boom" } });
+    expect(await listCampaignAudienceBoards(BIZ, { from: () => chain } as never)).toEqual([]);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) chain[m] = () => chain;
+    chain.order = async () => ({ data: [], error: null });
+    defaultClientSpy.mockReturnValue({ from: () => chain });
+    expect(await listCampaignAudienceBoards(BIZ)).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+
+  it("answers no boards for a tenant who never made one", async () => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) chain[m] = () => chain;
+    chain.order = async () => ({ data: null, error: null });
+    expect(await listCampaignAudienceBoards(BIZ, { from: () => chain } as never)).toEqual([]);
   });
 });

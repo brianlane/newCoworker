@@ -2521,6 +2521,55 @@ nothing. Nothing is stamped when a batch is held, so the same prospects are
 due again on the next pass five minutes later; only a PERSISTENT failure stops
 follow-ups, and it surfaces as a sweep note rather than being silent.
 
+### Campaign audiences: one addition, two subtractions
+
+A campaign audience used to be a single addition, `audience_tag`, with blank
+meaning everyone. Two things made that too thin to be safe.
+
+The obvious send, a broadcast to the whole directory, had no way to spare a
+group: "everyone except the people I just onboarded" meant tagging every OTHER
+contact. And since the meeting-minutes classifier landed, the platform writes
+the Won stage tag ITSELF, so the closed-customer group grows without anyone
+touching the board. An owner who never thinks about it would quietly start
+mailing more and more of their existing customers.
+
+So an audience is now one addition and two subtractions, in that order:
+
+| Field | Meaning |
+| --- | --- |
+| `audience_tag` | The tag a contact must carry. Blank = everyone emailable. |
+| `exclude_tag` | A tag that takes a contact OUT, even if it matched above. |
+| `include_closed` | Default FALSE: leave out contacts at or past the won stage. |
+
+"Closed" is resolved against the tenant's OWN board and by POSITION, not by a
+hardcoded name, so a renamed column still anchors correctly and the columns
+AFTER Won (Onboarded, Active) count as closed too, which is what an owner
+means by "do not mail my existing customers". A board with no won column
+contributes nothing rather than guessing.
+
+`include_closed` defaults false, which narrows any draft that already existed.
+That is the right direction for marketing mail, and the composer's live
+recipient count shows the effect before anything is scheduled. The checkbox
+applies to EVERY send, not only a broadcast: targeting a tag only closed
+customers carry shows a count of zero, which is the prompt to tick the box
+rather than a silent surprise.
+
+The rules and the de-dupe live in ONE place
+([src/lib/campaigns/filter.ts](src/lib/campaigns/filter.ts)), used by both the
+composer's preview and the sweep's snapshot. Those were previously the same
+filters written twice with a comment asking the next person to keep them in
+lockstep, which was a reasonable ask while the rule was "carries this tag" and
+stopped being one once it grew a subtraction and a stage lookup: a preview
+that promises 400 recipients and a send that mails 550 is worse than either
+number alone, because the owner approved the first one.
+
+The board read fails OPEN (a read error means no boards, so the closed rule
+cannot apply), deliberately the opposite of the outreach nudge above. The
+stakes invert: there, silence decides whether a machine mails a stranger, so
+uncertainty must suppress; here an owner wrote the mail, chose the audience
+and read the count, so mailing FEWER people than the preview promised would
+break the approval that count represents.
+
 ### Suppression is wider than sending, on two axes
 
 Any ledger row retires its domain from discovery forever, whatever became of

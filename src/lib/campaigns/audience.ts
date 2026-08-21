@@ -11,8 +11,9 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { INSTAGRAM_PROSPECT_TAG } from "@/lib/ai-flows/templates";
-import { CAMPAIGN_MAX_RECIPIENTS } from "./db";
+import { CAMPAIGN_MAX_RECIPIENTS, listCampaignAudienceBoards } from "./db";
 import { CAMPAIGN_AUDIENCE_SCAN_LIMIT } from "./send";
+import { selectCampaignAudience } from "./filter";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -37,11 +38,13 @@ export type CampaignAudiencePreview = {
 export async function previewCampaignAudience(
   businessId: string,
   audienceTag: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  /** The subtractions, defaulted so existing callers keep their meaning. */
+  options: { excludeTag?: string; includeClosed?: boolean } = {}
 ): Promise<CampaignAudiencePreview> {
   /* c8 ignore start -- production default; tests inject */
   const db = client ?? (await createSupabaseServiceClient());
-  return scanAudience(db, businessId, audienceTag);
+  return scanAudience(db, businessId, audienceTag, options);
   /* c8 ignore stop */
 }
 
@@ -54,7 +57,8 @@ export async function previewCampaignAudience(
 async function scanAudience(
   db: SupabaseClient,
   businessId: string,
-  audienceTag: string
+  audienceTag: string,
+  options: { excludeTag?: string; includeClosed?: boolean }
 ): Promise<CampaignAudiencePreview> {
   const { data, error } = await db
     .from("contacts")
@@ -87,19 +91,13 @@ async function scanAudience(
     a.toLowerCase().localeCompare(b.toLowerCase())
   );
 
-  const wantedTag = audienceTag.trim().toLowerCase();
-  const matched = scanned.filter(
-    (c) => !wantedTag || (c.tags ?? []).some((t) => t.trim().toLowerCase() === wantedTag)
-  );
-
-  // De-dupe by address exactly like the snapshot: two rows sharing an email
-  // get ONE mail, so the preview counts mails, not rows.
-  const seen = new Set<string>();
-  const audience = matched.filter((c) => {
-    const key = c.email.trim().toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  // The audience rules and the de-dupe are the SHARED implementation the
+  // snapshot runs, so this count is the mail that will actually go out.
+  const audience = selectCampaignAudience(scanned, {
+    audienceTag,
+    excludeTag: options.excludeTag ?? "",
+    includeClosed: options.includeClosed ?? false,
+    boards: await listCampaignAudienceBoards(businessId, db)
   });
   const capped = audience.slice(0, CAMPAIGN_MAX_RECIPIENTS);
 

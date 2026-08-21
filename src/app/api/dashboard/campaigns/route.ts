@@ -29,6 +29,10 @@ const createSchema = z.object({
   subject: z.string().trim().min(1).max(300),
   bodyMd: z.string().trim().min(1).max(8000),
   audienceTag: z.string().trim().max(40).optional(),
+  // The two subtractions. Both optional; the DB defaults are the safe
+  // reading (subtract nothing by tag, leave closed customers alone).
+  excludeTag: z.string().trim().max(40).optional(),
+  includeClosed: z.boolean().optional(),
   /** ISO datetime; present = scheduled, absent = draft. */
   sendAt: z.string().datetime({ offset: true }).optional()
 });
@@ -79,6 +83,8 @@ export async function POST(request: Request) {
       subject: body.data.subject,
       body_md: body.data.bodyMd,
       audience_tag: body.data.audienceTag ?? "",
+      exclude_tag: body.data.excludeTag ?? "",
+      include_closed: body.data.includeClosed ?? false,
       ...(body.data.sendAt
         ? { status: "scheduled" as const, send_at: new Date(body.data.sendAt).toISOString() }
         : {})
