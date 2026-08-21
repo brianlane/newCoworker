@@ -352,8 +352,18 @@ relaxing it would open a SQL-injection surface to save a duplicate alert; the
 `sms_owner_reply_prompts` reads are the read half of a compare-and-swap whose
 write is central, so read and write must move together or not at all; and the
 international gateway's router read RESOLVES the business id, so there is no
-tenant to route to yet. The voice bridge vendors its own mirror of the
-timeline loader and is still central, which is a gap on the VOICE path.
+tenant to route to yet.
+
+**The voice bridge routes too, over loopback.** It vendors its own mirrors of
+those loaders, and it is the one caller that never leaves the box: it runs on
+the tenant's VPS and the datastore is on `127.0.0.1:8091` there, so it skips
+the tunnel, the DNS, and the central credential lookup entirely
+([vps/voice-bridge/src/residency.ts](vps/voice-bridge/src/residency.ts)).
+`deploy-client.sh` writes `DATA_API_TOKENS` into the bridge's env so a deal
+that rotates that bearer cannot leave the bridge presenting a stale one and
+silently degrading every caller's history to empty. The bridge escapes the
+root `tsc`, so run its own compiler (`cd vps/voice-bridge && npx tsc
+--noEmit`) before merging, and remember its redeploy is manual.
 
 `tests/residency-read-coverage.test.ts` holds every read to one of those
 rules, plus the shapes a source scan cannot see on its own: `.from(expr)` with

@@ -2067,6 +2067,15 @@ VAULT_PATH=/vault
 ROWBOAT_URL=${ROWBOAT_URL:-http://rowboat:3000}
 APP_BASE_URL=${APP_BASE_URL:-}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
+# Bearer for the residency data-api on this same box (127.0.0.1:8091), which
+# the bridge reads for a vps tenant's purged content. Blank on a normal
+# tenant, and blank here whenever DATA_API_TOKENS is not passed in, because
+# it is defaulted further down; vps/voice-bridge/src/residency.ts then falls
+# back to ROWBOAT_GATEWAY_TOKEN above, which is the SAME value that default
+# produces. Written explicitly so a deal that rotates DATA_API_TOKENS away
+# from the gateway token does not leave the bridge presenting a stale bearer
+# and silently degrading every caller's history to empty.
+DATA_API_TOKENS=${DATA_API_TOKENS:-}
 VBENV_EOF
     chmod 600 .env
 

@@ -17,6 +17,11 @@
  * can import it without the bridge's VPS-only runtime deps.
  */
 
+import {
+  voiceIsVpsReadMode,
+  voiceReadMovedRowsOrNull
+} from "./residency.js";
+
 /** How far back an interaction still counts as recent context. */
 export const CONTACT_TIMELINE_LOOKBACK_HOURS = 72;
 
@@ -135,6 +140,12 @@ async function resolveContactNumbers(
 ): Promise<string[]> {
   const numbers = [contactE164];
   try {
+    // Deliberately CENTRAL even for a vps tenant. `contacts` is a KEPT
+    // table, so central is the write ingress and the box copy can only lag
+    // it; these numbers also filter `sms_inbound_jobs`, which stays central.
+    // Routing identity box-ward could drop a just-merged alias and make the
+    // central leg miss history central still holds (reverted for exactly
+    // this reason in PR #1574).
     const { data, error } = await supabase
       .from("contacts")
       .select("customer_e164, alias_e164s")
@@ -171,6 +182,9 @@ export async function loadVoiceContactTimeline(
     const sinceIso = new Date(
       Date.now() - CONTACT_TIMELINE_LOOKBACK_HOURS * 3_600_000
     ).toISOString();
+    // One mode decision for the whole timeline, so the two routed reads
+    // share a single businesses lookup.
+    const vpsRead = await voiceIsVpsReadMode(supabase, businessId);
     const numbers = await resolveContactNumbers(supabase, businessId, contactE164);
     const events: ContactTimelineEvent[] = [];
 
@@ -197,19 +211,42 @@ export async function loadVoiceContactTimeline(
       }
     }
 
-    const outbound = await supabase
-      .from("sms_outbound_log")
-      .select("created_at, body")
-      .eq("business_id", businessId)
-      .in("to_e164", numbers)
-      .is("deleted_at", null)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(TIMELINE_MAX_EVENTS);
-    if (outbound.error) {
-      console.error("contact-context: outbound lookup", outbound.error);
+    // `sms_outbound_log` is PURGED from central at cutover, so for a vps
+    // tenant these rows live only on this box. Loopback, not the tunnel:
+    // the datastore is on 127.0.0.1 here.
+    let outboundRows: OutboundLogRow[] | null;
+    if (vpsRead) {
+      outboundRows = await voiceReadMovedRowsOrNull<OutboundLogRow>({
+        table: "sms_outbound_log",
+        columns: ["created_at", "body"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_e164", op: "in", value: numbers },
+          { column: "deleted_at", op: "is", value: null },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: TIMELINE_MAX_EVENTS
+      });
     } else {
-      for (const row of (outbound.data ?? []) as OutboundLogRow[]) {
+      const outbound = await supabase
+        .from("sms_outbound_log")
+        .select("created_at, body")
+        .eq("business_id", businessId)
+        .in("to_e164", numbers)
+        .is("deleted_at", null)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(TIMELINE_MAX_EVENTS);
+      if (outbound.error) {
+        console.error("contact-context: outbound lookup", outbound.error);
+        outboundRows = null;
+      } else {
+        outboundRows = (outbound.data ?? []) as OutboundLogRow[];
+      }
+    }
+    if (outboundRows !== null) {
+      for (const row of outboundRows) {
         events.push({
           at: row.created_at ?? "",
           channel: "sms_out",
@@ -218,19 +255,42 @@ export async function loadVoiceContactTimeline(
       }
     }
 
-    const calls = await supabase
-      .from("voice_call_transcripts")
-      .select("started_at, created_at, direction, summary, status")
-      .eq("business_id", businessId)
-      .in("caller_e164", numbers)
-      .is("deleted_at", null)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(3);
-    if (calls.error) {
-      console.error("contact-context: voice lookup", calls.error);
+    // `voice_call_transcripts` is purged too, on the same terms. This is the
+    // caller's own call history: empty here means the receptionist greets a
+    // repeat caller as a stranger.
+    let callRows: VoiceCallRow[] | null;
+    if (vpsRead) {
+      callRows = await voiceReadMovedRowsOrNull<VoiceCallRow>({
+        table: "voice_call_transcripts",
+        columns: ["started_at", "created_at", "direction", "summary", "status"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "caller_e164", op: "in", value: numbers },
+          { column: "deleted_at", op: "is", value: null },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: 3
+      });
     } else {
-      for (const row of (calls.data ?? []) as VoiceCallRow[]) {
+      const calls = await supabase
+        .from("voice_call_transcripts")
+        .select("started_at, created_at, direction, summary, status")
+        .eq("business_id", businessId)
+        .in("caller_e164", numbers)
+        .is("deleted_at", null)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(3);
+      if (calls.error) {
+        console.error("contact-context: voice lookup", calls.error);
+        callRows = null;
+      } else {
+        callRows = (calls.data ?? []) as VoiceCallRow[];
+      }
+    }
+    if (callRows !== null) {
+      for (const row of callRows) {
         const when = row.started_at ?? row.created_at ?? "";
         const dir = row.direction === "outbound" ? "outbound call" : "inbound call";
         const summary = row.summary?.trim();
