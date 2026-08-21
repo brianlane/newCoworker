@@ -265,12 +265,46 @@ report_posture() {
     : > "$METRIC_SAMPLES_FILE"
   fi
 
-  local joined payload
+  # Live Ollama environment, for the platform's bootstrap-drift check.
+  #
+  # Read from the RUNNING PROCESS, not from override.conf. A box can carry a
+  # perfectly correct drop-in and a service that was never restarted to pick
+  # it up: that is the July 2026 adopted-box drift, where the refreshed
+  # config never reached the live process and Ollama stayed loopback-bound
+  # while every host-side probe passed. Comparing the file would have said
+  # everything was fine.
+  #
+  # Omitted entirely on a box with no ollama unit (kvm1), and on any read
+  # failure, so absence means "not measured" and never "matches".
+  local ollama_env_json=""
+  if systemctl cat ollama.service >/dev/null 2>&1; then
+    local ollama_pid environ_raw
+    ollama_pid="$(systemctl show -p MainPID --value ollama 2>/dev/null || true)"
+    if [[ -n "$ollama_pid" && "$ollama_pid" != "0" ]]; then
+      # Split the READ from the transform. If the environ is unreadable we
+      # send nothing, and the platform records "not measured". If it IS
+      # readable but carries no tuning at all, we must send an EMPTY object
+      # rather than nothing: a completely untuned live process is the most
+      # broken state there is, and reporting it as "not measured" would be
+      # the same silence this whole check exists to break. So grep finding
+      # no matches is swallowed, and the object is emitted either way.
+      if environ_raw="$(tr '\0' '\n' < "/proc/$ollama_pid/environ" 2>/dev/null)"; then
+        ollama_env_json="{$(printf '%s\n' "$environ_raw" \
+          | grep -E '^(OLLAMA_|OMP_)[A-Z0-9_]+=' \
+          | awk -F= '{ k=$1; sub(/^[^=]*=/, "", $0); v=$0;
+                       gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v);
+                       printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, v }' || true)}"
+      fi
+    fi
+  fi
+
+  local joined payload extra=""
+  [[ -n "$ollama_env_json" ]] && extra=",\"ollamaEnv\":${ollama_env_json}"
   joined="$(IFS=,; echo "${checks[*]}")"
   if [[ -n "$metrics_json" ]]; then
-    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}],\"metrics\":${metrics_json}}"
+    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}],\"metrics\":${metrics_json}${extra}}"
   else
-    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}]}"
+    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}]${extra}}"
   fi
   if curl -sf --max-time 15 -X POST \
       -H "Content-Type: application/json" \

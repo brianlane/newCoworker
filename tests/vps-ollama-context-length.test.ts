@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  EXPECTED_OLLAMA_ENV,
   OLLAMA_TUNED_SIZES,
+  expectedOllamaEnvFromBootstrap,
   parseOllamaContextLengths
 } from "@/lib/vps/ollama-tuning";
 
@@ -86,5 +88,34 @@ describe("integration compose mirrors the box tuning", () => {
       "utf8"
     );
     expect(fragment).toContain(`OLLAMA_CONTEXT_LENGTH=${contextLengths.get("kvm2")}`);
+  });
+});
+
+/**
+ * The live-box drift check compares a box's running Ollama process against
+ * `EXPECTED_OLLAMA_ENV`, a hand-maintained copy of what bootstrap.sh writes.
+ * It has to be a copy: the check runs in the serverless app, which cannot
+ * read a shell script at request time.
+ *
+ * A copy that silently diverged from the script would report "no drift"
+ * forever, which is precisely the silence the check exists to break, so the
+ * copy is pinned to the real script here. Edit bootstrap.sh without editing
+ * the table and this fails.
+ */
+describe("EXPECTED_OLLAMA_ENV is pinned to bootstrap.sh", () => {
+  it("matches what the script actually writes, for every tuned size", () => {
+    expect(EXPECTED_OLLAMA_ENV).toEqual(expectedOllamaEnvFromBootstrap(BOOTSTRAP));
+  });
+
+  it("covers every variable the script sets, not just the context length", () => {
+    for (const size of OLLAMA_TUNED_SIZES) {
+      const keys = Object.keys(EXPECTED_OLLAMA_ENV[size]);
+      // A partial table would leave the uncovered knobs able to drift with
+      // no alarm, which is the whole class of bug being closed.
+      expect(keys).toContain("OLLAMA_CONTEXT_LENGTH");
+      expect(keys).toContain("OLLAMA_HOST");
+      expect(keys).toContain("OLLAMA_NUM_PARALLEL");
+      expect(keys.length).toBeGreaterThanOrEqual(8);
+    }
   });
 });
