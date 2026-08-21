@@ -201,7 +201,13 @@ export type SendTelnyxSmsResult = {
   channel: "sms" | "rcs";
 };
 
-type ReserveSlotResult = { ok?: boolean; reason?: string; source?: string };
+type ReserveSlotResult = {
+  ok?: boolean;
+  reason?: string;
+  source?: string;
+  /** Quota window the RPC decided in; keys the once-per-window cap alert. */
+  window_start?: string | null;
+};
 
 const DEFAULT_THROTTLE_MAX_PER_SECOND = 10;
 
@@ -364,7 +370,7 @@ export async function sendTelnyxSms(
         await sendCapAlertOnce(meterClient, {
           businessId,
           kind: "sms_monthly",
-          periodKey: smsCapPeriodKey(),
+          periodKey: smsCapPeriodKey(gate?.window_start),
           notifyUrl: `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/functions/v1/notifications`,
           bearer: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
           payload: { surface: "app_send_sms" },

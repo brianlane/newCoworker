@@ -6212,10 +6212,15 @@ async function sendSmsStep(
     { p_business_id: run.business_id, p_text_units: reserveUnits, p_destination_e164: toE164 }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
-  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
   if (!reserve?.ok) {
     if (reserve?.reason === "monthly_sms_limit") {
-      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_send_sms");
+      await alertSmsCapOnce(
+        supabase,
+        run.business_id,
+        "ai_flow_send_sms",
+        reserve?.window_start
+      );
     }
     return { kind: "ok", skipped: true, result: { skipped: reserve?.reason ?? "quota" } };
   }
@@ -6417,10 +6422,15 @@ async function sendGroupSmsStep(
     }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
-  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
   if (!reserve?.ok) {
     if (reserve?.reason === "monthly_sms_limit") {
-      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_send_sms");
+      await alertSmsCapOnce(
+        supabase,
+        run.business_id,
+        "ai_flow_send_sms",
+        reserve?.window_start
+      );
     }
     return { kind: "ok", skipped: true, result: { skipped: reserve?.reason ?? "quota" } };
   }
@@ -10895,10 +10905,15 @@ async function sendOfferSms(
     { p_business_id: run.business_id, p_text_units: reserveUnits, p_destination_e164: to }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
-  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
   if (!reserve?.ok) {
     if (reserve?.reason === "monthly_sms_limit") {
-      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_route_to_team");
+      await alertSmsCapOnce(
+        supabase,
+        run.business_id,
+        "ai_flow_route_to_team",
+        reserve?.window_start
+      );
     }
     throw new Error(`route_to_team: outbound quota unavailable (${reserve?.reason ?? "quota"})`);
   }
@@ -10931,16 +10946,21 @@ async function sendOfferSms(
   }
 }
 
-/** One-shot (per business per month) urgent owner alert when the SMS cap blocks a send. */
+/**
+ * One-shot (per business per quota window) urgent owner alert when the SMS
+ * cap blocks a send. `windowStart` is the window the reserve RPC refused in,
+ * so the guard and the meter always agree on which window this is.
+ */
 async function alertSmsCapOnce(
   supabase: Supabase,
   businessId: string,
-  surface: string
+  surface: string,
+  windowStart?: string | null
 ): Promise<void> {
   await sendCapAlertOnce(supabase, {
     businessId,
     kind: "sms_monthly",
-    periodKey: smsCapPeriodKey(),
+    periodKey: smsCapPeriodKey(windowStart),
     notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
     bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     payload: { surface }

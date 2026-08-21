@@ -5,6 +5,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTierLimits } from "@/lib/plans/limits";
 import type { PlanTier } from "@/lib/plans/tier";
 import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
+import { soonestExpiryAt } from "@/lib/billing/usage-period";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -15,6 +16,17 @@ export type VoiceBillingSnapshot = {
   reservedIncludedInflight: number;
   includedHeadroomSeconds: number;
   bonusSecondsAvailable: number;
+  /**
+   * End of the month-window `stripePeriodStart` opens, i.e. when the included
+   * allowance refills. Null only when the period anchor is unparseable.
+   */
+  includedResetAt: string | null;
+  /**
+   * Expiry of the soonest-expiring bonus grant that still HOLDS minutes.
+   * Packs expire in tranches, so this is the next date the displayed bonus
+   * balance drops. Null when no live pack has minutes left.
+   */
+  bonusSoonestExpiresAt: string | null;
 };
 
 /**
@@ -50,9 +62,11 @@ export async function getVoiceBillingSnapshotForBusiness(
   // the Stripe period (prepaid 12/24-month plans have a term-long period but
   // included minutes reset monthly). Normalized through Date to match
   // voice_reserve.ts exactly.
-  const periodStart = new Date(
-    deriveMonthlyQuotaWindow(sub.stripe_current_period_start as string, Date.now()).startIso
-  ).toISOString();
+  const quotaWindow = deriveMonthlyQuotaWindow(
+    sub.stripe_current_period_start as string,
+    Date.now()
+  );
+  const periodStart = new Date(quotaWindow.startIso).toISOString();
 
   const { data: usageRow } = await db
     .from("voice_billing_period_usage")
@@ -79,14 +93,21 @@ export async function getVoiceBillingSnapshotForBusiness(
   const nowIso = new Date().toISOString();
   const { data: bonusRows } = await db
     .from("voice_bonus_grants")
-    .select("seconds_remaining")
+    .select("seconds_remaining, expires_at")
     .eq("business_id", businessId)
     .is("voided_at", null)
     .gt("expires_at", nowIso);
 
   let bonus = 0;
+  // Expiries come from the rows already fetched for the balance rather than a
+  // second query. A drained grant is skipped: its expiry is not a date any
+  // displayed balance disappears on, so surfacing it would be misleading.
+  const liveExpiries: (string | null)[] = [];
   for (const g of bonusRows ?? []) {
-    bonus += Number((g as { seconds_remaining?: number }).seconds_remaining ?? 0);
+    const row = g as { seconds_remaining?: number; expires_at?: string | null };
+    const seconds = Number(row.seconds_remaining ?? 0);
+    bonus += seconds;
+    if (seconds > 0) liveExpiries.push(row.expires_at ?? null);
   }
 
   const headroom = Math.max(0, tierCap - committed - reservedSum);
@@ -97,6 +118,8 @@ export async function getVoiceBillingSnapshotForBusiness(
     committedIncludedSeconds: committed,
     reservedIncludedInflight: reservedSum,
     includedHeadroomSeconds: headroom,
-    bonusSecondsAvailable: bonus
+    bonusSecondsAvailable: bonus,
+    includedResetAt: quotaWindow.endIso,
+    bonusSoonestExpiresAt: soonestExpiryAt(liveExpiries)
   };
 }

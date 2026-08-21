@@ -231,8 +231,35 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
       committedIncludedSeconds: 100,
       reservedIncludedInflight: 100,
       includedHeadroomSeconds: 400,
-      bonusSecondsAvailable: 120
+      bonusSecondsAvailable: 120,
+      // End of the month-window the period start opens.
+      includedResetAt: "2026-05-01T00:00:00.000Z",
+      // The one grant holding minutes carries no expiry in this fixture, and
+      // the other holds none, so there is no date to show.
+      bonusSoonestExpiresAt: null
     });
+  });
+
+  it("reports the soonest expiry among grants that still hold minutes", async () => {
+    const client = mockClient({
+      businesses: makeBusinessesResult({ tier: "starter", enterprise_limits: null }),
+      subscriptions: makeSubResult({ stripe_current_period_start: "2026-04-01T00:00:00.000Z" }),
+      voice_billing_period_usage: makeUsageResult({
+        tier_cap_seconds: 600,
+        committed_included_seconds: 0
+      }),
+      voice_reservations: makeResvResult([]),
+      voice_bonus_grants: makeBonusResult([
+        { seconds_remaining: 600, expires_at: "2026-06-01T00:00:00.000Z" },
+        // Drained: unexpired, but no displayed balance disappears on its
+        // date, so it must not win even though it expires first.
+        { seconds_remaining: 0, expires_at: "2026-05-02T00:00:00.000Z" },
+        { seconds_remaining: 1800, expires_at: "2026-05-20T00:00:00.000Z" }
+      ])
+    });
+    const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
+    expect(snap?.bonusSecondsAvailable).toBe(2400);
+    expect(snap?.bonusSoonestExpiresAt).toBe("2026-05-20T00:00:00.000Z");
   });
 
   it("keys the snapshot on the current month-window for a prepaid multi-month period", async () => {
@@ -251,6 +278,8 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
     });
     const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
     expect(snap?.stripePeriodStart).toBe("2026-07-01T00:00:00.000Z");
+    // ...and the reset date shown is that window's end, not the term end.
+    expect(snap?.includedResetAt).toBe("2026-08-01T00:00:00.000Z");
   });
 
   it("coerces missing reserved_included_seconds to zero", async () => {

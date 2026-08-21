@@ -25,6 +25,11 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription, isCommitmentElapsed } from "@/lib/db/subscriptions";
 import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
+import {
+  calendarMonthResetAt,
+  formatUsagePeriodDate,
+  monthlyUsageResetAt
+} from "@/lib/billing/usage-period";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
@@ -40,9 +45,10 @@ import {
 } from "@/lib/billing/membership-pack-addons";
 import {
   getChatSpendSnapshotForBusiness,
+  getSmsBonusSoonestExpiry,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
-import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getBillingWindowUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import {
   getAutoReloadCard,
@@ -132,8 +138,9 @@ export default async function BillingPage(props: {
   const [
     subscription,
     snapshot,
-    smsMonthUsed,
+    smsWindowUsed,
     smsBonusRemaining,
+    smsBonusExpiresAt,
     chatSpend,
     allCustomOffers,
     autoReloadRules,
@@ -144,12 +151,13 @@ export default async function BillingPage(props: {
     ? await Promise.all([
         getSubscription(business.id),
         getVoiceBillingSnapshotForBusiness(business.id),
-        getCalendarMonthUsageTotals(business.id, db)
+        getBillingWindowUsageTotals(business.id, db)
           // Cap surface: text UNITS, ceiled (matches the reserve RPC's ledger;
           // analytics keeps message counts via sms_sent elsewhere).
           .then((t) => Math.ceil(t.sms_text_units))
           .catch(() => null),
         getSmsBonusTextsRemaining(business.id, db),
+        getSmsBonusSoonestExpiry(business.id, db).catch(() => null),
         getChatSpendSnapshotForBusiness(
           business.id,
           db,
@@ -171,6 +179,7 @@ export default async function BillingPage(props: {
         null,
         null,
         0,
+        null,
         null,
         [] as Awaited<ReturnType<typeof listWhiteGloveOffers>>,
         [] as Awaited<ReturnType<typeof listAutoReloadRules>>,
@@ -260,7 +269,7 @@ export default async function BillingPage(props: {
         })),
         currentUnits:
           smsMonthlyCap !== null && Number.isFinite(smsMonthlyCap)
-            ? Math.max(0, smsMonthlyCap - (smsMonthUsed ?? 0)) + smsBonusRemaining
+            ? Math.max(0, smsMonthlyCap - (smsWindowUsed ?? 0)) + smsBonusRemaining
             : null,
         // An infinite plan cap can never be crossed, so a remaining-capacity
         // threshold is meaningless rather than merely large.
@@ -384,6 +393,23 @@ export default async function BillingPage(props: {
 
   // ---- Derive PlanCard props from subscription + profile ---------------
   const now = new Date();
+
+  // ONE reset date for every included allowance. Voice minutes, texts, and the
+  // AI chat budget all refill on the month-window anchored to the Stripe
+  // period start (see @/lib/billing/usage-period, and the
+  // sms_window_anchored_to_billing_period migration for the text side). On a
+  // 12/24-month prepaid plan that is NOT the renewal date PlanCard shows
+  // above: the term renews once, the allowances refill every month.
+  //
+  // Bonus packs are the exception and keep their own per-grant expiry.
+  const nowMs = now.getTime();
+  const anchoredResetAt =
+    snapshot?.includedResetAt ??
+    monthlyUsageResetAt(subscription?.stripe_current_period_start ?? null, nowMs);
+  // Without a Stripe anchor every meter falls back to the UTC calendar month,
+  // matching sms_billing_window_start and getChatSpendSnapshotForBusiness.
+  const usageResetAt = anchoredResetAt ?? calendarMonthResetAt(nowMs);
+  const fmtPeriodDate = (iso: string) => formatUsagePeriodDate(iso, locale);
   const planStatus: "active" | "active_cancel_at_period_end" | "canceled_in_grace" | "pending" | "canceled" | "wiped" =
     !subscription
       ? "canceled"
@@ -573,6 +599,9 @@ export default async function BillingPage(props: {
                   used: formatMinutes(snapshot.committedIncludedSeconds)
                 })}
               </dd>
+              <dd className="text-[11px] text-parchment/40">
+                {t("resetsOn", { date: fmtPeriodDate(usageResetAt) })}
+              </dd>
             </div>
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("bonusBalance")}</dt>
@@ -580,6 +609,13 @@ export default async function BillingPage(props: {
                 {formatMinutes(snapshot.bonusSecondsAvailable)}
               </dd>
               <dd className="text-[11px] text-parchment/40">{t("unusedTopUps")}</dd>
+              {snapshot.bonusSoonestExpiresAt && (
+                <dd className="text-[11px] text-parchment/40">
+                  {t("bonusNextExpiry", {
+                    date: fmtPeriodDate(snapshot.bonusSoonestExpiresAt)
+                  })}
+                </dd>
+              )}
             </div>
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("topUpRate")}</dt>
@@ -610,12 +646,15 @@ export default async function BillingPage(props: {
                 {t("textsSentThisMonth")}
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
-                {smsMonthUsed === null ? "–" : smsMonthUsed.toLocaleString()}
+                {smsWindowUsed === null ? "–" : smsWindowUsed.toLocaleString()}
               </dd>
               <dd className="text-[11px] text-parchment/40">
                 {smsMonthlyCap === null || smsMonthlyCap === Infinity
                   ? t("noMonthlyCap")
                   : t("planCapPerMonth", { cap: smsMonthlyCap.toLocaleString() })}
+              </dd>
+              <dd className="text-[11px] text-parchment/40">
+                {t("resetsOn", { date: fmtPeriodDate(usageResetAt) })}
               </dd>
             </div>
             <div>
@@ -626,6 +665,11 @@ export default async function BillingPage(props: {
                 {smsBonusRemaining.toLocaleString()}
               </dd>
               <dd className="text-[11px] text-parchment/40">{t("usedAfterCap")}</dd>
+              {smsBonusExpiresAt && (
+                <dd className="text-[11px] text-parchment/40">
+                  {t("bonusNextExpiry", { date: fmtPeriodDate(smsBonusExpiresAt) })}
+                </dd>
+              )}
             </div>
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("aiChatBudget")}</dt>
@@ -641,6 +685,11 @@ export default async function BillingPage(props: {
                     })
                   : t("sharedAcrossTasks")}
               </dd>
+              {chatSpend && (
+                <dd className="text-[11px] text-parchment/40">
+                  {t("resetsOn", { date: fmtPeriodDate(usageResetAt) })}
+                </dd>
+              )}
             </div>
           </dl>
         </Card>

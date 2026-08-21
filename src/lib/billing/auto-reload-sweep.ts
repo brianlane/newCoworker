@@ -34,7 +34,7 @@ import {
 } from "@/lib/db/auto-reload";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import { getChatSpendSnapshotForBusiness, getSmsBonusTextsRemaining } from "@/lib/db/chat-usage";
-import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getBillingWindowUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { createOffSessionPackCharge, getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -166,7 +166,7 @@ export async function readRemainingUnits(
     // charge against a number that is meaningless here.
     if (!Number.isFinite(cap)) return null;
     const [usage, bonus] = await Promise.all([
-      getCalendarMonthUsageTotals(candidate.businessId, db),
+      getBillingWindowUsageTotals(candidate.businessId, db),
       getSmsBonusTextsRemaining(candidate.businessId, db)
     ]);
     // Balance in text units, the ledger the reserve RPC actually enforces,

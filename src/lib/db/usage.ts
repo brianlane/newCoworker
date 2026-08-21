@@ -61,44 +61,62 @@ export async function getTodayUsage(
   return data as DailyUsageRow;
 }
 
+
+export type BillingWindowUsage = {
+  /** First UTC date counted in the window (YYYY-MM-DD). */
+  windowStart: string;
+  sms_sent: number;
+  sms_text_units: number;
+  calls_made: number;
+};
+
 /**
- * Sum SMS and outbound calls for the current UTC calendar month from
- * `daily_usage`. `sms_sent` counts MESSAGES (analytics surfaces);
- * `sms_text_units` is the billable-unit total the monthly cap is enforced
- * against (one unit per SMS part, 2.2 per MMS; see
- * src/lib/sms/segment-info.ts). Cap/allowance surfaces must read the units.
+ * Usage in the tenant's CURRENT text-quota window.
+ *
+ * The window is anchored to `subscriptions.stripe_current_period_start`, the
+ * same month-window voice minutes and the AI chat budget reset on, so a
+ * tenant has one reset date rather than three. See the
+ * `sms_window_anchored_to_billing_period` migration for the anchoring and its
+ * changeover rule.
+ *
+ * The sum is done in Postgres by `sms_billing_window_usage` rather than over
+ * rows fetched here, so the number shown on the billing page is produced by
+ * the same expression `try_reserve_sms_outbound_slot` enforces with. A
+ * TS-side reimplementation of the window would be free to drift from the
+ * RPC, and a cap surface that disagrees with the RPC is worse than no cap
+ * surface at all.
+ *
+ * Throws on error: a caller that cannot read usage must not silently
+ * render zero as though the tenant had sent nothing.
  */
-export async function getCalendarMonthUsageTotals(
+export async function getBillingWindowUsageTotals(
   businessId: string,
   client?: SupabaseClient
-): Promise<{ sms_sent: number; sms_text_units: number; calls_made: number }> {
+): Promise<BillingWindowUsage> {
   const db = client ?? (await createSupabaseServiceClient());
-  const monthStart = calendarMonthStartUtcYmd();
-  const { data, error } = await db
-    .from("daily_usage")
-    .select("sms_sent, sms_text_units, calls_made")
-    .eq("business_id", businessId)
-    .gte("usage_date", monthStart);
-
+  const { data, error } = await db.rpc("sms_billing_window_usage", {
+    p_business_id: businessId
+  });
   if (error) {
-    console.error("getCalendarMonthUsageTotals", error);
-    throw new Error(`getCalendarMonthUsageTotals: ${error.message}`);
+    console.error("getBillingWindowUsageTotals", error);
+    throw new Error(`getBillingWindowUsageTotals: ${error.message}`);
   }
-
-  let sms = 0;
-  let units = 0;
-  let calls = 0;
-  for (const row of data ?? []) {
-    const r = row as {
-      sms_sent?: number | null;
-      sms_text_units?: number | null;
-      calls_made?: number | null;
-    };
-    sms += Number(r.sms_sent ?? 0);
-    units += Number(r.sms_text_units ?? 0);
-    calls += Number(r.calls_made ?? 0);
-  }
-  return { sms_sent: sms, sms_text_units: units, calls_made: calls };
+  const row = (data ?? {}) as {
+    window_start?: string | null;
+    sms_sent?: number | string | null;
+    sms_text_units?: number | string | null;
+    calls_made?: number | string | null;
+  };
+  const num = (v: number | string | null | undefined): number => {
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    windowStart: row.window_start ?? "",
+    sms_sent: num(row.sms_sent),
+    sms_text_units: num(row.sms_text_units),
+    calls_made: num(row.calls_made)
+  };
 }
 
 /**
@@ -376,7 +394,10 @@ export async function checkLimitReached(
   if (limits.smsPerMonth !== Infinity) {
     let month: { sms_sent: number; sms_text_units: number; calls_made: number };
     try {
-      month = await getCalendarMonthUsageTotals(businessId, client);
+      // The anchored window, not the calendar month: this advisory check has
+      // to agree with try_reserve_sms_outbound_slot or it will refuse sends
+      // the RPC would allow (and vice versa).
+      month = await getBillingWindowUsageTotals(businessId, client);
     } catch (e) {
       console.error("checkLimitReached: monthly usage unavailable", e);
       return {
