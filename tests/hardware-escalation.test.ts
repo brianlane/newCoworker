@@ -4,6 +4,7 @@ import {
   ADVISOR_WINDOW_DAYS,
   DEFAULT_THRESHOLDS,
   ON_BOX_ERROR_SOURCES,
+  adviceLogMessage,
   advisorDeployedSize,
   autoReloadCovers,
   buildEscalationAdviceEmail,
@@ -813,6 +814,80 @@ describe("buildEscalationAdviceEmail", () => {
       "https://app.example.com"
     );
     expect(text).toContain("memory down to 4% available, across 7 hours of 20 measured");
+  });
+});
+
+describe("adviceLogMessage", () => {
+  function advice(overrides: Partial<BusinessAdvice>): BusinessAdvice {
+    const signals: EscalationSignal[] = overrides.signals ?? [];
+    return {
+      businessId: "biz-1",
+      businessName: "Amy's Plumbing",
+      tier: "starter",
+      currentSize: "kvm2",
+      recommendedSize: "kvm4",
+      hardwareSignals: signals.filter((sig) => signalCategory(sig.kind) === "hardware"),
+      usageSignals: signals.filter((sig) => signalCategory(sig.kind) === "usage"),
+      ...overrides,
+      signals
+    };
+  }
+
+  it("names the migration for a hardware finding", () => {
+    expect(
+      adviceLogMessage(advice({ signals: [{ kind: "system_errors", errorCount: 40 }] }))
+    ).toBe("Sustained load: system_errors, consider migrating kvm2 → kvm4");
+  });
+
+  it("says the box is maxed out only when hardware fired and the ladder ran out", () => {
+    expect(
+      adviceLogMessage(
+        advice({
+          currentSize: "kvm8",
+          recommendedSize: null,
+          signals: [{ kind: "system_errors", errorCount: 40 }]
+        })
+      )
+    ).toBe("Sustained load: system_errors, already on kvm8 (largest box)");
+  });
+
+  it("does NOT call an idle kvm2 maxed out just because it has no recommendation", () => {
+    // `recommendedSize` is null in two cases that mean opposite things. This
+    // tenant's box is fine; they are near a plan limit.
+    const msg = adviceLogMessage(
+      advice({
+        recommendedSize: null,
+        signals: [
+          {
+            kind: "voice_volume",
+            projectedMonthlyMinutes: 227,
+            includedMinutes: 250,
+            packMinutes: 0
+          }
+        ]
+      })
+    );
+    expect(msg).toBe(
+      "Near a plan limit: voice_volume, a packs or plan conversation, not hardware"
+    );
+    expect(msg).not.toContain("largest box");
+    expect(msg).not.toContain("migrating");
+  });
+
+  it("reports both halves when a tenant tripped hardware AND a plan limit", () => {
+    expect(
+      adviceLogMessage(
+        advice({
+          signals: [
+            { kind: "local_model_fallback", localTurns: 2, refusedTurns: 0, hasLocalModel: true },
+            { kind: "sms_volume", monthToDateUnits: 90, capUnits: 100, packUnits: 0 }
+          ]
+        })
+      )
+    ).toBe(
+      "Sustained load: local_model_fallback, consider migrating kvm2 → kvm4. " +
+        "Also near a plan limit: sms_volume"
+    );
   });
 });
 

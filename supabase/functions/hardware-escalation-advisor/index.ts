@@ -33,6 +33,7 @@ import {
   ADVISOR_WINDOW_DAYS,
   DEFAULT_THRESHOLDS,
   ON_BOX_ERROR_SOURCES,
+  adviceLogMessage,
   buildEscalationAdviceEmail,
   evaluateEscalationSignals,
   isAdvisorFleetCandidate,
@@ -553,12 +554,21 @@ serve(async (req: Request) => {
               source: "platform",
               level: "warn",
               event: "hardware_escalation_advice",
-              message:
-                `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")}, ` +
-                (advice.recommendedSize
-                  ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
-                  : `already on ${advice.currentSize} (largest box)`),
-              payload: { signals: advice.signals, period_key: periodKey }
+              // Must say the same thing the digest says. `recommendedSize`
+              // is now null in TWO cases, and they mean opposite things: a
+              // usage-only tenant has no hardware advice at all, while a
+              // hardware-flagged tenant on kvm8 has run out of ladder.
+              // Reading every null as "largest box" would label an idle
+              // kvm2 as maxed-out hardware, which is the same conflation of
+              // plan limits with machine limits this cron was rewritten to
+              // stop making.
+              message: adviceLogMessage(advice),
+              payload: {
+                signals: advice.signals,
+                hardware_signals: advice.hardwareSignals.map((sig) => sig.kind),
+                usage_signals: advice.usageSignals.map((sig) => sig.kind),
+                period_key: periodKey
+              }
             });
           }
         }

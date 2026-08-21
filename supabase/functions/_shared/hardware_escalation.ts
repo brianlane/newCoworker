@@ -600,6 +600,32 @@ function usageBlock(a: BusinessAdvice, siteUrl: string): string {
 }
 
 /**
+ * Admin-page warn line for one tenant, mirroring the digest's split.
+ *
+ * `recommendedSize` is null in TWO cases that mean opposite things: a
+ * usage-only tenant has no hardware advice at all, while a hardware-flagged
+ * tenant on kvm8 has run out of ladder. Reading every null as "largest box"
+ * would label an idle kvm2 as maxed-out hardware, which is the same
+ * conflation of plan limits with machine limits this module was rewritten
+ * to stop making.
+ */
+export function adviceLogMessage(advice: BusinessAdvice): string {
+  const kinds = (sigs: EscalationSignal[]) => sigs.map((sig) => sig.kind).join(", ");
+  if (advice.hardwareSignals.length === 0) {
+    return `Near a plan limit: ${kinds(
+      advice.usageSignals
+    )}, a packs or plan conversation, not hardware`;
+  }
+  const hardware = `Sustained load: ${kinds(advice.hardwareSignals)}, ${
+    advice.recommendedSize
+      ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
+      : `already on ${advice.currentSize} (largest box)`
+  }`;
+  if (advice.usageSignals.length === 0) return hardware;
+  return `${hardware}. Also near a plan limit: ${kinds(advice.usageSignals)}`;
+}
+
+/**
  * Ops digest email for every flagged tenant in one send (one email per run,
  * not per business, the operator wants a single morning digest).
  *
