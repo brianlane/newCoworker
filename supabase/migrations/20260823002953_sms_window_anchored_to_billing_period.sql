@@ -99,6 +99,22 @@ begin
     v_start := (v_anchor_utc + make_interval(months => v_n))::date;
   end if;
 
+  -- The floor applies only once the changeover date has actually ARRIVED.
+  -- Applied earlier (a stack whose clock is behind the date, a fresh db reset
+  -- in CI) it would put the window start in the FUTURE, so every
+  -- `usage_date >= start` sum is empty and the tenant texts uncapped. Worse,
+  -- for a tenant whose anniversary day IS the changeover day the start would
+  -- already equal the floor, so it would not move when the anniversary came
+  -- and the page would have promised a reset the meter never performs.
+  -- Before the changeover the plain anchored window is already consistent
+  -- with what the page shows, so return it untouched.
+  if v_now_utc::date < v_changeover then
+    return v_start;
+  end if;
+
+  -- On and after the changeover: the start only moves forward, and the next
+  -- date this expression changes value is the next anniversary, which is the
+  -- date the billing page shows.
   return greatest(v_start, v_changeover);
 end;
 $function$;
