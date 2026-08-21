@@ -143,44 +143,25 @@ export async function resolveContactNumbers(
 ): Promise<string[]> {
   const numbers = [contactE164];
   try {
-    type ContactNumbersRow = { customer_e164?: string | null; alias_e164s?: string[] | null };
-    let row: ContactNumbersRow | null = null;
-    if (await edgeIsVpsReadMode(supabase, businessId)) {
-      // The tenant's own box owns their contacts. The OR + array-containment
-      // legs are the same query central runs, expressible since the box
-      // grammar widened (PR #1570).
-      const rows = await edgeReadMovedRowsOrNull<ContactNumbersRow>(supabase, businessId, {
-        table: "contacts",
-        columns: ["customer_e164", "alias_e164s"],
-        filters: [
-          { column: "business_id", op: "eq", value: businessId },
-          {
-            or: [
-              [{ column: "customer_e164", op: "eq", value: contactE164 }],
-              [{ column: "alias_e164s", op: "contains", value: [contactE164] }]
-            ]
-          }
-        ],
-        limit: 1
-      });
-      // Unreachable box degrades to the surfaced number alone, which is what
-      // a central read error already did here: the timeline then covers one
-      // number instead of the merged profile's several.
-      if (rows === null) return numbers;
-      row = rows[0] ?? null;
-    } else {
-      const { data, error } = await supabase
-        .from("contacts")
-        .select("customer_e164, alias_e164s")
-        .eq("business_id", businessId)
-        .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
-        .maybeSingle();
-      if (error) {
-        console.error("contact_context: contact resolve", error);
-        return numbers;
-      }
-      row = data as ContactNumbersRow | null;
+    // Deliberately CENTRAL even for a vps tenant, and not an oversight.
+    // `contacts` is a KEPT table, so central is the write ingress and the box
+    // copy can only ever be a replay tick BEHIND it, never ahead. These
+    // numbers then filter both the box legs below AND `sms_inbound_jobs`,
+    // which is an engine table that stays central. Reading identity from the
+    // box could therefore drop a just-merged alias and make the CENTRAL leg
+    // miss history that central still holds. Central identity paired with box
+    // history is the only combination where neither side is short.
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("customer_e164, alias_e164s")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("contact_context: contact resolve", error);
+      return numbers;
     }
+    const row = data as { customer_e164?: string | null; alias_e164s?: string[] | null } | null;
     if (row?.customer_e164) numbers.push(row.customer_e164);
     for (const alias of row?.alias_e164s ?? []) {
       if (typeof alias === "string" && alias) numbers.push(alias);

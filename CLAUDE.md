@@ -186,7 +186,9 @@ If you are in plan mode, the plan should say so.
   The Deno workers route through `supabase/functions/_shared/residency.ts`
   (a lockstep mirror, since they cannot import `@/lib/*`); pick
   `edgeReadMovedRows` when the reply depends on the rows and
-  `edgeReadMovedRowsOrNull` when the read only suppresses something.
+  `edgeReadMovedRowsOrNull` when the read only suppresses something. Routing
+  a KEPT table box-ward in isolation is still wrong on the engine side too:
+  central is the write ingress, so the box copy only ever lags it.
 - **`package.json` overrides** each have a documented reason in
   `docs/DEPENDENCY-OVERRIDES.md`. Adding, changing, or removing an override
   means updating that file in the same PR.

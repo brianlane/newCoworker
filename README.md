@@ -328,8 +328,14 @@ chose triggers over call-site wrappers.
 cannot import `@/lib/*`, so `supabase/functions/_shared/residency.ts` mirrors
 the routing layer (pinned by `tests/residency-edge-lockstep.test.ts`). What a
 residency tenant's coworker KNOWS about a customer now comes from their own
-box: the cross-channel timeline, the automation's recent sends, the last
-assistant message, and the contact identity that feeds them.
+box: the cross-channel timeline, the automation's recent sends, and the last
+assistant message.
+
+The contact IDENTITY behind them stays central on purpose. `contacts` is a
+kept table, so central is the write ingress and the box copy can only lag it;
+those numbers then filter both the box legs and the central
+`sms_inbound_jobs` leg, so taking them from the box could drop a just-merged
+alias and make the central leg miss history central still holds.
 
 The failure posture there is deliberately not uniform. `edgeReadMovedRows`
 throws; `edgeReadMovedRowsOrNull` returns null so a caller can fall back to a

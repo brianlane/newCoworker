@@ -242,8 +242,6 @@ const KEPT_TABLE_ROUTED_BOX_WARD: Record<SiteKey, string> = {
     "AiFlows list page reads the tenant's own box, via listAiFlows's inner fetchFlows (PR #1567)",
   "src/lib/ai-flows/db.ts::getAiFlow::ai_flows":
     "single flow read for the AiFlows pages, on the tenant's own box (PR #1567)",
-  "supabase/functions/_shared/contact_context.ts::resolveContactNumbers::contacts":
-    "the inbound engine resolves a contact's merged numbers from the tenant's own box. `contacts` is KEPT central, so this is on-box serving rather than a fix for missing rows; it is routed because it feeds the two PURGED timeline reads in the same function, and leaving it central would have the engine read one tenant's identity centrally and their history box-ward",
   "src/lib/ai-flows/db.ts::enqueueAiFlowRun::ai_flows":
     "enqueue gate re-reads the flow from the tenant's own box (PR #1567). NOTE the residual read-after-write window: createAiFlow and updateAiFlow write CENTRAL and replicate by journal, so a flow created or edited and then immediately enqueued can miss the newest definition by up to one replay tick. Inherent to box reads plus central writes, not specific to this call"
 };

@@ -57,7 +57,6 @@ describe("inbound path on a residency tenant", () => {
 
   it("reads the purged timeline tables from the tenant's box, not central", async () => {
     vi.mocked(edgeReadMovedRowsOrNull).mockImplementation(async (_db, _biz, req) => {
-      if (req.table === "contacts") return [{ customer_e164: LEAD, alias_e164s: [] }] as never;
       if (req.table === "sms_outbound_log")
         return [{ created_at: "2026-07-14T17:09:03Z", body: "When does your policy renew?" }] as never;
       if (req.table === "voice_call_transcripts")
@@ -109,38 +108,22 @@ describe("inbound path on a residency tenant", () => {
     ]);
   });
 
-  it("resolves merged aliases from the box so the timeline spans the profile", async () => {
-    // The alias arm is the reason this read exists at all: a contact whose
-    // old number was merged keeps its rows keyed on the OLD number.
-    vi.mocked(edgeReadMovedRowsOrNull).mockImplementation(async (_db, _biz, req) =>
-      (req.table === "contacts"
-        ? [{ customer_e164: "+15550009999", alias_e164s: [LEAD] }]
-        : []) as never
-    );
-    const { db } = centralOnlyDb([]);
+  it("resolves the contact's identity from CENTRAL, never the box", async () => {
+    // Bugbot, PR #1574. `contacts` is a KEPT table: central is the write
+    // ingress, so the box copy can only ever be a replay tick behind it. The
+    // numbers this produces filter the two box legs AND the central
+    // `sms_inbound_jobs` leg, so taking them from the box could drop a
+    // just-merged alias and make the CENTRAL leg miss history central still
+    // holds. Routing a kept table in isolation is the exact regression the
+    // read-coverage guard blocks; this pins that it did not happen here.
+    vi.mocked(edgeReadMovedRowsOrNull).mockResolvedValue([]);
+    const { db, seen } = centralOnlyDb([]);
     await loadContactTimeline(db, BIZ, LEAD);
-    const contactReq = vi
+    expect(seen).toContain("contacts");
+    const asked = vi
       .mocked(edgeReadMovedRowsOrNull)
-      .mock.calls.map((c) => c[2] as { table: string; filters?: unknown[] })
-      .find((r) => r.table === "contacts");
-    expect(contactReq?.filters).toEqual([
-      { column: "business_id", op: "eq", value: BIZ },
-      {
-        or: [
-          [{ column: "customer_e164", op: "eq", value: LEAD }],
-          [{ column: "alias_e164s", op: "contains", value: [LEAD] }]
-        ]
-      }
-    ]);
-    // The merged profile's numbers reach the content reads.
-    const outbound = vi
-      .mocked(edgeReadMovedRowsOrNull)
-      .mock.calls.map((c) => c[2] as { table: string; filters?: Array<{ column: string; value: unknown }> })
-      .find((r) => r.table === "sms_outbound_log");
-    expect(outbound?.filters?.find((f) => f.column === "to_e164")?.value).toEqual([
-      LEAD,
-      "+15550009999"
-    ]);
+      .mock.calls.map((c) => (c[2] as { table: string }).table);
+    expect(asked).not.toContain("contacts");
   });
 
   it("an unreachable box costs ONE channel, never the conversation", async () => {
@@ -148,7 +131,6 @@ describe("inbound path on a residency tenant", () => {
     // fail a live customer reply to avoid a missing history line.
     vi.mocked(edgeReadMovedRowsOrNull).mockImplementation(async (_db, _biz, req) => {
       if (req.table === "voice_call_transcripts") return null; // box unreachable
-      if (req.table === "contacts") return [{ customer_e164: LEAD, alias_e164s: [] }] as never;
       return [{ created_at: "2026-07-14T17:09:03Z", body: "Still here." }] as never;
     });
     const { db } = centralOnlyDb([]);
@@ -157,18 +139,6 @@ describe("inbound path on a residency tenant", () => {
     expect(text).not.toContain("call took place");
   });
 
-  it("falls back to the queried number alone when the contact read fails", async () => {
-    vi.mocked(edgeReadMovedRowsOrNull).mockImplementation(async (_db, _biz, req) =>
-      (req.table === "contacts" ? null : []) as never
-    );
-    const { db } = centralOnlyDb([]);
-    await loadContactTimeline(db, BIZ, LEAD);
-    const outbound = vi
-      .mocked(edgeReadMovedRowsOrNull)
-      .mock.calls.map((c) => c[2] as { table: string; filters?: Array<{ column: string; value: unknown }> })
-      .find((r) => r.table === "sms_outbound_log");
-    expect(outbound?.filters?.find((f) => f.column === "to_e164")?.value).toEqual([LEAD]);
-  });
 });
 
 describe("flow context on a residency tenant", () => {
