@@ -2285,7 +2285,6 @@
       "refundWindowPassed": "Your 30-day money-back window has passed.",
       "capReached": "You've reached the maximum number of subscription lifetimes for this account.",
       "changePlanInactive": "Plan changes are only available on an active subscription.",
-      "includedUsage": "Included usage",
       "voiceBalance": "Voice balance",
       "includedLeft": "Included left this period",
       "capUsed": "cap {cap} · used {used}",

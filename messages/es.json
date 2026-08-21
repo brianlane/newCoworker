@@ -2285,7 +2285,6 @@
       "refundWindowPassed": "Tu ventana de devolución de 30 días ya pasó.",
       "capReached": "Alcanzaste el número máximo de suscripciones de por vida para esta cuenta.",
       "changePlanInactive": "Los cambios de plan solo están disponibles con una suscripción activa.",
-      "includedUsage": "Uso incluido",
       "voiceBalance": "Saldo de voz",
       "includedLeft": "Incluido restante este periodo",
       "capUsed": "límite {cap} · usado {used}",
