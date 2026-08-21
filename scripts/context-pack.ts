@@ -636,7 +636,15 @@ function renderChatDigest(repoRoot: string, days: number): string {
 /* section: fleet snapshot                                                     */
 /* -------------------------------------------------------------------------- */
 
-type BusinessRow = { id: string; name: string; tier: string; status: string; created_at: string };
+type BusinessRow = {
+  id: string;
+  name: string;
+  tier: string;
+  status: string;
+  created_at: string;
+  /** Null on a row written before the column existed; reads as the default. */
+  data_residency_mode: string | null;
+};
 
 async function renderFleet(repoRoot: string): Promise<string> {
   try {
@@ -663,7 +671,7 @@ async function renderFleetInner(repoRoot: string): Promise<string> {
   // which is worse than printing nothing (renderFleet's catch reports a
   // thrown error as an unavailable section).
   const [businesses, routes, flows] = await Promise.all([
-    db.from("businesses").select("id,name,tier,status,created_at").order("created_at", { ascending: true }),
+    db.from("businesses").select("id,name,tier,status,created_at,data_residency_mode").order("created_at", { ascending: true }),
     fetchAllPaged<{ to_e164: string; business_id: string }>(
       (from, to) =>
         db
@@ -696,13 +704,13 @@ async function renderFleetInner(repoRoot: string): Promise<string> {
   const lines = [
     `${rows.length} tenants. Ids are printed in full because that is what every \`debug/\` script takes as an argument, and because the reviewer sandboxes share their first 8 characters.`,
     "",
-    "| Business | Business id | Tier | Status | DID | Flows (on/total) |",
-    "| --- | --- | --- | --- | --- | --- |"
+    "| Business | Business id | Tier | Status | Residency | DID | Flows (on/total) |",
+    "| --- | --- | --- | --- | --- | --- | --- |"
   ];
   for (const b of rows) {
     const counts = flowCount.get(b.id) ?? { total: 0, enabled: 0 };
     lines.push(
-      `| ${escapeTableCell(b.name.trim())} | \`${b.id}\` | ${b.tier} | ${b.status} | ${didFor.get(b.id) ?? "-"} | ${counts.enabled}/${counts.total} |`
+      `| ${escapeTableCell(b.name.trim())} | \`${b.id}\` | ${b.tier} | ${b.status} | ${b.data_residency_mode ?? "supabase"} | ${didFor.get(b.id) ?? "-"} | ${counts.enabled}/${counts.total} |`
     );
   }
   if (routes.truncated || flows.truncated) {

@@ -171,6 +171,18 @@ If you are in plan mode, the plan should say so.
   dossier in `docs/tenants/`, which CI enforces.
 - **New coworker tools** must satisfy the parity contract, and **new content
   surfaces** must register in the KG source registry. Both are CI-guarded.
+- **Data-residency reads:** the 15 `RESIDENCY_MOVED_TABLES` split in two, and
+  the halves have opposite rules. `residency_purge_business()` DELETES from 8
+  of them, so a central read of `email_log`, `sms_outbound_log`,
+  `voice_call_transcripts` (+turns), `voice_outbound_dial_log`,
+  `notifications`, `scheduled_sms`, or `sms_owner_reply_prompts` is silently
+  incomplete for a `vps` tenant: route it through `@/lib/residency/read`. The
+  other 7 (`contacts`, `sms_rowboat_threads`, `dashboard_chat_*`, `ai_flows`,
+  `aiflow_url_memory`) are deliberately KEPT central, so a central read of
+  those is correct and in fact fresher than the box; do not route one on its
+  own. WRITES need nothing either way, the journal triggers catch every
+  writer by construction. `tests/residency-read-coverage.test.ts` enforces
+  this and `npx tsx debug/residency-read-report.ts` shows the current state.
 - **`package.json` overrides** each have a documented reason in
   `docs/DEPENDENCY-OVERRIDES.md`. Adding, changing, or removing an override
   means updating that file in the same PR.

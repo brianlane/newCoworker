@@ -236,10 +236,24 @@ const FLOW_GATE_COLUMNS = ["definition", "deleted_at"] as const;
  * The named flows behind a set of runs.
  *
  * `ai_flows` is a residency-moved table, so for a tenant in vps mode the
- * definitions live on that tenant's box and a central read returns nothing,
- * which on the Task Center meant every card labeling its workflow "AiFlow"
- * with no step position. `vpsReadMode` is resolved once by the caller and
- * passed in, so a route running several routed reads makes one decision.
+ * definitions are served from that tenant's own box. `vpsReadMode` is
+ * resolved once by the caller and passed in, so a route running several
+ * routed reads makes one decision.
+ *
+ * CORRECTION (2026-08-20): this comment used to say a central read "returns
+ * nothing" for a vps tenant. That is wrong. `residency_purge_business()`
+ * (20260707192939_residency_purge.sql) deliberately KEEPS `ai_flows`
+ * central, along with contacts, threads, chat and url memory, "until the
+ * engine's own reads are residency-routed". Central holds every row, and
+ * because central is still the write ingress it is the FRESHER copy.
+ *
+ * That matters here, because this file does not agree with itself:
+ * `getAiFlow`, `listAiFlows` and `createAiFlow` below all read central. A
+ * create followed immediately by a list therefore misses the new row until
+ * the journal replayer's next tick. Routing this one reader bought no
+ * compliance and cost that window. Whether to fix it by routing the rest or
+ * by returning this reader to central is an open decision, recorded in
+ * MIXED_ROUTING_EXCEPTIONS in tests/residency-read-coverage.test.ts.
  */
 export async function listAiFlowDefinitions(
   businessId: string,

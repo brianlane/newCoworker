@@ -304,6 +304,36 @@ Per-tenant enablement runbook (one deal at a time, no fleet rollout):
    replicates as deletes; live engine state — contacts, threads, chat, flows —
    deliberately stays central until the engine's own reads are residency-routed)
 
+**Which reads must be routed, and which must not.** The purge deliberately
+splits the moved tables, and the two halves have opposite rules:
+
+- **Purged (8)**: `email_log`, `sms_outbound_log`, `voice_call_transcripts`
+  (+turns), `voice_outbound_dial_log`, read `notifications`, terminal
+  `scheduled_sms`, answered `sms_owner_reply_prompts`. Central loses these, so
+  a central read is silently incomplete for a `vps` tenant: an empty list, not
+  an error. These must go through
+  [src/lib/residency/read.ts](src/lib/residency/read.ts).
+- **Kept central (7)**: `contacts`, `sms_rowboat_threads`,
+  `dashboard_chat_*`, `ai_flows`, `aiflow_url_memory`. Central holds every row
+  and, being the write ingress, is the fresher copy. Routing one of these on
+  its own buys no compliance and costs up to a replay tick of staleness plus a
+  5xx path when the tunnel is down.
+
+Writes need no routing at all: the journal triggers catch every writer by
+construction, which is why
+[20260804000000_residency_write_journal.sql](supabase/migrations/20260804000000_residency_write_journal.sql)
+chose triggers over call-site wrappers.
+
+`tests/residency-read-coverage.test.ts` holds every read to one of those
+rules, plus the shapes a source scan cannot see on its own: `.from(expr)` with
+a computed table name (`WEBHOOK_EVENT_SOURCES` resolves to three purged
+tables), and the SQL functions whose bodies touch a moved table and therefore
+cannot be routed at all, since they execute in central Postgres.
+`npx tsx debug/residency-read-report.ts` prints the current state. As of
+2026-08-20 that is 56 central reads of a purged table: 4 cross-tenant fleet
+queries that cannot be routed to any single box, 30 held at engine posture in
+the Deno workers, and 22 dashboard-side, which is the list that shrinks.
+
 DR: a 6h systemd timer on the box streams `pg_dump → gzip → AES-256` and
 uploads **ciphertext only** to `business-backups/residency/<id>/`; the
 passphrase is escrowed in `residency_backup_keys` (service-role-only,

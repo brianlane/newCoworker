@@ -106,3 +106,63 @@ export const RESIDENCY_TABLE_PRIMARY_KEYS: Record<ResidencyMovedTable, readonly 
   ai_flows: ["id"],
   aiflow_url_memory: ["business_id", "memory_key"]
 };
+
+/**
+ * The moved tables that `residency_purge_business()` actually DELETES from
+ * central once a tenant reaches `vps` mode
+ * (supabase/migrations/20260707192939_residency_purge.sql).
+ *
+ * This split existed only as prose and DELETE statements inside that one
+ * migration, with nothing importable, and the cost of that was a real bug:
+ * `listAiFlowDefinitions` was routed box-ward on the stated grounds that "a
+ * central read returns nothing" for `ai_flows`, which is a table the purge
+ * deliberately KEEPS. Routing it bought no compliance and cost up to a
+ * replay tick of staleness against the central `createAiFlow` next to it.
+ * Hence this constant, and the coverage guard that keys off it
+ * (tests/residency-read-coverage.test.ts).
+ *
+ * Reading one of these centrally for a vps tenant is SILENTLY INCOMPLETE:
+ * the rows are gone, and an empty result is indistinguishable from "nothing
+ * happened". Reading a kept table centrally is correct, and in fact fresher
+ * than the box, because central is still the write ingress and the journal
+ * replays one way.
+ *
+ * Note the purge predicates are already hedged toward live state: only
+ * TERMINAL voice calls, READ notifications, TERMINAL scheduled sms, and
+ * ANSWERED owner prompts go. In-flight rows survive a purge.
+ *
+ * Kept in lockstep with the migration by tests/residency-purged-tables.test.ts.
+ */
+export const RESIDENCY_CENTRAL_PURGED_TABLES = [
+  "email_log",
+  "sms_outbound_log",
+  "voice_call_transcripts",
+  "voice_call_transcript_turns",
+  "voice_outbound_dial_log",
+  "notifications",
+  "scheduled_sms",
+  "sms_owner_reply_prompts"
+] as const;
+
+/**
+ * Purged via an FK cascade from its parent rather than its own DELETE
+ * statement, so the lockstep test must not expect to find it in the SQL.
+ */
+export const RESIDENCY_PURGE_CASCADE_TABLES = ["voice_call_transcript_turns"] as const;
+
+export type ResidencyPurgedTable = (typeof RESIDENCY_CENTRAL_PURGED_TABLES)[number];
+
+/**
+ * The moved tables the purge deliberately KEEPS central: live engine state
+ * the coworker re-reads on the hot path. Derived, never hand-listed, so it
+ * cannot drift from the two lists above.
+ */
+export const RESIDENCY_CENTRAL_KEPT_TABLES: readonly ResidencyMovedTable[] =
+  RESIDENCY_MOVED_TABLES.filter(
+    (t) => !(RESIDENCY_CENTRAL_PURGED_TABLES as readonly string[]).includes(t)
+  );
+
+/** True when central loses this table's history at Phase 4 purge. */
+export function isResidencyPurgedTable(name: string): name is ResidencyPurgedTable {
+  return (RESIDENCY_CENTRAL_PURGED_TABLES as readonly string[]).includes(name);
+}
