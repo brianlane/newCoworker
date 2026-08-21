@@ -175,7 +175,9 @@ describe("renderWhiteGloveDocSections", () => {
     // Operator checklist + acceptance always present.
     expect(all).toContain("Installation checklist");
     expect(all).toContain("Go-live acceptance");
-    expect(all).toContain("Customer signature");
+    // Signature lines were removed on purpose: the doc is a working record,
+    // not a contract, so nothing should render a signature block.
+    expect(all).not.toMatch(/signature/i);
   });
 
   it("falls back to the industry preset greeting/questions when left blank", () => {

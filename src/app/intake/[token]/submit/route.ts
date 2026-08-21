@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { intakeAnswersSchema } from "@/lib/white-glove/template";
 import { submitWhiteGloveIntake } from "@/lib/white-glove/intake";
+import { sendOpsIntakeCompletedEmail } from "@/lib/email/ops-notify";
 import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
@@ -54,16 +55,9 @@ export async function POST(
     );
   }
 
+  let submitted: Awaited<ReturnType<typeof submitWhiteGloveIntake>>;
   try {
-    const submitted = await submitWhiteGloveIntake(token, parsed.data);
-    if (!submitted) {
-      // Unknown token, already completed, or revoked, one answer for all
-      // three so the public endpoint doesn't oracle which tokens exist.
-      return NextResponse.json(
-        { error: "This questionnaire is no longer open." },
-        { status: 409 }
-      );
-    }
+    submitted = await submitWhiteGloveIntake(token, parsed.data);
   } catch (err) {
     logger.error("white_glove_intake submit failed", {
       error: err instanceof Error ? err.message : String(err)
@@ -73,6 +67,25 @@ export async function POST(
       { status: 500 }
     );
   }
+  if (!submitted) {
+    // Unknown token, already completed, or revoked, one answer for all
+    // three so the public endpoint doesn't oracle which tokens exist.
+    return NextResponse.json(
+      { error: "This questionnaire is no longer open." },
+      { status: 409 }
+    );
+  }
+
+  // Heads-up to the ops inbox so the build starts without anyone polling the
+  // admin panel. Best-effort by contract (the sender never throws): the
+  // answers are already saved, a mail hiccup must not fail the submission.
+  await sendOpsIntakeCompletedEmail({
+    intakeId: submitted.id,
+    businessName: submitted.business_name,
+    industry: submitted.industry,
+    recipientEmail: submitted.recipient_email,
+    completedAt: submitted.completed_at ?? new Date().toISOString()
+  });
 
   return NextResponse.json({ ok: true });
 }
