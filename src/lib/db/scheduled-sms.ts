@@ -2,11 +2,13 @@
  * The dashboard's scheduled-SMS queue read.
  *
  * `scheduled_sms` is a residency-moved table, so for a tenant in
- * `data_residency_mode = 'vps'` the queued rows live on that tenant's box and
- * a central read returns nothing: the composer's schedule panel would show an
- * empty queue while the box quietly kept dispatching those very messages. An
- * unreachable box raises ResidencyReadError instead, which the route turns
- * into an error response, never into an empty queue.
+ * `data_residency_mode = 'vps'` the queued rows are served from that tenant's
+ * box. Note what the purge actually removes: only TERMINAL rows (sent,
+ * canceled, failed) older than the keep window, so central keeps every
+ * PENDING row. The history pane is the one that would go incomplete
+ * centrally; the pending pane would not. An unreachable box raises
+ * ResidencyReadError, which the route turns into an error response, never
+ * into an empty queue.
  *
  * Writes are NOT routed: central inserts replicate box-ward through the
  * `residency_journal_row` trigger and `src/lib/residency/replay.ts`.

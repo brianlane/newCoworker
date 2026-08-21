@@ -162,11 +162,12 @@ export async function listAiFlows(
   client?: SupabaseClient
 ): Promise<AiFlowRow[]> {
   const db = await resolveDb(client);
-  // `ai_flows` is residency-moved, so a vps tenant's flows live on their own
-  // box and the central read below returns nothing. An empty list here is
-  // indistinguishable from "this business has no flows", which is why the
-  // box read is allowed to throw: a ResidencyReadError reaches the page as a
-  // failure instead of an empty AiFlows list that reads as "you have none".
+  // `ai_flows` is residency-moved, so a vps tenant's flows are served from
+  // their own box. Central still holds them too (the purge KEEPS ai_flows,
+  // see RESIDENCY_CENTRAL_PURGED_TABLES), so this is on-box serving rather
+  // than a correctness fix. The box read is still allowed to throw: an
+  // unreachable box must reach the page as a failure, not as an empty
+  // AiFlows list that reads as "you have none".
   const fetchFlows = async (): Promise<AiFlowRow[]> => {
     if (await isVpsReadMode(businessId, db)) {
       return await readMovedRows<AiFlowRow>(businessId, {

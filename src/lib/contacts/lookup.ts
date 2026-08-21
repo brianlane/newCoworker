@@ -4,10 +4,11 @@
  * document routes' cross-tenant contact guard.
  *
  * `contacts` is a RESIDENCY_MOVED_TABLE, so for a tenant in
- * `data_residency_mode = 'vps'` the authoritative rows live on that tenant's
- * own box and a central `db.from("contacts")` read comes back empty. Empty is
- * indistinguishable from "this business has no leads", so those surfaces
- * would render a blank board with no error at all. Every lookup here picks
+ * `data_residency_mode = 'vps'` these surfaces are served from that tenant's
+ * own box. Central is NOT empty: `residency_purge_business()` deliberately
+ * keeps `contacts` (see RESIDENCY_CENTRAL_PURGED_TABLES), so the trade here
+ * is on-box serving against up to one replay tick of staleness, not a fix
+ * for missing rows. Every lookup here picks
  * the box or central once, from a `vpsReadMode` flag the CALLER resolves once
  * per request (see `isVpsReadMode`), so one dashboard render never pays for
  * several mode lookups.

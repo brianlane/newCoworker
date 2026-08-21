@@ -230,7 +230,13 @@ const KEPT_TABLE_ROUTED_BOX_WARD: Record<SiteKey, string> = {
   "src/lib/analytics/flow-funnels.ts::fetchFlows::ai_flows":
     "flow funnel card reads the tenant's own box; the only other ai_flows reader in this file is the routed sends leg, so the file is internally consistent",
   "src/lib/ai-flows/db.ts::listAiFlowDefinitions::ai_flows":
-    "SEE MIXED_ROUTING_EXCEPTIONS: this one is inconsistent with the rest of its own file and is the open question, not a settled decision"
+    "AiFlows pages read the tenant's own box (PR #1567 routed the rest of this file's readers, so it is now internally consistent)",
+  "src/lib/ai-flows/db.ts::fetchFlows::ai_flows":
+    "AiFlows list page reads the tenant's own box, via listAiFlows's inner fetchFlows (PR #1567)",
+  "src/lib/ai-flows/db.ts::getAiFlow::ai_flows":
+    "single flow read for the AiFlows pages, on the tenant's own box (PR #1567)",
+  "src/lib/ai-flows/db.ts::enqueueAiFlowRun::ai_flows":
+    "enqueue gate re-reads the flow from the tenant's own box (PR #1567). NOTE the residual read-after-write window: createAiFlow and updateAiFlow write CENTRAL and replicate by journal, so a flow created or edited and then immediately enqueued can miss the newest definition by up to one replay tick. Inherent to box reads plus central writes, not specific to this call"
 };
 
 /**
@@ -238,14 +244,13 @@ const KEPT_TABLE_ROUTED_BOX_WARD: Record<SiteKey, string> = {
  *
  * Default is that they may not. For a kept table both copies hold the same
  * rows, so mixing means some readers see a stale box and some see fresh
- * central for identical content: pure inconsistency, no compliance gain. In
- * ai-flows/db.ts it is worse than cosmetic, because the central readers
- * include createAiFlow, so create-then-list loses the row for a replay tick.
+ * central for identical content: pure inconsistency, no compliance gain.
+ *
+ * Empty, and worth keeping empty. src/lib/ai-flows/db.ts was the one entry
+ * here; PR #1567 routed its remaining readers, so the file now agrees with
+ * itself and the exception was deleted rather than left to rot.
  */
-const MIXED_ROUTING_EXCEPTIONS: Record<string, string> = {
-  "src/lib/ai-flows/db.ts::ai_flows":
-    "KNOWN INCONSISTENCY, not an endorsement. listAiFlowDefinitions is routed while getAiFlow, listAiFlows and createAiFlow stay central. Tracked for resolution; the fix is to make the file agree with itself, in either direction"
-};
+const MIXED_ROUTING_EXCEPTIONS: Record<string, string> = {};
 
 /**
  * `.from(<expression>)` sites, where the table is not a literal and no
@@ -443,8 +448,25 @@ describe("residency read coverage", () => {
   it("no stale KEPT-table or mixed-routing entries", () => {
     const liveKept = new Set(keptRouted.map(siteKey));
     expect(Object.keys(KEPT_TABLE_ROUTED_BOX_WARD).filter((k) => !liveKept.has(k)).sort()).toEqual([]);
-    const liveFiles = new Set(scan.sites.map((s) => `${s.file}::${s.table}`));
-    expect(Object.keys(MIXED_ROUTING_EXCEPTIONS).filter((k) => !liveFiles.has(k)).sort()).toEqual([]);
+    // Must test for still-MIXED, not merely still-present. An earlier
+    // version checked that the file/table pair existed at all, which stayed
+    // green through the very change (#1567) that resolved the mix and made
+    // the entry stale.
+    const stillMixed = new Set<string>();
+    const tally = new Map<string, { routed: number; central: number }>();
+    for (const s2 of scan.sites) {
+      if (isResidencyPurgedTable(s2.table)) continue;
+      const key = `${s2.file}::${s2.table}`;
+      const v = tally.get(key) ?? { routed: 0, central: 0 };
+      if (s2.routed) v.routed++;
+      else v.central++;
+      tally.set(key, v);
+    }
+    for (const [key, v] of tally) if (v.routed > 0 && v.central > 0) stillMixed.add(key);
+    expect(
+      Object.keys(MIXED_ROUTING_EXCEPTIONS).filter((k) => !stillMixed.has(k)).sort(),
+      "this file no longer mixes routed and central reads: delete the exception"
+    ).toEqual([]);
   });
 
   it("no stale dynamic or RPC entries", () => {
