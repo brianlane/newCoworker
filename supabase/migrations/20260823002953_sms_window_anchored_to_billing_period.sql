@@ -66,8 +66,13 @@ begin
   v_anchor_utc := (v_anchor at time zone 'utc');
 
   if v_now_utc <= v_anchor_utc then
-    -- Clock skew or a webhook that landed early: window 0.
-    v_start := v_anchor_utc::date;
+    -- The anchor is in the FUTURE (a scheduled plan change, a webhook that
+    -- landed early, clock skew). Returning the anchor's own date here would
+    -- hand back a window that has not started, every `usage_date >= start`
+    -- sum would be empty, and the tenant would text without a cap until the
+    -- date arrived. Fall back to the calendar month, which is both non-empty
+    -- and exactly what this tenant was measured against before.
+    return date_trunc('month', v_now_utc)::date;
   else
     -- Whole months elapsed. The estimate can only OVERSHOOT around clamped
     -- month ends (a Jan 31 anchor with now = Mar 1 estimates 2, but window 2
