@@ -76,30 +76,31 @@ export const RESIDENCY_ENGINE_LOOKBACK_WINDOWS = [
 ] as const;
 
 /**
- * Windows over a purged table that are WIDER than the floor and knowingly
- * accept truncation.
+ * Windows over a purged table that a purge can never truncate, because the
+ * tenants they read are not tenants a purge can run against.
  *
- * The floor cannot simply rise to cover these. `residency_purge_business`
- * documents a default of 72 hours, so a 168h floor would make the default
- * call fail, and the runbook's own step 4 would stop working. The honest
- * answer is per window: say which ones lose data and why that is tolerable.
- *
- * Pinned by the same lockstep test, so a window cannot join or leave this
- * list silently.
+ * A separate category from "the floor covers it", and one that needs the
+ * disjointness spelled out rather than asserted. The lockstep test pins the
+ * EVIDENCE, not just the claim, so a change that made the two populations
+ * overlap fails here instead of going quietly wrong.
  */
-export const RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION = [
+export const RESIDENCY_WINDOWS_OUT_OF_SCOPE = [
   {
     file: "supabase/functions/_shared/hardware_escalation.ts",
     constant: "ADVISOR_WINDOW_DAYS",
-    // The source literal is in DAYS; `hours` is what the floor compares.
     literal: 7,
     hours: 7 * 24,
-    reads: "voice_call_transcripts across the whole fleet",
+    reads: "voice_call_transcripts across the fleet",
+    /** Pinned by the lockstep test: the advisor's own tenant filter. */
+    evidenceFile: "supabase/functions/hardware-escalation-advisor/index.ts",
+    evidence: '.in("tier", ["starter", "standard"])',
     why:
-      "internal weekly capacity advisory, not customer-facing and not billing. It projects " +
-      "monthly minutes from the window, so a residency tenant purged at 72h is under-counted " +
-      "and may simply not be flagged for an upgrade. Degraded advice about one tenant, against " +
-      "a floor rise that would break the purge's own documented 72h default"
+      "the advisor scans starter/standard tenants only, and residency is enterprise-only: " +
+      "residencyAllowedForTier requires tier === 'enterprise', and residency_purge_business " +
+      "itself refuses any tenant that is not enterprise AND in vps mode. The populations " +
+      "cannot overlap, so this window is never purged out from under the advisor. Recorded " +
+      "rather than omitted, because at 168h it is wider than the floor and would otherwise " +
+      "read as an oversight to the next person who checks"
   }
 ] as const;
 

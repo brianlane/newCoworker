@@ -7,7 +7,7 @@ import {
   assertResidencyReplayCronScheduled,
   RESIDENCY_ENGINE_LOOKBACK_WINDOWS,
   RESIDENCY_MIN_KEEP_HOURS,
-  RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION,
+  RESIDENCY_WINDOWS_OUT_OF_SCOPE,
   ResidencyKeepWindowError,
   ResidencyReplayCronError
 } from "@/lib/residency/keep-window";
@@ -30,7 +30,7 @@ describe("residency keep-window floor", () => {
     // would silently reopen the gap this floor exists to close.
     for (const w of [
       ...RESIDENCY_ENGINE_LOOKBACK_WINDOWS,
-      ...RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION
+      ...RESIDENCY_WINDOWS_OUT_OF_SCOPE
     ]) {
       const src = readFileSync(join(ROOT, w.file), "utf8");
       const m = new RegExp(String.raw`\b${w.constant}\s*=\s*(\d+)`).exec(src);
@@ -46,22 +46,30 @@ describe("residency keep-window floor", () => {
     expect(RESIDENCY_MIN_KEEP_HOURS).toBe(widest);
   });
 
-  it("keeps the covered and truncation-accepting lists honest about each other", () => {
-    // Anything at or under the floor belongs in the COVERED list: parking it
-    // under "accepts truncation" would excuse a window that is not actually
-    // losing anything, and hide it from the floor calculation if it later grew.
-    for (const w of RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION) {
-      expect(
-        w.hours,
-        `${w.constant} fits under the floor, so it is covered, not truncated`
-      ).toBeGreaterThan(RESIDENCY_MIN_KEEP_HOURS);
-      expect(w.why.trim().length, `${w.constant}: needs a reason, not a shrug`).toBeGreaterThan(40);
-    }
+  it("keeps the covered and out-of-scope lists honest about each other", () => {
     for (const w of RESIDENCY_ENGINE_LOOKBACK_WINDOWS) {
       expect(
         w.hours,
         `${w.constant} is wider than the floor, so it cannot claim to be covered`
       ).toBeLessThanOrEqual(RESIDENCY_MIN_KEEP_HOURS);
+    }
+    for (const w of RESIDENCY_WINDOWS_OUT_OF_SCOPE) {
+      expect(w.why.trim().length, `${w.constant}: needs a reason, not a shrug`).toBeGreaterThan(40);
+    }
+  });
+
+  it("pins the EVIDENCE for each out-of-scope window, not just the claim", () => {
+    // An out-of-scope entry rests on the two tenant populations being
+    // disjoint. Asserting that in prose is worthless; this asserts the filter
+    // the claim depends on, so widening the advisor to enterprise tenants
+    // fails here rather than silently invalidating the exemption.
+    for (const w of RESIDENCY_WINDOWS_OUT_OF_SCOPE) {
+      const src = readFileSync(join(ROOT, w.evidenceFile), "utf8");
+      expect(
+        src.includes(w.evidence),
+        `${w.constant}: ${w.evidenceFile} no longer contains ${w.evidence}, so the ` +
+          "populations may now overlap and this exemption is unproven"
+      ).toBe(true);
     }
   });
 
@@ -70,7 +78,7 @@ describe("residency keep-window floor", () => {
     // it. Bugbot caught two missing entries on the first pass; this is the
     // check that would have caught them first.
     const declared = new Set<string>(
-      [...RESIDENCY_ENGINE_LOOKBACK_WINDOWS, ...RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION].map(
+      [...RESIDENCY_ENGINE_LOOKBACK_WINDOWS, ...RESIDENCY_WINDOWS_OUT_OF_SCOPE].map(
         (w) => w.constant as string
       )
     );
@@ -91,7 +99,7 @@ describe("residency keep-window floor", () => {
       unaccounted.sort(),
       "a fixed lookback window in a module that reads a purged table, missing from both lists. " +
         "Add it to RESIDENCY_ENGINE_LOOKBACK_WINDOWS if the floor covers it, or to " +
-        "RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION with the reason it may lose rows."
+        "RESIDENCY_WINDOWS_OUT_OF_SCOPE with the reason it may lose rows."
     ).toEqual([]);
   });
 
