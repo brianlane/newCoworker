@@ -2445,9 +2445,11 @@ day 5  "I wrote last week..." lands on somebody who already signed
 now asks two more questions before any follow-up, and EITHER one suppresses it:
 
 1. **Did they book since we mailed?** Matched on the address or the normalized
-   phone against `calendar_booking_dedupe`, and only for bookings created
-   after `sent_at`, since an older one is a relationship that predates the
-   outreach. Board-independent, which matters because a pipeline is optional.
+   phone against `calendar_booking_dedupe`, only for CONFIRMED rows (a null
+   `event_id` is an in-flight or abandoned claim, not an appointment) and only
+   for bookings created after `sent_at`, since an older one is a relationship
+   that predates the outreach. Board-independent, which matters because a
+   pipeline is optional.
 2. **Has their card moved past the stage prospecting itself writes?** Anchored
    on the "Contacted" column rather than a fixed position, so a board with
    extra columns in front still compares the right thing. This covers every

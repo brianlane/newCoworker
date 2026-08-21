@@ -194,7 +194,16 @@ async function findBookedProspects(
       const table = db
         .from("calendar_booking_dedupe")
         .select("attendee_key, attendee_email, created_at")
-        .eq("business_id", businessId);
+        .eq("business_id", businessId)
+        // CONFIRMED bookings only. A null `event_id` is an in-flight or
+        // abandoned claim, not an appointment: somebody who opened the
+        // booking page and gave up leaves one behind. Counting that as
+        // engagement would permanently retire a prospect who never actually
+        // booked, and the retirement is a write, so they would never get the
+        // follow-up they were owed (Bugbot, PR #1571). Same filter
+        // findUpcomingBookingClaim and its by-phone twin already use to mean
+        // "a real booking".
+        .not("event_id", "is", null);
       let query = lookup.exact
         ? table.in("attendee_key", lookup.values)
         : table.or(

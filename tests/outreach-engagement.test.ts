@@ -49,13 +49,15 @@ function makeDb(tables: {
 }) {
   const seenTables: string[] = [];
   const bookingLookups: string[] = [];
+  const bookingFilters: unknown[][] = [];
   let contactCall = 0;
   const from = (table: string) => {
     seenTables.push(table);
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "gte", "or", "in", "order", "limit"]) {
+    for (const m of ["select", "eq", "gte", "or", "in", "not", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         if (m === "in" || m === "or") bookingLookups.push(String(args[0] ?? ""));
+        if (m === "not" && table === "calendar_booking_dedupe") bookingFilters.push(args);
         return builder;
       };
     }
@@ -78,7 +80,7 @@ function makeDb(tables: {
     builder.then = (resolve: (v: unknown) => unknown) => Promise.resolve(resultFor()).then(resolve);
     return builder;
   };
-  return { db: { from } as never, seenTables, bookingLookups };
+  return { db: { from } as never, seenTables, bookingLookups, bookingFilters };
 }
 
 const CONTACTED_BOARD = [
@@ -186,6 +188,15 @@ describe("findEngagedProspects: the booking signal", () => {
       ]
     });
     expect((await findEngagedProspects(BIZ, [candidate()], db)).engaged.has("p1")).toBe(true);
+  });
+
+  it("asks only for CONFIRMED bookings", async () => {
+    // A null event_id is an in-flight or abandoned claim, not an
+    // appointment: somebody who opened the booking page and gave up leaves
+    // one. Counting it would permanently retire a prospect who never booked.
+    const { db, bookingFilters } = makeDb({ bookings: [], stages: [] });
+    await findEngagedProspects(BIZ, [candidate()], db);
+    expect(bookingFilters).toContainEqual(["event_id", "is", null]);
   });
 
   it("ignores a booking that predates the pitch", async () => {
