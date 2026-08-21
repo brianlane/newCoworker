@@ -491,19 +491,23 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(cat("automated_bulk")).toMatch(/not already corresponding/i);
   });
 
-  it("bins ONLY the unmistakably bulk tier, and never texts about it", () => {
+  it("labels the bulk tier in place, and never texts about it", () => {
     const step = steps.find((s) => s.id === "s_org_bulk");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_bulk" });
-    expect(step?.trash).toBe(true);
-    // Labelled BEFORE binning, so a misclassification is still findable with
-    // `label:HQ/Automated in:trash` for the 30 days Gmail keeps it.
+    expect(step?.trash).toBeUndefined();
     expect(step?.addLabels).toEqual(["HQ/Automated"]);
     expect(notifySteps.some((n) => n.when?.equals === "automated_bulk")).toBe(false);
   });
 
-  it("keeps trash to exactly one step, so the blast radius stays visible", () => {
-    const binning = steps.filter((s) => s.type === "email_organize" && s.trash === true);
-    expect(binning.map((s) => s.id)).toEqual(["s_org_bulk"]);
+  it("never bins anything: no step in the flow carries trash", () => {
+    // The bulk tier used to move mail to the Gmail bin, which hides it from
+    // the inbox, label views and default search all at once. On Aug 21 2026
+    // a real vendor email (TAC Security's CSM asking for an intro call)
+    // classified automated_bulk and vanished that way, so binning is gone
+    // from every tier (Brian's rule): a misclassification may only ever
+    // mislabel, never remove.
+    const binning = steps.filter((s) => s.trash === true);
+    expect(binning.map((s) => s.id)).toEqual([]);
   });
 
   it("texts about important automated mail and leaves it in the inbox", () => {

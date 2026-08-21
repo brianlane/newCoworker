@@ -561,9 +561,16 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         addLabels: ["HQ/Billing"]
       },
       /**
-       * The only tier that bins anything: marketing and newsletters with no
-       * working unsubscribe, which is what started this. Labelled first so a
-       * misclassification is findable with `label:HQ/Automated in:trash`.
+       * Bulk mail is labelled and left in the inbox, the same treatment as
+       * automated_notice. This step carried `trash: true` until Aug 21 2026,
+       * when an intro from TAC Security's Customer Success manager (a vendor
+       * we actively pay, asking for a call) classified automated_bulk and
+       * went to the Gmail bin a minute after arriving. The bin hides a
+       * message from the inbox, from label views and from default search at
+       * once, so a misclassification there removed mail from every surface
+       * Brian actually reads. No tier removes mail from the inbox any more
+       * (Brian's rule, the same shape as the markRead removal): a mistake
+       * may only ever mislabel, never remove.
        */
       {
         id: "s_org_bulk",
@@ -571,8 +578,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         connectionId: GMAIL_CONNECTION_ROW_ID,
         importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "automated_bulk" },
-        addLabels: ["HQ/Automated"],
-        trash: true
+        addLabels: ["HQ/Automated"]
       },
       /**
        * The automated mail that DOES matter: an outage, a security alert, a
