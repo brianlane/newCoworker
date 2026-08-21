@@ -1643,7 +1643,7 @@ async function meteredWarmTransferSend(
     console.error("warm-transfer notify: reserve slot failed", reserveErr);
     return { ok: false, reason: "reserve_error" };
   }
-  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
   if (!reserve?.ok) {
     // Over the monthly cap: alert the owner once per period (same channel the
     // other metered send paths use), then skip, retrying won't help this month.
@@ -1651,7 +1651,7 @@ async function meteredWarmTransferSend(
       await sendCapAlertOnce(supabase, {
         businessId,
         kind: "sms_monthly",
-        periodKey: smsCapPeriodKey(),
+        periodKey: smsCapPeriodKey(reserve?.window_start),
         notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
         bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
         payload: { surface: "warm_transfer" }

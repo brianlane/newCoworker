@@ -33,9 +33,25 @@ describe("capAlertTaskType", () => {
 });
 
 describe("smsCapPeriodKey", () => {
-  it("returns the UTC month start as YYYY-MM-DD", () => {
-    expect(smsCapPeriodKey(new Date("2026-06-15T23:59:00Z"))).toBe("2026-06-01");
-    expect(smsCapPeriodKey(new Date("2026-01-01T00:00:00Z"))).toBe("2026-01-01");
+  it("uses the quota window the metering RPC reported", () => {
+    // The text window is anchored to the tenant's Stripe period, so the key
+    // has to come from the RPC. Deriving it from `now` would re-alert on the
+    // 1st inside one window and stay silent through the real reset.
+    expect(smsCapPeriodKey("2026-08-28")).toBe("2026-08-28");
+    // Postgres may hand back a full timestamp for a date column.
+    expect(smsCapPeriodKey("2026-08-28T00:00:00+00:00")).toBe("2026-08-28");
+  });
+
+  it("falls back to the UTC month start when no window is supplied", () => {
+    // Covers the deploy gap where new function code runs against the previous
+    // RPC, whose result carries no window_start.
+    expect(smsCapPeriodKey(null, new Date("2026-06-15T23:59:00Z"))).toBe("2026-06-01");
+    expect(smsCapPeriodKey(undefined, new Date("2026-01-01T00:00:00Z"))).toBe("2026-01-01");
+  });
+
+  it("falls back rather than trusting a malformed window", () => {
+    expect(smsCapPeriodKey("not-a-date", new Date("2026-06-15T00:00:00Z"))).toBe("2026-06-01");
+    expect(smsCapPeriodKey("", new Date("2026-06-15T00:00:00Z"))).toBe("2026-06-01");
   });
 
   it("defaults to now", () => {

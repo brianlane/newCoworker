@@ -218,3 +218,36 @@ export async function getSmsBonusTextsRemaining(
   const n = Number(data ?? 0);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
+
+/**
+ * Expiry of the soonest-expiring SMS bonus grant that still HOLDS texts, i.e.
+ * the next date the displayed bonus-text balance drops. Null when no live
+ * grant has texts left, and null on error so a failed read shows no date
+ * rather than a wrong one.
+ *
+ * Ordered + limited server-side rather than summarized in JS (the way the
+ * voice snapshot does it, where the rows are already in hand for the
+ * balance): this needs one row, and a `.limit(1)` cannot be truncated by
+ * PostgREST's 1000-row cap the way an unbounded select can.
+ */
+export async function getSmsBonusSoonestExpiry(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("sms_bonus_grants")
+    .select("expires_at")
+    .eq("business_id", businessId)
+    .is("voided_at", null)
+    .gt("texts_remaining", 0)
+    .gt("expires_at", new Date().toISOString())
+    .order("expires_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("getSmsBonusSoonestExpiry", error.message);
+    return null;
+  }
+  return (data as { expires_at?: string | null } | null)?.expires_at ?? null;
+}

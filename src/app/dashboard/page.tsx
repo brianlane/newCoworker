@@ -32,7 +32,7 @@ import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
-import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getBillingWindowUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { translatorAllowedForTier } from "@/lib/plans/translator";
 
@@ -70,7 +70,7 @@ export default async function DashboardPage() {
   // falls back to the static plan copy rather than blanking the dashboard.
   let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
   let voiceSnapshot: Awaited<ReturnType<typeof getVoiceBillingSnapshotForBusiness>> | null = null;
-  let smsUsedThisMonth: number | null = null;
+  let smsUsedThisPeriod: number | null = null;
   if (business) {
     [
       recentActivity,
@@ -79,7 +79,7 @@ export default async function DashboardPage() {
       telnyxSettings,
       chatSpend,
       voiceSnapshot,
-      smsUsedThisMonth
+      smsUsedThisPeriod
     ] = await Promise.all([
       getRecentActivity(business.id, 10, undefined, business.tier),
       getLatestProvisioningStatus(business.id),
@@ -91,7 +91,7 @@ export default async function DashboardPage() {
         (business.tier ?? null) as PlanTier | null
       ).catch(() => null),
       getVoiceBillingSnapshotForBusiness(business.id).catch(() => null),
-      getCalendarMonthUsageTotals(business.id, db)
+      getBillingWindowUsageTotals(business.id, db)
         // Cap surface: show text UNITS (the number the reserve RPC enforces),
         // ceiled so the displayed remainder is never more than Postgres allows.
         .then((t) => Math.ceil(t.sms_text_units))
@@ -237,9 +237,9 @@ export default async function DashboardPage() {
                       locale
                     )}
                 <br />
-                {smsUsedThisMonth !== null && smsCap !== null && Number.isFinite(smsCap)
+                {smsUsedThisPeriod !== null && smsCap !== null && Number.isFinite(smsCap)
                   ? t("textsUsage", {
-                      used: smsUsedThisMonth.toLocaleString(),
+                      used: smsUsedThisPeriod.toLocaleString(),
                       cap: smsCap.toLocaleString()
                     })
                   : smsMonthlyLine(

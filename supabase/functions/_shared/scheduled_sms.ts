@@ -188,14 +188,14 @@ async function dispatchOne(
       { p_business_id: row.business_id, p_text_units: scheduledUnits, p_destination_e164: row.to_e164 }
     );
     if (reserveErr) return await fail(`sms_reserve:${reserveErr.message}`);
-    const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+    const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
     if (!reserve?.ok) {
       const reason = reserve?.reason ?? "monthly_sms_limit";
       if (reason === "monthly_sms_limit" && opts.notifyUrl && opts.notifyBearer) {
         await sendCapAlertOnce(supabase, {
           businessId: row.business_id,
           kind: "sms_monthly",
-          periodKey: smsCapPeriodKey(),
+          periodKey: smsCapPeriodKey(reserve?.window_start),
           notifyUrl: opts.notifyUrl,
           bearer: opts.notifyBearer,
           payload: { trigger: "scheduled_sms" },

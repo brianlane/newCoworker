@@ -44,7 +44,8 @@ vi.mock("@/lib/db/chat-usage", () => ({
   getSmsBonusTextsRemaining: (...a: unknown[]) => smsBonus(...a)
 }));
 vi.mock("@/lib/db/usage", () => ({
-  getCalendarMonthUsageTotals: (...a: unknown[]) => monthUsage(...a)
+  // The sweep reads the Stripe-anchored window now, not the calendar month.
+  getBillingWindowUsageTotals: (...a: unknown[]) => monthUsage(...a)
 }));
 
 vi.mock("@/lib/notifications/dispatch", () => ({

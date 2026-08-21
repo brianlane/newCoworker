@@ -2399,7 +2399,7 @@ serve(async (req: Request) => {
       processed += 1;
       continue;
     }
-    const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+    const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string; window_start?: string | null } | null;
     if (!reserve?.ok) {
       // Strict cap: no auto-reply here (customer sees silence). The owner gets
       // a one-time urgent alert per period so silence isn't the only signal.
@@ -2424,7 +2424,7 @@ serve(async (req: Request) => {
         await sendCapAlertOnce(supabase, {
           businessId: job.business_id,
           kind: "sms_monthly",
-          periodKey: smsCapPeriodKey(),
+          periodKey: smsCapPeriodKey(reserve?.window_start),
           notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
           bearer: serviceKey,
           payload: { surface: "sms_worker", job_id: job.id }

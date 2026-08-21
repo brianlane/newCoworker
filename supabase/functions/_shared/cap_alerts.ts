@@ -31,8 +31,27 @@ export function capAlertTaskType(kind: CapAlertKind): string {
   return "missed_call_spike";
 }
 
-/** UTC month-start period key for the SMS monthly cap (YYYY-MM-DD). */
-export function smsCapPeriodKey(now: Date = new Date()): string {
+/**
+ * Once-per-period key for the SMS monthly cap (YYYY-MM-DD).
+ *
+ * Pass the `window_start` the metering RPC returned. The text quota window is
+ * anchored to the tenant's Stripe period start, not the calendar month, so
+ * deriving the key here from `now` would put the alert guard in a different
+ * window than the meter that tripped it: a tenant would be re-alerted on the
+ * 1st while still inside one window, and silenced through the real reset on
+ * their anniversary.
+ *
+ * Falls back to the UTC month start when no window is supplied, which covers
+ * the deploy gap where new function code runs briefly against the previous
+ * RPC (its result carries no `window_start`) and any caller that never got a
+ * reserve result back.
+ */
+export function smsCapPeriodKey(
+  windowStart?: string | null,
+  now: Date = new Date()
+): string {
+  const trimmed = typeof windowStart === "string" ? windowStart.slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
     .toISOString()
     .slice(0, 10);

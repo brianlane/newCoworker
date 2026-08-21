@@ -13,6 +13,7 @@ import {
   getChatSpendSnapshotForBusiness,
   getFleetCurrentAiSpendMicros,
   getFleetCurrentAiSpendMicrosByBusiness,
+  getSmsBonusSoonestExpiry,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
 
@@ -41,6 +42,8 @@ function stubDb(opts: {
     const builder = {
       select: () => builder,
       eq: () => builder,
+      is: () => builder,
+      gt: () => builder,
       order: () => builder,
       limit: () => builder,
       maybeSingle: async () => tables[table] ?? { data: null, error: null }
@@ -365,6 +368,56 @@ describe("getSmsBonusTextsRemaining", () => {
     const db = stubDb({ rpcResults: { sms_bonus_texts_remaining: { data: 5, error: null } } });
     mockCreateClient.mockResolvedValueOnce(db);
     await expect(getSmsBonusTextsRemaining("biz-1")).resolves.toBe(5);
+    expect(mockCreateClient).toHaveBeenCalled();
+  });
+});
+
+describe("getSmsBonusSoonestExpiry", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  function stubGrants(result: MaybeSingleResult) {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      is: () => builder,
+      gt: () => builder,
+      order: () => builder,
+      limit: () => builder,
+      maybeSingle: async () => result
+    };
+    return { from: vi.fn(() => builder), rpc: vi.fn() };
+  }
+
+  it("returns the expiry of the soonest live grant", async () => {
+    const db = stubGrants({ data: { expires_at: "2026-09-15T00:00:00.000Z" }, error: null });
+    await expect(getSmsBonusSoonestExpiry("biz-1", db as never)).resolves.toBe(
+      "2026-09-15T00:00:00.000Z"
+    );
+    expect(db.from).toHaveBeenCalledWith("sms_bonus_grants");
+  });
+
+  it("returns null when no live grant holds texts", async () => {
+    const db = stubGrants({ data: null, error: null });
+    await expect(getSmsBonusSoonestExpiry("biz-1", db as never)).resolves.toBeNull();
+  });
+
+  it("returns null when the row carries no expiry", async () => {
+    const db = stubGrants({ data: {}, error: null });
+    await expect(getSmsBonusSoonestExpiry("biz-1", db as never)).resolves.toBeNull();
+  });
+
+  it("returns null on error rather than a wrong date", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = stubGrants({ data: null, error: { message: "boom" } });
+    await expect(getSmsBonusSoonestExpiry("biz-1", db as never)).resolves.toBeNull();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed", async () => {
+    const db = stubGrants({ data: { expires_at: "2026-10-01T00:00:00.000Z" }, error: null });
+    mockCreateClient.mockResolvedValueOnce(db);
+    await expect(getSmsBonusSoonestExpiry("biz-1")).resolves.toBe("2026-10-01T00:00:00.000Z");
     expect(mockCreateClient).toHaveBeenCalled();
   });
 });

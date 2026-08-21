@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  getBillingWindowUsageTotals,
   getTodayUsage,
-  getCalendarMonthUsageTotals,
   getFleetCalendarMonthUsageTotals,
   getFleetCalendarMonthUsageByBusiness,
   peakConcurrentFromIntervals,
@@ -76,7 +76,32 @@ function mockLimitClient(opts: {
       error: today ? null : { message: "no rows" }
     })
   );
-  chain.rpc = vi.fn().mockResolvedValue({ error: null });
+  // checkLimitReached reads the anchored window through
+  // `sms_billing_window_usage`, which sums in Postgres. Derive the RPC's
+  // answer from the same `monthRows` fixtures so each case keeps its intent.
+  chain.rpc = vi.fn((fn: string) => {
+    if (fn !== "sms_billing_window_usage") {
+      return Promise.resolve({ data: null, error: null });
+    }
+    if (opts.monthError) return Promise.resolve({ data: null, error: opts.monthError });
+    let sms = 0;
+    let units = 0;
+    let calls = 0;
+    for (const r of monthRows) {
+      sms += r.sms_sent ?? 0;
+      units += r.sms_text_units ?? 0;
+      calls += r.calls_made ?? 0;
+    }
+    return Promise.resolve({
+      data: {
+        window_start: "2026-03-01",
+        sms_sent: sms,
+        sms_text_units: units,
+        calls_made: calls
+      },
+      error: null
+    });
+  });
 
   return chain;
 }
@@ -115,87 +140,6 @@ describe("db/usage", () => {
     });
   });
 
-  describe("getCalendarMonthUsageTotals", () => {
-    it("throws when the query returns an error", async () => {
-      const monthThenable: PromiseLike<{ data: null; error: { message: string } }> = {
-        then(onFulfilled, onRejected) {
-          return Promise.resolve({ data: null, error: { message: "db" } }).then(onFulfilled, onRejected);
-        }
-      };
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.select = vi.fn(() => chain);
-      chain.eq = vi.fn(() => chain);
-      chain.gte = vi.fn(() => monthThenable);
-      const err = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      await expect(getCalendarMonthUsageTotals("biz-uuid-1", chain as never)).rejects.toThrow(
-        "getCalendarMonthUsageTotals: db"
-      );
-      expect(err).toHaveBeenCalled();
-
-      err.mockRestore();
-    });
-
-    it("sums rows for the month", async () => {
-      const monthThenable: PromiseLike<{
-        data: Array<{ sms_sent: number; calls_made: number }>;
-        error: null;
-      }> = {
-        then(onFulfilled, onRejected) {
-          return Promise.resolve({
-            data: [
-              { sms_sent: 3, sms_text_units: 7, calls_made: 1 },
-              { sms_sent: 2, sms_text_units: 2.2, calls_made: 4 }
-            ],
-            error: null
-          }).then(onFulfilled, onRejected);
-        }
-      };
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.select = vi.fn(() => chain);
-      chain.eq = vi.fn(() => chain);
-      chain.gte = vi.fn(() => monthThenable);
-
-      const result = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(result).toEqual({ sms_sent: 5, sms_text_units: 9.2, calls_made: 5 });
-    });
-
-    it("treats null data as empty and null row fields as zero", async () => {
-      const monthThenable: PromiseLike<{
-        data: null;
-        error: null;
-      }> = {
-        then(onFulfilled, onRejected) {
-          return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
-        }
-      };
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.select = vi.fn(() => chain);
-      chain.eq = vi.fn(() => chain);
-      chain.gte = vi.fn(() => monthThenable);
-
-      const empty = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(empty).toEqual({ sms_sent: 0, sms_text_units: 0, calls_made: 0 });
-
-      const sparseThenable: PromiseLike<{
-        data: Array<{ sms_sent?: number | null; calls_made?: number | null }>;
-        error: null;
-      }> = {
-        then(onFulfilled, onRejected) {
-          return Promise.resolve({
-            data: [{ sms_sent: null }, { calls_made: null }],
-            error: null
-          }).then(onFulfilled, onRejected);
-        }
-      };
-      chain.gte = vi.fn(() => sparseThenable);
-      const sparse = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(sparse).toEqual({ sms_sent: 0, sms_text_units: 0, calls_made: 0 });
-    });
-  });
 
   describe("getFleetCalendarMonthUsageTotals", () => {
     type FleetPage = {
@@ -761,5 +705,81 @@ describe("db/usage", () => {
 
       log.mockRestore();
     });
+  });
+});
+
+describe("getBillingWindowUsageTotals", () => {
+  function rpcClient(result: { data?: unknown; error?: { message: string } | null }) {
+    return {
+      rpc: vi.fn().mockResolvedValue({
+        data: result.data ?? null,
+        error: result.error ?? null
+      })
+    };
+  }
+
+  it("returns the window the RPC reports", async () => {
+    const db = rpcClient({
+      data: {
+        window_start: "2026-08-28",
+        sms_sent: 210,
+        sms_text_units: 264.4,
+        calls_made: 7
+      }
+    });
+    await expect(getBillingWindowUsageTotals("biz-1", db as never)).resolves.toEqual({
+      windowStart: "2026-08-28",
+      sms_sent: 210,
+      sms_text_units: 264.4,
+      calls_made: 7
+    });
+    expect(db.rpc).toHaveBeenCalledWith("sms_billing_window_usage", {
+      p_business_id: "biz-1"
+    });
+  });
+
+  it("coerces numeric strings, which is how PostgREST renders bigint/numeric", async () => {
+    const db = rpcClient({
+      data: { window_start: "2026-08-28", sms_sent: "210", sms_text_units: "264.4", calls_made: "7" }
+    });
+    const usage = await getBillingWindowUsageTotals("biz-1", db as never);
+    expect(usage.sms_sent).toBe(210);
+    expect(usage.sms_text_units).toBe(264.4);
+    expect(usage.calls_made).toBe(7);
+  });
+
+  it("treats missing and non-numeric fields as zero", async () => {
+    const db = rpcClient({ data: { window_start: "2026-08-28", sms_text_units: "nope" } });
+    const usage = await getBillingWindowUsageTotals("biz-1", db as never);
+    expect(usage).toEqual({
+      windowStart: "2026-08-28",
+      sms_sent: 0,
+      sms_text_units: 0,
+      calls_made: 0
+    });
+  });
+
+  it("tolerates a null payload", async () => {
+    const db = rpcClient({ data: null });
+    const usage = await getBillingWindowUsageTotals("biz-1", db as never);
+    expect(usage.windowStart).toBe("");
+    expect(usage.sms_text_units).toBe(0);
+  });
+
+  it("throws on error so a caller never renders zero as if it were real", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = rpcClient({ error: { message: "boom" } });
+    await expect(getBillingWindowUsageTotals("biz-1", db as never)).rejects.toThrow(
+      "getBillingWindowUsageTotals: boom"
+    );
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed", async () => {
+    const db = rpcClient({ data: { window_start: "2026-08-28", sms_sent: 1 } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(getBillingWindowUsageTotals("biz-1")).resolves.toMatchObject({ sms_sent: 1 });
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });

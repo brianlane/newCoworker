@@ -4049,6 +4049,22 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
 - **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). The same RPC applies the destination gate and per-destination text-unit multipliers (see "International reachability"), so a blocked or unknown destination refuses here too. This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
   - Node: `sendTelnyxSms(..., { meterBusinessId })` — `app/api/dashboard/messages/send`, `app/api/voice/tools/sms`, `app/api/rowboat/tool-call`.
   - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.
+  - **The window is the tenant's billing month, not the calendar month.**
+    `sms_billing_window_start(business_id)` derives it from
+    `subscriptions.stripe_current_period_start` (clamped month arithmetic,
+    matching `_shared/billing_period_window.ts`), so texts reset on the same
+    date voice minutes and the AI budget do rather than on the 1st. It is the
+    single definition: `check_sms_monthly_limit`,
+    `meter_sms_operational_send`, `try_reserve_sms_outbound_slot` and
+    `sms_billing_window_usage` (which the billing page, dashboard,
+    `checkLimitReached` and the auto-reload sweep read) all call it, so the
+    displayed number is produced by the expression that refuses a send. No
+    Stripe anchor, or an anchor in the future, falls back to the calendar
+    month. The metering RPCs return `window_start` so the once-per-period cap
+    alert is keyed to the window that refused the send. Auto-reload's monthly
+    SPEND limit deliberately stays on the calendar month: it caps how much we
+    may charge a card without asking, which is a guardrail rather than a plan
+    allowance.
 - **AI chat spend (graceful degrade, NOT a hard stop):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. The SMS SEND that carries that reply is still hard-gated by the SMS cap above.
 
 **NOTHING is exempt from metering** (policy set Jul 14 2026 — the previous
