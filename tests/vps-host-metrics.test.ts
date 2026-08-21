@@ -128,6 +128,23 @@ describe("heartbeat.sh and parseHostMetrics agree on field names", () => {
     expect(samplerCall).toBeLessThan(reportFn);
   });
 
+  it("reports an empty object for a readable-but-untuned Ollama process", () => {
+    // grep finding no OLLAMA_/OMP_ vars must not swallow the whole field: a
+    // completely untuned live process is the most broken state there is, and
+    // omitting `ollamaEnv` would make it indistinguishable from a box too
+    // old to report one. The `|| true` after grep is what guarantees the
+    // object is still emitted, and the braces are added outside it.
+    const heartbeatSrc = readFileSync(
+      join(__dirname, "..", "vps", "scripts", "heartbeat.sh"),
+      "utf8"
+    );
+    expect(heartbeatSrc).toMatch(/ollama_env_json="\{\$\(printf/);
+    expect(heartbeatSrc).toMatch(/grep -E '\^\(OLLAMA_\|OMP_\)\[A-Z0-9_\]\+='/);
+    // The read is guarded separately from the transform, so an UNREADABLE
+    // environ still omits the field entirely.
+    expect(heartbeatSrc).toContain('if environ_raw="$(tr');
+  });
+
   it("truncates the sample file when it aggregates, not when the POST succeeds", () => {
     // Truncating on send would make a box with a failing POST re-report a
     // widening window every hour, each retry looking like a longer period of

@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const rpcMock = vi.fn();
-const businessRowMock = vi.fn(async () => ({
-  data: { tier: "standard", vps_size: "kvm2" },
-  error: null
-}));
+type BusinessRowResult = {
+  data: { tier: string; vps_size: string | null } | null;
+  error: { message: string } | null;
+};
+const businessRowMock = vi.fn(
+  async (): Promise<BusinessRowResult> => ({
+    data: { tier: "standard", vps_size: "kvm2" },
+    error: null
+  })
+);
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => ({
     rpc: rpcMock,
@@ -231,6 +237,29 @@ describe("api/vps/posture bootstrap drift check", () => {
     return vi.mocked(insertVpsPostureReport).mock.calls.at(-1)?.[0].checks ?? [];
   }
 
+  // This block needs its own setup: a `beforeEach` belongs to the describe
+  // that declares it, so without this these tests would inherit whatever
+  // mock state the previous describe (and each preceding sibling) happened
+  // to leave behind. Several tests below deliberately swap the business row
+  // out, so that leakage would make them order-dependent.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    vi.mocked(insertVpsPostureReport).mockResolvedValue({
+      id: "rep-1",
+      business_id: BIZ_ID,
+      ok: true,
+      checks: [],
+      metrics: null,
+      created_at: "2026-07-08T00:00:00Z"
+    });
+    rpcMock.mockResolvedValue({ data: null, error: null });
+    businessRowMock.mockResolvedValue({
+      data: { tier: "standard", vps_size: "kvm2" },
+      error: null
+    });
+  });
+
   it("passes a box that matches its size's bootstrap tuning", async () => {
     const res = await POST(
       makeRequest({ businessId: BIZ_ID, checks: passingChecks, ollamaEnv: KVM2_ENV })
@@ -276,6 +305,21 @@ describe("api/vps/posture bootstrap drift check", () => {
     );
   });
 
+  it("treats a readable-but-empty environment as fully drifted", async () => {
+    // The box read the process and found NO tuning at all. That is the most
+    // broken state there is, and it must not look like "not measured".
+    const res = await POST(
+      makeRequest({ businessId: BIZ_ID, checks: passingChecks, ollamaEnv: {} })
+    );
+    expect((await res.json()).data.ok).toBe(false);
+    const check = checksFromLastInsert().find(
+      (c) => c.name === "ollama_tuning_matches_bootstrap"
+    );
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain("OLLAMA_CONTEXT_LENGTH is unset");
+    expect(check?.detail).toContain("OLLAMA_HOST is unset");
+  });
+
   it("adds no check when the box reports no ollamaEnv", async () => {
     // Every box runs a heartbeat that predates this block until redeployed.
     const res = await POST(makeRequest({ businessId: BIZ_ID, checks: passingChecks }));
@@ -290,7 +334,7 @@ describe("api/vps/posture bootstrap drift check", () => {
     // matching. "We could not tell" must never render as "it matches".
     businessRowMock.mockResolvedValue({ data: null, error: { message: "down" } });
     const res = await POST(
-      makeRequest({ businessId: BIZ_ID, checks: passingChecks, ollamaEnv: {} })
+      makeRequest({ businessId: BIZ_ID, checks: passingChecks, ollamaEnv: KVM2_ENV })
     );
     expect((await res.json()).data.ok).toBe(true);
     expect(checksFromLastInsert().map((c) => c.name)).not.toContain(

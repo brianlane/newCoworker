@@ -278,16 +278,23 @@ report_posture() {
   # failure, so absence means "not measured" and never "matches".
   local ollama_env_json=""
   if systemctl cat ollama.service >/dev/null 2>&1; then
-    local ollama_pid
+    local ollama_pid environ_raw
     ollama_pid="$(systemctl show -p MainPID --value ollama 2>/dev/null || true)"
-    if [[ -n "$ollama_pid" && "$ollama_pid" != "0" && -r "/proc/$ollama_pid/environ" ]]; then
-      ollama_env_json="$(tr '\0' '\n' < "/proc/$ollama_pid/environ" 2>/dev/null \
-        | grep -E '^(OLLAMA_|OMP_)[A-Z0-9_]+=' \
-        | awk -F= '{ k=$1; sub(/^[^=]*=/, "", $0); v=$0;
-                     gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v);
-                     printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, v }
-                   END { if (n == 0) exit 1 }' 2>/dev/null || true)"
-      [[ -n "$ollama_env_json" ]] && ollama_env_json="{${ollama_env_json}}"
+    if [[ -n "$ollama_pid" && "$ollama_pid" != "0" ]]; then
+      # Split the READ from the transform. If the environ is unreadable we
+      # send nothing, and the platform records "not measured". If it IS
+      # readable but carries no tuning at all, we must send an EMPTY object
+      # rather than nothing: a completely untuned live process is the most
+      # broken state there is, and reporting it as "not measured" would be
+      # the same silence this whole check exists to break. So grep finding
+      # no matches is swallowed, and the object is emitted either way.
+      if environ_raw="$(tr '\0' '\n' < "/proc/$ollama_pid/environ" 2>/dev/null)"; then
+        ollama_env_json="{$(printf '%s\n' "$environ_raw" \
+          | grep -E '^(OLLAMA_|OMP_)[A-Z0-9_]+=' \
+          | awk -F= '{ k=$1; sub(/^[^=]*=/, "", $0); v=$0;
+                       gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v);
+                       printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, v }' || true)}"
+      fi
     fi
   fi
 
