@@ -49,6 +49,7 @@ describe("api/vps/posture route", () => {
       business_id: BIZ_ID,
       ok: true,
       checks: [],
+      metrics: null,
       created_at: "2026-07-08T00:00:00Z"
     });
     rpcMock.mockResolvedValue({ data: null, error: null });
@@ -62,9 +63,80 @@ describe("api/vps/posture route", () => {
     expect(insertVpsPostureReport).toHaveBeenCalledWith({
       businessId: BIZ_ID,
       ok: true,
-      checks: passingChecks
+      checks: passingChecks,
+      metrics: null
     });
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("stores a well-formed host metrics aggregate", async () => {
+    const metrics = {
+      cpuCount: 2,
+      load1Max: 2.9,
+      load1Mean: 1.31,
+      memAvailableMinMib: 2001,
+      memTotalMib: 7940,
+      swapUsedMaxMib: 200,
+      samples: 30
+    };
+    const res = await POST(makeRequest({ businessId: BIZ_ID, checks: passingChecks, metrics }));
+    expect(res.status).toBe(200);
+    expect(insertVpsPostureReport).toHaveBeenCalledWith(
+      expect.objectContaining({ metrics })
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("a busy box is not posture drift", async () => {
+    // Metrics ride ALONGSIDE the checks, never as one: the route ANDs checks
+    // into `ok` and emits vps_posture_drift on a failure, and a loaded box is
+    // a capacity signal, not a security finding.
+    const res = await POST(
+      makeRequest({
+        businessId: BIZ_ID,
+        checks: passingChecks,
+        metrics: {
+          cpuCount: 2,
+          load1Max: 14.2,
+          load1Mean: 11.8,
+          memAvailableMinMib: 40,
+          memTotalMib: 7940,
+          swapUsedMaxMib: 3900,
+          samples: 30
+        }
+      })
+    );
+    expect((await res.json()).data.ok).toBe(true);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("stores null and warns when the metrics block is malformed", async () => {
+    const res = await POST(
+      makeRequest({
+        businessId: BIZ_ID,
+        checks: passingChecks,
+        metrics: { cpuCount: 2, load1Max: 1.0 }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(insertVpsPostureReport).toHaveBeenCalledWith(
+      expect.objectContaining({ metrics: null })
+    );
+    // Silence here would make a box shipping garbage indistinguishable from a
+    // box too old to send metrics at all.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "VPS posture metrics rejected as malformed",
+      { businessId: BIZ_ID }
+    );
+  });
+
+  it("accepts a report from a box whose heartbeat predates metrics", async () => {
+    const res = await POST(makeRequest({ businessId: BIZ_ID, checks: passingChecks }));
+    expect(res.status).toBe(200);
+    expect(insertVpsPostureReport).toHaveBeenCalledWith(
+      expect.objectContaining({ metrics: null })
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("drift persists ok=false, warns, and emits vps_posture_drift telemetry", async () => {

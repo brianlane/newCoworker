@@ -15,6 +15,7 @@ const sample = {
   business_id: "biz-1",
   ok: false,
   checks: [{ name: "ufw_active", ok: false, detail: "ufw inactive" }],
+  metrics: null,
   created_at: "2026-07-08T00:00:00Z"
 };
 
@@ -51,8 +52,29 @@ describe("vps_posture_reports DB layer", () => {
     expect(chain.insert).toHaveBeenCalledWith({
       business_id: "biz-1",
       ok: false,
-      checks: sample.checks
+      checks: sample.checks,
+      metrics: null
     });
+  });
+
+  it("insertVpsPostureReport writes the host metrics aggregate when present", async () => {
+    const chain = makeChain();
+    chain.single.mockResolvedValue({ data: sample, error: null });
+    const db = makeDb(chain);
+    const metrics = {
+      cpuCount: 2,
+      load1Max: 2.9,
+      load1Mean: 1.31,
+      memAvailableMinMib: 2001,
+      memTotalMib: 7940,
+      swapUsedMaxMib: 200,
+      samples: 30
+    };
+    await insertVpsPostureReport(
+      { businessId: "biz-1", ok: true, checks: sample.checks, metrics },
+      db as never
+    );
+    expect(chain.insert).toHaveBeenCalledWith(expect.objectContaining({ metrics }));
   });
 
   it("insertVpsPostureReport throws on a Supabase error", async () => {

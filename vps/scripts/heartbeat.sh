@@ -47,6 +47,49 @@ if ollama_unit_exists && ! check_ollama; then
 fi
 
 # ------------------------------------------------------------------
+# Host CPU/memory sampler.
+#
+# Runs on EVERY 2-minute tick, unlike the posture report below which is
+# throttled to one POST an hour. That split is the whole point: a single
+# /proc/loadavg read taken once an hour covers under 2% of the wall clock and
+# would miss every burst, so the box accumulates ~30 samples between reports
+# and ships the summary. `load1Max` then means "the worst minute in this
+# hour", not "the minute we happened to look".
+#
+# One line per sample, `load1 mem_avail_kb mem_total_kb swap_used_kb`. The
+# posture report aggregates and TRUNCATES the file, so an unsent hour is
+# never double counted and a box whose posture POST keeps failing cannot grow
+# this file without bound (the truncate happens on aggregate, not on send).
+#
+# Best-effort throughout: an unreadable /proc must never break the
+# service-restart heartbeat above, so every step is guarded and a failure
+# just means one missing sample.
+# ------------------------------------------------------------------
+METRIC_SAMPLES_FILE="/tmp/.heartbeat_host_samples"
+
+sample_host_metrics() {
+  local load1 mem_avail_kb mem_total_kb swap_total_kb swap_free_kb swap_used_kb
+  load1="$(awk '{print $1}' /proc/loadavg 2>/dev/null || true)"
+  mem_avail_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+  mem_total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+  swap_total_kb="$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  swap_free_kb="$(awk '/^SwapFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  [[ -n "$load1" && -n "$mem_avail_kb" && -n "$mem_total_kb" ]] || return 0
+  (( mem_total_kb > 0 )) || return 0
+  swap_used_kb=$(( swap_total_kb - swap_free_kb ))
+  (( swap_used_kb < 0 )) && swap_used_kb=0
+  # Cap the file so a box that never manages to POST cannot accumulate
+  # forever: 2000 lines is ~66 hours of ticks, far past any real backlog.
+  if [[ -f "$METRIC_SAMPLES_FILE" ]] && (( $(wc -l < "$METRIC_SAMPLES_FILE" 2>/dev/null || echo 0) >= 2000 )); then
+    tail -n 1000 "$METRIC_SAMPLES_FILE" > "$METRIC_SAMPLES_FILE.tmp" 2>/dev/null \
+      && mv "$METRIC_SAMPLES_FILE.tmp" "$METRIC_SAMPLES_FILE"
+  fi
+  printf '%s %s %s %s\n' "$load1" "$mem_avail_kb" "$mem_total_kb" "$swap_used_kb" \
+    >> "$METRIC_SAMPLES_FILE" 2>/dev/null || true
+}
+sample_host_metrics || true
+
+# ------------------------------------------------------------------
 # Security-posture report (BYOS emphasis; harmless + useful on fleet boxes).
 #
 # Cron gives us no env, so source the chat-worker .env (root-only, written
@@ -190,9 +233,45 @@ report_posture() {
     fi
   fi
 
+  # Host metrics block, aggregated from the 2-minute samples accumulated
+  # since the last report. Sent alongside the checks, NOT as a check: the
+  # route ANDs every check into one `ok` and emits vps_posture_drift on a
+  # failure, and a busy box is a capacity signal, not a security finding.
+  # Omitted entirely when there are no samples, so the platform can tell
+  # "nothing measured" from "measured and quiet".
+  local metrics_json=""
+  if [[ -s "$METRIC_SAMPLES_FILE" ]]; then
+    metrics_json="$(awk -v cores="$(nproc 2>/dev/null || echo 1)" '
+      NF >= 4 {
+        n++
+        if ($1 > loadmax) loadmax = $1
+        loadsum += $1
+        avail = $2 / 1024
+        if (n == 1 || avail < availmin) availmin = avail
+        total = $3 / 1024
+        swap = $4 / 1024
+        if (swap > swapmax) swapmax = swap
+      }
+      END {
+        if (n == 0) exit 1
+        if (cores < 1) cores = 1
+        printf "{\"cpuCount\":%d,\"load1Max\":%.2f,\"load1Mean\":%.2f,\"memAvailableMinMib\":%d,\"memTotalMib\":%d,\"swapUsedMaxMib\":%d,\"samples\":%d}", \
+          cores, loadmax, loadsum / n, availmin, total, swapmax, n
+      }
+    ' "$METRIC_SAMPLES_FILE" 2>/dev/null || true)"
+    # Truncate on AGGREGATE, not on a successful POST. A box whose POST keeps
+    # failing would otherwise re-send the same widening window every hour,
+    # and each retry would look like a longer and longer period of load.
+    : > "$METRIC_SAMPLES_FILE"
+  fi
+
   local joined payload
   joined="$(IFS=,; echo "${checks[*]}")"
-  payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}]}"
+  if [[ -n "$metrics_json" ]]; then
+    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}],\"metrics\":${metrics_json}}"
+  else
+    payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}]}"
+  fi
   if curl -sf --max-time 15 -X POST \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer ${ROWBOAT_GATEWAY_TOKEN}" \
