@@ -166,15 +166,23 @@ describe("white-glove/intake DB layer", () => {
     );
   });
 
-  it("submitWhiteGloveIntake claims only SENT rows and reports whether it landed", async () => {
+  it("submitWhiteGloveIntake claims only SENT rows and returns the completed row", async () => {
+    const completedRow = {
+      ...INTAKE,
+      answers: ANSWERS,
+      status: "completed",
+      completed_at: "2026-08-21T19:56:12.345Z"
+    };
     const db = mockDb({
-      select: vi.fn().mockResolvedValue({ data: [{ id: INTAKE.id }], error: null })
+      select: vi.fn().mockResolvedValue({ data: [completedRow], error: null })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await submitWhiteGloveIntake("tok-1", ANSWERS)).toBe(true);
+    // The full row comes back so the route can notify ops without re-reading.
+    expect(await submitWhiteGloveIntake("tok-1", ANSWERS)).toBe(completedRow);
     expect(db.update).toHaveBeenCalledWith(
       expect.objectContaining({ answers: ANSWERS, status: "completed" })
     );
+    expect(db.select).toHaveBeenCalledWith("*");
     // The immutability guard: only a still-open questionnaire accepts answers.
     expect(db.eq).toHaveBeenCalledWith("token", "tok-1");
     expect(db.eq).toHaveBeenCalledWith("status", "sent");
@@ -182,7 +190,7 @@ describe("white-glove/intake DB layer", () => {
     for (const data of [[], null]) {
       const none = mockDb({ select: vi.fn().mockResolvedValue({ data, error: null }) });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
-      expect(await submitWhiteGloveIntake("tok-1", ANSWERS)).toBe(false);
+      expect(await submitWhiteGloveIntake("tok-1", ANSWERS)).toBeNull();
     }
   });
 

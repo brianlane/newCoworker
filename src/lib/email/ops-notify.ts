@@ -56,6 +56,10 @@ import {
   buildOpsProvisioningStuckEmail,
   type OpsProvisioningStuckInput
 } from "@/lib/email/templates/ops-provisioning-stuck";
+import {
+  buildOpsIntakeCompletedEmail,
+  type OpsIntakeCompletedInput
+} from "@/lib/email/templates/ops-intake-completed";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -446,6 +450,41 @@ export async function sendOpsDidReleaseFailedEmail(
     logger.warn("ops DID-release-failed email failed", {
       businessId: input.businessId,
       e164: input.e164,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget "white-glove questionnaire completed" ops alert; never
+ * throws. Sent by the public intake submit route the moment a prospect
+ * finishes, the only other way the team finds out is opening the admin
+ * panel. Not tier-tagged: a prospect usually has no tenant yet. Best-effort
+ * by contract, a mail hiccup must never fail the prospect's submission.
+ */
+export async function sendOpsIntakeCompletedEmail(
+  input: Omit<OpsIntakeCompletedInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops intake-completed email skipped: RESEND_API_KEY missing", {
+        intakeId: input.intakeId
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsIntakeCompletedEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops intake-completed email sent", {
+      intakeId: input.intakeId,
+      businessName: input.businessName,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops intake-completed email failed", {
+      intakeId: input.intakeId,
       error: err instanceof Error ? err.message : String(err)
     });
   }

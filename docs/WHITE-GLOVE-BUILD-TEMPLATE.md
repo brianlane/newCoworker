@@ -4,9 +4,9 @@ This is the blank reference copy of the white-glove build template, distilled fr
 Lead Management PRD (`PRDs/Lead Management.pdf`) into a short, plain-English,
 industry-agnostic document.
 
-**Normal flow:** admins don't fill this out by hand — they create the intake
+**Normal flow:** admins don't fill this out by hand: they create the intake
 questionnaire from the admin panel (All Clients → "White-glove setup questionnaires"),
-supplying the business name and industry themselves (email optional — with one the link
+supplying the business name and industry themselves (email optional: with one the link
 is emailed automatically, without one they get a shareable link). The prospect answers
 on the public `/intake/<token>` page and the completed build document (this template,
 filled in) is generated at `/admin/intake-doc/<id>`, ready to print, save as PDF, or
@@ -26,7 +26,7 @@ area, team size, CRM, tone). Section 1 below is filled by the admin, not the pro
 
 ## 2. Team & handoffs
 
-Leads are handed to (in order — name and mobile number per line):
+Leads are handed to (in order, name and mobile number per line):
 
 - ______________________________________
 - ______________________________________
@@ -47,7 +47,7 @@ Leads are handed to (in order — name and mobile number per line):
 
   > ______________________________________
 
-- The assistant may ask AT MOST these questions before booking (3 max — fewer
+- The assistant may ask AT MOST these questions before booking (3 max, fewer
   questions means fewer leads lost):
 
   1. ______________________________________
@@ -69,7 +69,7 @@ Leads are handed to (in order — name and mobile number per line):
 - First nudge if a lead doesn't reply: ☐ 2 hours ☐ 4 hours ☐ same day ☐ next morning
 - Second nudge: ☐ next day ☐ 2 days ☐ 3 days ☐ 1 week
 - Flag for a personal touch: ☐ after 2 ☐ after 3 ☐ after 5 unanswered follow-ups
-- Quiet leads are marked inactive, never deleted — if they reply weeks later, the
+- Quiet leads are marked inactive, never deleted: if they reply weeks later, the
   conversation resumes where it left off.
 
 ## 7. When a human takes over
@@ -113,7 +113,3 @@ ______________________________________
 - [ ] Follow-up nudges fire on the agreed schedule
 - [ ] Handoff topics reach a person immediately
 - [ ] Opt-out (STOP) is honored
-
-Customer signature: ______________________ Date: __________
-
-Installer signature: ______________________ Date: __________

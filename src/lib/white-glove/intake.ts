@@ -130,13 +130,14 @@ export async function getWhiteGloveIntakeByToken(
  * Store the prospect's answers and mark the intake completed, an atomic
  * claim guarded on status='sent', so a completed questionnaire can never be
  * overwritten (double-submits and stale tabs lose quietly) and a revoked
- * link can't be submitted. Returns whether the submission landed.
+ * link can't be submitted. Returns the completed row when the submission
+ * landed (the caller notifies ops from it), null when it did not.
  */
 export async function submitWhiteGloveIntake(
   token: string,
   answers: IntakeAnswers,
   client?: SupabaseClient
-): Promise<boolean> {
+): Promise<WhiteGloveIntakeRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("white_glove_intakes")
@@ -147,9 +148,10 @@ export async function submitWhiteGloveIntake(
     })
     .eq("token", token)
     .eq("status", "sent")
-    .select("id");
+    .select("*");
   if (error) throw new Error(`submitWhiteGloveIntake: ${error.message}`);
-  return ((data as unknown[] | null) ?? []).length > 0;
+  const rows = (data as WhiteGloveIntakeRow[] | null) ?? [];
+  return rows[0] ?? null;
 }
 
 /**

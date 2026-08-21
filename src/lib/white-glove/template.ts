@@ -531,10 +531,7 @@ export function renderWhiteGloveDocSections(
         "☐ Every lead shows a clear status at all times",
         "☐ Follow-up nudges fire on the agreed schedule",
         "☐ Handoff topics reach a person immediately",
-        "☐ Opt-out (STOP) is honored",
-        "",
-        "Customer signature: ______________________    Date: __________",
-        "Installer signature: ______________________    Date: __________"
+        "☐ Opt-out (STOP) is honored"
       ]
     }
   ];

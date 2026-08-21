@@ -40,6 +40,19 @@ export type ApplyBusinessOption = {
 };
 
 /**
+ * "8/21/2026, 12:56 PM" in the admin's own timezone. The completion moment
+ * matters (a build should start while the prospect is warm), so the date
+ * alone undersells how fresh a submission is.
+ */
+function formatCompletedAt(iso: string): string {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString()}, ${d.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  })}`;
+}
+
+/**
  * Preview + confirm for applying a completed intake to a tenant. The preview
  * is computed CLIENT-SIDE from the same pure mapper the server apply uses
  * (`buildIntakeApplyPlan`), so what the admin reads is what gets written.
@@ -377,7 +390,7 @@ export function WhiteGloveIntakesPanel({
                   <p className="text-xs text-parchment/40">
                     {i.status === "completed"
                       ? `Completed ${
-                          i.completed_at ? new Date(i.completed_at).toLocaleDateString() : ""
+                          i.completed_at ? formatCompletedAt(i.completed_at) : ""
                         }${
                           i.applied_at
                             ? `, applied ${new Date(i.applied_at).toLocaleDateString()}`

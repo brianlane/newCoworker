@@ -10,11 +10,33 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimitIdentifierFromRequest: vi.fn().mockReturnValue("ip:1.2.3.4")
 }));
 
+vi.mock("@/lib/email/ops-notify", () => ({
+  sendOpsIntakeCompletedEmail: vi.fn().mockResolvedValue(undefined)
+}));
+
 import { POST } from "@/app/intake/[token]/submit/route";
 import { submitWhiteGloveIntake } from "@/lib/white-glove/intake";
+import { sendOpsIntakeCompletedEmail } from "@/lib/email/ops-notify";
 import { rateLimitDurable } from "@/lib/rate-limit";
 
 const TOKEN = "0f0f0f0f-0000-4000-8000-0000000000aa";
+
+/** What submitWhiteGloveIntake hands back once the claim lands. */
+const COMPLETED_ROW = {
+  id: "0f0f0f0f-0000-4000-8000-000000000001",
+  token: TOKEN,
+  business_name: "Acme Home Services",
+  industry: "home_services",
+  recipient_email: "prospect@example.com",
+  business_id: null,
+  status: "completed",
+  created_at: "2026-08-20T00:00:00.000Z",
+  completed_at: "2026-08-21T19:56:12.345Z",
+  applied_at: null,
+  applied_flow_id: null,
+  apply_started_at: null,
+  priority_support_granted_at: null
+} as never;
 
 const VALID_ANSWERS = {
   business_hours: "Mon–Fri 9am–5pm",
@@ -46,7 +68,8 @@ describe("POST /intake/[token]/submit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(rateLimitDurable).mockResolvedValue({ success: true } as never);
-    vi.mocked(submitWhiteGloveIntake).mockResolvedValue(true);
+    vi.mocked(submitWhiteGloveIntake).mockResolvedValue(COMPLETED_ROW);
+    vi.mocked(sendOpsIntakeCompletedEmail).mockResolvedValue(undefined);
   });
 
   it("validates + stores the answers against the token", async () => {
@@ -62,6 +85,18 @@ describe("POST /intake/[token]/submit", () => {
         never_handle: []
       })
     );
+  });
+
+  it("notifies the ops inbox with the completed intake's details", async () => {
+    const res = await POST(submitRequest(VALID_ANSWERS), routeParams(TOKEN));
+    expect(res.status).toBe(200);
+    expect(sendOpsIntakeCompletedEmail).toHaveBeenCalledWith({
+      intakeId: "0f0f0f0f-0000-4000-8000-000000000001",
+      businessName: "Acme Home Services",
+      industry: "home_services",
+      recipientEmail: "prospect@example.com",
+      completedAt: "2026-08-21T19:56:12.345Z"
+    });
   });
 
   it("404s malformed tokens without touching the DB", async () => {
@@ -91,10 +126,12 @@ describe("POST /intake/[token]/submit", () => {
   });
 
   it("409s when the intake is unknown, completed, or revoked (one answer for all three)", async () => {
-    vi.mocked(submitWhiteGloveIntake).mockResolvedValue(false);
+    vi.mocked(submitWhiteGloveIntake).mockResolvedValue(null);
     const res = await POST(submitRequest(VALID_ANSWERS), routeParams(TOKEN));
     expect(res.status).toBe(409);
     expect((await res.json()).error).toContain("no longer open");
+    // A submission that did not land must not ping the team.
+    expect(sendOpsIntakeCompletedEmail).not.toHaveBeenCalled();
   });
 
   it("500s (without leaking details) when the store fails", async () => {
@@ -102,5 +139,6 @@ describe("POST /intake/[token]/submit", () => {
     const res = await POST(submitRequest(VALID_ANSWERS), routeParams(TOKEN));
     expect(res.status).toBe(500);
     expect((await res.json()).error).not.toContain("db down");
+    expect(sendOpsIntakeCompletedEmail).not.toHaveBeenCalled();
   });
 });

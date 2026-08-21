@@ -35,7 +35,8 @@ import {
   sendOpsNewSignupEmail,
   sendOpsNangoQuotaEmail,
   sendOpsProvisioningStuckEmail,
-  sendOpsCronSweepHealthEmail
+  sendOpsCronSweepHealthEmail,
+  sendOpsIntakeCompletedEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -892,6 +893,90 @@ describe("sendOpsOrphanSweepEmail", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops orphan-sweep email failed",
       expect.objectContaining({ error: "plain string boom" })
+    );
+  });
+});
+
+describe("sendOpsIntakeCompletedEmail", () => {
+  const intakeInput = {
+    intakeId: "0f0f0f0f-0000-4000-8000-000000000001",
+    businessName: "Acme Home Services",
+    industry: "home_services",
+    recipientEmail: "prospect@example.com",
+    completedAt: "2026-08-21T19:56:12.345Z"
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the completion alert to the ops inbox and logs the audit line", async () => {
+    await sendOpsIntakeCompletedEmail(intakeInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("White-glove questionnaire completed"),
+      expect.objectContaining({
+        text: expect.stringContaining("2026-08-21 19:56 UTC"),
+        html: expect.stringContaining("/admin/intake-doc/0f0f0f0f-0000-4000-8000-000000000001")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops intake-completed email sent",
+      expect.objectContaining({
+        intakeId: intakeInput.intakeId,
+        businessName: "Acme Home Services",
+        toEmail: "team@newcoworker.com"
+      })
+    );
+  });
+
+  it("is not tier-tagged: a prospect usually has no tenant yet", async () => {
+    await sendOpsIntakeCompletedEmail(intakeInput);
+    expect(getBusiness).not.toHaveBeenCalled();
+    expect(sendOwnerEmailMock.mock.calls[0][2]).not.toContain("[ENTERPRISE]");
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsIntakeCompletedEmail(intakeInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops intake-completed email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ intakeId: intakeInput.intakeId })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsIntakeCompletedEmail(intakeInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  // The prospect's submission is already saved when this fires; a dead
+  // mailer must never turn their success into a 500.
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsIntakeCompletedEmail(intakeInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops intake-completed email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsIntakeCompletedEmail(intakeInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops intake-completed email failed",
+      expect.objectContaining({ error: "smtp string failure" })
     );
   });
 });
