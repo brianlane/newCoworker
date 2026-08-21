@@ -21,10 +21,11 @@
  * Restart safety: `systemctl restart ollama` drops any in-flight LOCAL
  * inference. On this fleet the local model only serves the spend-cap twin
  * agents (CoworkerLocal / OwnerCoworkerLocal / WebchatCoworkerLocal), which
- * are reached only once a tenant's shared AI budget fuse has tripped, so the
- * script checks that fuse and SKIPS a tenant whose fuse is currently tripped
- * unless `--force`. Voice is untouched either way: Gemini Live never goes
- * near Ollama.
+ * are reached only once a tenant is over its shared AI budget, so the script
+ * checks that budget (current-period spend against base cap plus purchased
+ * credit, the same number the workers route on) and SKIPS a tenant who is
+ * currently over unless `--force`. Voice is untouched either way: Gemini
+ * Live never goes near Ollama.
  *
  * Usage:
  *   tsx debug/apply-ollama-context.ts --all --dry-run   # list targets, change nothing
@@ -60,6 +61,7 @@ const { getActiveVpsSshKeyForBusiness, listActiveVpsSshKeys, newestKeyPerBusines
 );
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
 const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
+const { getChatSpendSnapshotForBusiness } = await import("../src/lib/db/chat-usage.ts");
 
 const BOOTSTRAP = readFileSync(
   join(import.meta.dirname, "..", "vps", "scripts", "bootstrap.sh"),
@@ -93,24 +95,33 @@ if (ALL) {
 }
 
 /**
- * True when this tenant's shared AI budget fuse is currently tripped, which
- * is the only state in which the box actually serves local-model turns.
+ * True when this tenant is currently OVER its AI budget, which is the only
+ * state in which the box actually serves local-model turns.
+ *
+ * Deliberately NOT `owner_chat_model_spend.fuse_tripped_at`. The workers
+ * route on current-period `spend >= effectiveCap` (base cap PLUS purchased
+ * credit), which is what `getChatSpendSnapshotForBusiness` computes, and it
+ * also resolves the right period window. `fuse_tripped_at` disagrees with
+ * that in two directions: it is sticky once set, so a mid-period credit
+ * top-up restores Gemini while the stamp stays, and the newest row can be a
+ * PRIOR period whose trip says nothing about today.
+ *
  * Returns null when it cannot be read: unknown must not be downgraded to
  * "safe to restart".
  */
-async function fuseTripped(businessId: string): Promise<boolean | null> {
-  const { data, error } = await db
-    .from("owner_chat_model_spend")
-    .select("period_start, fuse_tripped_at")
-    .eq("business_id", businessId)
-    .order("period_start", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.error(`  ! could not read owner_chat_model_spend: ${error.message}`);
+async function overAiBudget(
+  businessId: string,
+  tier: "starter" | "standard" | "enterprise"
+): Promise<boolean | null> {
+  try {
+    const snap = await getChatSpendSnapshotForBusiness(businessId, db, tier);
+    return snap.spendMicros >= snap.effectiveCapMicros;
+  } catch (err) {
+    console.error(
+      `  ! could not read the chat spend snapshot: ${err instanceof Error ? err.message : String(err)}`
+    );
     return null;
   }
-  return (data as { fuse_tripped_at: string | null } | null)?.fuse_tripped_at != null;
 }
 
 function remoteScript(contextLength: number): string {
@@ -159,9 +170,15 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 echo "== effective environment of the running process =="
-PID="$(pgrep -f 'ollama serve' | head -1 || true)"
-if [ -z "$PID" ]; then
-  echo "ERROR: no 'ollama serve' process found" >&2
+# systemd's own MainPID, NOT pgrep. This whole script is delivered as one
+# \`bash -c\` command, so its text (including any pgrep pattern) is in the
+# shell's own /proc cmdline: \`pgrep -f 'ollama serve'\` matches the shell
+# too, and after a restart Ollama's PID is HIGHER than the shell's, so
+# \`head -1\` would read the shell's environ and report a failure on a box
+# that is in fact correct. MainPID has no such ambiguity.
+PID="$(systemctl show -p MainPID --value ollama 2>/dev/null || true)"
+if [ -z "$PID" ] || [ "$PID" = "0" ]; then
+  echo "ERROR: systemd reports no running MainPID for ollama.service" >&2
   exit 1
 fi
 EFFECTIVE="$(tr '\\0' '\\n' < "/proc/$PID/environ" | grep -E '^OLLAMA_CONTEXT_LENGTH=' || true)"
@@ -202,12 +219,15 @@ for (const key of targets) {
   const want = CONTEXT_LENGTHS.get(size) as number;
   console.log(`  tier=${row.tier} pin=${row.vps_size} size=${size} want=${want}`);
 
-  const tripped = await fuseTripped(businessId);
-  if (tripped !== false && !FORCE) {
+  const overBudget = await overAiBudget(
+    businessId,
+    row.tier as "starter" | "standard" | "enterprise"
+  );
+  if (overBudget !== false && !FORCE) {
     console.error(
-      tripped === null
-        ? "  ! AI budget fuse state unknown, refusing to restart Ollama (use --force)"
-        : "  ! AI budget fuse is TRIPPED, this box is serving local turns right now. Skipping (use --force)"
+      overBudget === null
+        ? "  ! AI budget state unknown, refusing to restart Ollama (use --force)"
+        : "  ! OVER the AI budget, this box is serving local turns right now. Skipping (use --force)"
     );
     failures += 1;
     continue;
