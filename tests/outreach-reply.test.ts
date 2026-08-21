@@ -116,6 +116,36 @@ describe("noteProspectReply", () => {
     expect(patchProspectSpy).not.toHaveBeenCalled();
   });
 
+  it("honors an opt-out from a row that has already answered us", async () => {
+    // The request is about the FUTURE, so what the ledger already thinks of
+    // the row is beside the point. Behind the status gate this was reachable
+    // only from `sent`, so somebody who wrote back once and then asked to
+    // stop was ignored: no ledger stamp, no marketing stamp, and still inside
+    // every campaign audience.
+    for (const status of ["replied", "drafted", "skipped", "failed"]) {
+      suppressProspectSpy.mockClear();
+      findProspectByEmailSpy.mockResolvedValue({ id: PROSPECT, status });
+      expect(
+        await noteProspectReply(BIZ, ["info@acmehvac.com"], "please unsubscribe me", {} as never)
+      ).toBe("unsubscribed");
+      expect(suppressProspectSpy).toHaveBeenCalledWith(
+        BIZ,
+        PROSPECT,
+        expect.anything(),
+        "asked to stop by reply"
+      );
+    }
+  });
+
+  it("does not re-suppress a row that already opted out", async () => {
+    suppressProspectSpy.mockClear();
+    findProspectByEmailSpy.mockResolvedValue({ id: PROSPECT, status: "unsubscribed" });
+    expect(
+      await noteProspectReply(BIZ, ["info@acmehvac.com"], "unsubscribe", {} as never)
+    ).toBe("already");
+    expect(suppressProspectSpy).not.toHaveBeenCalled();
+  });
+
   it("never throws: this is bookkeeping beside the reply, not the reply itself", async () => {
     findProspectByEmailSpy.mockRejectedValue(new Error("ledger down"));
     expect(await noteProspectReply(BIZ, ["info@acmehvac.com"], "hi", {} as never)).toBe(

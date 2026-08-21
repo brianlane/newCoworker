@@ -2407,17 +2407,88 @@ carries no send step at all, and a test pins that.
   platform's.
 - Every pitch and every follow-up carries a working prospect-scoped
   unsubscribe link. Unsubscribing stamps BOTH the ledger row and any contact
-  holding that address, so a later campaign cannot reach them either.
+  holding that address, so a later campaign cannot reach them either. An
+  opt-out is honored WHATEVER state the ledger row is in: the request is about
+  the future, so a person who already answered us once and then asks to stop
+  is suppressed like anyone else. Only an already-suppressed row short-circuits.
 - Weekdays only, inside a per-tenant window in the tenant's timezone, under a
   per-tenant daily cap (12 by default) that counts follow-ups too.
 - One follow-up per prospect, ever, and any reply cancels it. Opt-out
   detection reads only the text ABOVE the quoted history, because our own
   footer says "unsubscribe" and a quoted reply would otherwise suppress a warm
   lead.
+- **Silence means silence on every channel, not just email.** See below.
 - No SMS and no AI calls to prospects: scraped contacts consented to neither,
   the same line `instagramProspectTemplate` draws.
 - A prospect with nothing checkable to say about them is never emailed. An
   opening built from a vague compliment is spam whatever the footer says.
+
+### The follow-up asks three questions, not one
+
+The nudge is scheduled off SILENCE, and for a while the only thing that
+counted as noise was `replied_at`, which is written in exactly one place
+(`noteProspectReply`) when inbound mail lands on an owned thread. Nothing else
+set it: not a booking, not a call, not a meeting.
+
+That was a gap rather than a corner case, because the pitch itself carries a
+booking-page link. "Clicks the link, books, never replies by email" is the
+path the mail is written to produce. So this was live:
+
+```text
+day 0  cold email goes out, with a booking link
+day 1  prospect books from the link and never replies
+day 3  the meeting happens, the minutes classifier moves them to Won
+day 5  "I wrote last week..." lands on somebody who already signed
+```
+
+`findEngagedProspects` ([src/lib/outreach/engagement.ts](src/lib/outreach/engagement.ts))
+now asks two more questions before any follow-up, and EITHER one suppresses it:
+
+1. **Did they book since we mailed?** Matched on the address or the normalized
+   phone against `calendar_booking_dedupe`, only for CONFIRMED rows (a null
+   `event_id` is an in-flight or abandoned claim, not an appointment) and only
+   for bookings created after `sent_at`, since an older one is a relationship
+   that predates the outreach. Board-independent, which matters because a
+   pipeline is optional.
+2. **Has their card moved past the stage prospecting itself writes?** Anchored
+   on the "Contacted" column rather than a fixed position, so a board with
+   extra columns in front still compares the right thing. This covers every
+   other way a lead advances (a reply on any channel, a claim, a meeting
+   classified as signed) in one condition.
+
+Two independent signals rather than one, because each covers the other's blind
+spot: a tenant with no board still gets the booking check, and a lead who
+advanced without a platform booking still gets the stage check.
+
+Keyed on the prospect's PHONE, not on `outreach_prospects.contact_id`. That
+column exists on the row type and is patchable, but nothing in the codebase
+ever writes it and it is null on every sent prospect in production. The phone
+is the join the Contacted reconcile already uses.
+
+Both lookups are KEYED on the batch's own identifiers rather than scanning
+the tenant's bookings, because a scan has to be capped and a cap on a
+fail-safe check is fail-OPEN: past the cap a real booking is invisible and the
+follow-up sends. The two columns match differently on purpose:
+`attendee_key` is normalized by `bookingAttendeeKey` so an exact `in` matches
+it, while `attendee_email` keeps whatever casing the booker typed, so that one
+needs `ilike` or it silently never fires.
+
+**An engaged prospect is RETIRED, not just skipped.** The due query is
+oldest-first and capped at `NUDGE_BATCH`, so a handful of booked leads left at
+`status = 'sent'` would win every slot on every pass and starve the silent
+prospects behind them until they aged out of the window unnudged. That is the
+same starvation the Contacted reconcile documents, and skipping without
+stamping walks straight back into it. They are stamped `replied`, which is
+what happened: this ledger's "replied" means the prospect ANSWERED the
+outreach, and booking a call is an answer. `nudged_at` stays null, so the one
+follow-up they are owed is still theirs if the owner ever wants it.
+
+**Fail direction is suppress.** An unreadable or TRUNCATED signal answers
+"engaged" and holds the whole batch, because the sweep's own doctrine settles
+it: a duplicate cold email is a spam complaint while a missed one costs
+nothing. Nothing is stamped when a batch is held, so the same prospects are
+due again on the next pass five minutes later; only a PERSISTENT failure stops
+follow-ups, and it surfaces as a sweep note rather than being silent.
 
 ### Suppression is wider than sending, on two axes
 

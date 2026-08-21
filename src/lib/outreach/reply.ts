@@ -60,14 +60,31 @@ export async function noteProspectReply(
       if (prospect) break;
     }
     if (!prospect) return "not_a_prospect";
-    // Only a contacted prospect can reply. Anything else (a draft, a skip, an
-    // already-suppressed row) is left exactly as it is.
-    if (prospect.status !== "sent") return "already";
 
+    // AN OPT-OUT IS HONORED WHATEVER STATE THE ROW IS IN, and is therefore
+    // checked before the status gate below.
+    //
+    // "Take me off your list" is a request about the FUTURE, so what the
+    // ledger already thinks of this row is beside the point. Behind the gate
+    // it was reachable only from `sent`, which meant a person who had already
+    // answered us once could ask to stop and be ignored: their second mail
+    // returned "already" and never reached suppressProspect, leaving them
+    // stamped on neither axis and still inside every future campaign
+    // audience. Retiring engaged prospects as `replied` (this PR) would have
+    // widened that from "people who wrote back twice" to "everyone who booked
+    // a call", which is how it was found (Bugbot, PR #1571).
+    //
+    // suppressProspect is idempotent on both writes, so the only state worth
+    // short-circuiting is one that is already suppressed.
     if (looksLikeOptOut(bodyText)) {
+      if (prospect.status === "unsubscribed") return "already";
       await suppressProspect(businessId, prospect.id, db, "asked to stop by reply");
       return "unsubscribed";
     }
+
+    // Only a contacted prospect can newly REPLY. Anything else (a draft, a
+    // skip, a row that already answered) is left exactly as it is.
+    if (prospect.status !== "sent") return "already";
     await patchProspect(
       businessId,
       prospect.id,
