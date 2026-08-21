@@ -25,38 +25,84 @@
  */
 
 /**
- * Every fixed recency window the engine reads over a PURGED table, with the
- * module that owns it. Keys are repo-relative paths; the lockstep test reads
- * each file and checks the literal still matches.
+ * Fixed recency windows the engine reads over a PURGED table, which the
+ * floor MUST cover. Keys are repo-relative paths; the lockstep test reads
+ * each file and checks the literal still matches, so widening one fails
+ * until the floor moves with it.
  */
 export const RESIDENCY_ENGINE_LOOKBACK_WINDOWS = [
   {
     file: "supabase/functions/_shared/contact_context.ts",
     constant: "CONTACT_TIMELINE_LOOKBACK_HOURS",
+    literal: 72,
     hours: 72,
     reads: "sms_outbound_log + voice_call_transcripts, into the model's prompt"
   },
   {
+    file: "supabase/functions/_shared/ai_flows/run_context.ts",
+    constant: "FLOW_CONTEXT_LOOKBACK_HOURS",
+    literal: 72,
+    hours: 72,
+    reads: "sms_outbound_log, the context behind a flow run"
+  },
+  {
+    file: "supabase/functions/_shared/ai_flows/contact_said.ts",
+    constant: "SAID_LOOKBACK_HOURS",
+    literal: 72,
+    hours: 72,
+    reads: "voice_call_transcripts + turns, what the contact said"
+  },
+  {
+    file: "supabase/functions/_shared/call_summary_sweep.ts",
+    constant: "CALL_SUMMARY_WINDOW_HOURS",
+    literal: 48,
+    hours: 48,
+    reads: "voice_call_transcripts, calls still awaiting a summary"
+  },
+  {
     file: "supabase/functions/_shared/needs_human.ts",
     constant: "NEEDS_HUMAN_REPAGE_HOURS",
+    literal: 24,
     hours: 24,
     reads: "notifications, to suppress a duplicate human page"
   },
   {
     file: "supabase/functions/_shared/ai_flows/call_guards.ts",
     constant: "DEFAULT_DIAL_WINDOW_HOURS",
+    literal: 24,
     hours: 24,
     reads: "voice_outbound_dial_log, the dial-cap backstop"
   }
 ] as const;
 
 /**
- * Smallest keep-hours a purge may use: the widest engine window. Kept in
- * lockstep with the same literal in
- * 20260822233041_residency_purge_keep_floor_and_replay_cron_check.sql, which
- * enforces it again in the RPC because the RPC is callable without the
- * wrapper.
+ * Windows over a purged table that are WIDER than the floor and knowingly
+ * accept truncation.
+ *
+ * The floor cannot simply rise to cover these. `residency_purge_business`
+ * documents a default of 72 hours, so a 168h floor would make the default
+ * call fail, and the runbook's own step 4 would stop working. The honest
+ * answer is per window: say which ones lose data and why that is tolerable.
+ *
+ * Pinned by the same lockstep test, so a window cannot join or leave this
+ * list silently.
  */
+export const RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION = [
+  {
+    file: "supabase/functions/_shared/hardware_escalation.ts",
+    constant: "ADVISOR_WINDOW_DAYS",
+    // The source literal is in DAYS; `hours` is what the floor compares.
+    literal: 7,
+    hours: 7 * 24,
+    reads: "voice_call_transcripts across the whole fleet",
+    why:
+      "internal weekly capacity advisory, not customer-facing and not billing. It projects " +
+      "monthly minutes from the window, so a residency tenant purged at 72h is under-counted " +
+      "and may simply not be flagged for an upgrade. Degraded advice about one tenant, against " +
+      "a floor rise that would break the purge's own documented 72h default"
+  }
+] as const;
+
 export const RESIDENCY_MIN_KEEP_HOURS = 72;
 
 export class ResidencyKeepWindowError extends Error {

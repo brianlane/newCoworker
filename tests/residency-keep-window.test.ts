@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,11 +7,16 @@ import {
   assertResidencyReplayCronScheduled,
   RESIDENCY_ENGINE_LOOKBACK_WINDOWS,
   RESIDENCY_MIN_KEEP_HOURS,
+  RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION,
   ResidencyKeepWindowError,
   ResidencyReplayCronError
 } from "@/lib/residency/keep-window";
 
 const ROOT = join(__dirname, "..");
+
+/** The 8 tables residency_purge_business() deletes from. */
+const PURGED_TABLE_RE =
+  /\.from\(["'`](email_log|sms_outbound_log|voice_call_transcripts|voice_call_transcript_turns|voice_outbound_dial_log|notifications|scheduled_sms|sms_owner_reply_prompts)["'`]\)/;
 const MIGRATION = join(
   ROOT,
   "supabase",
@@ -23,19 +28,71 @@ describe("residency keep-window floor", () => {
   it("pins every declared window to the constant the engine actually uses", () => {
     // Lockstep. Widening a window in the Deno source without moving the floor
     // would silently reopen the gap this floor exists to close.
-    for (const w of RESIDENCY_ENGINE_LOOKBACK_WINDOWS) {
+    for (const w of [
+      ...RESIDENCY_ENGINE_LOOKBACK_WINDOWS,
+      ...RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION
+    ]) {
       const src = readFileSync(join(ROOT, w.file), "utf8");
       const m = new RegExp(String.raw`\b${w.constant}\s*=\s*(\d+)`).exec(src);
       expect(m, `${w.constant} is gone from ${w.file}`).not.toBeNull();
       expect(Number(m?.[1]), `${w.constant} in ${w.file} moved but the floor did not`).toBe(
-        w.hours
+        w.literal
       );
     }
   });
 
-  it("sets the floor to the widest window", () => {
+  it("sets the floor to the widest window it covers", () => {
     const widest = Math.max(...RESIDENCY_ENGINE_LOOKBACK_WINDOWS.map((w) => w.hours));
     expect(RESIDENCY_MIN_KEEP_HOURS).toBe(widest);
+  });
+
+  it("keeps the covered and truncation-accepting lists honest about each other", () => {
+    // Anything at or under the floor belongs in the COVERED list: parking it
+    // under "accepts truncation" would excuse a window that is not actually
+    // losing anything, and hide it from the floor calculation if it later grew.
+    for (const w of RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION) {
+      expect(
+        w.hours,
+        `${w.constant} fits under the floor, so it is covered, not truncated`
+      ).toBeGreaterThan(RESIDENCY_MIN_KEEP_HOURS);
+      expect(w.why.trim().length, `${w.constant}: needs a reason, not a shrug`).toBeGreaterThan(40);
+    }
+    for (const w of RESIDENCY_ENGINE_LOOKBACK_WINDOWS) {
+      expect(
+        w.hours,
+        `${w.constant} is wider than the floor, so it cannot claim to be covered`
+      ).toBeLessThanOrEqual(RESIDENCY_MIN_KEEP_HOURS);
+    }
+  });
+
+  it("finds no fixed engine window over a purged table that is unaccounted for", () => {
+    // The inventory claims completeness, so prove it rather than asserting
+    // it. Bugbot caught two missing entries on the first pass; this is the
+    // check that would have caught them first.
+    const declared = new Set<string>(
+      [...RESIDENCY_ENGINE_LOOKBACK_WINDOWS, ...RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION].map(
+        (w) => w.constant as string
+      )
+    );
+    const EDGE_SHARED = join(ROOT, "supabase", "functions", "_shared");
+    const files = readdirSync(EDGE_SHARED, { withFileTypes: true, recursive: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".ts"))
+      .map((e) => join(e.parentPath, e.name));
+    const unaccounted: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(file, "utf8");
+      // Only modules that actually read a purged table can truncate.
+      if (!PURGED_TABLE_RE.test(src)) continue;
+      for (const m of src.matchAll(/^export const ([A-Z_]*(?:HOURS|DAYS))\s*=\s*(\d+)/gm)) {
+        if (!declared.has(m[1])) unaccounted.push(`${m[1]} (${file.replace(ROOT + "/", "")})`);
+      }
+    }
+    expect(
+      unaccounted.sort(),
+      "a fixed lookback window in a module that reads a purged table, missing from both lists. " +
+        "Add it to RESIDENCY_ENGINE_LOOKBACK_WINDOWS if the floor covers it, or to " +
+        "RESIDENCY_WINDOWS_ACCEPTING_TRUNCATION with the reason it may lose rows."
+    ).toEqual([]);
   });
 
   it("keeps the SQL floor in lockstep with the TypeScript one", () => {

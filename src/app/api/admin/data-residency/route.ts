@@ -4,6 +4,7 @@ import {
   DATA_RESIDENCY_MODES,
   ResidencyValidationError
 } from "@/lib/residency/tier-gate";
+import { ResidencyReplayCronError } from "@/lib/residency/keep-window";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -34,6 +35,13 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
     }
     if (err instanceof ResidencyValidationError) {
+      return errorResponse("VALIDATION_ERROR", err.message);
+    }
+    // The cron precondition refuses a flip that would replicate nothing. Its
+    // message names the runbook step that fixes it, and a generic 500 would
+    // throw that away: the whole argument for failing closed is that the
+    // block is recoverable in a minute, which needs the admin to SEE it.
+    if (err instanceof ResidencyReplayCronError) {
       return errorResponse("VALIDATION_ERROR", err.message);
     }
     return handleRouteError(err);
