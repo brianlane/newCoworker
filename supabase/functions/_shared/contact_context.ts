@@ -35,6 +35,10 @@
  * the Next runtime).
  */
 import { inboundSmsBody } from "./telnyx_sms_compliance.ts";
+import {
+  edgeIsVpsReadMode,
+  edgeReadMovedRowsOrNull
+} from "./residency.ts";
 
 /** How far back an interaction still counts as recent context. */
 export const CONTACT_TIMELINE_LOOKBACK_HOURS = 72;
@@ -139,6 +143,14 @@ export async function resolveContactNumbers(
 ): Promise<string[]> {
   const numbers = [contactE164];
   try {
+    // Deliberately CENTRAL even for a vps tenant, and not an oversight.
+    // `contacts` is a KEPT table, so central is the write ingress and the box
+    // copy can only ever be a replay tick BEHIND it, never ahead. These
+    // numbers then filter both the box legs below AND `sms_inbound_jobs`,
+    // which is an engine table that stays central. Reading identity from the
+    // box could therefore drop a just-merged alias and make the CENTRAL leg
+    // miss history that central still holds. Central identity paired with box
+    // history is the only combination where neither side is short.
     const { data, error } = await supabase
       .from("contacts")
       .select("customer_e164, alias_e164s")
@@ -184,6 +196,9 @@ export async function loadContactTimeline(
     // another profile keeps its message/call rows keyed on the OLD number,
     // so the timeline must query every number the profile spans (Bugbot on
     // PR #608, the surfaced number alone missed the primary's history).
+    // One mode decision for the whole timeline, so three routed reads make
+    // one businesses lookup between them.
+    const vpsRead = await edgeIsVpsReadMode(supabase, businessId);
     const numbers = await resolveContactNumbers(supabase, businessId, contactE164);
     const events: ContactTimelineEvent[] = [];
 
@@ -217,19 +232,43 @@ export async function loadContactTimeline(
 
     // Outbound SMS, every source (AI reply, AiFlow send, scheduled): the
     // contact experienced them all as one thread.
-    const outbound = await supabase
-      .from("sms_outbound_log")
-      .select("created_at, body")
-      .eq("business_id", businessId)
-      .in("to_e164", numbers)
-      .is("deleted_at", null)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(TIMELINE_MAX_EVENTS);
-    if (outbound.error) {
-      console.error("contact_context: outbound lookup", outbound.error);
+    // `sms_outbound_log` is PURGED from central once a tenant reaches vps
+    // mode, so a central read there is not merely stale, it is empty. Same
+    // per-source degrade the module already documents: an unreachable box
+    // costs this ONE channel, never the whole timeline.
+    let outboundRows: OutboundLogRow[] | null;
+    if (vpsRead) {
+      outboundRows = await edgeReadMovedRowsOrNull<OutboundLogRow>(supabase, businessId, {
+        table: "sms_outbound_log",
+        columns: ["created_at", "body"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_e164", op: "in", value: numbers },
+          { column: "deleted_at", op: "is", value: null },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: TIMELINE_MAX_EVENTS
+      });
     } else {
-      for (const row of (outbound.data ?? []) as OutboundLogRow[]) {
+      const outbound = await supabase
+        .from("sms_outbound_log")
+        .select("created_at, body")
+        .eq("business_id", businessId)
+        .in("to_e164", numbers)
+        .is("deleted_at", null)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(TIMELINE_MAX_EVENTS);
+      if (outbound.error) {
+        console.error("contact_context: outbound lookup", outbound.error);
+        outboundRows = null;
+      } else {
+        outboundRows = (outbound.data ?? []) as OutboundLogRow[];
+      }
+    }
+    if (outboundRows !== null) {
+      for (const row of outboundRows) {
         events.push({
           at: row.created_at ?? "",
           channel: "sms_out",
@@ -241,19 +280,40 @@ export async function loadContactTimeline(
     // Voice, the call summarizer's one-paragraph summaries; a call that
     // ended but isn't summarized yet still shows up as a placeholder so the
     // model knows a conversation happened.
-    const calls = await supabase
-      .from("voice_call_transcripts")
-      .select("started_at, created_at, direction, summary, status")
-      .eq("business_id", businessId)
-      .in("caller_e164", numbers)
-      .is("deleted_at", null)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(3);
-    if (calls.error) {
-      console.error("contact_context: voice lookup", calls.error);
+    // `voice_call_transcripts` is purged too, on the same terms.
+    let callRows: VoiceCallRow[] | null;
+    if (vpsRead) {
+      callRows = await edgeReadMovedRowsOrNull<VoiceCallRow>(supabase, businessId, {
+        table: "voice_call_transcripts",
+        columns: ["started_at", "created_at", "direction", "summary", "status"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "caller_e164", op: "in", value: numbers },
+          { column: "deleted_at", op: "is", value: null },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: 3
+      });
     } else {
-      for (const row of (calls.data ?? []) as VoiceCallRow[]) {
+      const calls = await supabase
+        .from("voice_call_transcripts")
+        .select("started_at, created_at, direction, summary, status")
+        .eq("business_id", businessId)
+        .in("caller_e164", numbers)
+        .is("deleted_at", null)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(3);
+      if (calls.error) {
+        console.error("contact_context: voice lookup", calls.error);
+        callRows = null;
+      } else {
+        callRows = (calls.data ?? []) as VoiceCallRow[];
+      }
+    }
+    if (callRows !== null) {
+      for (const row of callRows) {
         const when = row.started_at ?? row.created_at ?? "";
         const dir = row.direction === "outbound" ? "outbound call" : "inbound call";
         const summary = row.summary?.trim();

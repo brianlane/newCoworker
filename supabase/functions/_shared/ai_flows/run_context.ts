@@ -24,6 +24,10 @@
  * wrappers, a context failure must never break the reply path.
  */
 import { isTestModeTrigger } from "./test_mode.ts";
+import {
+  edgeIsVpsReadMode,
+  edgeReadMovedRowsOrNull
+} from "../residency.ts";
 
 /** How far back a run still counts as conversation context. */
 export const FLOW_CONTEXT_LOOKBACK_HOURS = 72;
@@ -352,20 +356,46 @@ export async function loadFlowRunContextDetailed(
     // Multiple messages, not just the newest: the model must know EVERY
     // recently-delivered automated line so it can't re-send an earlier one.
     let recentFlowMessages: string[] = [];
-    const { data: outbound, error: outboundErr } = await supabase
-      .from("sms_outbound_log")
-      .select("body")
-      .eq("business_id", businessId)
-      .eq("to_e164", contactE164)
-      .eq("source", "ai_flow")
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(MAX_FLOW_MESSAGES);
-    if (outboundErr) {
-      console.error("run_context: outbound lookup", outboundErr);
+    // `sms_outbound_log` is PURGED from central at cutover, so for a vps
+    // tenant these come from the tenant's own box. An empty result here is
+    // not cosmetic: it is exactly the Truly Insurance 2026-07-14 regression
+    // this block was added to fix, where the model lost sight of what the
+    // automation had already texted and restarted intake mid-conversation.
+    type OutboundBodyRow = { body?: string | null };
+    let outboundRows: OutboundBodyRow[] | null;
+    if (await edgeIsVpsReadMode(supabase, businessId)) {
+      outboundRows = await edgeReadMovedRowsOrNull<OutboundBodyRow>(supabase, businessId, {
+        table: "sms_outbound_log",
+        columns: ["body"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_e164", op: "eq", value: contactE164 },
+          { column: "source", op: "eq", value: "ai_flow" },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: MAX_FLOW_MESSAGES
+      });
     } else {
+      const { data: outbound, error: outboundErr } = await supabase
+        .from("sms_outbound_log")
+        .select("body")
+        .eq("business_id", businessId)
+        .eq("to_e164", contactE164)
+        .eq("source", "ai_flow")
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(MAX_FLOW_MESSAGES);
+      if (outboundErr) {
+        console.error("run_context: outbound lookup", outboundErr);
+        outboundRows = null;
+      } else {
+        outboundRows = (outbound ?? []) as OutboundBodyRow[];
+      }
+    }
+    if (outboundRows !== null) {
       // Query is newest-first for the LIMIT; the prompt reads oldest-first.
-      recentFlowMessages = ((outbound ?? []) as Array<{ body?: string | null }>)
+      recentFlowMessages = outboundRows
         .map((row) => (typeof row.body === "string" ? row.body : ""))
         .filter((body) => body.trim().length > 0)
         .reverse();

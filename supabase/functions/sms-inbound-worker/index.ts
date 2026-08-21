@@ -122,6 +122,10 @@ import {
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
+  edgeIsVpsReadMode,
+  edgeReadMovedRowsOrNull
+} from "../_shared/residency.ts";
+import {
   smsInboundBatchHasRoom,
   smsInboundDeferredIds,
   smsInboundModelBudgetMs
@@ -467,6 +471,10 @@ async function loadLatestAssistantMessage(
   customerE164: string
 ): Promise<string | null> {
   try {
+    type OutRow = { body?: string | null; created_at?: string };
+    // `sms_inbound_jobs` is an ENGINE table and stays central by design; only
+    // the outbound leg moves, so exactly one of these two arms is routed.
+    const vpsRead = await edgeIsVpsReadMode(supabase, businessId);
     const [jobRes, outRes] = await Promise.all([
       supabase
         .from("sms_inbound_jobs")
@@ -479,19 +487,31 @@ async function loadLatestAssistantMessage(
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
-      supabase
-        .from("sms_outbound_log")
-        .select("body, created_at")
-        .eq("business_id", businessId)
-        .eq("to_e164", customerE164)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      vpsRead
+        ? edgeReadMovedRowsOrNull<OutRow>(supabase, businessId, {
+            table: "sms_outbound_log",
+            columns: ["body", "created_at"],
+            filters: [
+              { column: "business_id", op: "eq", value: businessId },
+              { column: "to_e164", op: "eq", value: customerE164 },
+              { column: "deleted_at", op: "is", value: null }
+            ],
+            order: [{ column: "created_at", ascending: false }],
+            limit: 1
+          }).then((rows) => ({ data: rows === null ? null : (rows[0] ?? null), error: null }))
+        : supabase
+            .from("sms_outbound_log")
+            .select("body, created_at")
+            .eq("business_id", businessId)
+            .eq("to_e164", customerE164)
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
     ]);
     if (jobRes.error || outRes.error) return null;
     const jobRow = jobRes.data as { assistant_reply_text?: string | null; updated_at?: string } | null;
-    const outRow = outRes.data as { body?: string | null; created_at?: string } | null;
+    const outRow = outRes.data as OutRow | null;
     const candidates = [
       jobRow?.assistant_reply_text
         ? { text: jobRow.assistant_reply_text, atMs: Date.parse(jobRow.updated_at ?? "") }

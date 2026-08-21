@@ -91,6 +91,18 @@ function makeDb(results: Scripted[]) {
   let idx = 0;
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
+    // The loaders resolve data_residency_mode before reading content
+    // now, so a residency tenant's rows come from their own box.
+    // Answered out of band, and not recorded: these fakes are
+    // SEQUENTIAL queues, so letting the mode lookup take a scripted
+    // result would silently shift every content read after it.
+    if (table === "businesses") {
+      const mode: Record<string, unknown> = {};
+      for (const m of ["select", "eq"]) mode[m] = () => mode;
+      mode["maybeSingle"] = () =>
+        Promise.resolve({ data: { data_residency_mode: "supabase" }, error: null });
+      return mode;
+    }
     const builder: Record<string, unknown> = {};
     for (const m of ["select", "eq", "neq", "is", "in", "or", "gte", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {

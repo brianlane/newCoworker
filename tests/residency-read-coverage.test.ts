@@ -73,15 +73,30 @@ const PURGED_READ_CENTRAL_BY_DESIGN: Record<SiteKey, string> = {
 /**
  * Reads of a PURGED table from the Deno edge workers.
  *
- * Held at today's posture deliberately (2026-08-20). Routing these would put
- * tunnel egress on the SMS and voice inbound hot path, where an unreachable
- * box currently degrades a dedupe or guard check and would instead hard-fail
- * a live customer conversation. Every one of them is a bounded-recency read
- * that sits inside the purge keep-window, which PR 2 turns from a
- * coincidence into an enforced floor.
+ * The four reads that carry what the coworker KNOWS about a customer on the
+ * inbound text path are now routed to the tenant's box (the cross-channel
+ * timeline, the flow-context messages, the last assistant message, and the
+ * contact identity that feeds them). What is left here is left for a stated
+ * reason, not for lack of effort, and the reasons differ:
  *
- * This is a posture, not an absolution. When the first residency deal lands,
- * this block is the list to work through.
+ *   * THREE `notifications` dedupe reads filter on JSON-path columns
+ *     (`payload->>taskType`). The box validates column names against
+ *     /^[a-z_][a-z0-9_]*$/ and rejects those outright, and relaxing that
+ *     validator would open a SQL-injection surface on a tenant's box to save
+ *     a duplicate owner page. Worst case when they read empty is exactly
+ *     that: one duplicate alert.
+ *   * TWO `sms_owner_reply_prompts` reads in the webhook are the read half
+ *     of a compare-and-swap whose write is central. Routing the read alone
+ *     would leave the claim guarding a row it did not read, which is the
+ *     lost-update hazard, and both sites also sit in `serve()` with no
+ *     try/catch, so a throw would 500 the webhook into a Telnyx redelivery
+ *     loop. Read and write must move together, or neither.
+ *   * ONE `sms_outbound_log` read RESOLVES the businessId (the international
+ *     gateway's inbound router), so there is no tenant to route to yet.
+ *
+ * All remaining entries are bounded-recency reads inside the purge
+ * keep-window, which the 72h floor turns from a coincidence into an enforced
+ * invariant.
  */
 const PURGED_READ_ENGINE_CENTRAL: Record<SiteKey, string> = {
   "supabase/functions/_shared/ai_flows/call_guards.ts::countRecentDials::voice_outbound_dial_log":
@@ -90,16 +105,10 @@ const PURGED_READ_ENGINE_CENTRAL: Record<SiteKey, string> = {
     "prompt context for the current call; a hard failure here would end a live conversation",
   "supabase/functions/_shared/ai_flows/contact_said.ts::loadContactSaid::voice_call_transcript_turns":
     "turns behind the transcript above; same live-call posture",
-  "supabase/functions/_shared/ai_flows/run_context.ts::loadFlowRunContextDetailed::sms_outbound_log":
-    "recent sends for the run being executed right now",
   "supabase/functions/_shared/aiflow_failure_alert.ts::sendAiflowFailureAlert::notifications":
     "alert dedupe on a live failure; a box round trip here can only suppress or duplicate an alert",
   "supabase/functions/_shared/call_summary_sweep.ts::processCallSummarySweep::voice_call_transcripts":
     "sweep claims recent unsummarized calls, well inside the keep-window",
-  "supabase/functions/_shared/contact_context.ts::loadContactTimeline::sms_outbound_log":
-    "CONTACT_TIMELINE_LOOKBACK_HOURS = 72, exactly the purge default. The keep-hours floor is what makes this safe, and it is why that floor is a separate hard invariant",
-  "supabase/functions/_shared/contact_context.ts::loadContactTimeline::voice_call_transcripts":
-    "same 72h timeline window as the sms_outbound_log leg above; feeds the model's prompt, so an empty result is a confidently wrong turn rather than a blank screen",
   "supabase/functions/_shared/customer_reply_alert.ts::sendCustomerReplyAlert::notifications":
     "alert dedupe keyed on the live inbound job id",
   "supabase/functions/_shared/forwarded_call_log.ts::readExistingTranscript::voice_call_transcripts":
@@ -130,8 +139,6 @@ const PURGED_READ_ENGINE_CENTRAL: Record<SiteKey, string> = {
     "digest window is bounded and inside the keep-window",
   "supabase/functions/notifications/index.ts::<module>::notifications":
     "notifications edge function serving the owner's live list",
-  "supabase/functions/sms-inbound-worker/index.ts::loadLatestAssistantMessage::sms_outbound_log":
-    "last assistant message for the reply being composed now",
   "supabase/functions/telnyx-sms-inbound/index.ts::ownerReplyPromptIsNewer::sms_owner_reply_prompts":
     "compares the live owner prompt against the newest one; unanswered prompts are never purged",
   "supabase/functions/telnyx-sms-inbound/index.ts::tryOwnerReplyRelay::sms_owner_reply_prompts":
