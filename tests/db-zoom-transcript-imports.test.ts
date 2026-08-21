@@ -19,8 +19,11 @@ import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
   getZoomTranscriptImport,
+  claimZoomTranscriptClassification,
+  getZoomTranscriptClassification,
   reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport,
+  stampZoomTranscriptClassification,
   ZOOM_IMPORT_CLAIM_LEASE_MS
 } from "@/lib/db/zoom-transcript-imports";
 
@@ -277,5 +280,149 @@ describe("reclaimCompletedZoomTranscriptImport", () => {
     defaultClientSpy.mockReturnValue(makeDb(c));
     expect(await reclaimCompletedZoomTranscriptImport(BIZ, UUID)).toBe(false);
     expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("getZoomTranscriptClassification", () => {
+  const CONTACT = "33333333-3333-4333-8333-333333333333";
+
+  it("returns the stored decision once a classification has run", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({
+      data: { contact_id: CONTACT, outcome: "signed", classified_at: "2026-08-20T21:00:00Z" },
+      error: null
+    });
+    expect(await getZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toEqual({
+      contactId: CONTACT,
+      outcome: "signed",
+      classifiedAt: "2026-08-20T21:00:00Z"
+    });
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("reads an unclassified row as not yet decided", async () => {
+    // The import ledger row exists from the claim; only classified_at says
+    // whether the side effects have run.
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({
+      data: { contact_id: null, outcome: null, classified_at: null },
+      error: null
+    });
+    expect(await getZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBeNull();
+  });
+
+  it("returns null when there is no row at all", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBeNull();
+  });
+
+  it("reads an error as not yet decided, and never throws", async () => {
+    // Fail-open on purpose: the cost of being wrong here is a duplicate
+    // note, and the caller's own writes are individually guarded.
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "read boom" } });
+    expect(await getZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBeNull();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("stays silent when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    expect(await getZoomTranscriptClassification(BIZ, UUID)).toBeNull();
+  });
+});
+
+describe("claimZoomTranscriptClassification", () => {
+  const NOW_FN = () => NOW;
+
+  it("wins the claim when the row is unclassified", async () => {
+    const c = chain({ data: [{ id: "row-1" }], error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(true);
+    expect(c.update).toHaveBeenCalledWith({ classified_at: new Date(NOW).toISOString() });
+    // The conditional is the whole point: only a row still at null matches,
+    // so two racing passes cannot both win.
+    expect(c.is).toHaveBeenCalledWith("classified_at", null);
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("loses the claim when another pass already owns the meeting", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+  });
+
+  it("declines rather than risking a duplicate when the ledger errors", async () => {
+    const c = chain({ data: null, error: { message: "claim boom" } });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("declines when no data comes back at all", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+  });
+
+  it("stays silent when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID)).toBe(false);
+  });
+});
+
+describe("stampZoomTranscriptClassification", () => {
+  const CONTACT = "33333333-3333-4333-8333-333333333333";
+
+  it("records the contact and the outcome, leaving the claim marker alone", async () => {
+    // classified_at belongs to the CLAIM, which set it before this pass ran.
+    // Rewriting it here would turn an ownership marker into a completion
+    // stamp and lose the "claimed but died" state.
+    const c = chain({ error: null });
+    await stampZoomTranscriptClassification(
+      BIZ,
+      UUID,
+      { contactId: CONTACT, outcome: "signed" },
+      makeDb(c)
+    );
+    expect(c.update).toHaveBeenCalledWith({ contact_id: CONTACT, outcome: "signed" });
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("stamps an unattributed decision too", async () => {
+    // "We have decided about this meeting" is the fact being stored, not
+    // "we changed something": without it a re-import would re-decide.
+    const c = chain({ error: null });
+    await stampZoomTranscriptClassification(
+      BIZ,
+      UUID,
+      { contactId: null, outcome: "unclear" },
+      makeDb(c)
+    );
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({ contact_id: null, outcome: "unclear" })
+    );
+  });
+
+  it("never throws on a write error", async () => {
+    const c = chain({ error: { message: "stamp boom" } });
+    await expect(
+      stampZoomTranscriptClassification(
+        BIZ,
+        UUID,
+        { contactId: null, outcome: "unclear" },
+        makeDb(c)
+      )
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("stays silent when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    await expect(
+      stampZoomTranscriptClassification(BIZ, UUID, { contactId: null, outcome: "unclear" })
+    ).resolves.toBeUndefined();
   });
 });

@@ -161,6 +161,142 @@ export async function finalizeZoomTranscriptImport(
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
+/** A classification that has already been applied to this meeting. */
+export type ZoomTranscriptClassification = {
+  contactId: string | null;
+  outcome: string | null;
+  classifiedAt: string;
+};
+
+/**
+ * The classification already applied to this meeting, or null for "not yet".
+ *
+ * The import ledger serializes the DOCUMENT, not the side effects, and
+ * `reclaimCompletedZoomTranscriptImport` deliberately blanks `document_id`
+ * so a manual re-import can produce a fresh one. Without this second stamp
+ * that re-import would also write a second note and a second set of to-dos.
+ * Re-importing a meeting re-files the document; it does not re-decide what
+ * the meeting meant.
+ *
+ * Returning the stored decision rather than a bare boolean is what lets the
+ * re-import re-link the NEW document to the SAME contact without paying for
+ * a second classification or re-running attribution.
+ *
+ * Never throws: an unreadable ledger answers "not yet", and the caller's own
+ * writes are individually guarded. The cost of being wrong here is a
+ * duplicate note, not a lost one.
+ */
+export async function getZoomTranscriptClassification(
+  businessId: string,
+  meetingUuid: string,
+  client?: SupabaseClient
+): Promise<ZoomTranscriptClassification | null> {
+  const db = await ledgerClientOrNull(client, "classification read");
+  if (!db) return null;
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .select("contact_id,outcome,classified_at")
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .maybeSingle();
+  if (error) {
+    logger.warn("zoom transcript ledger: classification read failed", {
+      businessId,
+      error: error.message
+    });
+    return null;
+  }
+  const row = data as {
+    contact_id: string | null;
+    outcome: string | null;
+    classified_at: string | null;
+  } | null;
+  if (!row?.classified_at) return null;
+  return {
+    contactId: row.contact_id,
+    outcome: row.outcome,
+    classifiedAt: row.classified_at
+  };
+}
+
+/**
+ * CLAIM the right to classify this meeting, atomically. True means this pass
+ * owns it; false means another one already does (or already did).
+ *
+ * Claim-first, not check-then-act. Reading `classified_at` at the start and
+ * stamping it at the end leaves the whole classify pass (two Gemini calls)
+ * as a window in which a manual re-import, which
+ * `reclaimCompletedZoomTranscriptImport` happily grants, schedules a SECOND
+ * pass that also sees no stamp. Both then write a note and a set of to-dos,
+ * which is precisely the duplicate the stamp exists to prevent (Bugbot,
+ * PR #1566). The conditional update is the atomic arbiter, the same shape
+ * `claimZoomTranscriptImport` uses one table over.
+ *
+ * The trade, taken deliberately: a pass that claims and then dies leaves the
+ * meeting classified-but-empty forever, because there is no lease here. That
+ * is the right direction for a best-effort enrichment. A meeting that never
+ * gets a note is a missing nicety; a contact with two of everything is a mess
+ * somebody has to clean up by hand.
+ *
+ * Never throws. A ledger blip answers false, so the pass declines to write
+ * rather than risking a duplicate.
+ */
+export async function claimZoomTranscriptClassification(
+  businessId: string,
+  meetingUuid: string,
+  client?: SupabaseClient,
+  now: () => number = Date.now
+): Promise<boolean> {
+  const db = await ledgerClientOrNull(client, "classification claim");
+  if (!db) return false;
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .update({ classified_at: new Date(now()).toISOString() })
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .is("classified_at", null)
+    .select("id");
+  if (error) {
+    logger.warn("zoom transcript ledger: classification claim failed", {
+      businessId,
+      error: error.message
+    });
+    return false;
+  }
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
+}
+
+/**
+ * Record WHAT the classification decided, onto a row this pass already
+ * claimed.
+ *
+ * Deliberately does not touch `classified_at`: the claim owns that column,
+ * and it means "a pass has taken this meeting", not "a pass finished". The
+ * two are distinguishable by `outcome`, which stays null for a pass that
+ * claimed and then died.
+ *
+ * Stamped even when the classification wrote nothing to a record (an unclear
+ * outcome, no contact match): the fact being stored is what was decided,
+ * which is exactly what must not be decided twice. Never throws.
+ */
+export async function stampZoomTranscriptClassification(
+  businessId: string,
+  meetingUuid: string,
+  result: { contactId: string | null; outcome: string },
+  client?: SupabaseClient
+): Promise<void> {
+  const db = await ledgerClientOrNull(client, "classification stamp");
+  if (!db) return;
+  const { error } = await db
+    .from("zoom_transcript_imports")
+    .update({ contact_id: result.contactId, outcome: result.outcome })
+    .match({ business_id: businessId, meeting_uuid: meetingUuid });
+  if (error) {
+    logger.warn("zoom transcript ledger: classification stamp failed", {
+      businessId,
+      error: error.message
+    });
+  }
+}
+
 /**
  * Serialize a deliberate manual RE-import of an already-completed meeting:
  * atomically flip the completed row back to in-flight (document_id null,

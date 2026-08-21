@@ -38,6 +38,8 @@
  */
 import { applyGoalEvent } from "../ai_flows/goal_events.ts";
 import { enqueueContactEventRuns } from "../ai_flows/contact_events.ts";
+import { staffNumberCheck } from "../ai_flows/staff_numbers.ts";
+import { contactAliasOrFilter } from "../contact_key.ts";
 import {
   planLifecycleStageWrites,
   type LifecycleEvent,
@@ -163,57 +165,68 @@ type ContactRow = {
  * Is this contact a teammate rather than a lead?
  *
  * "A teammate is never a lead, however the step addressed them" (README).
- * Two independent signals: the stored `type`, and the roster itself, keyed
- * on every number linked to the row. Fails SAFE (an unreadable roster is
- * treated as staff), so an outage can never start tagging the broker as a
- * lead in their own pipeline.
+ * Delegated to the SHARED `staffNumberCheck`, the same detector
+ * `update_contact`'s tag protection uses, so the two cannot drift on who
+ * counts as staff. It carries three arms this module used to lack: the
+ * roster's phone numbers, the roster's EMAIL addresses (an email-keyed
+ * contact carries no number, so a number-only check silently protects
+ * nobody), and the business's own derived numbers. Same fail-safe
+ * direction: an unreadable roster answers staff, so an outage can never
+ * start tagging the broker as a lead in their own pipeline.
  *
  * Deliberately NOT gated on `businesses.aiflow_protect_staff_contacts`:
  * that toggle exists so a business can maintain lead-state tags over its
  * own team through its OWN flows, which is not consent to receive automatic
- * platform tags.
+ * platform tags. `staffNumberCheck` does not read that toggle either (its
+ * ai-flow-worker caller applies it separately), so delegating here changes
+ * who is detected, never whether the toggle applies.
  */
 async function isStaffContact(
   supabase: AnyClient,
   businessId: string,
   contact: ContactRow,
-  numbers: string[]
+  contactKeys: string[]
 ): Promise<boolean> {
-  const storedType = (contact.type ?? "").trim().toLowerCase();
-  if (storedType === "owner" || storedType === "employee") return true;
-  // `numbers` always carries at least the targeted phone, which the caller
-  // validated as non-empty, so there is no empty case to guard.
   try {
-    const { data, error } = await supabase
-      .from("ai_flow_team_members")
-      .select("id")
-      .eq("business_id", businessId)
-      .in("phone_e164", numbers)
-      .limit(1);
-    if (error) {
-      console.error("lifecycle_stages: roster check", error);
-      return true;
-    }
-    return ((data ?? []) as unknown[]).length > 0;
+    // Lowercased before delegating: `contacts_type_chk` already constrains
+    // the column to lowercase values, but this module has always normalized
+    // and `staffNumberCheck` compares literally, so keep the defense rather
+    // than quietly narrowing it to whatever the constraint happens to allow.
+    const storedType = (contact.type ?? "").trim().toLowerCase();
+    const check = await staffNumberCheck(supabase, businessId, contactKeys, storedType);
+    return check.staff;
   } catch (e) {
     console.error("lifecycle_stages: roster check", e);
     return true;
   }
 }
 
-/** Alias-aware contact lookup, matching every other tag write path. */
+/**
+ * Alias-aware contact lookup, matching every other tag write path.
+ *
+ * The key is not always a number: `contacts.customer_e164` holds
+ * `email:someone@example.com` for a contact we only ever knew by address.
+ * `contactAliasOrFilter` returns null for those, meaning "match this one
+ * exactly instead": an address is not safe to interpolate into a
+ * comma-delimited `.or()` string, and the alias arm would buy nothing
+ * anyway (`alias_e164s` only ever collects numbers a merge folded away).
+ * Same shape as readContactLanguageState.
+ */
 async function loadContact(
   supabase: AnyClient,
   businessId: string,
-  contactE164: string
+  contactKey: string
 ): Promise<ContactRow | null> {
   try {
-    const { data, error } = await supabase
+    const base = supabase
       .from("contacts")
       .select("id, customer_e164, alias_e164s, tags, type")
-      .eq("business_id", businessId)
-      .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
-      .maybeSingle();
+      .eq("business_id", businessId);
+    const filter = contactAliasOrFilter(contactKey);
+    const { data, error } = await (filter
+      ? base.or(filter)
+      : base.eq("customer_e164", contactKey)
+    ).maybeSingle();
     if (error) {
       console.error("lifecycle_stages: contact read", error);
       return null;
@@ -227,16 +240,21 @@ async function loadContact(
 
 /**
  * Advance a contact to the stage this lifecycle event implies. Never throws.
+ *
+ * `contactKey` is a contact KEY, not necessarily a phone: an E.164 number, or
+ * `email:someone@example.com` for a lead we only ever knew by address. Both
+ * resolve, both are staff-checked, and both fan out to the goal/contact-event
+ * hooks. Callers hand over whatever `contacts.customer_e164` holds.
  */
 export async function applyLifecycleStage(
   supabase: AnyClient,
   businessId: string,
-  contactE164: string | null | undefined,
+  contactKey: string | null | undefined,
   event: LifecycleEvent,
   opts: ApplyLifecycleStageOptions
 ): Promise<LifecycleStageOutcome> {
-  const phone = (contactE164 ?? "").trim();
-  if (!phone) return "no_contact";
+  const key = (contactKey ?? "").trim();
+  if (!key) return "no_contact";
 
   if (!(await lifecycleStagesEnabled(supabase, businessId))) return "disabled";
 
@@ -245,17 +263,21 @@ export async function applyLifecycleStage(
   const pipelines = await loadPipelineStages(supabase, businessId);
   if (pipelines === null || pipelines.length === 0) return "no_stage";
 
-  const contact = await loadContact(supabase, businessId, phone);
+  const contact = await loadContact(supabase, businessId, key);
   if (!contact) return "no_contact";
 
-  const numbers = [
+  // Every key attached to the row: the primary, merge aliases, and the one
+  // we were called with. For an email-keyed contact this is a single
+  // `email:` key, which staffNumberCheck and both downstream hooks
+  // understand.
+  const contactKeys = [
     ...new Set(
-      [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), phone].filter(
+      [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), key].filter(
         (n) => typeof n === "string" && n.length > 0
       )
     )
   ];
-  if (await isStaffContact(supabase, businessId, contact, numbers)) return "staff";
+  if (await isStaffContact(supabase, businessId, contact, contactKeys)) return "staff";
 
   const currentTags = (Array.isArray(contact.tags) ? contact.tags : []).filter(
     (t): t is string => typeof t === "string" && t.trim().length > 0
@@ -278,11 +300,15 @@ export async function applyLifecycleStage(
   }
 
   // The same hooks, in the same order, as update_contact's tag write. Runs
-  // match by the EXACT number they were triggered with, which after a
-  // profile merge may be any of the row's numbers, so fan out over all.
+  // match by the EXACT key they were triggered with, which after a profile
+  // merge may be any of the row's numbers, so fan out over all. Both hooks
+  // handle an `email:` key natively (goal_events.ts, contact_events.ts).
   for (const tag of plan.added) {
-    for (const number of numbers) {
-      await applyGoalEvent(supabase, businessId, number, { kind: "tag_added", tag });
+    for (const contactKeyForHook of contactKeys) {
+      await applyGoalEvent(supabase, businessId, contactKeyForHook, {
+        kind: "tag_added",
+        tag
+      });
     }
   }
   for (const [tag, change] of [
@@ -291,7 +317,7 @@ export async function applyLifecycleStage(
   ]) {
     await enqueueContactEventRuns(supabase, businessId, {
       kind: "tag_changed",
-      contact: { e164: contact.customer_e164 || phone, tags: plan.nextTags },
+      contact: { e164: contact.customer_e164 || key, tags: plan.nextTags },
       tag,
       change,
       ...(opts.sourceFlowId ? { sourceFlowId: opts.sourceFlowId } : {}),

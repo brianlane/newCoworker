@@ -32,22 +32,32 @@ describe("shared tag caps stay in lockstep with the platform ruleset", () => {
 });
 
 describe("LIFECYCLE_STAGE_TAGS", () => {
-  it("writes only default-board stages, and never Won", () => {
-    // Won is a human judgement the board move endpoint owns; the platform must
-    // never write it. Compared as a SET rather than a list, because moments and
-    // stages are no longer one-to-one: `claimed` and `contacted` both mean the
-    // lead has been reached and both write "Contacted".
+  it("writes only default-board stages", () => {
+    // Compared as a SET rather than a list, because moments and stages are not
+    // one-to-one: `claimed` and `contacted` both mean the lead has been reached
+    // and both write "Contacted".
     const defaults = DEFAULT_PIPELINE.stages.map((s) => s.name);
     const written = [...new Set(Object.values(LIFECYCLE_STAGE_TAGS))];
-    expect([...written].sort()).toEqual([...defaults.slice(0, -1)].sort());
-    expect(defaults.at(-1)).toBe("Won");
-    expect(written).not.toContain("Won");
+    expect([...written].sort()).toEqual([...defaults].sort());
     // Every stage a moment writes has to be a real column on the default board,
     // since a stage IS a tag and an invented one is junk that still burns a slot.
     for (const tag of written) expect(defaults).toContain(tag);
   });
 
-  it("covers the five lifecycle moments", () => {
+  it("reaches Won ONLY from a classified meeting", () => {
+    // This assertion used to read "never Won", on the grounds that won is a
+    // human judgement. That held while every platform signal was mechanical:
+    // a filed lead or an existing booking cannot tell a closed deal from a
+    // booked call. A meeting the classifier read as a commitment can, and it
+    // is the one moment a business most wants on the board without dragging a
+    // card. What must stay true is that NOTHING ELSE writes it.
+    const toWon = Object.entries(LIFECYCLE_STAGE_TAGS)
+      .filter(([, tag]) => tag === "Won")
+      .map(([event]) => event);
+    expect(toWon).toEqual(["won"]);
+  });
+
+  it("covers the seven lifecycle moments", () => {
     expect(Object.keys(LIFECYCLE_STAGE_TAGS)).toEqual([
       "lead_filed",
       "claimed",
@@ -57,9 +67,16 @@ describe("LIFECYCLE_STAGE_TAGS", () => {
       // anyone has touched this lead, not who did.
       "contacted",
       "replied",
-      "booked"
+      "booked",
+      // The meeting-minutes pair, the only moments driven by READING content
+      // rather than by an event firing.
+      "met",
+      "won"
     ]);
     expect(LIFECYCLE_STAGE_TAGS.contacted).toBe(LIFECYCLE_STAGE_TAGS.claimed);
+    // `met` shares "Engaged" with `replied` for the same reason: a meeting is
+    // the strongest possible "this lead is in conversation".
+    expect(LIFECYCLE_STAGE_TAGS.met).toBe(LIFECYCLE_STAGE_TAGS.replied);
   });
 });
 

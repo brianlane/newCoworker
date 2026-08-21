@@ -34,6 +34,7 @@ import {
 } from "@/lib/zoom/document-title";
 import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleMeetingClassification } from "@/lib/meetings/apply-outcome";
 import { logger } from "@/lib/logger";
 
 // Same ceiling as POST /api/dashboard/documents, an imported transcript
@@ -59,6 +60,19 @@ export type ImportZoomTranscriptParams = {
    * is a candidate.
    */
   hostNames?: string[];
+  /**
+   * Zoom's past-meeting instance UUID. The classification's dedupe key and
+   * its ledger row. Omitted disables the classification pass: without it
+   * there is nothing to stamp, so a retry could not be told from a first
+   * run and would duplicate the note and the to-dos.
+   */
+  meetingUuid?: string;
+  /**
+   * Zoom's numeric meeting id, the join key into the booking ledger and so
+   * the deterministic half of contact attribution. Omitted still classifies;
+   * attribution falls back to the transcript.
+   */
+  zoomMeetingId?: string | null;
 };
 
 export type ImportZoomTranscriptDeps = {
@@ -69,6 +83,7 @@ export type ImportZoomTranscriptDeps = {
   deleteDocument?: typeof deleteBusinessDocument;
   ingest?: typeof ingestDocument;
   syncVault?: typeof syncVaultToVpsAndLog;
+  scheduleClassification?: typeof scheduleMeetingClassification;
   uuid?: () => string;
 };
 
@@ -98,6 +113,8 @@ export async function importZoomTranscriptDocument(
   const deleteDocument = deps.deleteDocument ?? deleteBusinessDocument;
   const ingest = deps.ingest ?? ingestDocument;
   const syncVault = deps.syncVault ?? syncVaultToVpsAndLog;
+  const scheduleClassification =
+    deps.scheduleClassification ?? scheduleMeetingClassification;
   const uuid = deps.uuid ?? randomUUID;
   /* c8 ignore stop */
 
@@ -209,6 +226,25 @@ export async function importZoomTranscriptDocument(
       // Fire-and-forget: the Supabase write is canonical; a slow VPS must
       // not block the import.
       void syncVault(businessId);
+      // Now that the minutes exist, decide what the meeting WAS and apply it
+      // to the person it was with (link, note, stage move, to-dos). Deferred
+      // past the response and individually guarded: the document is the
+      // valuable part and it is already saved. Needs the meeting UUID for
+      // its exactly-once stamp, so an import that could not resolve one
+      // (a legacy reference shape) files the document and stops there.
+      if (params.meetingUuid) {
+        scheduleClassification({
+          businessId,
+          documentId,
+          documentTitle: derivedTitle ?? title,
+          minutes: ingested.contentMd,
+          summary: ingested.summary,
+          vtt,
+          meetingUuid: params.meetingUuid,
+          zoomMeetingId: params.zoomMeetingId ?? null,
+          hostNames: params.hostNames ?? []
+        });
+      }
       return {
         ok: true,
         // `row` came from the insert, so it still carries the provisional

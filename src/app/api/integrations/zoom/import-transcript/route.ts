@@ -153,7 +153,13 @@ export async function POST(request: Request) {
         vtt: transcript.vtt,
         title,
         refLabel,
-        hostNames
+        hostNames,
+        // Same pair the webhook passes. A legacy unkeyed import (no UUID
+        // resolvable from the pasted reference) files the document without
+        // classifying it: there would be nothing to stamp, so a retry could
+        // not be told from a first run.
+        ...(meetingUuid ? { meetingUuid } : {}),
+        zoomMeetingId: titleBits.meetingId
       });
 
       if (!imported.ok) {

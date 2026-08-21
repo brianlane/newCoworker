@@ -109,12 +109,30 @@ export function pickZoomGuestName(input: {
   hostNames: string[];
   summary?: string | null;
 }): string | null {
+  const guest = pickZoomGuestSpeaker(input);
+  if (!guest) return null;
+  return findNickname(guest, input.summary ?? null) ?? firstNameOf(guest);
+}
+
+/**
+ * The guest's speaker label as Zoom recorded it, WHOLE and untrimmed of
+ * anything but whitespace: "Kingsley Moyo", not "Kingsley".
+ *
+ * Split out from {@link pickZoomGuestName} because the two callers want
+ * opposite things from the same person. A title wants the short, friendly
+ * form, so that function shortens to a first name or a nickname. An IDENTITY
+ * lookup wants the full string: a contact is stored as "Kingsley Moyo", and
+ * matching a first name against it either misses entirely (an anchored
+ * compare) or matches too much (a prefix compare, where "Dave" also finds
+ * "Dave's Plumbing"). Meeting attribution uses this one.
+ */
+export function pickZoomGuestSpeaker(input: {
+  speakers: string[];
+  hostNames: string[];
+}): string | null {
   const hosts = new Set(input.hostNames.map(normalizeName).filter((n) => n !== ""));
   const guest = input.speakers.find((speaker) => !hosts.has(normalizeName(speaker)));
-  if (!guest) return null;
-
-  const trimmed = guest.trim();
-  return findNickname(trimmed, input.summary ?? null) ?? firstNameOf(trimmed);
+  return guest ? guest.trim() : null;
 }
 
 /**
