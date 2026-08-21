@@ -66,6 +66,12 @@ const PURGED_READ_CENTRAL_BY_DESIGN: Record<SiteKey, string> = {
     "cross-tenant admin sweep, same shape as the email_log leg above: no business_id filter, so no single box owns the answer",
   "src/lib/db/fleet-activity.ts::getFleetRecentActivity::voice_call_transcripts":
     "cross-tenant admin sweep, same shape as the email_log leg above: no business_id filter, so no single box owns the answer",
+  "vps/voice-bridge/src/index.ts::createSupabaseTranscriptAdapter::voice_call_transcripts":
+    "reads back, by id, the transcript row this bridge wrote CENTRALLY seconds earlier for the call in progress. Routing it box-ward would race the journal replayer and usually find nothing: central is the write ingress, so for a read-after-write on the same call central is the only copy guaranteed to have it. The purge only removes TERMINAL calls past the keep window, so this row is never a purge candidate",
+  "vps/voice-bridge/src/index.ts::sendIntakeLeadSms::voice_call_transcripts":
+    "same read-after-write on the call in flight, keyed by call_control_id, to attach the intake SMS to it",
+  "vps/voice-bridge/src/index.ts::sendIntakeLeadSms::voice_call_transcript_turns":
+    "the turns of that same in-flight transcript, written by this process moments before and not yet replayed",
   "src/lib/db/usage.ts::getFleetCalendarMonthUsageByBusiness::voice_call_transcripts":
     "cross-tenant fleet usage rollup, no business_id filter. Degrades only peakConcurrentCalls for a residency tenant; billable minutes come from voice_settlements, which is central and does not move"
 };
@@ -525,7 +531,7 @@ describe("residency read coverage", () => {
       "found no routed reads: the routing detector broke"
     ).toBeGreaterThan(25);
     expect(scan.dynamic.length, "found no dynamic sites: the fallback broke").toBeGreaterThan(0);
-    expect([...SCAN_ROOTS]).toEqual(["src", "supabase/functions"]);
+    expect([...SCAN_ROOTS]).toEqual(["src", "supabase/functions", "vps/voice-bridge/src"]);
     expect(
       [...SCAN_EXCLUDED],
       "the exclusion list grew: nothing may be quietly scanned out of this guard"

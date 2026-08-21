@@ -23,7 +23,22 @@ services:
     env_file:
       - .env
     ports:
+      # Host loopback, for cloudflared (a HOST process) to forward the
+      # data-<biz> tunnel hostname. This publish does NOT make the API
+      # reachable from sibling CONTAINERS: their 127.0.0.1 is themselves, and
+      # host.docker.internal lands on the docker-bridge IP where nothing is
+      # listening. That is the May 2026 outage documented in
+      # vps/voice-bridge/docker-compose.yml. Sibling containers use the
+      # `data-api` DNS name on rowboat_default below.
       - "127.0.0.1:8091:8091"
+    networks:
+      # `default` keeps Postgres reachable on this stack's private network.
+      - default
+      # Shared with Rowboat and the voice bridge, so the bridge can read a
+      # residency tenant's own content by Docker DNS instead of leaving the
+      # box through the tunnel. Bearer-authenticated either way; Postgres
+      # stays on `default` and still binds no host port at all.
+      - rowboat_default
     mem_limit: 128m
     depends_on:
       residency-postgres:
@@ -69,6 +84,13 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+
+networks:
+  default:
+  # Created by /opt/rowboat/docker-compose.yml, which deploy-client.sh always
+  # brings up before this stack.
+  rowboat_default:
+    external: true
 
 volumes:
   residency_pgdata:

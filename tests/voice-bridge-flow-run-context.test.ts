@@ -193,25 +193,33 @@ describe("loadVoiceFlowContext", () => {
     expect(normalized(voiceDb.calls)).toEqual(normalized(sharedDb.calls));
   });
 
-  it("the shared loader is residency-aware and the voice bridge deliberately is not", () => {
-    // Same one divergence as tests/voice-bridge-contact-context.test.ts: the
-    // shared edge loader routes a vps tenant's PURGED sms_outbound_log read
-    // to their box, while the voice bridge is a separately-deployed mirror
-    // that still reads central. Stated here rather than filtered away, so a
-    // reader of the parity test knows the queries differ on exactly one axis.
-    const sharedSrc = readFileSync(
-      join(__dirname, "..", "supabase", "functions", "_shared", "ai_flows", "run_context.ts"),
-      "utf8"
-    );
-    const voiceSrc = readFileSync(
-      join(__dirname, "..", "vps", "voice-bridge", "src", "flow-run-context.ts"),
-      "utf8"
-    );
+  it("both loaders route the same PURGED tables for a residency tenant", () => {
+    // This used to assert the bridge was deliberately NOT residency-aware.
+    // It is now, so the assertion is inverted rather than deleted: the point
+    // of this file is that a one-sided edit stays loud, and "both route the
+    // same tables" is the version of that which survives.
+    //
+    // The bridge reaches the datastore over LOOPBACK (127.0.0.1:8091 on the
+    // tenant's own box) rather than the tunnel the other two callers use, so
+    // the helper names differ on purpose; what must not differ is WHICH
+    // tables stop being read from central.
+    const sharedSrc = readFileSync(join(__dirname, "..", "supabase/functions/_shared/ai_flows/run_context.ts"), "utf8");
+    const voiceSrc = readFileSync(join(__dirname, "..", "vps/voice-bridge/src/flow-run-context.ts"), "utf8");
     expect(sharedSrc).toContain("edgeIsVpsReadMode");
-    expect(
-      voiceSrc.includes("edgeIsVpsReadMode"),
-      "the voice bridge became residency-aware: delete this test and pin the parity instead"
-    ).toBe(false);
+    expect(voiceSrc).toContain("voiceIsVpsReadMode");
+    for (const table of [
+      "sms_outbound_log"
+    ]) {
+      expect(sharedSrc, `shared loader stopped routing ${table}`).toContain(
+        `table: "${table}"`
+      );
+      expect(voiceSrc, `voice bridge stopped routing ${table}`).toContain(
+        `table: "${table}"`
+      );
+    }
+    // `contacts` is KEPT central and must stay central on BOTH sides.
+    expect(sharedSrc).not.toContain('table: "contacts"');
+    expect(voiceSrc).not.toContain('table: "contacts"');
   });
 
   it("assembles runs + names + last automated text into the voice block", async () => {

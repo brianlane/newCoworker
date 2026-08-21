@@ -35,11 +35,18 @@ import ts from "typescript";
 import { RESIDENCY_MOVED_TABLES, type ResidencyMovedTable } from "@/lib/residency/tables";
 
 /** Directories walked, relative to the repo root. */
-export const SCAN_ROOTS = ["src", "supabase/functions"] as const;
+export const SCAN_ROOTS = ["src", "supabase/functions", "vps/voice-bridge/src"] as const;
 
 /**
  * Skipped, with the reason. The residency layer is the routing layer: it
  * reads moved tables by construction and cannot route through itself.
+ *
+ * NOTE on the roots above: `vps/voice-bridge/src` is scanned because the
+ * bridge vendors its own mirrors of two shared loaders and reads moved
+ * tables directly. It was invisible to this guard until 2026-08-21, which
+ * is precisely how its purged reads sat unrouted after both other callers
+ * were fixed. `vps/data-api` is NOT scanned and must not be: it IS the box
+ * datastore's API and reads every moved table by definition.
  */
 export const SCAN_EXCLUDED = ["src/lib/residency/"] as const;
 
@@ -62,7 +69,12 @@ const ROUTING_HELPERS = new Set([
   "countMovedRows",
   "edgeReadMovedRows",
   "edgeReadMovedRowsOrNull",
-  "edgeCountMovedRows"
+  "edgeCountMovedRows",
+  // The voice bridge reaches the datastore over loopback on the tenant's own
+  // box, so it has a third mirror with its own names. Missing these made the
+  // guard call a routed bridge read "still central debt", the same false
+  // reading the edge names caused before them.
+  "voiceReadMovedRowsOrNull"
 ]);
 
 /** Opt-in marker for the shape where the box branch lives in a sibling helper. */

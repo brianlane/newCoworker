@@ -352,8 +352,21 @@ relaxing it would open a SQL-injection surface to save a duplicate alert; the
 `sms_owner_reply_prompts` reads are the read half of a compare-and-swap whose
 write is central, so read and write must move together or not at all; and the
 international gateway's router read RESOLVES the business id, so there is no
-tenant to route to yet. The voice bridge vendors its own mirror of the
-timeline loader and is still central, which is a gap on the VOICE path.
+tenant to route to yet.
+
+**The voice bridge routes too, without leaving the box.** It vendors its own
+mirrors of those loaders and runs on the tenant's VPS beside the datastore,
+so it skips the tunnel, the public internet, and the central credential
+lookup ([vps/voice-bridge/src/residency.ts](vps/voice-bridge/src/residency.ts)).
+It reaches the API by Docker DNS at `data-api:8091` on the shared
+`rowboat_default` network, NOT `127.0.0.1`: the API publishes host loopback
+for cloudflared, and a sibling container's `127.0.0.1` is itself. Getting
+that wrong is the May 2026 outage recorded in the bridge's compose header.
+`deploy-client.sh` writes `DATA_API_TOKENS` into the bridge's env so a deal
+that rotates that bearer cannot leave the bridge presenting a stale one and
+silently degrading every caller's history to empty. The bridge escapes the
+root `tsc`, so run its own compiler (`cd vps/voice-bridge && npx tsc
+--noEmit`) before merging, and remember its redeploy is manual.
 
 `tests/residency-read-coverage.test.ts` holds every read to one of those
 rules, plus the shapes a source scan cannot see on its own: `.from(expr)` with

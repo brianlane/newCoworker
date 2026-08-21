@@ -181,29 +181,34 @@ describe("loader parity (same wire shape against the same fake client)", () => {
     expect(wire(voice.calls)).toEqual(wire(shared.calls));
   });
 
-  it("the shared loader is residency-aware and the voice bridge deliberately is not", () => {
-    // The one divergence, stated rather than filtered away. The shared edge
-    // loader routes a vps tenant's purged reads to their box; the voice
-    // bridge is a separate deployable, rsynced to the VPS and redeployed by
-    // hand, so it still reads central. That is a gap on the VOICE path, not
-    // a mistake here, and it is recorded in the read-coverage registry.
+  it("both loaders route the same PURGED tables for a residency tenant", () => {
+    // This used to assert the bridge was deliberately NOT residency-aware.
+    // It is now, so the assertion is inverted rather than deleted: the point
+    // of this file is that a one-sided edit stays loud, and "both route the
+    // same tables" is the version of that which survives.
     //
-    // The DATA rules this file exists to pin are unaffected: the central
-    // path above is byte-identical between the two, which is what the wire
-    // comparison asserts.
-    const sharedSrc = readFileSync(
-      join(__dirname, "..", "supabase", "functions", "_shared", "contact_context.ts"),
-      "utf8"
-    );
-    const voiceSrc = readFileSync(
-      join(__dirname, "..", "vps", "voice-bridge", "src", "contact-context.ts"),
-      "utf8"
-    );
+    // The bridge reaches the datastore over LOOPBACK (127.0.0.1:8091 on the
+    // tenant's own box) rather than the tunnel the other two callers use, so
+    // the helper names differ on purpose; what must not differ is WHICH
+    // tables stop being read from central.
+    const sharedSrc = readFileSync(join(__dirname, "..", "supabase/functions/_shared/contact_context.ts"), "utf8");
+    const voiceSrc = readFileSync(join(__dirname, "..", "vps/voice-bridge/src/contact-context.ts"), "utf8");
     expect(sharedSrc).toContain("edgeIsVpsReadMode");
-    expect(
-      voiceSrc.includes("edgeIsVpsReadMode"),
-      "the voice bridge became residency-aware: delete this test and pin the parity instead"
-    ).toBe(false);
+    expect(voiceSrc).toContain("voiceIsVpsReadMode");
+    for (const table of [
+      "sms_outbound_log",
+      "voice_call_transcripts"
+    ]) {
+      expect(sharedSrc, `shared loader stopped routing ${table}`).toContain(
+        `table: "${table}"`
+      );
+      expect(voiceSrc, `voice bridge stopped routing ${table}`).toContain(
+        `table: "${table}"`
+      );
+    }
+    // `contacts` is KEPT central and must stay central on BOTH sides.
+    expect(sharedSrc).not.toContain('table: "contacts"');
+    expect(voiceSrc).not.toContain('table: "contacts"');
   });
 
   it("both return null for an empty window and on a blown-up client", async () => {

@@ -2067,6 +2067,16 @@ VAULT_PATH=/vault
 ROWBOAT_URL=${ROWBOAT_URL:-http://rowboat:3000}
 APP_BASE_URL=${APP_BASE_URL:-}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
+# Bearer for the residency data-api on this same box (reached at
+# data-api:8091 over the shared rowboat_default docker network, NOT via
+# loopback: see vps/voice-bridge/src/residency.ts). Blank on a normal
+# tenant, and blank here whenever DATA_API_TOKENS is not passed in, because
+# it is defaulted further down; vps/voice-bridge/src/residency.ts then falls
+# back to ROWBOAT_GATEWAY_TOKEN above, which is the SAME value that default
+# produces. Written explicitly so a deal that rotates DATA_API_TOKENS away
+# from the gateway token does not leave the bridge presenting a stale bearer
+# and silently degrading every caller's history to empty.
+DATA_API_TOKENS=${DATA_API_TOKENS:-}
 VBENV_EOF
     chmod 600 .env
 

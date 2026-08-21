@@ -19,6 +19,11 @@
  * ws) that are only installed on the VPS.
  */
 
+import {
+  voiceIsVpsReadMode,
+  voiceReadMovedRowsOrNull
+} from "./residency.js";
+
 /** How far back a run still counts as conversation context. */
 export const FLOW_CONTEXT_LOOKBACK_HOURS = 72;
 
@@ -240,20 +245,45 @@ export async function loadVoiceFlowContext(
     // only, agent offers and owner notices go to teammates, not the lead).
     // Multiple messages, not just the newest, mirror of the shared module.
     let recentFlowMessages: string[] = [];
-    const { data: outbound, error: outboundErr } = await supabase
-      .from("sms_outbound_log")
-      .select("body")
-      .eq("business_id", businessId)
-      .eq("to_e164", callerE164)
-      .eq("source", "ai_flow")
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(MAX_FLOW_MESSAGES);
-    if (outboundErr) {
-      console.warn("voice-bridge: flow-context outbound lookup failed (non-fatal)", outboundErr);
+    // PURGED from central at cutover, so for a vps tenant these live only on
+    // this box, over loopback. Empty here is what let the model re-ask
+    // something the automation had already texted (the 2026-07-14 Truly
+    // incident, voice side).
+    type OutboundBodyRow = { body?: string | null };
+    let outboundRows: OutboundBodyRow[] | null;
+    if (await voiceIsVpsReadMode(supabase, businessId)) {
+      outboundRows = await voiceReadMovedRowsOrNull<OutboundBodyRow>({
+        table: "sms_outbound_log",
+        columns: ["body"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_e164", op: "eq", value: callerE164 },
+          { column: "source", op: "eq", value: "ai_flow" },
+          { column: "created_at", op: "gte", value: sinceIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: MAX_FLOW_MESSAGES
+      });
     } else {
+      const { data: outbound, error: outboundErr } = await supabase
+        .from("sms_outbound_log")
+        .select("body")
+        .eq("business_id", businessId)
+        .eq("to_e164", callerE164)
+        .eq("source", "ai_flow")
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(MAX_FLOW_MESSAGES);
+      if (outboundErr) {
+        console.warn("voice-bridge: flow-context outbound lookup failed (non-fatal)", outboundErr);
+        outboundRows = null;
+      } else {
+        outboundRows = (outbound ?? []) as OutboundBodyRow[];
+      }
+    }
+    if (outboundRows !== null) {
       // Query is newest-first for the LIMIT; the prompt reads oldest-first.
-      recentFlowMessages = ((outbound ?? []) as Array<{ body?: string | null }>)
+      recentFlowMessages = outboundRows
         .map((row) => (typeof row.body === "string" ? row.body : ""))
         .filter((body) => body.trim().length > 0)
         .reverse();
