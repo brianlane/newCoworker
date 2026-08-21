@@ -28,6 +28,7 @@ import { listTeamMembers } from "@/lib/db/employees";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
 import {
+  claimZoomTranscriptClassification,
   getZoomTranscriptClassification,
   stampZoomTranscriptClassification
 } from "@/lib/db/zoom-transcript-imports";
@@ -78,6 +79,7 @@ export type ApplyMeetingOutcomeDeps = {
   listMembers?: typeof listTeamMembers;
   fireStage?: typeof fireLifecycleStage;
   stampLedger?: typeof stampZoomTranscriptClassification;
+  claimClassification?: typeof claimZoomTranscriptClassification;
   readClassification?: typeof getZoomTranscriptClassification;
   logSystem?: typeof recordSystemLog;
 };
@@ -201,6 +203,8 @@ export async function applyMeetingClassification(
   const listMembers = deps.listMembers ?? listTeamMembers;
   const fireStage = deps.fireStage ?? fireLifecycleStage;
   const stampLedger = deps.stampLedger ?? stampZoomTranscriptClassification;
+  const claimClassification =
+    deps.claimClassification ?? claimZoomTranscriptClassification;
   const readClassification = deps.readClassification ?? getZoomTranscriptClassification;
   const logSystem = deps.logSystem ?? recordSystemLog;
   /* c8 ignore stop */
@@ -216,21 +220,28 @@ export async function applyMeetingClassification(
     reusedPriorClassification: false
   };
 
-  // A deliberate manual re-import of a meeting already decided about: file
-  // the NEW document against the SAME contact and stop. No second model
-  // call, no second note, no second set of to-dos, and no second stage move.
-  const prior = await readClassification(input.businessId, input.meetingUuid);
-  if (prior) {
+  // CLAIM before doing anything. Losing the claim means another pass owns
+  // this meeting, either one that finished earlier (a deliberate manual
+  // re-import) or one running right now (that re-import racing the
+  // auto-import's deferred pass). Either way this pass must not write a
+  // second note, a second stage move or a second set of to-dos: it files the
+  // NEW document against the contact the winner found, and stops.
+  if (!(await claimClassification(input.businessId, input.meetingUuid))) {
     result.reusedPriorClassification = true;
-    result.outcome = (prior.outcome ?? MEETING_OUTCOME_UNCLEAR) as MeetingOutcome;
-    result.contactId = prior.contactId;
-    if (prior.contactId) {
-      const contactId = prior.contactId;
+    const prior = await readClassification(input.businessId, input.meetingUuid);
+    result.outcome = (prior?.outcome ?? MEETING_OUTCOME_UNCLEAR) as MeetingOutcome;
+    result.contactId = prior?.contactId ?? null;
+    // A null contact here is either "the winner matched nobody" or "the
+    // winner has not finished yet" (outcome still null). Neither is a
+    // contact this pass may invent, so the new document stays unlinked and
+    // the log says which case it was.
+    if (result.contactId) {
+      const contactId = result.contactId;
       result.linkedDocument = await attempt("document link", input.businessId, async () => {
         await patchDocument(input.businessId, input.documentId, { contact_id: contactId });
       });
     }
-    await logReclassifySkipped(input, result, logSystem);
+    await logReclassifySkipped(input, result, prior?.outcome == null, logSystem);
     return result;
   }
 
@@ -356,10 +367,11 @@ async function stampResult(
   });
 }
 
-/** The re-import trail: says plainly that the earlier decision still stands. */
+/** The re-import trail: says plainly that another pass owns this meeting. */
 async function logReclassifySkipped(
   input: MeetingClassificationInput,
   result: MeetingClassificationResult,
+  winnerInFlight: boolean,
   logSystem: NonNullable<ApplyMeetingOutcomeDeps["logSystem"]>
 ): Promise<void> {
   await logSystem({
@@ -367,14 +379,16 @@ async function logReclassifySkipped(
     source: MEETING_CLASSIFY_LOG_SOURCE,
     event: "meeting_reclassify_skipped",
     level: "info",
-    message:
-      "Meeting re-imported; the existing classification stands and only the document link was refreshed",
+    message: winnerInFlight
+      ? "Meeting re-imported while its classification was still running; this document was left unlinked rather than guessing a contact"
+      : "Meeting re-imported; the existing classification stands and only the document link was refreshed",
     payload: {
       meetingUuid: input.meetingUuid,
       documentId: input.documentId,
       contactId: result.contactId,
       outcome: result.outcome,
-      linkedDocument: result.linkedDocument
+      linkedDocument: result.linkedDocument,
+      winnerInFlight
     }
   });
 }

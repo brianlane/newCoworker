@@ -8,10 +8,17 @@
 -- Those writes must happen exactly once per meeting. The ledger already
 -- serializes the IMPORT, but `reclaimCompletedZoomTranscriptImport` blanks
 -- `document_id` so a deliberate manual re-import can produce a fresh
--- document; without a separate stamp that re-import would also write a
--- SECOND note and a second set of to-dos. `classified_at` is that stamp and
+-- document; without a separate marker that re-import would also write a
+-- SECOND note and a second set of to-dos. `classified_at` is that marker and
 -- is deliberately NOT cleared by the reclaim: re-importing a meeting
 -- re-files the document, it does not re-decide what the meeting meant.
+--
+-- It is a CLAIM, not a completion stamp: it is set before the classification
+-- runs, by a conditional update that only matches while it is null, so the
+-- pass itself (two model calls) is not a window in which a racing re-import
+-- also sees "not yet classified". `outcome` is what separates a pass that
+-- finished from one that claimed and then died; there is no lease, because
+-- for a best-effort enrichment a missing note beats a duplicated one.
 --
 -- `contact_id` and `outcome` are recorded for the owner-facing trail (which
 -- person the meeting was attributed to, and what it was read as), so a
@@ -36,7 +43,7 @@ comment on column public.zoom_transcript_imports.contact_id is
   'Contact the meeting was attributed to, or null when no confident match was found. SET NULL on contact delete, matching business_documents.contact_id.';
 
 comment on column public.zoom_transcript_imports.outcome is
-  'What the classifier read the meeting as: signed, follow_up, not_a_fit, internal, or unclear. Informational; the side effects it drove are already applied.';
+  'What the classifier read the meeting as: signed, follow_up, not_a_fit, internal, or unclear. Written only when the pass completes, so null alongside a non-null classified_at means the pass claimed the meeting and never finished.';
 
 comment on column public.zoom_transcript_imports.classified_at is
-  'When the classification side effects (note, stage move, to-dos) were applied. Non-null suppresses re-application on a deliberate manual re-import, which blanks document_id but never this.';
+  'Claim marker for the classification pass, set BEFORE it runs by a conditional update that only matches while null, so two racing passes cannot both write a note. Non-null suppresses re-application on a deliberate manual re-import, which blanks document_id but never this. A non-null classified_at with a null outcome is a pass that claimed and then died.';

@@ -33,6 +33,7 @@ import {
   MEETING_ACTION_ITEM_FIELDS,
   MEETING_OUTCOME_CATEGORIES,
   MEETING_OUTCOME_UNCLEAR,
+  outcomeWantsActionItems,
   parseMeetingActionItems,
   type MeetingActionItem,
   type MeetingOutcome
@@ -162,10 +163,12 @@ export async function classifyMeeting(
         )
   ) as MeetingOutcome;
 
-  // An unclear outcome writes nothing, so there is nothing for action items
-  // to hang off: skip the second call rather than pay for a list that will
-  // be discarded.
-  if (outcome === MEETING_OUTCOME_UNCLEAR) {
+  // An outcome that writes nothing to a contact record has nothing for
+  // action items to hang off, so skip the second call rather than pay for a
+  // list the applier will discard. That is `unclear` AND `internal`: every
+  // team sync and vendor call used to buy a metered extraction it could
+  // never apply.
+  if (!outcomeWantsActionItems(outcome)) {
     return { outcome, actionItems: [] };
   }
 

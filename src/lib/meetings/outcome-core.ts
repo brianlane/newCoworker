@@ -87,6 +87,19 @@ export function outcomeTouchesContact(outcome: MeetingOutcome): boolean {
 }
 
 /**
+ * Is it worth extracting action items for this outcome?
+ *
+ * Only when they will actually be filed. The applier discards them for any
+ * outcome that touches no contact record, so extracting them anyway spends a
+ * metered Gemini call on a list that is thrown away, once per team sync.
+ * Shared with `classifyMeeting` so the skip rule and the write rule cannot
+ * drift into disagreeing about which outcomes matter.
+ */
+export function outcomeWantsActionItems(outcome: MeetingOutcome): boolean {
+  return outcome !== MEETING_OUTCOME_UNCLEAR && outcomeTouchesContact(outcome);
+}
+
+/**
  * The prompt-injection guard for the classifier.
  *
  * A transcript is speech by a third party, and this classifier's output

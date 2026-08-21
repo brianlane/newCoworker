@@ -19,6 +19,7 @@ import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
   getZoomTranscriptImport,
+  claimZoomTranscriptClassification,
   getZoomTranscriptClassification,
   reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport,
@@ -333,24 +334,58 @@ describe("getZoomTranscriptClassification", () => {
   });
 });
 
-describe("stampZoomTranscriptClassification", () => {
-  const CONTACT = "33333333-3333-4333-8333-333333333333";
+describe("claimZoomTranscriptClassification", () => {
   const NOW_FN = () => NOW;
 
-  it("records the contact, the outcome and when it ran", async () => {
+  it("wins the claim when the row is unclassified", async () => {
+    const c = chain({ data: [{ id: "row-1" }], error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(true);
+    expect(c.update).toHaveBeenCalledWith({ classified_at: new Date(NOW).toISOString() });
+    // The conditional is the whole point: only a row still at null matches,
+    // so two racing passes cannot both win.
+    expect(c.is).toHaveBeenCalledWith("classified_at", null);
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("loses the claim when another pass already owns the meeting", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+  });
+
+  it("declines rather than risking a duplicate when the ledger errors", async () => {
+    const c = chain({ data: null, error: { message: "claim boom" } });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("declines when no data comes back at all", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID, makeDb(c), NOW_FN)).toBe(false);
+  });
+
+  it("stays silent when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    expect(await claimZoomTranscriptClassification(BIZ, UUID)).toBe(false);
+  });
+});
+
+describe("stampZoomTranscriptClassification", () => {
+  const CONTACT = "33333333-3333-4333-8333-333333333333";
+
+  it("records the contact and the outcome, leaving the claim marker alone", async () => {
+    // classified_at belongs to the CLAIM, which set it before this pass ran.
+    // Rewriting it here would turn an ownership marker into a completion
+    // stamp and lose the "claimed but died" state.
     const c = chain({ error: null });
     await stampZoomTranscriptClassification(
       BIZ,
       UUID,
       { contactId: CONTACT, outcome: "signed" },
-      makeDb(c),
-      NOW_FN
+      makeDb(c)
     );
-    expect(c.update).toHaveBeenCalledWith({
-      contact_id: CONTACT,
-      outcome: "signed",
-      classified_at: new Date(NOW).toISOString()
-    });
+    expect(c.update).toHaveBeenCalledWith({ contact_id: CONTACT, outcome: "signed" });
     expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
   });
 
@@ -362,8 +397,7 @@ describe("stampZoomTranscriptClassification", () => {
       BIZ,
       UUID,
       { contactId: null, outcome: "unclear" },
-      makeDb(c),
-      NOW_FN
+      makeDb(c)
     );
     expect(c.update).toHaveBeenCalledWith(
       expect.objectContaining({ contact_id: null, outcome: "unclear" })
@@ -377,8 +411,7 @@ describe("stampZoomTranscriptClassification", () => {
         BIZ,
         UUID,
         { contactId: null, outcome: "unclear" },
-        makeDb(c),
-        NOW_FN
+        makeDb(c)
       )
     ).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();

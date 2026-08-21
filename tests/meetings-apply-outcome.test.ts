@@ -64,6 +64,7 @@ function deps(over: Record<string, unknown> = {}) {
     ]),
     fireStage: vi.fn(async () => "written"),
     stampLedger: vi.fn(async () => {}),
+    claimClassification: vi.fn(async () => true),
     readClassification: vi.fn(async () => null),
     logSystem: vi.fn(async () => {}),
     ...over
@@ -321,7 +322,10 @@ describe("applyMeetingClassification: a re-imported meeting", () => {
   };
 
   it("re-links the new document without re-deciding anything", async () => {
-    const d = deps({ readClassification: vi.fn(async () => prior) });
+    const d = deps({
+      claimClassification: vi.fn(async () => false),
+      readClassification: vi.fn(async () => prior)
+    });
     const out = await applyMeetingClassification(input, d);
     const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
 
@@ -338,15 +342,72 @@ describe("applyMeetingClassification: a re-imported meeting", () => {
   });
 
   it("logs that the earlier decision still stands", async () => {
-    const d = deps({ readClassification: vi.fn(async () => prior) });
+    const d = deps({
+      claimClassification: vi.fn(async () => false),
+      readClassification: vi.fn(async () => prior)
+    });
     await applyMeetingClassification(input, d);
     expect((d as never as Record<string, ReturnType<typeof vi.fn>>).logSystem.mock.calls[0][0])
       .toMatchObject({ event: "meeting_reclassify_skipped" });
   });
 
+  it("claims before doing any work, so a racing pass cannot double-write", async () => {
+    // Bugbot, PR #1566: this used to READ classified_at at the start and
+    // stamp it at the end, leaving the whole classify pass (two model calls)
+    // as a window in which a manual re-import scheduled a second pass that
+    // also saw no stamp. Both then wrote a note and a set of to-dos.
+    const order: string[] = [];
+    const d = deps({
+      claimClassification: vi.fn(async () => {
+        order.push("claim");
+        return true;
+      }),
+      classify: vi.fn(async () => {
+        order.push("classify");
+        return { outcome: "signed", actionItems: [] };
+      })
+    });
+    await applyMeetingClassification(input, d);
+    expect(order).toEqual(["claim", "classify"]);
+  });
+
+  it("writes nothing to a record while the winning pass is still running", async () => {
+    // Claim lost AND the winner has not stamped an outcome yet, so there is
+    // no contact to attribute to. Guessing one would file this meeting on
+    // whoever a fresh resolve happened to return.
+    const d = deps({
+      claimClassification: vi.fn(async () => false),
+      readClassification: vi.fn(async () => ({
+        contactId: null,
+        outcome: null,
+        classifiedAt: "2026-08-20T21:00:00Z"
+      }))
+    });
+    const out = await applyMeetingClassification(input, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(out.linkedDocument).toBe(false);
+    expect(m.createNote).not.toHaveBeenCalled();
+    expect(m.logSystem.mock.calls[0][0].payload.winnerInFlight).toBe(true);
+  });
+
+  it("declines to write when the ledger cannot be reached at all", async () => {
+    // A claim blip answers false, so the pass skips rather than risking the
+    // duplicate the claim exists to prevent.
+    const d = deps({
+      claimClassification: vi.fn(async () => false),
+      readClassification: vi.fn(async () => null)
+    });
+    const out = await applyMeetingClassification(input, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(m.classify).not.toHaveBeenCalled();
+    expect(m.createNote).not.toHaveBeenCalled();
+    expect(out.reusedPriorClassification).toBe(true);
+  });
+
   it("skips the link when the earlier run matched nobody", async () => {
     const d = deps({
-      readClassification: vi.fn(async () => ({ ...prior, contactId: null, outcome: null }))
+      claimClassification: vi.fn(async () => false),
+      readClassification: vi.fn(async () => ({ ...prior, contactId: null, outcome: "unclear" }))
     });
     const out = await applyMeetingClassification(input, d);
     expect(out.outcome).toBe("unclear");

@@ -11,6 +11,7 @@ import {
   MEETING_OUTCOME_CATEGORIES,
   MEETING_OUTCOME_EVENT,
   outcomeTouchesContact,
+  outcomeWantsActionItems,
   parseMeetingActionItems,
   type MeetingOutcome
 } from "@/lib/meetings/outcome-core";
@@ -57,6 +58,17 @@ describe("meeting outcome categories", () => {
     expect(MEETING_OUTCOME_EVENT.not_a_fit).toBeNull();
     expect(MEETING_OUTCOME_EVENT.internal).toBeNull();
     expect(MEETING_OUTCOME_EVENT.unclear).toBeNull();
+  });
+
+  it("extracts action items only for outcomes that file them", () => {
+    // The skip rule in classify.ts and the write rule in apply-outcome.ts
+    // read the SAME predicate, so they cannot drift into paying for a list
+    // that is then discarded.
+    expect(outcomeWantsActionItems("signed")).toBe(true);
+    expect(outcomeWantsActionItems("follow_up")).toBe(true);
+    expect(outcomeWantsActionItems("not_a_fit")).toBe(true);
+    expect(outcomeWantsActionItems("internal")).toBe(false);
+    expect(outcomeWantsActionItems("unclear")).toBe(false);
   });
 
   it("keeps an internal meeting off everyone's record", () => {

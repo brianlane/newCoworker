@@ -120,18 +120,28 @@ export async function findContactIdByUniqueName(
   if (!trimmed) return null;
   try {
     const db = await createSupabaseServiceClient();
+    // Case-insensitive equality, via ilike with the LIKE metacharacters
+    // ESCAPED. Unescaped, `_` matches any single character and `%` matches
+    // anything, so a Zoom display name like "dave_smith" would also match a
+    // different contact and file this meeting on them. Same escape the
+    // address lookups use (emailIlikePattern, findCustomerByEmail).
+    const pattern = trimmed.replace(/[%_\\]/g, (m) => `\\${m}`);
     const { data, error } = await db
       .from("contacts")
-      .select("id, customer_e164")
+      .select("id, display_name")
       .eq("business_id", businessId)
-      // Case-insensitive but ANCHORED: ilike without wildcards is equality
-      // that ignores casing, so "Dave" never matches "Dave's Plumbing".
-      .ilike("display_name", trimmed)
+      .ilike("display_name", pattern)
       .limit(2);
     if (error) return null;
-    const rows = (data ?? []) as Array<{ id: string; customer_e164: string | null }>;
+    const rows = (data ?? []) as Array<{ id: string; display_name: string | null }>;
     if (rows.length !== 1) return null;
-    return rows[0].id;
+    // Re-verify in JS so the result can never be a wildcard false positive,
+    // the same belt-and-braces findCustomerByEmail applies.
+    const matched = rows[0];
+    if ((matched.display_name ?? "").trim().toLowerCase() !== trimmed.toLowerCase()) {
+      return null;
+    }
+    return matched.id;
   } catch (err) {
     logger.warn("meeting contact: name lookup threw", {
       businessId,

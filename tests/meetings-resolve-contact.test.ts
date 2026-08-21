@@ -327,7 +327,7 @@ describe("findContactIdByUniqueName", () => {
   }
 
   it("returns the id when exactly one contact carries the name", async () => {
-    const calls = nameClient([{ id: KINGSLEY_ID, customer_e164: KINGSLEY_KEY }]);
+    const calls = nameClient([{ id: KINGSLEY_ID, display_name: "Kingsley Moyo" }]);
     expect(await findContactIdByUniqueName(BIZ, "Kingsley Moyo")).toBe(KINGSLEY_ID);
     // Anchored ilike: equality that ignores casing, with NO wildcards, so
     // "Dave" can never match "Dave's Plumbing".
@@ -337,10 +337,39 @@ describe("findContactIdByUniqueName", () => {
     expect(calls.find((c) => c.name === "limit")?.args).toEqual([2]);
   });
 
+  it("escapes LIKE metacharacters in the speaker label", async () => {
+    // Bugbot, PR #1566: `_` is a single-character wildcard in LIKE, so an
+    // unescaped Zoom label "dave_smith" also matched "daveXsmith" and would
+    // file this meeting's note, stage move and to-dos on a different person.
+    const calls = nameClient([{ id: "c-1", display_name: "dave_smith" }]);
+    await findContactIdByUniqueName(BIZ, "dave_smith");
+    expect(calls.find((c) => c.name === "ilike")?.args).toEqual([
+      "display_name",
+      "dave\\_smith"
+    ]);
+  });
+
+  it("re-verifies the match in JS, so a wildcard can never slip through", async () => {
+    // Belt and braces, the same shape findCustomerByEmail uses: even if a
+    // pattern did widen, a row whose name is not the label is refused.
+    nameClient([{ id: "c-1", display_name: "daveXsmith" }]);
+    expect(await findContactIdByUniqueName(BIZ, "dave_smith")).toBeNull();
+  });
+
+  it("matches case-insensitively on the re-verify", async () => {
+    nameClient([{ id: KINGSLEY_ID, display_name: "  KINGSLEY MOYO " }]);
+    expect(await findContactIdByUniqueName(BIZ, "Kingsley Moyo")).toBe(KINGSLEY_ID);
+  });
+
+  it("refuses a row whose display name is null", async () => {
+    nameClient([{ id: "c-1", display_name: null }]);
+    expect(await findContactIdByUniqueName(BIZ, "Kingsley Moyo")).toBeNull();
+  });
+
   it("refuses an ambiguous name rather than picking one", async () => {
     nameClient([
-      { id: "c-1", customer_e164: "+15550000001" },
-      { id: "c-2", customer_e164: "+15550000002" }
+      { id: "c-1", display_name: "Dave" },
+      { id: "c-2", display_name: "Dave" }
     ]);
     expect(await findContactIdByUniqueName(BIZ, "Dave")).toBeNull();
   });

@@ -79,6 +79,27 @@ describe("classifyMeeting", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  it("skips the second call for an internal meeting too", async () => {
+    // Bugbot, PR #1566: only `unclear` short-circuited, but the applier
+    // discards action items for `internal` as well, so every team sync and
+    // vendor call bought a metered extraction that could never be applied.
+    const { generate } = generator(['{"category":"internal"}']);
+    const out = await classifyMeeting(BIZ, MINUTES, { generate: generate as never });
+    expect(out).toEqual({ outcome: "internal", actionItems: [] });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(meterGeminiSpendForBusiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("still extracts for an outcome that files them", async () => {
+    const { generate } = generator([
+      '{"category":"not_a_fit"}',
+      '{"action_1":"Send a referral"}'
+    ]);
+    const out = await classifyMeeting(BIZ, MINUTES, { generate: generate as never });
+    expect(out.actionItems).toEqual([{ title: "Send a referral", owner: null }]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a hallucinated category as unclear", async () => {
     const { generate } = generator(['{"category":"definitely_closing"}']);
     expect((await classifyMeeting(BIZ, MINUTES, { generate: generate as never })).outcome).toBe(
