@@ -78,6 +78,32 @@ const MOVED_TABLES = new Set([
   "aiflow_url_memory"
 ]);
 
+const pool = new pg.Pool({
+  connectionString: DATABASE_URL,
+  // The box serves exactly one tenant; a handful of connections is ample and
+  // keeps the memory-capped Postgres comfortably inside its mem_limit.
+  max: 5,
+  idleTimeoutMillis: 30_000
+});
+
+/** Timing-safe bearer check against every configured token (sha256-padded). */
+function bearerOk(header) {
+  if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
+  const presented = createHash("sha256").update(header.slice(7).trim(), "utf8").digest();
+  let ok = false;
+  for (const token of TOKENS) {
+    const expected = createHash("sha256").update(token, "utf8").digest();
+    // Constant-length digests -> timingSafeEqual never throws; OR-accumulate
+    // so every token is compared regardless of early matches.
+    if (timingSafeEqual(presented, expected)) ok = true;
+  }
+  return ok;
+}
+
+function clientError(res, status, error, message) {
+  return res.status(status).json({ ok: false, error, message });
+}
+
 function requireTable(body) {
   const requested = body?.table;
   // Resolve to the SET's own member (not the request string) so the value
