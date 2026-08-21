@@ -49,6 +49,7 @@ import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
+import { findEngagedProspects } from "./engagement";
 import { logger } from "@/lib/logger";
 import {
   claimDiscoveryRun,
@@ -153,6 +154,7 @@ export type OutreachSweepDeps = {
   processFlowEventImpl?: typeof processWebhookFlowEvent;
   recordEmailLogImpl?: typeof recordOutreachEmailLog;
   fireLifecycleStageImpl?: typeof fireLifecycleStage;
+  findEngagedImpl?: typeof findEngagedProspects;
 };
 
 /** Every dependency resolved once, so the phases below take no optionals. */
@@ -174,6 +176,7 @@ type Resolved = {
   processFlowEvent: typeof processWebhookFlowEvent;
   recordEmailLog: typeof recordOutreachEmailLog;
   fireLifecycleStage: typeof fireLifecycleStage;
+  findEngaged: typeof findEngagedProspects;
 };
 
 /* c8 ignore start -- production defaults; every test injects its own */
@@ -195,7 +198,8 @@ async function resolveDeps(deps: OutreachSweepDeps): Promise<Resolved> {
     schedulingLink: deps.schedulingLinkImpl ?? outreachSchedulingLink,
     processFlowEvent: deps.processFlowEventImpl ?? processWebhookFlowEvent,
     recordEmailLog: deps.recordEmailLogImpl ?? recordOutreachEmailLog,
-    fireLifecycleStage: deps.fireLifecycleStageImpl ?? fireLifecycleStage
+    fireLifecycleStage: deps.fireLifecycleStageImpl ?? fireLifecycleStage,
+    findEngaged: deps.findEngagedImpl ?? findEngagedProspects
   };
 }
 /* c8 ignore stop */
@@ -621,11 +625,35 @@ async function nudgeForBusiness(
     allowance,
     r.db
   );
+  // Silence is what schedules this mail, and `replied_at` only ever hears
+  // EMAIL. Ask the other two ways a prospect can have answered (they booked
+  // from the link the pitch carried, or their card has moved past Contacted)
+  // before writing to somebody who has already met us. Checked BEFORE the
+  // claim so the common case never claims and undoes.
+  const engagement = await r.findEngaged(settings.business_id, due, r.db);
+  if (engagement.readFailed) {
+    // Fail-safe: suppress rather than risk mailing a customer. Nothing is
+    // stamped, so the same prospects are due again on the next pass; only a
+    // persistent failure stops follow-ups, and this note is how that shows.
+    result.notes.push({
+      businessId: settings.business_id,
+      note: "held this pass's follow-ups: could not confirm whether these prospects had already booked or replied"
+    });
+    return;
+  }
+
   for (const prospect of due) {
     const to = prospect.email;
     // Same reasoning as the send phase: no address means nothing to do, and
     // silently "succeeding" would burn this prospect's one follow-up.
     if (!to) continue;
+    if (engagement.engaged.has(prospect.id)) {
+      // Left unstamped on purpose. `nudged_at` means "we sent the one
+      // follow-up", and burning it here would be a lie that also hides the
+      // prospect from any future decision to reach out again.
+      result.skipped += 1;
+      continue;
+    }
     const unsubscribeUrl = buildOutreachUnsubscribeUrl(
       r.appUrl,
       settings.business_id,

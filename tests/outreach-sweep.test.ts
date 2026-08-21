@@ -159,6 +159,11 @@ function baseDeps(over: Record<string, unknown> = {}) {
     })),
     recordEmailLogImpl: vi.fn(async () => {}),
     fireLifecycleStageImpl: vi.fn(async () => "moved" as const),
+    // Nobody has booked or advanced, which is the case every phase-4 test
+    // below is about. The engagement check has its own suite
+    // (outreach-engagement.test.ts); the tests that care about the
+    // SUPPRESSION it drives override this.
+    findEngagedImpl: vi.fn(async () => ({ engaged: new Set<string>(), readFailed: false })),
     ...over
   } as never;
 }
@@ -1373,6 +1378,64 @@ describe("phase 4: the single nudge", () => {
     expect(
       (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
     ).not.toHaveBeenCalled();
+  });
+
+  it("does not follow up with a prospect who already booked or advanced", async () => {
+    // The gap this closes: the nudge is scheduled off SILENCE, and the only
+    // thing that ever counted as noise was an inbound EMAIL. A prospect who
+    // took a slot from the link in the pitch, met, and signed was still
+    // silent by that definition, so "I wrote last week..." went to a
+    // customer.
+    const ledger = nudgeLedger();
+    const deps = baseDeps({
+      findEngagedImpl: vi.fn(async () => ({
+        engaged: new Set([prospect().id]),
+        readFailed: false
+      }))
+    });
+    const result = await processOutreachSweep(deps);
+    expect(result.nudged).toBe(0);
+    expect(result.skipped).toBe(1);
+    // Never claimed, so the one follow-up a prospect ever gets is still
+    // theirs if the owner decides to reach out later.
+    expect(ledger.claimProspectNudge).not.toHaveBeenCalled();
+    expect(ledger.patchProspect).not.toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      expect.objectContaining({ nudged_at: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it("checks engagement BEFORE claiming, so the common case never undoes", async () => {
+    const ledger = nudgeLedger();
+    const findEngagedImpl = vi.fn(async () => ({
+      engaged: new Set<string>(),
+      readFailed: false
+    }));
+    await processOutreachSweep(baseDeps({ findEngagedImpl }));
+    expect(findEngagedImpl).toHaveBeenCalled();
+    const engagedAt = findEngagedImpl.mock.invocationCallOrder[0];
+    const claimedAt = (ledger.claimProspectNudge as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    expect(engagedAt).toBeLessThan(claimedAt);
+  });
+
+  it("holds the whole batch, and says so, when engagement cannot be read", async () => {
+    // Fail-safe: a duplicate cold email is a spam complaint while a missed
+    // one costs nothing. Nothing is stamped, so the same prospects are due
+    // again in five minutes; only a PERSISTENT failure stops follow-ups, and
+    // the note is how that stops being silent.
+    const ledger = nudgeLedger();
+    const deps = baseDeps({
+      findEngagedImpl: vi.fn(async () => ({ engaged: new Set<string>(), readFailed: true }))
+    });
+    const result = await processOutreachSweep(deps);
+    expect(result.nudged).toBe(0);
+    expect(ledger.claimProspectNudge).not.toHaveBeenCalled();
+    expect(result.notes.some((n) => n.note.includes("held this pass's follow-ups"))).toBe(
+      true
+    );
   });
 
   it("abandons a claimed nudge when the prospect replied, opted out, or vanished", async () => {
