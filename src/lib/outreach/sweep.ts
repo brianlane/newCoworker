@@ -648,9 +648,25 @@ async function nudgeForBusiness(
     // silently "succeeding" would burn this prospect's one follow-up.
     if (!to) continue;
     if (engagement.engaged.has(prospect.id)) {
-      // Left unstamped on purpose. `nudged_at` means "we sent the one
-      // follow-up", and burning it here would be a lie that also hides the
-      // prospect from any future decision to reach out again.
+      // RETIRE the row, do not just skip it. The due query is oldest-first
+      // and capped at NUDGE_BATCH, so a handful of booked leads left at
+      // `status = 'sent'` would win every slot on every pass and starve the
+      // silent prospects behind them until those aged out of the window
+      // unnudged. That is the same starvation `reconcileContactedForBusiness`
+      // documents a few functions up, and leaving it unstamped walked
+      // straight back into it (Bugbot, PR #1571).
+      //
+      // Stamped as `replied` rather than `nudged`, because that is what
+      // happened: this ledger's "replied" means the prospect ANSWERED the
+      // outreach, and `noteProspectReply` writes the same pair for the email
+      // case. Booking a call is an answer. `nudged_at` stays null, so the one
+      // follow-up they are owed is still theirs if the owner ever wants it.
+      await patchProspect(
+        settings.business_id,
+        prospect.id,
+        { status: "replied", replied_at: r.now.toISOString() },
+        r.db
+      );
       result.skipped += 1;
       continue;
     }

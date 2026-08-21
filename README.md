@@ -2460,14 +2460,30 @@ column exists on the row type and is patchable, but nothing in the codebase
 ever writes it and it is null on every sent prospect in production. The phone
 is the join the Contacted reconcile already uses.
 
-**Fail direction is suppress.** An unreadable signal answers "engaged" and
-holds the whole batch, because the sweep's own doctrine settles it: a
-duplicate cold email is a spam complaint while a missed one costs nothing.
-Nothing is stamped when a batch is held, so the same prospects are due again
-on the next pass five minutes later; only a PERSISTENT failure stops
-follow-ups, and it surfaces as a sweep note rather than being silent. A
-suppressed prospect keeps `nudged_at` null on purpose: that stamp means "we
-sent the one follow-up", and burning it here would be a lie.
+Both lookups are KEYED on the batch's own identifiers rather than scanning
+the tenant's bookings, because a scan has to be capped and a cap on a
+fail-safe check is fail-OPEN: past the cap a real booking is invisible and the
+follow-up sends. The two columns match differently on purpose:
+`attendee_key` is normalized by `bookingAttendeeKey` so an exact `in` matches
+it, while `attendee_email` keeps whatever casing the booker typed, so that one
+needs `ilike` or it silently never fires.
+
+**An engaged prospect is RETIRED, not just skipped.** The due query is
+oldest-first and capped at `NUDGE_BATCH`, so a handful of booked leads left at
+`status = 'sent'` would win every slot on every pass and starve the silent
+prospects behind them until they aged out of the window unnudged. That is the
+same starvation the Contacted reconcile documents, and skipping without
+stamping walks straight back into it. They are stamped `replied`, which is
+what happened: this ledger's "replied" means the prospect ANSWERED the
+outreach, and booking a call is an answer. `nudged_at` stays null, so the one
+follow-up they are owed is still theirs if the owner ever wants it.
+
+**Fail direction is suppress.** An unreadable or TRUNCATED signal answers
+"engaged" and holds the whole batch, because the sweep's own doctrine settles
+it: a duplicate cold email is a spam complaint while a missed one costs
+nothing. Nothing is stamped when a batch is held, so the same prospects are
+due again on the next pass five minutes later; only a PERSISTENT failure stops
+follow-ups, and it surfaces as a sweep note rather than being silent.
 
 ### Suppression is wider than sending, on two axes
 

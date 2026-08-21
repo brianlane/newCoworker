@@ -9,6 +9,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  BOOKING_LOOKUP_LIMIT,
   findEngagedProspects,
   hasAdvancedPastContacted,
   prospectContactKey
@@ -36,9 +37,10 @@ const candidate = (over: Record<string, unknown> = {}) => ({
 });
 
 /**
- * Chainable fake. `bookings` answers the calendar_booking_dedupe read,
- * `stages` the pipeline_stages read, `contacts` the per-contact tag read.
- * A table set to the string "error" reports a query error instead.
+ * Chainable fake. `bookings` answers BOTH calendar_booking_dedupe reads (the
+ * exact one on attendee_key and the ilike one on attendee_email), `stages` the
+ * pipeline_stages read, `contacts` the per-contact tag read. A table set to
+ * "error" reports a query error; "null" answers null data with no error.
  */
 function makeDb(tables: {
   bookings?: unknown[] | "error" | "null";
@@ -46,12 +48,16 @@ function makeDb(tables: {
   contacts?: Array<{ tags: string[] | null } | null> | "error";
 }) {
   const seenTables: string[] = [];
+  const bookingLookups: string[] = [];
   let contactCall = 0;
   const from = (table: string) => {
     seenTables.push(table);
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "gte", "or", "order", "limit"]) {
-      builder[m] = () => builder;
+    for (const m of ["select", "eq", "gte", "or", "in", "order", "limit"]) {
+      builder[m] = (...args: unknown[]) => {
+        if (m === "in" || m === "or") bookingLookups.push(String(args[0] ?? ""));
+        return builder;
+      };
     }
     const resultFor = (): { data: unknown; error: unknown } => {
       if (table === "calendar_booking_dedupe") {
@@ -72,7 +78,7 @@ function makeDb(tables: {
     builder.then = (resolve: (v: unknown) => unknown) => Promise.resolve(resultFor()).then(resolve);
     return builder;
   };
-  return { db: { from } as never, seenTables };
+  return { db: { from } as never, seenTables, bookingLookups };
 }
 
 const CONTACTED_BOARD = [
@@ -298,8 +304,10 @@ describe("findEngagedProspects: the fail direction", () => {
 });
 
 describe("findEngagedProspects: batching", () => {
-  it("reads the bookings once for the whole batch", async () => {
-    const { db, seenTables } = makeDb({
+  it("asks for the whole batch's identifiers in one lookup per column", async () => {
+    // Two reads for any batch size, not two per prospect. Keyed rather than
+    // scanned, so a tenant's booking volume can never hide a match.
+    const { db, seenTables, bookingLookups } = makeDb({
       bookings: [
         { attendee_key: "phone:+14809995302", attendee_email: null, created_at: AFTER }
       ],
@@ -315,7 +323,21 @@ describe("findEngagedProspects: batching", () => {
     );
     expect(out.engaged.has("p1")).toBe(true);
     expect(out.engaged.has("p2")).toBe(false);
-    expect(seenTables.filter((t) => t === "calendar_booking_dedupe")).toHaveLength(1);
+    expect(seenTables.filter((t) => t === "calendar_booking_dedupe")).toHaveLength(2);
+    // Both prospects' keys ride the SAME lookup.
+    const keyLookup = bookingLookups.find((l) => l === "attendee_key");
+    expect(keyLookup).toBeDefined();
+  });
+
+  it("matches attendee_email case-insensitively, since bookers type it freely", () => {
+    // attendee_key is normalized by bookingAttendeeKey, so `in` matches it.
+    // attendee_email keeps whatever casing was typed, so an exact `in` there
+    // would silently never fire.
+    const { db, bookingLookups } = makeDb({ bookings: [], stages: [] });
+    return findEngagedProspects(BIZ, [candidate()], db).then(() => {
+      expect(bookingLookups.some((l) => l.includes("attendee_email.ilike."))).toBe(true);
+      expect(bookingLookups).toContain("attendee_key");
+    });
   });
 });
 
@@ -384,5 +406,73 @@ describe("findEngagedProspects: the thin cases", () => {
   it("reports readFailed when the client rejects with a raw value", async () => {
     createSupabaseServiceClient.mockRejectedValue("raw string");
     expect((await findEngagedProspects(BIZ, [candidate()])).readFailed).toBe(true);
+  });
+});
+
+describe("findEngagedProspects: the booking lookup's rails", () => {
+  it("holds the batch when a lookup comes back full, rather than assuming no booking", async () => {
+    // A cap on a fail-safe check is fail-OPEN if a full page reads as "none
+    // found": past the cap a real booking is invisible and the follow-up
+    // sends. A full page is an UNKNOWN answer (Bugbot, PR #1571).
+    const full = Array.from({ length: BOOKING_LOOKUP_LIMIT }, () => ({
+      attendee_key: "phone:+15550001111",
+      attendee_email: null,
+      created_at: AFTER
+    }));
+    const { db } = makeDb({ bookings: full, stages: [] });
+    const out = await findEngagedProspects(BIZ, [candidate()], db);
+    expect(out.readFailed).toBe(true);
+  });
+
+  it("asks nothing when the batch carries no usable identifier at all", async () => {
+    const { db, seenTables } = makeDb({ bookings: [], stages: [] });
+    const out = await findEngagedProspects(
+      BIZ,
+      [candidate({ phone: null, email: null })],
+      db
+    );
+    expect(out).toEqual({ engaged: new Set(), readFailed: false });
+    expect(seenTables).not.toContain("calendar_booking_dedupe");
+  });
+
+  it("skips the key lookup when only an address is usable", async () => {
+    // A prospect with no phone still has the email arm; the key arm has
+    // nothing to ask for beyond the address key, which rides it.
+    const { db, bookingLookups } = makeDb({
+      bookings: [
+        {
+          attendee_key: "email:info@greenmagicpest.com",
+          attendee_email: null,
+          created_at: AFTER
+        }
+      ],
+      stages: []
+    });
+    const out = await findEngagedProspects(BIZ, [candidate({ phone: null })], db);
+    expect(out.engaged.has("p1")).toBe(true);
+    expect(bookingLookups).toContain("attendee_key");
+  });
+
+  it("skips the email lookup when only a phone is usable", async () => {
+    const { db, bookingLookups } = makeDb({
+      bookings: [
+        { attendee_key: "phone:+14809995302", attendee_email: null, created_at: AFTER }
+      ],
+      stages: []
+    });
+    const out = await findEngagedProspects(BIZ, [candidate({ email: null })], db);
+    expect(out.engaged.has("p1")).toBe(true);
+    expect(bookingLookups.some((l) => l.includes("attendee_email.ilike."))).toBe(false);
+  });
+
+  it("ignores an address the filter gate refuses", async () => {
+    const { db, seenTables } = makeDb({ bookings: [], stages: [] });
+    const out = await findEngagedProspects(
+      BIZ,
+      [candidate({ phone: null, email: "not an address" })],
+      db
+    );
+    expect(out.engaged.size).toBe(0);
+    expect(seenTables).not.toContain("calendar_booking_dedupe");
   });
 });

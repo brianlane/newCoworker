@@ -48,7 +48,11 @@ import {
   isE164,
   normalizeNanpToE164
 } from "../../../supabase/functions/_shared/ai_flows/engine";
-import { contactAliasOrFilter } from "../../../supabase/functions/_shared/contact_key";
+import {
+  contactAliasOrFilter,
+  emailIlikePattern,
+  isFilterSafeEmail
+} from "../../../supabase/functions/_shared/contact_key";
 import {
   LIFECYCLE_STAGE_TAGS,
   stageForTags,
@@ -56,6 +60,13 @@ import {
 } from "../../../supabase/functions/_shared/pipelines/stages";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/**
+ * Rail on one keyed booking lookup. Bounded by how often a handful of
+ * prospects have booked, so reaching it means something is wrong rather than
+ * busy; a full page is treated as an unreadable answer, never as "no booking".
+ */
+export const BOOKING_LOOKUP_LIMIT = 200;
 
 /** The prospect fields this check needs; the ledger row supplies all of them. */
 export type EngagementCandidate = {
@@ -135,30 +146,86 @@ async function findBookedProspects(
   earliestSent: string | undefined
 ): Promise<{ ids: string[]; readFailed: boolean }> {
   const ids: string[] = [];
-  try {
-    // Bounded by the oldest pitch in the batch, so this never scans a
-    // tenant's whole booking history. `created_at` rather than `start_at`:
-    // booking a slot for next month is engagement TODAY.
-    const base = db
-      .from("calendar_booking_dedupe")
-      .select("attendee_key, attendee_email, created_at")
-      .eq("business_id", businessId);
-    const { data, error } = await (earliestSent
-      ? base.gte("created_at", earliestSent)
-      : base
-    ).limit(500);
-    if (error) {
-      logger.warn("outreach: booking signal unreadable", {
-        businessId,
-        error: error.message
-      });
-      return { ids, readFailed: true };
+  // Ask for THIS batch's identifiers rather than scanning the tenant's
+  // bookings and matching in memory. A scan has to be capped, and a cap on a
+  // fail-safe check is fail-OPEN: past the cap a real booking is invisible and
+  // the follow-up sends (Bugbot, PR #1571). Keyed lookups are bounded by how
+  // many times these five prospects have booked, which is a handful, so the
+  // limit below is a rail rather than a horizon.
+  const emails = new Set<string>();
+  const keys = new Set<string>();
+  for (const p of prospects) {
+    const email = p.email?.trim().toLowerCase() ?? "";
+    // Only addresses safe to interpolate into a filter list; the ledger's
+    // email column is not gated the way a contact key is.
+    if (email && isFilterSafeEmail(email)) {
+      emails.add(email);
+      keys.add(`email:${email}`);
     }
-    const rows = (data ?? []) as Array<{
+    const key = prospectContactKey(p.phone);
+    if (key) keys.add(`phone:${key}`);
+  }
+  // `keys` is a superset: a usable address contributes `email:<addr>` to it,
+  // and a usable phone contributes `phone:<e164>`. So an empty `keys` means
+  // this batch carries no identifier worth asking about.
+  if (keys.size === 0) return { ids, readFailed: false };
+
+  try {
+    const rows: Array<{
       attendee_key: string | null;
       attendee_email: string | null;
       created_at: string;
-    }>;
+    }> = [];
+    // Two lookups with DIFFERENT matching rules, because the two columns are
+    // normalized differently. `attendee_key` is built by bookingAttendeeKey,
+    // which lowercases the address and keeps E.164 as-is, so an exact `in`
+    // matches it. `attendee_email` is whatever casing the booker typed, and
+    // `in` is case-SENSITIVE, so that one needs ilike or it silently never
+    // fires. (An address is one identity however it was typed; same reason
+    // emailIlikePattern exists.)
+    for (const lookup of [
+      { label: "attendee_key", values: [...keys], exact: true },
+      // Only when an address survived the filter gate; a phone-only batch has
+      // nothing to ask this column.
+      ...(emails.size > 0
+        ? [{ label: "attendee_email", values: [...emails], exact: false }]
+        : [])
+    ]) {
+      const table = db
+        .from("calendar_booking_dedupe")
+        .select("attendee_key, attendee_email, created_at")
+        .eq("business_id", businessId);
+      let query = lookup.exact
+        ? table.in("attendee_key", lookup.values)
+        : table.or(
+            lookup.values
+              .map((e) => `attendee_email.ilike.${emailIlikePattern(e)}`)
+              .join(",")
+          );
+      // Still bounded by the oldest pitch in the batch: `created_at` rather
+      // than `start_at`, because booking a slot for next month is engagement
+      // TODAY.
+      if (earliestSent) query = query.gte("created_at", earliestSent);
+      const { data, error } = await query.limit(BOOKING_LOOKUP_LIMIT);
+      if (error) {
+        logger.warn("outreach: booking signal unreadable", {
+          businessId,
+          error: error.message
+        });
+        return { ids, readFailed: true };
+      }
+      const page = (data ?? []) as typeof rows;
+      // A full page means the answer may be truncated, and an unknown answer
+      // has to read as "engaged" here, not as "no booking found".
+      if (page.length >= BOOKING_LOOKUP_LIMIT) {
+        logger.warn("outreach: booking signal truncated; holding the follow-ups", {
+          businessId,
+          column: lookup.label
+        });
+        return { ids, readFailed: true };
+      }
+      rows.push(...page);
+    }
     for (const prospect of prospects) {
       const email = prospect.email?.trim().toLowerCase() ?? "";
       const key = prospectContactKey(prospect.phone);

@@ -1399,6 +1399,29 @@ describe("phase 4: the single nudge", () => {
     // Never claimed, so the one follow-up a prospect ever gets is still
     // theirs if the owner decides to reach out later.
     expect(ledger.claimProspectNudge).not.toHaveBeenCalled();
+  });
+
+  it("retires the engaged prospect so it cannot starve the queue behind it", async () => {
+    // The due query is oldest-first and capped at NUDGE_BATCH. Left at
+    // `status = 'sent'`, a handful of booked leads would win every slot on
+    // every pass and the silent prospects behind them would age out of the
+    // window unnudged. Same starvation the Contacted reconcile documents.
+    const ledger = nudgeLedger();
+    const deps = baseDeps({
+      findEngagedImpl: vi.fn(async () => ({
+        engaged: new Set([prospect().id]),
+        readFailed: false
+      }))
+    });
+    await processOutreachSweep(deps);
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      // "Replied" is what happened: this ledger's replied means the prospect
+      // ANSWERED, and booking a call is an answer. nudged_at stays null.
+      expect.objectContaining({ status: "replied", replied_at: expect.any(String) }),
+      expect.anything()
+    );
     expect(ledger.patchProspect).not.toHaveBeenCalledWith(
       BIZ,
       prospect().id,
