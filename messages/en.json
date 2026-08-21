@@ -523,6 +523,35 @@
           "description": "Choose exactly which events reach you (by SMS, email, or dashboard) and when."
         }
       },
+      "pipeline": {
+        "eyebrow": "Pipeline",
+        "title": "The lead, the deal, and who owns it",
+        "subtitle": "Somewhere for the work your coworker starts to land: deals, to-dos, notes, and claiming. New in August 2026.",
+        "deals": {
+          "title": "Deals on a Lead",
+          "description": "Put a value, a close date, and a commission on a lead, move it from open to under contract to won or lost, and see what each owner actually closed."
+        },
+        "todos": {
+          "title": "Assignable To-Dos",
+          "description": "Give a teammate a task with a due date, tie it to a deal, and see what is overdue. The assignee gets a text, so they never need a dashboard login."
+        },
+        "notes": {
+          "title": "Contact Notes",
+          "description": "Real notes with an author and a timestamp, in the same timeline as the calls, texts, and emails, instead of one shared blob everyone overwrites."
+        },
+        "claiming": {
+          "title": "Claim an Unowned Lead",
+          "description": "Filter the board to leads nobody owns and claim one in a click, or let a teammate claim it by replying 1 to the text alert. One contact, one owner."
+        },
+        "bulk": {
+          "title": "Bulk Contact Actions",
+          "description": "Select many contacts and tag, untag, assign an owner, or export them at once, up to 200 per go. Tag changes fire your automations, and we say so before you confirm."
+        },
+        "crmImport": {
+          "title": "Import from Follow Up Boss",
+          "description": "Bring your contacts, notes, and deals across, with a dry run that counts everything first. Smart lists and action plans arrive as a report to rebuild from, not as working automations."
+        }
+      },
       "platform": {
         "eyebrow": "Platform",
         "title": "A private platform, not a shared bot",
@@ -1472,6 +1501,71 @@
         "ctaTitle": "Stop approving drafts",
         "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee."
       },
+      "followUpBoss": {
+        "name": "Follow Up Boss",
+        "teaser": "A mature CRM your agents work inside, against a coworker that works the lead itself.",
+        "metaTitle": "New Coworker vs Follow Up Boss",
+        "metaDescription": "Follow Up Boss is a real estate CRM from $69 per user a month that organizes your team's leads. New Coworker answers the phone and books the appointment for one flat price per business. An honest, sourced comparison, including the two rows where Follow Up Boss wins.",
+        "ogTitle": "New Coworker vs Follow Up Boss",
+        "ogDescription": "A CRM your agents work inside vs a coworker that does the work. An honest comparison.",
+        "heroEyebrow": "New Coworker vs Follow Up Boss",
+        "heroTitle": "They organize the work.",
+        "heroHighlight": "We do it.",
+        "heroSubtitle": "Follow Up Boss is a mature real estate CRM that routes leads to your agents and nudges them until someone calls. New Coworker is the one that actually answers, qualifies, and books. If you have a full team working leads all day, Follow Up Boss is the better buy, and this page says so plainly.",
+        "themColumn": "Follow Up Boss",
+        "row1": {
+          "label": "What you're buying",
+          "us": "One AI coworker that answers the phone, texts back, and books on your calendar by itself.",
+          "them": "A CRM your agents work inside. It organizes the leads and reminds people, but the people still make the calls."
+        },
+        "row2": {
+          "label": "Price",
+          "us": "Starter from {starterMonthly} and Standard from {standardMonthly} on a 24-month term, priced per business rather than per seat.",
+          "them": "Grow is $69 per user monthly, or $58 billed annually. Pro is $499 a month for 10 users, or $416 annually. Platform is $1,000 a month for 30 users, or $833 annually. No contract."
+        },
+        "row3": {
+          "label": "Who does the work",
+          "us": "The coworker picks up at 2am, qualifies the caller, books the appointment, and follows up, then tells you what happened.",
+          "them": "Your agents do the work. Follow Up Boss routes the lead, starts an action plan, and nudges whoever owns it."
+        },
+        "row4": {
+          "label": "CRM depth for a team",
+          "us": "Deals, to-dos, contact notes, lead claiming, and saved segments, all shipped in August 2026 and deliberately version one.",
+          "them": "Years of smart lists, action plans, team inboxes, agent-level reporting, and teams within teams. This is what they are best at."
+        },
+        "row5": {
+          "label": "Integrations and mobile",
+          "us": "Zapier, Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, a REST API, and webhooks. The dashboard is web only, with no mobile app.",
+          "them": "More than 250 integrations, plus mature iPhone and Android apps your agents can work from all day."
+        },
+        "row6": {
+          "label": "Getting in, and getting out",
+          "us": "Import your Follow Up Boss contacts, notes, and deals, with a dry run that counts everything first. Your data sits on a dedicated server, one per business.",
+          "them": "Unlimited contacts and an open API you can export through, on shared cloud infrastructure."
+        },
+        "themCardTitle": "Where Follow Up Boss is the better buy",
+        "themCard1": "You have a real team and you want people, not software, working the leads. Smart lists, action plans, and agent-level reporting took them years to get right, and ours are new.",
+        "themCard2": "Your agents live on their phones. Their iPhone and Android apps are mature and fast. We have no mobile app at all.",
+        "themCard3": "You need something specific from their catalog of 250-plus integrations, or you are already deep into their action plans and do not want to rebuild them.",
+        "usCardTitle": "Where New Coworker is the better buy",
+        "usCard1": "Nobody is picking up. The coworker answers the call, texts back the one it missed, qualifies, and books, at 2am and on a Sunday, without anyone logging in.",
+        "usCard2": "You are paying per seat for agents who barely log in. We price per business, so one flat price covers everyone. Ten seats on their Pro plan is $416 a month billed annually.",
+        "usCard3": "You want to try it without committing to a migration. Import your contacts, notes, and deals with a dry run first, and keep Follow Up Boss running while you compare.",
+        "faq1": {
+          "q": "Can I move my Follow Up Boss data across?",
+          "a": "Yes. You paste your Follow Up Boss API key and we do a dry run first that counts exactly what would come over: people, notes, deals, stages, and sources. Contacts, notes, and deals then import for real. Smart lists and action plans arrive as a report you can read, not as working automations, so plan on rebuilding those as AiFlows."
+        },
+        "faq2": {
+          "q": "Is New Coworker a replacement for Follow Up Boss?",
+          "a": "For a solo agent or a small team, often yes. For a brokerage that runs on smart lists, action plans, and agent-level reporting, no. Our deals, to-dos, and notes shipped in August 2026 and are deliberately simple. Plenty of people run both: Follow Up Boss as the system of record, New Coworker as the one that answers."
+        },
+        "faq3": {
+          "q": "Do my teammates need their own logins?",
+          "a": "Not on Starter or Standard. The owner assigns a lead and the teammate gets a text they can reply to, so a roster of agents can work leads by phone without ever signing in. Teammate dashboard logins are an Enterprise feature."
+        },
+        "ctaTitle": "Try the coworker without leaving your CRM",
+        "ctaSubtitle": "Import your contacts, notes, and deals with a dry run first, and keep Follow Up Boss running while you compare."
+      },
       "answeringService": {
         "name": "Phone answering services",
         "teaser": "A human call center that takes a message, against an AI coworker that books the appointment.",
@@ -1553,11 +1647,11 @@
       "ctaLabel": "Get Started",
       "tableEyebrow": "Side by side",
       "tableTitle": "New Coworker vs {name}",
-      "tableSubtitle": "Their details reflect their own published pricing as of July 2026. Where they are stronger, we say so.",
+      "tableSubtitle": "Their details reflect their own published pricing, checked in July and August 2026. Where they are stronger, we say so.",
       "usColumn": "New Coworker",
       "diffEyebrow": "The real difference",
       "diffTitle": "Two different things to buy",
-      "sourcedNote": "Figures for {name} come from their published pricing in July 2026 and can change. Check their current pricing before you decide, and tell us if anything here is out of date.",
+      "sourcedNote": "Figures for {name} come from their published pricing, checked in July and August 2026, and can change. Check their current pricing before you decide, and tell us if anything here is out of date.",
       "faqEyebrow": "Questions",
       "faqTitle": "What people ask before switching"
     },

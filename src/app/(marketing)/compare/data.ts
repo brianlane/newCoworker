@@ -62,6 +62,18 @@ export const COMPARISONS: CompareDef[] = [
     verdicts: ["us", "them", "us", "us", "us", "us"]
   },
   {
+    // followupboss.com/pricing, August 2026: Grow $69/user/mo monthly or
+    // $58/user annually, calling add-on $39/user; Pro $499/mo for 10 users
+    // ($49 each extra) or $416/mo annually ($41 extra); Platform $1,000/mo for
+    // 30 users ($20 extra) or $833/mo annually ($17 extra). Free trial, no
+    // contract, cancel any time, 250+ integrations, unlimited contacts.
+    // The only entry that concedes two rows: they are a mature CRM and our
+    // deals, to-dos, and notes shipped in August 2026.
+    slug: "follow-up-boss",
+    i18nKey: "followUpBoss",
+    verdicts: ["us", "tie", "us", "them", "them", "us"]
+  },
+  {
     // Category comparison against human answering services and call centers.
     // Deliberately not a named vendor: the buyer question is about the
     // category, and category facts do not go stale.
