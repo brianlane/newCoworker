@@ -549,7 +549,7 @@
         },
         "crmImport": {
           "title": "Import from Follow Up Boss",
-          "description": "Bring your contacts, notes, and deals across, with a dry run that counts everything first. Smart lists and action plans arrive as a report to rebuild from, not as working automations."
+          "description": "Upload the CSV you export from Follow Up Boss and we bring your contacts, tags, stage, and lead source across, after showing you what is in the file. Notes and deals are not in that export, so they do not come with it."
         }
       },
       "platform": {
@@ -1539,9 +1539,9 @@
           "them": "More than 250 integrations, plus mature iPhone and Android apps your agents can work from all day."
         },
         "row6": {
-          "label": "Getting in, and getting out",
-          "us": "Import your Follow Up Boss contacts, notes, and deals, with a dry run that counts everything first. Your data sits on a dedicated server, one per business.",
-          "them": "Unlimited contacts and an open API you can export through, on shared cloud infrastructure."
+          "label": "Where your data lives",
+          "us": "Your own dedicated server, one per business.",
+          "them": "Shared cloud infrastructure, with the unlimited contacts, CSV export, and open API you would expect."
         },
         "themCardTitle": "Where Follow Up Boss is the better buy",
         "themCard1": "You have a real team and you want people, not software, working the leads. Smart lists, action plans, and agent-level reporting took them years to get right, and ours are new.",
@@ -1550,10 +1550,10 @@
         "usCardTitle": "Where New Coworker is the better buy",
         "usCard1": "Nobody is picking up. The coworker answers the call, texts back the one it missed, qualifies, and books, at 2am and on a Sunday, without anyone logging in.",
         "usCard2": "You are paying per seat for agents who barely log in. We price per business, so one flat price covers everyone. Ten seats on their Pro plan is $416 a month billed annually.",
-        "usCard3": "You want to try it without committing to a migration. Import your contacts, notes, and deals with a dry run first, and keep Follow Up Boss running while you compare.",
+        "usCard3": "You want to try it without committing to a migration. Export your contacts from Follow Up Boss yourself and upload the file here, and keep Follow Up Boss running while you compare.",
         "faq1": {
           "q": "Can I move my Follow Up Boss data across?",
-          "a": "Yes. You paste your Follow Up Boss API key and we do a dry run first that counts exactly what would come over: people, notes, deals, stages, and sources. Contacts, notes, and deals then import for real. Smart lists and action plans arrive as a report you can read, not as working automations, so plan on rebuilding those as AiFlows."
+          "a": "Your contacts, yes. You export them from Follow Up Boss yourself (People, then Export with \"Export All Columns\" checked) and upload that file here. We show you what is in it, including which columns we could not place, before anything is written. Names, phones, emails, tags, stage, and lead source come across. Notes and deals do not, because Follow Up Boss does not put them in that export, and neither do smart lists or action plans. Plan on rebuilding those as segments and AiFlows. We never ask for your Follow Up Boss password or API key."
         },
         "faq2": {
           "q": "Is New Coworker a replacement for Follow Up Boss?",
@@ -1564,7 +1564,7 @@
           "a": "Not on Starter or Standard. The owner assigns a lead and the teammate gets a text they can reply to, so a roster of agents can work leads by phone without ever signing in. Teammate dashboard logins are an Enterprise feature."
         },
         "ctaTitle": "Try the coworker without leaving your CRM",
-        "ctaSubtitle": "Import your contacts, notes, and deals with a dry run first, and keep Follow Up Boss running while you compare."
+        "ctaSubtitle": "Upload the CSV you export from Follow Up Boss, see exactly what is in it first, and keep Follow Up Boss running while you compare."
       },
       "answeringService": {
         "name": "Phone answering services",

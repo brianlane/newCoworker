@@ -549,7 +549,7 @@
         },
         "crmImport": {
           "title": "Importa desde Follow Up Boss",
-          "description": "Trae tus contactos, notas y negocios, con una prueba en seco que primero cuenta todo. Las listas inteligentes y los planes de acción llegan como un reporte del cual partir, no como automatizaciones funcionando."
+          "description": "Sube el CSV que exportas de Follow Up Boss y traemos tus contactos, etiquetas, etapa y fuente del prospecto, después de mostrarte qué trae el archivo. Las notas y los negocios no vienen en esa exportación, así que no llegan con él."
         }
       },
       "platform": {
@@ -1539,9 +1539,9 @@
           "them": "Más de 250 integraciones, además de apps maduras de iPhone y Android donde tus agentes pueden trabajar todo el día."
         },
         "row6": {
-          "label": "Entrar, y salir",
-          "us": "Importa tus contactos, notas y negocios de Follow Up Boss, con una prueba en seco que primero cuenta todo. Tus datos viven en un servidor dedicado, uno por negocio.",
-          "them": "Contactos ilimitados y una API abierta por la que puedes exportar, sobre infraestructura de nube compartida."
+          "label": "Dónde viven tus datos",
+          "us": "Tu propio servidor dedicado, uno por negocio.",
+          "them": "Infraestructura de nube compartida, con los contactos ilimitados, la exportación a CSV y la API abierta que esperarías."
         },
         "themCardTitle": "Dónde Follow Up Boss es la mejor compra",
         "themCard1": "Tienes un equipo de verdad y quieres que los prospectos los trabajen personas, no software. Sus listas inteligentes, planes de acción y reportes por agente les tomaron años, y los nuestros son nuevos.",
@@ -1550,10 +1550,10 @@
         "usCardTitle": "Dónde New Coworker es la mejor compra",
         "usCard1": "Nadie contesta. El coworker atiende la llamada, responde por mensaje la que se perdió, califica y agenda, a las 2 de la mañana y en domingo, sin que nadie inicie sesión.",
         "usCard2": "Estás pagando por asiento por agentes que casi no entran. Nosotros cobramos por negocio, así que un solo precio cubre a todos. Diez asientos en su plan Pro cuestan $416 al mes con pago anual.",
-        "usCard3": "Quieres probarlo sin comprometerte a una migración. Importa tus contactos, notas y negocios con una prueba en seco primero, y deja Follow Up Boss funcionando mientras comparas.",
+        "usCard3": "Quieres probarlo sin comprometerte a una migración. Exporta tú mismo tus contactos de Follow Up Boss, sube el archivo aquí y deja Follow Up Boss funcionando mientras comparas.",
         "faq1": {
           "q": "¿Puedo pasar mis datos de Follow Up Boss?",
-          "a": "Sí. Pegas tu clave de API de Follow Up Boss y hacemos primero una prueba en seco que cuenta exactamente qué pasaría: personas, notas, negocios, etapas y fuentes. Después se importan de verdad los contactos, las notas y los negocios. Las listas inteligentes y los planes de acción llegan como un reporte que puedes leer, no como automatizaciones funcionando, así que cuenta con rehacer esos como AiFlows."
+          "a": "Tus contactos, sí. Los exportas tú mismo desde Follow Up Boss (People y luego Export con la casilla \"Export All Columns\" marcada) y subes ese archivo aquí. Te mostramos qué trae, incluidas las columnas que no pudimos reconocer, antes de escribir nada. Pasan los nombres, teléfonos, correos, etiquetas, etapa y fuente del prospecto. Las notas y los negocios no, porque Follow Up Boss no los incluye en esa exportación, ni tampoco las listas inteligentes ni los planes de acción. Cuenta con volver a crear esos como segmentos y AiFlows. Nunca te pedimos tu contraseña ni tu clave de API de Follow Up Boss."
         },
         "faq2": {
           "q": "¿New Coworker reemplaza a Follow Up Boss?",
@@ -1564,7 +1564,7 @@
           "a": "En Starter y Standard, no. El dueño asigna un prospecto y el compañero recibe un mensaje al que puede responder, así que una lista de agentes puede trabajar prospectos por teléfono sin iniciar sesión nunca. El acceso al panel para compañeros de equipo es una función Enterprise."
         },
         "ctaTitle": "Prueba al coworker sin dejar tu CRM",
-        "ctaSubtitle": "Importa tus contactos, notas y negocios con una prueba en seco primero, y deja Follow Up Boss funcionando mientras comparas."
+        "ctaSubtitle": "Sube el CSV que exportas de Follow Up Boss, mira exactamente qué trae y deja Follow Up Boss funcionando mientras comparas."
       },
       "answeringService": {
         "name": "Servicios de contestación telefónica",
