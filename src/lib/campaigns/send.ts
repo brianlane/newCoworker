@@ -34,6 +34,7 @@ import {
 import { logger } from "@/lib/logger";
 import {
   CAMPAIGN_MAX_RECIPIENTS,
+  listCampaignAudienceBoards,
   claimRecipient,
   countRecipientsByStatus,
   deletePendingRecipients,
@@ -48,6 +49,7 @@ import {
   type CampaignRecipientRow,
   type EmailCampaignRow
 } from "./db";
+import { selectCampaignAudience } from "./filter";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -131,26 +133,19 @@ async function snapshotRecipients(
     .order("created_at", { ascending: true })
     .limit(CAMPAIGN_AUDIENCE_SCAN_LIMIT);
   if (error) throw new Error(`snapshotRecipients: ${error.message}`);
-  const wantedTag = campaign.audience_tag.trim().toLowerCase();
-  const contacts = (
+  const emailable = (
     (data as Array<{ id: string; email: string | null; tags: string[] | null }> | null) ?? []
-  )
-    .filter((c): c is { id: string; email: string; tags: string[] | null } =>
-      Boolean(c.email && c.email.includes("@"))
-    )
-    .filter(
-      (c) =>
-        !wantedTag || (c.tags ?? []).some((t) => t.trim().toLowerCase() === wantedTag)
-    );
-  // De-dupe by address: two contact rows sharing an email get ONE mail.
-  const seen = new Set<string>();
-  const rows = contacts
-    .filter((c) => {
-      const key = c.email.trim().toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
+  ).filter((c): c is { id: string; email: string; tags: string[] | null } =>
+    Boolean(c.email && c.email.includes("@"))
+  );
+  // The audience rules and the de-dupe are the SHARED implementation the
+  // composer previewed, so what goes out is the count the owner approved.
+  const rows = selectCampaignAudience(emailable, {
+    audienceTag: campaign.audience_tag,
+    excludeTag: campaign.exclude_tag,
+    includeClosed: campaign.include_closed,
+    boards: await listCampaignAudienceBoards(campaign.business_id, db)
+  })
     .slice(0, CAMPAIGN_MAX_RECIPIENTS)
     .map((c) => ({
       campaign_id: campaign.id,

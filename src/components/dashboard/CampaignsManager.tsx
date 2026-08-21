@@ -95,6 +95,11 @@ export function CampaignsManager({
   const [subject, setSubject] = useState("");
   const [bodyMd, setBodyMd] = useState("");
   const [audienceTag, setAudienceTag] = useState("");
+  const [excludeTag, setExcludeTag] = useState("");
+  // Default OFF: a campaign leaves people who already bought alone unless
+  // the owner says otherwise. The recipient count below reacts either way,
+  // so the effect is visible before anything is scheduled.
+  const [includeClosed, setIncludeClosed] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<AudiencePreview | null>(null);
@@ -129,7 +134,7 @@ export function CampaignsManager({
       void (async () => {
         try {
           const res = await fetch(
-            `/api/dashboard/campaigns/audience?businessId=${encodeURIComponent(businessId)}&tag=${encodeURIComponent(audienceTag.trim())}`,
+            `/api/dashboard/campaigns/audience?businessId=${encodeURIComponent(businessId)}&tag=${encodeURIComponent(audienceTag.trim())}&excludeTag=${encodeURIComponent(excludeTag.trim())}&includeClosed=${includeClosed ? "1" : "0"}`,
             { cache: "no-store" }
           );
           const json = (await res.json()) as { ok: boolean; data?: AudiencePreview };
@@ -143,7 +148,7 @@ export function CampaignsManager({
       stale = true;
       clearTimeout(handle);
     };
-  }, [businessId, audienceTag]);
+  }, [businessId, audienceTag, excludeTag, includeClosed]);
 
   async function create(asDraft: boolean) {
     if (!subject.trim() || !bodyMd.trim()) {
@@ -165,6 +170,8 @@ export function CampaignsManager({
           subject: subject.trim(),
           bodyMd: bodyMd.trim(),
           ...(audienceTag.trim() ? { audienceTag: audienceTag.trim() } : {}),
+          ...(excludeTag.trim() ? { excludeTag: excludeTag.trim() } : {}),
+          includeClosed,
           ...(!asDraft && sendAt ? { sendAt: new Date(sendAt).toISOString() } : {})
         })
       });
@@ -174,6 +181,8 @@ export function CampaignsManager({
         return;
       }
       setSubject("");
+      setExcludeTag("");
+      setIncludeClosed(false);
       setBodyMd("");
       setAudienceTag("");
       setSendAt("");
@@ -394,6 +403,32 @@ export function CampaignsManager({
                   <option key={t} value={t} />
                 ))}
               </datalist>
+            </div>
+            <div>
+              <label className={labelClass}>
+                Leave out this tag (optional)
+              </label>
+              <input
+                className={inputClass}
+                value={excludeTag}
+                onChange={(e) => setExcludeTag(e.target.value)}
+                placeholder="onboarding"
+                maxLength={40}
+                list="campaign-audience-tags"
+              />
+              <label className="mt-2 flex items-start gap-2 text-[11px] text-parchment/60">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={includeClosed}
+                  onChange={(e) => setIncludeClosed(e.target.checked)}
+                />
+                <span>
+                  Also email customers who already closed. Off by default, so a
+                  broadcast does not land on people who have already bought.
+                  Turn it on for onboarding or upsell mail.
+                </span>
+              </label>
               {preview ? (
                 <p className="mt-1 text-[11px] text-parchment/50">
                   Reaches{" "}

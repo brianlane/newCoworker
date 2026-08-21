@@ -17,7 +17,10 @@ export const dynamic = "force-dynamic";
 
 const querySchema = z.object({
   businessId: z.string().uuid(),
-  tag: z.string().trim().max(40).optional()
+  tag: z.string().trim().max(40).optional(),
+  excludeTag: z.string().trim().max(40).optional(),
+  // Query strings carry no booleans; "1" is the opt-in.
+  includeClosed: z.enum(["0", "1"]).optional()
 });
 
 export async function GET(request: Request) {
@@ -27,12 +30,22 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const query = querySchema.safeParse({
       businessId: url.searchParams.get("businessId"),
-      tag: url.searchParams.get("tag") ?? undefined
+      tag: url.searchParams.get("tag") ?? undefined,
+      excludeTag: url.searchParams.get("excludeTag") ?? undefined,
+      includeClosed: url.searchParams.get("includeClosed") ?? undefined
     });
     if (!query.success) return errorResponse("VALIDATION_ERROR", "businessId is required");
     if (!user.isAdmin) await requireBusinessRole(query.data.businessId, "manage_settings");
 
-    const preview = await previewCampaignAudience(query.data.businessId, query.data.tag ?? "");
+    const preview = await previewCampaignAudience(
+      query.data.businessId,
+      query.data.tag ?? "",
+      undefined,
+      {
+        excludeTag: query.data.excludeTag ?? "",
+        includeClosed: query.data.includeClosed === "1"
+      }
+    );
     return successResponse(preview);
   } catch (err) {
     return handleRouteError(err);

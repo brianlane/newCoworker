@@ -83,6 +83,8 @@ function campaign(overrides: Partial<EmailCampaignRow> = {}): EmailCampaignRow {
     subject: "Spring special",
     body_md: "Hi!\n\nBook a check-up.",
     audience_tag: "",
+    exclude_tag: "",
+    include_closed: false,
     status: "scheduled",
     send_at: "2026-07-16T17:00:00Z",
     started_at: null,
@@ -112,23 +114,41 @@ function recipient(id: string, email: string): CampaignRecipientRow {
   };
 }
 
-/** Contacts-scan mock for the snapshot query. */
+/**
+ * Mock for the snapshot's two reads. Table-aware: the contacts scan answers
+ * `contacts`, and the board read that drives the closed-customer rule
+ * answers `stages` (default none, which is the many tenants with no board).
+ */
 function makeDb(
   contacts: Array<{ id: string; email: string | null; tags?: string[] | null }> | null,
-  error: { message: string } | null = null
+  error: { message: string } | null = null,
+  stages: Array<{ id: string; pipeline_id: string; name: string; position: number }> = []
 ) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
-  const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "not", "is", "in", "order", "limit", "contains"]) {
-    chain[m] = vi.fn((...args: unknown[]) => {
-      calls.push({ name: m, args });
-      return chain;
-    });
-  }
-  (chain as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: contacts, error }).then(resolve);
-  return { db: { from: vi.fn(() => chain) } as never, calls };
+  const chainFor = (table: string) => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "not", "is", "in", "order", "limit", "contains"]) {
+      chain[m] = vi.fn((...args: unknown[]) => {
+        if (table === "contacts") calls.push({ name: m, args });
+        return chain;
+      });
+    }
+    (chain as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve(
+        table === "pipeline_stages" ? { data: stages, error: null } : { data: contacts, error }
+      ).then(resolve);
+    return chain;
+  };
+  return { db: { from: vi.fn((t: string) => chainFor(t)) } as never, calls };
 }
+
+/** A board with the stages the closed-customer rule anchors on. */
+const WON_BOARD = [
+  { id: "s0", pipeline_id: "p1", name: "New Lead", position: 0 },
+  { id: "s1", pipeline_id: "p1", name: "Engaged", position: 2 },
+  { id: "s2", pipeline_id: "p1", name: "Won", position: 4 },
+  { id: "s3", pipeline_id: "p1", name: "Onboarded", position: 5 }
+];
 
 const ENV_KEYS = ["NEXT_PUBLIC_APP_URL", "RESEND_API_KEY", "INTEGRATIONS_ENCRYPTION_KEY"] as const;
 const savedEnv: Record<string, string | undefined> = {};
@@ -225,6 +245,52 @@ describe("processCampaignSweep, promotion", () => {
       "created_at",
       { ascending: true }
     ]);
+  });
+
+  it("snapshots the same audience the composer previewed, subtractions included", async () => {
+    // The two used to be separate implementations with a comment asking the
+    // next person to keep them in step. A preview that promises 400 and a
+    // send that mails 550 is worse than either number, because the owner
+    // approved the first one.
+    const scan = makeDb(
+      [
+        { id: "a", email: "a@x.test", tags: ["VIP"] },
+        { id: "b", email: "b@x.test", tags: ["VIP", "Onboarding"] },
+        { id: "c", email: "c@x.test", tags: ["VIP", "Won"] }
+      ],
+      null,
+      WON_BOARD
+    );
+    listDue.mockResolvedValue([
+      campaign({ audience_tag: "vip", exclude_tag: "onboarding", include_closed: false })
+    ]);
+    await processCampaignSweep({ client: scan.db, now: () => NOW });
+    const rows = insertRecipients.mock.calls[0][0];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ contact_id: "a" });
+  });
+
+  it("snapshots closed customers when the campaign asked for them", async () => {
+    const scan = makeDb(
+      [
+        { id: "a", email: "a@x.test", tags: ["Engaged"] },
+        { id: "c", email: "c@x.test", tags: ["Won"] }
+      ],
+      null,
+      WON_BOARD
+    );
+    listDue.mockResolvedValue([campaign({ include_closed: true })]);
+    await processCampaignSweep({ client: scan.db, now: () => NOW });
+    expect(insertRecipients.mock.calls[0][0]).toHaveLength(2);
+  });
+
+  it("cannot exclude closed customers when the tenant keeps no board", async () => {
+    // Fail-open on purpose: an owner read a recipient count and approved it,
+    // so silently mailing FEWER people than promised would break that.
+    const scan = makeDb([{ id: "c", email: "c@x.test", tags: ["Won"] }]);
+    listDue.mockResolvedValue([campaign()]);
+    await processCampaignSweep({ client: scan.db, now: () => NOW });
+    expect(insertRecipients.mock.calls[0][0]).toHaveLength(1);
   });
 
   it("matches the audience tag case-insensitively; a lost claim never touches recipient rows", async () => {

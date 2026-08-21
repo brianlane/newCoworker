@@ -9,6 +9,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { boardsFromStageRows, type AudienceBoard } from "./filter";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -20,6 +21,10 @@ export type EmailCampaignRow = {
   subject: string;
   body_md: string;
   audience_tag: string;
+  /** Tag to leave OUT, applied after audience_tag. Blank = subtract nothing. */
+  exclude_tag: string;
+  /** False leaves out contacts at or past the won stage. */
+  include_closed: boolean;
   status: EmailCampaignStatus;
   send_at: string | null;
   started_at: string | null;
@@ -83,7 +88,11 @@ export async function getEmailCampaign(
 }
 
 export async function insertEmailCampaign(
+  // The two subtractions are OPTIONAL on insert: both columns carry a DB
+  // default (blank tag, closed customers excluded), so a caller that does not
+  // care gets the safe reading without having to spell it out.
   row: Pick<EmailCampaignRow, "business_id" | "subject" | "body_md" | "audience_tag"> &
+    Partial<Pick<EmailCampaignRow, "exclude_tag" | "include_closed">> &
     Partial<Pick<EmailCampaignRow, "status" | "send_at">>,
   client?: SupabaseClient
 ): Promise<EmailCampaignRow> {
@@ -103,6 +112,8 @@ export type EmailCampaignPatch = Partial<
     | "subject"
     | "body_md"
     | "audience_tag"
+    | "exclude_tag"
+    | "include_closed"
     | "status"
     | "send_at"
     | "started_at"
@@ -341,4 +352,38 @@ export async function countRecipientsByStatus(
     .eq("status", status);
   if (error) throw new Error(`countRecipientsByStatus: ${error.message}`);
   return count ?? 0;
+}
+
+/**
+ * The business's pipeline boards, for the campaign audience's
+ * closed-customer rule. One indexed select, and the fast path for the many
+ * tenants with no board is an empty array.
+ *
+ * A read error answers "no boards", so the closed rule cannot apply and the
+ * audience is the tag rules alone. That is fail-OPEN on purpose, and
+ * deliberately the opposite of the outreach nudge's posture, because the
+ * stakes invert. There, silence decides whether a machine mails a stranger,
+ * so uncertainty must suppress. Here an owner wrote the mail, chose the
+ * audience and read the recipient count, and quietly mailing FEWER people
+ * than the preview promised would break the approval that count represents.
+ */
+export async function listCampaignAudienceBoards(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<AudienceBoard[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("pipeline_stages")
+    .select("id, pipeline_id, name, position")
+    .eq("business_id", businessId)
+    .order("position", { ascending: true });
+  if (error) return [];
+  return boardsFromStageRows(
+    (data ?? []) as Array<{
+      id: string;
+      pipeline_id: string;
+      name: string;
+      position: number;
+    }>
+  );
 }
