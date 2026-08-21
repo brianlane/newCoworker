@@ -5,6 +5,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { VpsHostMetrics } from "@/lib/vps/host-metrics";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -19,11 +20,23 @@ export type VpsPostureReportRow = {
   business_id: string;
   ok: boolean;
   checks: VpsPostureCheck[];
+  /**
+   * Host CPU/memory aggregate for the interval since this box's previous
+   * report. Null on a box whose heartbeat predates the metrics block, which
+   * is every box until it is redeployed, so readers must handle the absence
+   * rather than treating it as a quiet box.
+   */
+  metrics: VpsHostMetrics | null;
   created_at: string;
 };
 
 export async function insertVpsPostureReport(
-  input: { businessId: string; ok: boolean; checks: VpsPostureCheck[] },
+  input: {
+    businessId: string;
+    ok: boolean;
+    checks: VpsPostureCheck[];
+    metrics?: VpsHostMetrics | null;
+  },
   client?: SupabaseClient
 ): Promise<VpsPostureReportRow> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -32,7 +45,8 @@ export async function insertVpsPostureReport(
     .insert({
       business_id: input.businessId,
       ok: input.ok,
-      checks: input.checks
+      checks: input.checks,
+      metrics: input.metrics ?? null
     })
     .select()
     .single();

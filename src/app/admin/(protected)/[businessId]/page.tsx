@@ -71,6 +71,7 @@ import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
+import { peakLoadPerCore } from "@/lib/vps/host-metrics";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
 import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
@@ -721,6 +722,31 @@ export default async function BusinessDetailPage({
                 </>
               ) : (
                 <span className="text-parchment/40 text-xs">no reports yet</span>
+              )}
+            </dd>
+          </div>
+          {/* Host load, the input to "is this box too small". Deliberately on
+              the same card as the migrate-size control, so the number and the
+              action sit together. Peak load is shown PER CORE because that is
+              what compares across sizes: 3.0 is idle-ish on 8 cores and badly
+              oversubscribed on 2. Absent on a box whose heartbeat predates the
+              metrics block, which reads as "not reporting", never as quiet. */}
+          <div>
+            <dt className="text-parchment/40 text-xs">Host load (last hour)</dt>
+            <dd className="text-parchment font-mono text-xs">
+              {postureReport?.metrics ? (
+                <>
+                  {peakLoadPerCore(postureReport.metrics).toFixed(2)} peak/core ·{" "}
+                  {postureReport.metrics.memAvailableMinMib} MiB free min
+                  {postureReport.metrics.swapUsedMaxMib > 0
+                    ? ` · ${postureReport.metrics.swapUsedMaxMib} MiB swap`
+                    : ""}{" "}
+                  <span className="text-parchment/40">
+                    ({postureReport.metrics.samples} samples)
+                  </span>
+                </>
+              ) : (
+                <span className="text-parchment/40">not reporting</span>
               )}
             </dd>
           </div>
