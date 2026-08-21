@@ -51,6 +51,7 @@ import {
   isEmailContactKey
 } from "../../../../../supabase/functions/_shared/contact_key";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
+import { smsSourceLabel } from "@/components/dashboard/sms-source-label";
 
 export const dynamic = "force-dynamic";
 
@@ -538,7 +539,10 @@ export default async function CustomerDetailPage({ params }: Props) {
                 {entry.assistantReply && (
                   <p className="text-sm text-parchment/70 mt-1">
                     <span className="text-parchment/40 mr-1">
-                      {entry.source ? "AiFlow:" : "Coworker:"}
+                      {/* Outbound-log rows label by their source (an
+                          owner-typed reply is "You", not "AiFlow"); rows
+                          without a source are conversational AI replies. */}
+                      {entry.source ? `${smsSourceLabel(entry.source)}:` : "Coworker:"}
                     </span>
                     {entry.assistantReply}
                   </p>

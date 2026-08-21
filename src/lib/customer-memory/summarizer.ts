@@ -218,7 +218,14 @@ function joinSmsHistory(rows: SmsHistoryEntry[]): string {
         lines.push(`[${r.receivedAt} SMS Customer]: ${r.inboundText}`);
       }
       if (r.assistantReply) {
-        lines.push(`[${r.receivedAt} SMS AI assistant]: ${r.assistantReply}`);
+        // Owner-typed sends (manual thread replies, scheduled sends) are the
+        // business speaking, not the AI; attributing them to the assistant
+        // made the rolling summary claim the AI said things the owner wrote.
+        const who =
+          r.source === "owner_manual" || r.source === "owner_scheduled"
+            ? "Business owner"
+            : "AI assistant";
+        lines.push(`[${r.receivedAt} SMS ${who}]: ${r.assistantReply}`);
       }
       return lines;
     })
