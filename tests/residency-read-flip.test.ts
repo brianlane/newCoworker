@@ -39,7 +39,14 @@ import {
   listContactsByLeadPhone,
   listTaggedContacts
 } from "@/lib/contacts/lookup";
-import { listAiFlowDefinitions } from "@/lib/ai-flows/db";
+import {
+  FLOW_COLS_FOR_TEST,
+  FLOW_COLUMNS,
+  enqueueAiFlowRun,
+  getAiFlow,
+  listAiFlowDefinitions,
+  listAiFlows
+} from "@/lib/ai-flows/db";
 import {
   SCHEDULED_SMS_HISTORY_LIMIT,
   SCHEDULED_SMS_PENDING_LIMIT,
@@ -1659,4 +1666,136 @@ describe("dashboard route vps reads", () => {
       );
     });
   });
+
+  describe("ai_flows list, detail and enqueue gates", () => {
+    it("pins the two column shapes together so the paths cannot drift", () => {
+      // supabase-js needs FLOW_COLS to stay a literal to type the row, so the
+      // array cannot be derived from it. This is the guard instead.
+      expect(FLOW_COLUMNS.join(",")).toBe(FLOW_COLS_FOR_TEST);
+    });
+
+    it("lists a vps tenant's flows from their box, not centrally", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { id: "f1", business_id: BIZ, name: "Intake", enabled: true }
+      ] as never);
+      const { db, chains } = trackedDb({ data: [], error: null });
+      const flows = await listAiFlows(BIZ, db);
+      expect(flows[0]).toMatchObject({ id: "f1", name: "Intake" });
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "ai_flows",
+        columns: [...FLOW_COLUMNS],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "deleted_at", op: "is", value: null }
+        ],
+        order: [{ column: "created_at", ascending: false }]
+      });
+      // The flows read moved; the runs read did NOT (ai_flow_runs is not a
+      // residency-moved table), so exactly one central chain remains.
+      expect(chains.map((c) => c.table)).toEqual(["ai_flow_runs"]);
+    });
+
+    it("an unreachable box fails the list instead of showing zero flows", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockRejectedValue(new Error("box down"));
+      const { db } = trackedDb({ data: [], error: null });
+      await expect(listAiFlows(BIZ, db)).rejects.toThrow("box down");
+    });
+
+    it("reads one flow from the box, and a miss is still a real miss", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockResolvedValue([{ id: "f1", name: "Intake" }] as never);
+      const hit = trackedDb({ data: null, error: null });
+      expect(await getAiFlow(BIZ, "f1", hit.db)).toMatchObject({ id: "f1" });
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "ai_flows",
+        columns: [...FLOW_COLUMNS],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "id", op: "eq", value: "f1" },
+          { column: "deleted_at", op: "is", value: null }
+        ],
+        limit: 1
+      });
+      expect(hit.chains).toHaveLength(0);
+
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      const miss = trackedDb({ data: null, error: null });
+      expect(await getAiFlow(BIZ, "gone", miss.db)).toBeNull();
+    });
+
+    it("an unreachable box cannot masquerade as a deleted flow", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockRejectedValue(new Error("box down"));
+      const { db } = trackedDb({ data: null, error: null });
+      await expect(getAiFlow(BIZ, "f1", db)).rejects.toThrow("box down");
+    });
+
+    it("the enqueue gates read the box, so a soft-deleted flow still refuses runs", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { definition: null, deleted_at: "2026-08-20T00:00:00Z" }
+      ] as never);
+      const { db } = trackedDb({ data: null, error: null });
+      expect(
+        await enqueueAiFlowRun({ businessId: BIZ, flowId: "f1", trigger: {} }, db)
+      ).toBeNull();
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "ai_flows",
+        columns: ["definition", "deleted_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "id", op: "eq", value: "f1" }
+        ],
+        limit: 1
+      });
+    });
+
+    it("a flow row the box does not have leaves the gates open too", async () => {
+      // Same contract as the throw case: no row means no gate, never a
+      // silent refusal to enqueue.
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      const insertChain: Record<string, unknown> = {};
+      insertChain.select = vi.fn(() => insertChain);
+      insertChain.single = vi.fn(async () => ({ data: { id: "r2" }, error: null }));
+      const db = {
+        from: vi.fn(() => ({
+          insert: vi.fn(() => insertChain),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) }))
+          }))
+        }))
+      } as never;
+      expect(
+        await enqueueAiFlowRun({ businessId: BIZ, flowId: "f1", trigger: {} }, db)
+      ).toMatchObject({ id: "r2" });
+    });
+
+    it("an unreachable box leaves the gates open rather than losing the lead", async () => {
+      // The documented contract on this read: a failure defaults both gates
+      // to "no gate", because losing the lead is worse than a duplicate or a
+      // burst. The box read joins that contract instead of overriding it, so
+      // this must NOT throw and must NOT return null for a missing gate read.
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockRejectedValue(new Error("box down"));
+      // Purpose-built stub: this is the one path that reaches the runs
+      // INSERT, which the shared read-only tracker does not model.
+      const insertChain: Record<string, unknown> = {};
+      insertChain.select = vi.fn(() => insertChain);
+      insertChain.single = vi.fn(async () => ({ data: { id: "r1" }, error: null }));
+      const db = {
+        from: vi.fn(() => ({
+          insert: vi.fn(() => insertChain),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) }))
+          }))
+        }))
+      } as never;
+      const run = await enqueueAiFlowRun({ businessId: BIZ, flowId: "f1", trigger: {} }, db);
+      expect(run).toMatchObject({ id: "r1" });
+    });
+  });
+
 });
