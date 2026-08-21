@@ -238,6 +238,22 @@ Environment="OMP_NUM_THREADS=2"
 # default-deny on the public interface still blocks external 11434 access;
 # only the loopback + docker bridge paths are reachable.
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+# Context window for every model load. Ollama defaults to 4096, which is too
+# thin for the local twin agents: the system preamble + agent instructions +
+# owner preamble alone eat ~2.5k tokens, and OwnerCoworkerLocal also carries
+# retained history plus 3 RAG chunks, so the prompt gets TRUNCATED and the
+# model "forgets" earlier turns (observed on business 621a5b0d, June 2026).
+# KVM 8 has carried 16384 since that incident; KVM 2 became the Standard
+# default in Jul 2026 and never inherited the setting, so every box in the
+# fleet ran at 4096. 8192, not 16384, because this box has 2 vCPUs: prefill
+# is CPU-bound (~2.7k tokens measured at ~16s warm in
+# debug/.bench-results-kvm2-local.json), so a 16k prompt would take minutes.
+# 8192 is the balanced point, enough for instructions + preamble + a real
+# history tail, without inviting a prompt this CPU cannot prefill in time.
+# Costs memory only: with q4_0 KV cache and NUM_PARALLEL=1 this is ~0.2 GB.
+# Applies to the OpenAI-compatible /v1 path the llm-router uses (which cannot
+# pass num_ctx per request), so an env default is the ONLY way to set it.
+Environment="OLLAMA_CONTEXT_LENGTH=8192"
 # TurboQuant KV cache compression, ACTIVE: quantizes KV cache to 4-bit,
 # reducing active memory per conversation by ~75% (critical for 8GB KVM 2).
 # OLLAMA_KV_CACHE_TYPE is a live Ollama env var (supported since Ollama 0.3+).
@@ -264,6 +280,12 @@ Environment="OMP_NUM_THREADS=4"
 # default-deny on the public interface still blocks external 11434 access;
 # only the loopback + docker bridge paths are reachable.
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+# Context window for every model load (see the KVM 2 block for why an env
+# default is the only lever on the /v1 path). 16384 here rather than KVM 2's
+# 8192: 4 vCPUs prefill roughly twice as fast, so the bigger ceiling stays
+# inside a usable reply time. With q4_0 KV cache across 2 parallel slots this
+# is ~0.3 GB of the 16 GB on this box.
+Environment="OLLAMA_CONTEXT_LENGTH=16384"
 # TurboQuant KV cache, ACTIVE
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # Flash Attention, ACTIVE
