@@ -37,6 +37,13 @@ export type BusinessRow = {
    */
   status: "online" | "offline" | "high_load" | "wiped";
   hostinger_vps_id: string | null;
+  /**
+   * Hostinger BILLING subscription id for the box, distinct from the VM id.
+   * Non-null means hardware has been paid for even when `hostinger_vps_id` is
+   * not yet stamped (the purchase can return before the VM is recorded), so
+   * the abandoned-signup sweep treats it as VPS linkage.
+   */
+  hostinger_subscription_id?: string | null;
   created_at: string;
   is_paused?: boolean;
   /**
