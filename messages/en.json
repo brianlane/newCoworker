@@ -1630,6 +1630,71 @@
         },
         "ctaTitle": "Book the job, not the callback",
         "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee."
+      },
+      "smithAi": {
+        "name": "Smith.ai",
+        "teaser": "A metered receptionist for your phone line, against a flat-rate coworker on every channel.",
+        "metaTitle": "New Coworker vs Smith.ai",
+        "metaDescription": "Smith.ai answers your phone with AI and real receptionists, billed by the call. New Coworker answers calls, texts, DMs, and email for one flat price per business. An honest, sourced comparison, including the two rows where Smith.ai wins.",
+        "ogTitle": "New Coworker vs Smith.ai",
+        "ogDescription": "A metered phone receptionist vs a flat-rate coworker on every channel. An honest comparison.",
+        "heroEyebrow": "New Coworker vs Smith.ai",
+        "heroTitle": "They answer the phone.",
+        "heroHighlight": "We answer everything.",
+        "heroSubtitle": "Smith.ai is a well-run receptionist service: AI on the line, with real people behind it, billed by the call. New Coworker is one coworker across calls, texts, DMs, and email at a flat price. If you want human beings answering, or you want to start for nothing, Smith.ai is the better buy, and this page says so plainly.",
+        "themColumn": "Smith.ai",
+        "row1": {
+          "label": "What you're buying",
+          "us": "One AI coworker that answers calls, texts back, handles DMs and email, books the appointment, and follows up afterwards.",
+          "them": "A receptionist service for your phone line: AI first, with real people behind it. Web chat and outbound campaigns are separate products."
+        },
+        "row2": {
+          "label": "Price",
+          "us": "Starter from {starterMonthly} and Standard from {standardMonthly} on a 24-month term, priced per business, with no charge per call.",
+          "them": "Their AI-only plan is free for 25 calls a month then $3.00 a call, $150 a month at $2.00 a call, or $500 at $1.67. Live receptionists are $300 a month for 30 calls, $810 for 90, or $2,100 for 300, with overage from $8.50 to $11.50 a call."
+        },
+        "row3": {
+          "label": "What it covers",
+          "us": "Calls, texts, WhatsApp, Facebook Messenger, Instagram, email, and website chat, all sharing one memory of the same customer.",
+          "them": "The phone line. Web chat and outbound campaigns exist, on their own plans and their own bills."
+        },
+        "row4": {
+          "label": "Humans when it matters",
+          "us": "No human staff at all. The coworker transfers a live call to you or a teammate and texts whoever owns the lead.",
+          "them": "More than 500 North America based receptionists to escalate to, at no extra fee when the AI starts the handoff itself."
+        },
+        "row5": {
+          "label": "Starting and stopping",
+          "us": "Month to month is available, and the {starterMonthly} and {standardMonthly} prices need a 24-month term. Thirty-day money-back window, minus the one-time carrier registration fee.",
+          "them": "The AI plan is genuinely free for your first 25 calls a month. Live plans are month to month, with no setup fee and a 30-day money-back guarantee up to $1,000."
+        },
+        "row6": {
+          "label": "Where your data lives",
+          "us": "Your own dedicated server, one per business.",
+          "them": "Shared cloud infrastructure."
+        },
+        "themCardTitle": "Where Smith.ai is the better buy",
+        "themCard1": "You want real people on your line. Their receptionists are North America based, and the AI hands off to them at no extra charge. We have nobody to hand off to.",
+        "themCard2": "You want to try it for nothing. Their AI plan is free for the first 25 calls a month and their live plans are month to month, where our headline prices need a 24-month term.",
+        "themCard3": "You are a law firm or a professional practice. Conflict checks, structured client intake, and the per-call add-ons built around that work are theirs, not ours.",
+        "usCardTitle": "Where New Coworker is the better buy",
+        "usCard1": "Your customers do not only call. Texts, WhatsApp, Messenger, Instagram, and email all reach the same coworker with the same memory, instead of a separate product and a separate bill for each one.",
+        "usCard2": "You get enough calls that a meter hurts. Their live plans start at $300 a month for 30 calls and reach $2,100 for 300, with every call past the limit billed on top. We charge per business, so a busy month costs what a quiet one does.",
+        "usCard3": "You want the lead worked, not just captured. The coworker texts back the call it missed, follows up over days, books, and reminds, rather than handing you a message to act on.",
+        "faq1": {
+          "q": "Does Smith.ai use AI or real people?",
+          "a": "Both, and that is their strength. Their AI answers, qualifies, and books, and it can escalate to one of more than 500 North America based receptionists, with no extra fee when the AI starts the handoff. New Coworker has no human staff. Our coworker transfers a live call to you or a teammate and texts whoever owns the lead, but if you want a person to pick up when the AI is out of its depth, Smith.ai does that and we do not."
+        },
+        "faq2": {
+          "q": "Which one is cheaper?",
+          "a": "It depends on volume, and their free tier is real. Their AI plan costs nothing for the first 25 calls a month, which beats anything we charge. Past that they meter, at $2.00 or $1.67 a call, and their live receptionists run from $300 a month for 30 calls up to $2,100 for 300, with overage on top. We charge per business, so a busy month costs the same as a quiet one. Short version: they win at very low volume, we win once the phone actually rings."
+        },
+        "faq3": {
+          "q": "Can Smith.ai handle my texts and DMs too?",
+          "a": "That is the main difference between us. Smith.ai is built around the phone line, and their web chat and outbound campaigns are separate products with their own plans. New Coworker answers calls, texts, WhatsApp, Facebook Messenger, Instagram, email, and website chat with one coworker that remembers the same customer across all of them, on one plan."
+        },
+        "ctaTitle": "One coworker, every channel, one price",
+        "ctaSubtitle": "No per-call meter, and no separate product for each channel. Live in minutes, with a 30-day money-back guarantee."
       }
     },
     "comparePage": {

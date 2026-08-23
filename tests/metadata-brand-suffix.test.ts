@@ -192,6 +192,7 @@ const PAGE_TITLE_KEYS = [
   "marketing.compare.answeringService.metaTitle",
   "marketing.compare.followUpBoss.metaTitle",
   "marketing.compare.marblism.metaTitle",
+  "marketing.compare.smithAi.metaTitle",
   "marketing.compare.zinng.metaTitle",
   "marketing.compareGhl.metaTitle",
   "marketing.comparePage.metaTitle",

@@ -80,6 +80,21 @@ export const COMPARISONS: CompareDef[] = [
     slug: "answering-service",
     i18nKey: "answeringService",
     verdicts: ["us", "us", "tie", "us", "us", "tie"]
+  },
+  {
+    // smith.ai/pricing and smith.ai/ai-receptionist, August 2026.
+    // AI-only plans: free for 25 calls/mo then $3.00/call, $150/mo at
+    // $2.00/call, $500/mo at $1.67/call. Live receptionists: Starter $300/mo
+    // for 30 calls ($11.50 over), Basic $810/90 ($10.50), Pro $2,100/300
+    // ($8.50), Enterprise custom. Month to month, no setup fee, 30-day
+    // money-back up to $1,000, 10% off on a 12-month commitment. Add-ons are
+    // per call (booking $1.50, Spanish line $1.00, recording $0.25). Web chat
+    // and outreach campaigns are separate products on their own plans.
+    // Concedes two rows: 500+ North America receptionists to escalate to, and
+    // a genuinely free AI tier. We have neither.
+    slug: "smith-ai",
+    i18nKey: "smithAi",
+    verdicts: ["us", "tie", "us", "them", "them", "us"]
   }
 ];
 

@@ -1630,6 +1630,71 @@
         },
         "ctaTitle": "Agenda el trabajo, no la devolución de llamada",
         "ctaSubtitle": "Listo en minutos, con garantía de devolución de 30 días."
+      },
+      "smithAi": {
+        "name": "Smith.ai",
+        "teaser": "Una recepción medida por llamada para tu teléfono, frente a un coworker de precio fijo en todos los canales.",
+        "metaTitle": "New Coworker frente a Smith.ai",
+        "metaDescription": "Smith.ai contesta tu teléfono con IA y recepcionistas reales, cobrando por llamada. New Coworker contesta llamadas, mensajes, DMs y correo por un precio fijo por negocio. Una comparación honesta y con fuentes, incluidas las dos filas donde gana Smith.ai.",
+        "ogTitle": "New Coworker frente a Smith.ai",
+        "ogDescription": "Una recepción telefónica medida por llamada frente a un coworker de precio fijo en todos los canales. Una comparación honesta.",
+        "heroEyebrow": "New Coworker frente a Smith.ai",
+        "heroTitle": "Ellos contestan el teléfono.",
+        "heroHighlight": "Nosotros contestamos todo.",
+        "heroSubtitle": "Smith.ai es un servicio de recepción bien llevado: IA en la línea, con personas reales detrás, cobrado por llamada. New Coworker es un solo coworker en llamadas, mensajes, DMs y correo por un precio fijo. Si quieres personas contestando, o quieres empezar sin pagar nada, Smith.ai es la mejor compra, y esta página lo dice sin rodeos.",
+        "themColumn": "Smith.ai",
+        "row1": {
+          "label": "Qué estás comprando",
+          "us": "Un coworker con IA que contesta llamadas, responde por mensaje, atiende DMs y correo, agenda la cita y después da seguimiento.",
+          "them": "Un servicio de recepción para tu línea telefónica: primero IA, con personas reales detrás. El chat web y las campañas salientes son productos aparte."
+        },
+        "row2": {
+          "label": "Precio",
+          "us": "Starter desde {starterMonthly} y Standard desde {standardMonthly} con plazo de 24 meses, con precio por negocio y sin cobro por llamada.",
+          "them": "Su plan solo con IA es gratis por 25 llamadas al mes y después $3.00 por llamada, $150 al mes a $2.00 por llamada, o $500 a $1.67. Las recepcionistas en vivo cuestan $300 al mes por 30 llamadas, $810 por 90, o $2,100 por 300, con excedente de $8.50 a $11.50 por llamada."
+        },
+        "row3": {
+          "label": "Qué cubre",
+          "us": "Llamadas, mensajes, WhatsApp, Facebook Messenger, Instagram, correo y chat del sitio, todo con una misma memoria del mismo cliente.",
+          "them": "La línea telefónica. El chat web y las campañas salientes existen, con sus propios planes y sus propias facturas."
+        },
+        "row4": {
+          "label": "Personas cuando hacen falta",
+          "us": "Sin personal humano. El coworker transfiere una llamada en vivo a ti o a un compañero y le avisa por mensaje a quien tenga el prospecto.",
+          "them": "Más de 500 recepcionistas en Norteamérica a quienes escalar, sin cargo extra cuando la IA inicia el traspaso."
+        },
+        "row5": {
+          "label": "Empezar y dejarlo",
+          "us": "Hay opción mes a mes, y los precios de {starterMonthly} y {standardMonthly} requieren plazo de 24 meses. Ventana de 30 días para devolución, menos la cuota única de registro con la operadora.",
+          "them": "El plan con IA es realmente gratis por tus primeras 25 llamadas al mes. Los planes en vivo son mes a mes, sin cuota de instalación y con garantía de devolución a 30 días de hasta $1,000."
+        },
+        "row6": {
+          "label": "Dónde viven tus datos",
+          "us": "Tu propio servidor dedicado, uno por negocio.",
+          "them": "Infraestructura de nube compartida."
+        },
+        "themCardTitle": "Dónde Smith.ai es la mejor compra",
+        "themCard1": "Quieres personas reales en tu línea. Sus recepcionistas están en Norteamérica y la IA les pasa la llamada sin cargo extra. Nosotros no tenemos a quién pasarla.",
+        "themCard2": "Quieres probarlo sin pagar nada. Su plan con IA es gratis por las primeras 25 llamadas al mes y sus planes en vivo son mes a mes, mientras que nuestros precios de portada requieren plazo de 24 meses.",
+        "themCard3": "Eres un despacho de abogados o una práctica profesional. Las revisiones de conflicto, la toma de datos estructurada del cliente y los complementos por llamada pensados para ese trabajo son suyos, no nuestros.",
+        "usCardTitle": "Dónde New Coworker es la mejor compra",
+        "usCard1": "Tus clientes no solo llaman. Los mensajes, WhatsApp, Messenger, Instagram y el correo llegan al mismo coworker con la misma memoria, en lugar de un producto aparte y una factura aparte para cada uno.",
+        "usCard2": "Recibes suficientes llamadas como para que el medidor duela. Sus planes en vivo empiezan en $300 al mes por 30 llamadas y llegan a $2,100 por 300, con cada llamada extra cobrada aparte. Nosotros cobramos por negocio, así que un mes ocupado cuesta lo mismo que uno tranquilo.",
+        "usCard3": "Quieres que trabajen el prospecto, no solo que lo capturen. El coworker responde por mensaje la llamada que se perdió, da seguimiento durante días, agenda y recuerda, en lugar de entregarte un recado para que actúes tú.",
+        "faq1": {
+          "q": "¿Smith.ai usa IA o personas reales?",
+          "a": "Ambas, y esa es su fuerza. Su IA contesta, califica y agenda, y puede escalar a una de más de 500 recepcionistas en Norteamérica, sin cargo extra cuando la IA inicia el traspaso. New Coworker no tiene personal humano. Nuestro coworker transfiere una llamada en vivo a ti o a un compañero y le avisa por mensaje a quien tenga el prospecto, pero si quieres que una persona conteste cuando la IA se queda corta, Smith.ai lo hace y nosotros no."
+        },
+        "faq2": {
+          "q": "¿Cuál sale más barato?",
+          "a": "Depende del volumen, y su nivel gratuito es real. Su plan con IA no cuesta nada por las primeras 25 llamadas al mes, lo cual le gana a cualquier cosa que cobremos. Después de eso miden: $2.00 o $1.67 por llamada, y sus recepcionistas en vivo van de $300 al mes por 30 llamadas hasta $2,100 por 300, con excedente aparte. Nosotros cobramos por negocio, así que un mes ocupado cuesta lo mismo que uno tranquilo. En corto: ellos ganan con muy poco volumen, nosotros ganamos en cuanto el teléfono de verdad suena."
+        },
+        "faq3": {
+          "q": "¿Smith.ai también atiende mis mensajes y DMs?",
+          "a": "Esa es la diferencia principal entre los dos. Smith.ai está construido alrededor de la línea telefónica, y su chat web y sus campañas salientes son productos aparte con sus propios planes. New Coworker contesta llamadas, mensajes, WhatsApp, Facebook Messenger, Instagram, correo y chat del sitio con un solo coworker que recuerda al mismo cliente en todos ellos, en un solo plan."
+        },
+        "ctaTitle": "Un coworker, todos los canales, un precio",
+        "ctaSubtitle": "Sin medidor por llamada y sin un producto aparte para cada canal. En línea en minutos, con garantía de devolución a 30 días."
       }
     },
     "comparePage": {
