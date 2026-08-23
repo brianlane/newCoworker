@@ -226,26 +226,6 @@ export function isBelowThreshold(balanceUnits: number, thresholdUnits: number): 
 }
 
 /**
- * The monthly-limit window key.
- *
- * Deliberately the UTC CALENDAR month, and deliberately no longer the same
- * window as the usage meters. This bounds how much money auto-reload may
- * charge a card without asking, which is a spend guardrail rather than a plan
- * allowance: a tenant reasons about it in calendar months, and a plan change
- * that moves their billing anchor must not silently hand them a second
- * month's charging budget.
- *
- * The usage windows moved to the Stripe anchor in
- * `sms_window_anchored_to_billing_period`; this one stayed put on purpose.
- * (It could not simply follow the raw Stripe period either: a prepaid 24
- * month tenant's period is the whole term, so that would be one budget
- * window spanning two years.)
- */
-export function autoReloadMonthKey(now: Date): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/**
  * The claim bucket a given moment falls in.
  *
  * Two sweep ticks inside the same cooldown window produce the same key, and
