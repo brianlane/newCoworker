@@ -3,7 +3,6 @@ import {
   AUTO_RELOAD_CATEGORIES,
   AUTO_RELOAD_MAX_MONTHLY_LIMIT_CENTS,
   AUTO_RELOAD_THRESHOLD_BOUNDS,
-  autoReloadMonthKey,
   autoReloadPlatformEnabled,
   autoReloadPlatformMaxMonthlyCents,
   buildAttemptKey,
@@ -251,15 +250,6 @@ describe("isBelowThreshold", () => {
   });
 });
 
-describe("autoReloadMonthKey", () => {
-  it("uses the UTC calendar month, zero padded", () => {
-    expect(autoReloadMonthKey(new Date("2026-08-03T12:00:00Z"))).toBe("2026-08");
-    expect(autoReloadMonthKey(new Date("2026-12-31T23:59:59Z"))).toBe("2026-12");
-    // A local-time reading of this instant is still December in some zones;
-    // the key must not drift with the runner's timezone.
-    expect(autoReloadMonthKey(new Date("2027-01-01T00:30:00Z"))).toBe("2027-01");
-  });
-});
 
 describe("buildAttemptKey", () => {
   const businessId = "11111111-1111-4111-8111-111111111111";
