@@ -28,10 +28,16 @@ begin
 end
 $unschedule$;
 
--- Daily 04:40 UTC, a quiet slot no other sweep holds.
+-- Daily 05:23 UTC. Hour 04 is the retention-prune cluster (:00 customer
+-- memory, :20 system_logs, :40 cron-history-prune, :50 telemetry-events,
+-- :55 cron-sweep-runs), and stacking an Edge-to-Next sweep on a history
+-- DELETE is how you get both fighting for the same IO. Hour 05 holds no
+-- daily job. :23 is also not a multiple of 5, so it misses the seven
+-- */5 sweeps, and dodges the hourly :05 and :07 jobs plus the
+-- 7,22,37,52 usage-pack pattern.
 select cron.schedule(
   'edge-abandoned-signup-sweep',
-  '40 4 * * *',
+  '23 5 * * *',
   $$
   select net.http_post(
     url := public._cron_vault_read('edge_base_url') || '/functions/v1/abandoned-signup-sweep',
