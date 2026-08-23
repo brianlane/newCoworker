@@ -99,6 +99,33 @@ begin
   if not found then
     return jsonb_build_object('ok', false, 'reason', 'no_settings');
   end if;
+
+  -- A ceiling pause belongs to the window that set it, so release it when the
+  -- window has rolled. Without this the `paused_at` check below short-circuits
+  -- before the key is ever compared: one ceiling hit disabled auto-reload
+  -- permanently, until the tenant happened to re-save their settings. The
+  -- counters reset here too, because this IS the rollover for this rule.
+  --
+  -- Only the ceiling pause clears. `authentication_required` means the card
+  -- needs the tenant to act, and no amount of waiting fixes that.
+  if r.paused_at is not null
+     and r.paused_reason = 'monthly_limit_reached'
+     and r.month_key is distinct from v_month then
+    update public.usage_pack_auto_reload_rules
+    set paused_at = null,
+        paused_reason = null,
+        month_key = v_month,
+        month_spent_cents = 0,
+        month_charges = 0,
+        updated_at = v_now
+    where business_id = p_business_id and category = p_category;
+    r.paused_at := null;
+    r.paused_reason := null;
+    r.month_key := v_month;
+    r.month_spent_cents := 0;
+    r.month_charges := 0;
+  end if;
+
   if not r.enabled or r.paused_at is not null then
     return jsonb_build_object('ok', false, 'reason', 'disabled');
   end if;
