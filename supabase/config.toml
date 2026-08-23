@@ -113,6 +113,9 @@ verify_jwt = false
 [functions.monthly-intro-nudge-sweep]
 verify_jwt = false
 
+[functions.abandoned-signup-sweep]
+verify_jwt = false
+
 [functions.contract-term-nudge-sweep]
 verify_jwt = false
 

@@ -178,8 +178,8 @@ export async function POST(request: Request) {
       case "checkout.session.async_payment_failed": {
         // Pending subs (never activated) are discarded on initial payment
         // failure, we never write `past_due` for new signups. The DB row
-        // stays as `pending` with status unchanged; the abandoned-subs
-        // cleanup job (existing) will prune it.
+        // stays as `pending` with status unchanged; the abandoned-signup
+        // sweep prunes it (src/lib/onboarding/abandoned-signup-cleanup.ts).
         const session = event.data.object as Stripe.Checkout.Session;
         const businessId = session.metadata?.businessId;
         logger.info("checkout.session.async_payment_failed: leaving pending row untouched", {
@@ -1013,7 +1013,7 @@ export async function POST(request: Request) {
         //    design treats `pending → discard` as the correct semantic:
         //    the parallel `checkout.session.async_payment_failed` handler
         //    above intentionally takes no DB action and lets the
-        //    abandoned-subs cleanup job prune the row + business.
+        //    abandoned-signup sweep prune the row + business.
         //    Flipping `status="canceled"` here would create a row whose
         //    appearance on the dashboard (PlanCard `status === "canceled"`
         //    branch) misleads a user who never actually had an active

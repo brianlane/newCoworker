@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getOnboardingDraft, upsertOnboardingDraft } from "@/lib/db/onboarding-drafts";
+import {
+  deleteOnboardingDraft,
+  getOnboardingDraft,
+  upsertOnboardingDraft
+} from "@/lib/db/onboarding-drafts";
 import type { OnboardingData } from "@/lib/onboarding/storage";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -117,6 +121,37 @@ describe("db/onboarding-drafts", () => {
 
     const row = await getOnboardingDraft(MOCK_ROW.business_id, MOCK_ROW.draft_token, db as never);
     expect(row?.draft_token).toBe(MOCK_ROW.draft_token);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  // The draft has no foreign key to businesses, so the abandoned-signup sweep
+  // has to delete it explicitly or the owner's name, email, and phone outlive
+  // the business row.
+  it("deletes a draft by business id", async () => {
+    const db = mockDb({ delete: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue({ error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(deleteOnboardingDraft(MOCK_ROW.business_id)).resolves.toBeUndefined();
+    expect(db.from).toHaveBeenCalledWith("onboarding_drafts");
+    expect(db.eq).toHaveBeenCalledWith("business_id", MOCK_ROW.business_id);
+  });
+
+  it("throws when the draft delete fails", async () => {
+    const db = mockDb({
+      delete: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: { message: "nope" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(deleteOnboardingDraft(MOCK_ROW.business_id)).rejects.toThrow(
+      "deleteOnboardingDraft: nope"
+    );
+  });
+
+  it("deletes with provided client without creating a service client", async () => {
+    const db = mockDb({ delete: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue({ error: null }) });
+
+    await deleteOnboardingDraft(MOCK_ROW.business_id, db as never);
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 

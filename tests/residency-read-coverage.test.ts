@@ -278,6 +278,8 @@ const DYNAMIC_TABLE_SITES: Record<string, string> = {
     "WEBHOOK_EVENT_SOURCES again, from the edge. Held at engine posture with the rest of supabase/functions",
   "src/lib/account/deletion.ts::getAccountDeletionImpact":
     "iterates a table list to count what account deletion would remove; central is the copy being deleted, and the journal replicates the deletes box-ward",
+  "src/lib/onboarding/abandoned-signup-cleanup.ts::countFor":
+    "counts rows across a guard list that includes three PURGED tables (sms_outbound_log, voice_call_transcripts, email_log). Correct by construction rather than by routing: the sweep only loads facts for a business still carrying the pending+<id>@onboarding.local sentinel, which has therefore never provisioned a box, so its data_residency_mode is supabase and residency_purge_business has never run against it. Central is the only copy that has ever existed. The counts are also a REFUSAL signal, so the failure direction is safe: a miscount can only spare a row, never delete one",
   "src/lib/admin/deleted-items.ts::readDeletedRows":
     "already residency-aware: the enclosing module resolves isVpsReadMode and calls readMovedRows on the box path",
   "src/lib/billing/usage-pack-clawback.ts::listOpenMembershipGrantSourceIds":

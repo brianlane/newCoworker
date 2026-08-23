@@ -50,6 +50,7 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   // Hourly.
   "aiflow-library-refresh": { maxGapMinutes: 150, schedule: "7 * * * *" },
   // Daily.
+  "abandoned-signup-sweep": { maxGapMinutes: 1500, schedule: "23 5 * * *" },
   "analytics-snapshot-sweep": { maxGapMinutes: 1500, schedule: "50 2 * * *" },
   "contract-term-nudge-sweep": { maxGapMinutes: 1500, schedule: "25 15 * * *" },
   "cron-sweep-watchdog": { maxGapMinutes: 1500, schedule: "30 3 * * *" },

@@ -43,6 +43,28 @@ export async function upsertOnboardingDraft(
   return row as OnboardingDraftRow;
 }
 
+/**
+ * Drop a business's saved onboarding draft.
+ *
+ * `onboarding_drafts` has no foreign key to `businesses`, so deleting a
+ * business does NOT cascade here and the draft (which carries the owner's
+ * name, email, and phone) would outlive the row it belongs to. Called by the
+ * abandoned-signup sweep, which deletes never-paid signups.
+ */
+export async function deleteOnboardingDraft(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("onboarding_drafts")
+    .delete()
+    .eq("business_id", businessId);
+  if (error) {
+    throw new Error(`deleteOnboardingDraft: ${error.message}`);
+  }
+}
+
 export async function getOnboardingDraft(
   businessId: string,
   draftToken?: string,
