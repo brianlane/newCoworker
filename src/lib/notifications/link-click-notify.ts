@@ -64,15 +64,81 @@ async function releaseNotifyStamp(db: ServiceClient, result: LinkClickRpcResult)
   }
 }
 
-function linkDestinationLabel(url: string): string {
+/**
+ * Longest destination we inline into an alert. Long enough to identify a
+ * page, short enough that a Stripe Checkout URL (which runs to hundreds of
+ * characters of opaque session id) cannot turn one SMS into four.
+ */
+const MAX_DESTINATION_DISPLAY = 60;
+
+/**
+ * What the lead actually opened, as a human label plus a compact address.
+ *
+ * The label alone used to be the whole alert, and it was only ever the
+ * hostname, so every tap on anything we host read "tapped your
+ * newcoworker.com". On 2026-08-24 a lead asked for a payment link, the
+ * coworker answered with the signup questionnaire, and the owner could not
+ * tell from the alert which of the two he had been sent. The address is what
+ * makes the alert answer that question without a database query.
+ */
+export function describeLinkDestination(url: string): { label: string; display: string } {
+  let parsed: URL;
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
-    if (/calendly/i.test(host)) return "booking link";
-    if (/cal\.com/i.test(host)) return "booking link";
-    return host || "link";
+    parsed = new URL(url);
   } catch {
-    return "link";
+    return { label: "link", display: "link" };
   }
+
+  const host = parsed.hostname.replace(/^www\./, "");
+  const path = parsed.pathname === "/" ? "" : parsed.pathname;
+  const full = `${host}${path}`;
+  const display =
+    full.length > MAX_DESTINATION_DISPLAY
+      ? `${full.slice(0, MAX_DESTINATION_DISPLAY - 3)}...`
+      : full || "link";
+
+  // Recognized destinations are named, because "payment link" is the thing
+  // an owner reacts to; the address below it is the proof.
+  if (/(^|\.)stripe\.com$/i.test(host) || path.startsWith("/pay/")) {
+    return { label: "payment link", display };
+  }
+  if (/calendly/i.test(host) || /(^|\.)cal\.com$/i.test(host) || path.startsWith("/book/")) {
+    return { label: "booking link", display };
+  }
+  if (path.startsWith("/onboard")) {
+    return { label: "signup questionnaire", display };
+  }
+  // Unrecognized: the address IS the most useful label. Returning it as both
+  // keeps the caller from rendering "example.com: example.com/offer".
+  return { label: display, display };
+}
+
+/**
+ * "payment link: checkout.stripe.com/..." for a destination we can name,
+ * and just the address otherwise, so a label never repeats itself.
+ */
+export function linkDestinationPhrase(url: string): string {
+  const { label, display } = describeLinkDestination(url);
+  return label === display ? label : `${label}: ${display}`;
+}
+
+/**
+ * Which surface sent the link. An owner reading "sent by your AI coworker's
+ * reply" knows immediately whether to go correct the agent or their own
+ * copy, which is the first question every one of these alerts raises.
+ */
+const LINK_SOURCE_LABELS: Record<string, string> = {
+  sms_auto_reply: "your AI coworker's reply",
+  ai_flow: "an AiFlow",
+  aiflow: "an AiFlow",
+  voice_follow_up: "a call follow up",
+  owner_notify: "an owner alert",
+  owner_manual: "a message you sent"
+};
+
+export function linkSourceLabel(source: string | null | undefined): string | null {
+  if (!source) return null;
+  return LINK_SOURCE_LABELS[source] ?? source;
 }
 
 export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void> {
@@ -124,14 +190,46 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
     contactLabel = names.get(result.to_e164)?.name ?? result.to_e164;
   }
 
-  const destLabel = linkDestinationLabel(result.original_url);
-  const summary = `${contactLabel} tapped your ${destLabel}`;
+  const { label: destLabel } = describeLinkDestination(result.original_url);
+  const destPhrase = linkDestinationPhrase(result.original_url);
+  const summary = `${contactLabel} tapped your ${destPhrase}`;
   const phoneSuffix =
     result.to_e164 && contactLabel !== result.to_e164 ? ` (${result.to_e164})` : "";
-  const smsBody = `${businessName}: ${contactLabel}${phoneSuffix} just opened your ${destLabel}.`;
+  const smsBody = `${businessName}: ${contactLabel}${phoneSuffix} just opened your ${destPhrase}`;
   const threadHref = result.to_e164
     ? `/dashboard/messages/${encodeURIComponent(result.to_e164)}`
     : "/dashboard/messages";
+
+  // `sms_links.source` is not in the RPC's return, and adding it there would
+  // be a migration for one string. This read only happens on the alert path,
+  // which is already past both the once-per-link stamp and the hourly
+  // per-contact throttle, so it is rare by construction. Best-effort: the
+  // alert is worth more than the attribution line.
+  let sourceLabel: string | null = null;
+  try {
+    const { data: linkRow } = await db
+      .from("sms_links")
+      .select("source")
+      .eq("id", result.link_id)
+      .maybeSingle();
+    sourceLabel = linkSourceLabel((linkRow as { source?: string | null } | null)?.source);
+  } catch (err) {
+    logger.warn("link-click-notify: source lookup failed", {
+      businessId: result.business_id,
+      linkId: result.link_id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  // The email has room the SMS does not, so it carries the UNtruncated
+  // destination: the address is the whole point of the alert.
+  const emailBody = [
+    `${contactLabel}${phoneSuffix} opened your ${destPhrase}.`,
+    `Where it went: ${result.original_url}`,
+    sourceLabel ? `Sent by: ${sourceLabel}` : null
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   try {
     await dispatchUrgentNotification({
@@ -146,10 +244,17 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
         flow_id: result.flow_id,
         run_id: result.run_id,
         click_count: result.click_count,
-        thread_href: threadHref
+        thread_href: threadHref,
+        destination_label: destLabel,
+        source: sourceLabel
       },
       smsBody,
-      emailSubject: `Lead link click: ${contactLabel}`
+      emailSubject: `Lead link click: ${contactLabel} opened your ${destLabel}`,
+      emailBody,
+      // Without this the button said "Open dashboard" and landed on the bare
+      // dashboard, one more hop from the conversation the alert is about.
+      ctaPath: threadHref,
+      ctaLabel: "Open the conversation"
     });
   } catch (err) {
     logger.warn("link-click-notify: dispatch failed", {
