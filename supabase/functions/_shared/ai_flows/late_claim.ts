@@ -26,6 +26,7 @@ import {
   type OfferCandidate
 } from "./offer_identity.ts";
 import { routingOfContext } from "./routing.ts";
+import { looksLikeTimeframe } from "./claim_timeframe.ts";
 
 /** The run-row shape the webhook fetches for the late-claim scan. */
 export type LateClaimCandidate = {
@@ -80,6 +81,21 @@ export type LateClaimResolution =
       ackLabel?: string;
     }
   | { outcome: "ambiguous"; labels: string[] }
+  /**
+   * The sender named a lead that is not among the ones they can claim, and
+   * the text does not read as an ETA either. Distinct from "none" because
+   * nothing may be claimed on their behalf: falling through would stamp the
+   * name as a timeframe and take whichever run was touched last.
+   */
+  | {
+      outcome: "unmatched";
+      /** What they typed, echoed back so they can see what we looked for. */
+      query: string;
+      /** Display labels of what they COULD still claim, newest first. */
+      labels: string[];
+      /** Set when the named lead is one a teammate took first. */
+      claimedElsewhere?: { label: string; claimedName: string };
+    }
   | { outcome: "none" };
 
 /** Bucket precedence as a sortable rank: live → late → yank → mine. */
@@ -301,7 +317,39 @@ export function matchLateClaimReply(args: {
         ...(eligible.length > 1 ? { ackLabel: named.label } : {})
       };
     }
-    // Named nothing: the text is an ETA after all. Fall through unchanged.
+    // Named nothing. Two very different replies land here: an ETA ("1, 20
+    // min"), which must fall through and be stamped, and a lead name we
+    // cannot offer them, which must NOT. Reading the second as an ETA is how
+    // "1,Sandy" claimed an unrelated lead and told the owner the teammate had
+    // spoken to someone they had never heard of (Amy Laidlaw, Aug 2026).
+    if (!looksLikeTimeframe(typed)) {
+      // A lead the sender already holds is not on offer, so it never joins
+      // the "here is what you can take" list.
+      const claimable = eligible.filter((m) => m.kind !== "mine");
+      const claimedElsewhere = findClaimedElsewhere({
+        candidates,
+        from,
+        query: typed,
+        nowMs,
+        windowMs
+      });
+      // Refuse only when we can actually TELL they named something they
+      // cannot have: some claimable lead has a name that did not fit, or the
+      // named one is a lead someone else took first. When not a single
+      // candidate has a name on file the named form carries no signal at all,
+      // and precedence is as good an answer as it ever was.
+      const anyNamed = claimable.some((m) => normalizeLeadName(offerCandidateOf(m).leadLabel));
+      if (anyNamed || claimedElsewhere) {
+        return {
+          outcome: "unmatched",
+          query: typed,
+          labels: claimable.map(
+            (m, i) => offerCandidateOf(m).leadLabel || `lead ${i + 1} (no name on file)`
+          ),
+          ...(claimedElsewhere ? { claimedElsewhere } : {})
+        };
+      }
+    }
   }
 
   const match = pickByPrecedence({ candidates, from, digit, timeframe, nowMs, windowMs });
@@ -347,4 +395,46 @@ function pickByPrecedence(args: {
   }
 
   return live ?? late ?? yank ?? mine;
+}
+
+/**
+ * Did a teammate take the lead this sender just named? Scans the RAW
+ * candidates rather than the eligible ones, because a run claimed by someone
+ * else is exactly what `classifyCandidate` filters out, and it is the single
+ * most common reason a named claim finds nothing: they answered a few minutes
+ * after someone beat them to it.
+ *
+ * Returns null when the name fits two claimed leads: the ask-back's generic
+ * wording is better than naming the wrong one.
+ */
+function findClaimedElsewhere(args: {
+  candidates: readonly LateClaimCandidate[];
+  from: string;
+  query: string;
+  nowMs: number;
+  windowMs: number;
+}): { label: string; claimedName: string } | null {
+  const { candidates, from, query, nowMs, windowMs } = args;
+  const taken: Array<{ candidate: OfferCandidate; claimedName: string }> = [];
+  for (const row of candidates) {
+    if (nowMs - Date.parse(row.updated_at) > windowMs) continue;
+    const routing = routingOfContext(row.context);
+    if (!routing) continue;
+    const claimedBy = routing.claimed_by ?? "";
+    if (!claimedBy || claimedBy === from) continue;
+    // Same label/phone extraction the eligible candidates get, so a lead is
+    // named identically whether it is on offer or already taken.
+    const candidate = offerCandidateOf({ kind: "late", row, stepIndex: -1 });
+    taken.push({
+      candidate: { ...candidate, runId: String(taken.length) },
+      claimedName: routing.claimed_name ?? ""
+    });
+  }
+  const hit = matchOfferByLeadName(
+    taken.map((t) => t.candidate),
+    query
+  );
+  if (hit.kind !== "one") return null;
+  const found = taken[Number(hit.runId)];
+  return { label: hit.label, claimedName: found.claimedName };
 }

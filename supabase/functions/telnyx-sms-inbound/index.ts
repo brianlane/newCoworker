@@ -54,7 +54,10 @@ import {
   isExecutableDefinition
 } from "../_shared/ai_flows/engine.ts";
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
-import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
+import {
+  looksLikeTimeframe,
+  parseClaimWithTimeframe
+} from "../_shared/ai_flows/claim_timeframe.ts";
 import {
   ambiguousClaimText,
   bareDigitAmbiguityText,
@@ -62,6 +65,7 @@ import {
   leadLabelFromVars,
   leadPhoneFromVars,
   matchOfferByLeadName,
+  unmatchedClaimText,
   type OfferCandidate
 } from "../_shared/ai_flows/offer_identity.ts";
 import {
@@ -695,6 +699,10 @@ async function consumeAmbiguousOfferReply(args: {
   messagingProfileId: string;
   smsFromE164: string;
   text: string;
+  /** Telemetry decision; defaults to the ambiguous-reply one. */
+  decision?: OfferReplyDecision;
+  /** Idempotency-key suffix, so two ask-back kinds never dedupe together. */
+  keySuffix?: string;
 }): Promise<Response> {
   const { supabase, businessId, from, ackTo, eventId, envelope, telnyxApiKey, smsFromE164 } = args;
   let ackSent: string | null = null;
@@ -718,7 +726,7 @@ async function consumeAmbiguousOfferReply(args: {
       fromE164: ackFrom,
       toE164: from,
       text: args.text,
-      idempotencyKey: `${eventId}:offer-reply-ambiguous`
+      idempotencyKey: `${eventId}:${args.keySuffix ?? "offer-reply-ambiguous"}`
     });
     if (!send.ok) console.error("ambiguous offer reply ack", send.status, send.body.slice(0, 300));
     else ackSent = args.text;
@@ -735,7 +743,7 @@ async function consumeAmbiguousOfferReply(args: {
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     event_id: eventId,
-    decision: OFFER_REPLY_DECISION.claim_ambiguous
+    decision: args.decision ?? OFFER_REPLY_DECISION.claim_ambiguous
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "ambiguous" }), {
     status: 200,
@@ -1766,6 +1774,25 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       messagingProfileId,
       smsFromE164,
       text: ambiguousClaimText(resolved.labels)
+    });
+  }
+  // Named a lead that is not among the claimable ones. Say so, and say what
+  // they can still take. Never fall through: downstream would stamp the name
+  // as an ETA and claim their most-recently-touched lead.
+  if (resolved.outcome === "unmatched") {
+    return await consumeAmbiguousOfferReply({
+      supabase,
+      businessId,
+      from,
+      ackTo,
+      eventId,
+      envelope,
+      telnyxApiKey,
+      messagingProfileId,
+      smsFromE164,
+      text: unmatchedClaimText(resolved.query, resolved.labels, resolved.claimedElsewhere),
+      decision: OFFER_REPLY_DECISION.claim_name_unmatched,
+      keySuffix: "offer-reply-unmatched"
     });
   }
   if (resolved.outcome !== "match") return null;
@@ -2951,6 +2978,11 @@ serve(async (req: Request) => {
         let resolvedOffer: { run: LiveOfferRun; broadcast: boolean } | undefined;
         let ackLeadLabel: string | undefined;
         let effectiveTimeframe = claimTf.timeframe;
+        // Set when the sender NAMED a lead none of their claimable ones answer
+        // to, and the text is not an ETA either. Nothing may be claimed on
+        // that: see the ask-back below the late-claim attempt.
+        let namedNoMatch = false;
+        let namedNoMatchLabels: string[] = [];
         if (claimTf.digit === "1") {
           const liveOffers = await findLiveOfferRunsFor(supabase, businessId, from);
           // Alerts join the name match too. The ask-back that produced this
@@ -3042,6 +3074,16 @@ serve(async (req: Request) => {
                 });
               }
             }
+            // Named a lead, matched nothing they hold, and it does not read
+            // as an ETA. The late-claim path below gets first refusal (the
+            // lead may be claimable there); if it declines, we ask rather
+            // than claim whichever run was touched most recently.
+            if (match.kind === "none" && !looksLikeTimeframe(claimTf.timeframe)) {
+              namedNoMatch = true;
+              namedNoMatchLabels = combined.map(
+                (c, i) => c.leadLabel || `lead ${i + 1} (no name on file)`
+              );
+            }
             if (match.kind === "one") {
               const picked = liveOffers.find((o) => o.run.id === match.runId);
               if (picked) {
@@ -3058,21 +3100,26 @@ serve(async (req: Request) => {
             }
           }
         }
-        const liveHandled = await tryAgentClaimWithTimeframe({
-          supabase,
-          businessId,
-          from,
-          ackTo: to,
-          eventId,
-          envelope,
-          telnyxApiKey,
-          messagingProfileId,
-          smsFromE164,
-          digit: claimTf.digit,
-          timeframe: effectiveTimeframe,
-          ...(resolvedOffer ? { resolvedOffer } : {}),
-          ...(ackLeadLabel ? { ackLeadLabel } : {})
-        });
+        // Skipped entirely on an unmatched name: tryAgentClaimWithTimeframe
+        // falls back to the sender's newest live offer, which is exactly the
+        // guess we must not make here.
+        const liveHandled = namedNoMatch
+          ? null
+          : await tryAgentClaimWithTimeframe({
+              supabase,
+              businessId,
+              from,
+              ackTo: to,
+              eventId,
+              envelope,
+              telnyxApiKey,
+              messagingProfileId,
+              smsFromE164,
+              digit: claimTf.digit,
+              timeframe: effectiveTimeframe,
+              ...(resolvedOffer ? { resolvedOffer } : {}),
+              ...(ackLeadLabel ? { ackLeadLabel } : {})
+            });
         if (liveHandled) return liveHandled;
 
         const passHandled = await tryAgentPassWithReason({
@@ -3104,6 +3151,26 @@ serve(async (req: Request) => {
           timeframe: claimTf.timeframe
         });
         if (lateHandled) return lateHandled;
+
+        // Named a lead nobody can hand them, and the late-claim scan had
+        // nothing to say either. Answer with what they DO have instead of
+        // claiming something they never asked for.
+        if (namedNoMatch) {
+          return await consumeAmbiguousOfferReply({
+            supabase,
+            businessId,
+            from,
+            ackTo: to,
+            eventId,
+            envelope,
+            telnyxApiKey,
+            messagingProfileId,
+            smsFromE164,
+            text: unmatchedClaimText(claimTf.timeframe, namedNoMatchLabels),
+            decision: OFFER_REPLY_DECISION.claim_name_unmatched,
+            keySuffix: "offer-reply-unmatched"
+          });
+        }
 
         const staleHandled = await tryStaleOfferAck({
           supabase,

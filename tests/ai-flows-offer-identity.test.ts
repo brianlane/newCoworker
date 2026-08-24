@@ -9,6 +9,7 @@ import {
   leadShortLabel,
   matchOfferByLeadName,
   normalizeLeadName,
+  unmatchedClaimText,
   type OfferCandidate
 } from "../supabase/functions/_shared/ai_flows/offer_identity";
 
@@ -164,6 +165,93 @@ describe("reply copy", () => {
       claimAckText("A")
     ]) {
       expect(text).not.toMatch(/—/);
+    }
+  });
+});
+
+describe("leadLabelFromVars, first-name-only flows", () => {
+  /**
+   * HomeLight Referral captures `lead_first_name` and nothing else. Until it
+   * was listed, its leads had no label at all: unnameable in a "1, <name>"
+   * reply and invisible in the "which one?" list. Gabrielle typed "1, Nancy"
+   * for exactly such a lead on 2026-08-24 and claimed a different one.
+   */
+  it("uses lead_first_name when that is all the flow captured", () => {
+    expect(leadLabelFromVars({ lead_first_name: "Nancy" })).toBe("Nancy");
+    expect(leadLabelFromVars({ first_name: "Nancy" })).toBe("Nancy");
+  });
+
+  it("still prefers the full name when the run carries both", () => {
+    expect(leadLabelFromVars({ lead_name: "Nancy Prince", lead_first_name: "Nancy" })).toBe(
+      "Nancy Prince"
+    );
+  });
+
+  it("makes such a lead matchable by name", () => {
+    const nancy: OfferCandidate = {
+      runId: "run-nancy",
+      leadLabel: leadLabelFromVars({ lead_first_name: "Nancy" }),
+      leadPhone: "+16025550100"
+    };
+    const other: OfferCandidate = { runId: "run-linda", leadLabel: "Linda Elenes" };
+    const m = matchOfferByLeadName([nancy, other], "Nancy");
+    expect(m.kind).toBe("one");
+    if (m.kind !== "one") return;
+    expect(m.runId).toBe("run-nancy");
+  });
+});
+
+describe("unmatchedClaimText", () => {
+  it("names who took the lead when we know", () => {
+    const text = unmatchedClaimText("Sandy", ["Isiah Perez"], {
+      label: "Sandy Baldwin",
+      claimedName: "Gabrielle Mota"
+    });
+    expect(text).toBe(
+      "Sandy Baldwin was already claimed by Gabrielle Mota. You still have Isiah Perez. " +
+        'Reply "1, <name>" to say which one you are taking.'
+    );
+  });
+
+  it("degrades to 'another teammate' when the claimer has no name on file", () => {
+    const text = unmatchedClaimText("Sandy", ["Isiah Perez"], {
+      label: "Sandy Baldwin",
+      claimedName: ""
+    });
+    expect(text).toContain("was already claimed by another teammate.");
+  });
+
+  it("echoes what they typed when we cannot explain it", () => {
+    const text = unmatchedClaimText("Sandy", ["Isiah Perez", "Linda Elenes"]);
+    expect(text).toBe(
+      'I could not find "Sandy" in your unclaimed leads. You have 2 unclaimed leads: ' +
+        'Isiah Perez or Linda Elenes. Reply "1, <name>" to say which one you are taking.'
+    );
+  });
+
+  it("says so plainly when there is nothing else waiting", () => {
+    expect(unmatchedClaimText("Sandy", [])).toBe(
+      'I could not find "Sandy" in your unclaimed leads. You have nothing else waiting right now.'
+    );
+    expect(
+      unmatchedClaimText("Sandy", [], { label: "Sandy Baldwin", claimedName: "Gabrielle Mota" })
+    ).toBe(
+      "Sandy Baldwin was already claimed by Gabrielle Mota. You have nothing else waiting right now."
+    );
+  });
+
+  it("never claims anything: the copy only ever offers a next step", () => {
+    // Guards the property the whole outcome exists for. Nothing in this text
+    // may read as a confirmation that a lead was assigned.
+    for (const text of [
+      unmatchedClaimText("Sandy", ["Isiah Perez"]),
+      unmatchedClaimText("Sandy", []),
+      unmatchedClaimText("Sandy", ["Isiah Perez"], {
+        label: "Sandy Baldwin",
+        claimedName: "Gabrielle Mota"
+      })
+    ]) {
+      expect(text).not.toMatch(/is yours|you've got|got it|claimed it/i);
     }
   });
 });

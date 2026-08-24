@@ -319,11 +319,11 @@ describe("matchLateClaimReply, a NAMED claim after the offer lapsed", () => {
     expect(r.ackLabel).toBeUndefined();
   });
 
-  it("never names a lead the sender cannot claim", () => {
+  it("never CLAIMS a lead the sender cannot have, and says who took it", () => {
     // Claimed by someone else, and a lead this sender was never offered.
     const taken = row({
       status: "done",
-      routing: { tried: [JASON], claimed_by: DAVE, step_index: 5 },
+      routing: { tried: [JASON], claimed_by: DAVE, claimed_name: "Dave Lane", step_index: 5 },
       vars: { lead_name: "Aurora Anthony" }
     });
     const strangers = row({
@@ -331,7 +331,13 @@ describe("matchLateClaimReply, a NAMED claim after the offer lapsed", () => {
       routing: { tried: [GABBY], offered_log: [GABBY], step_index: 5 },
       vars: { lead_name: "Aurora Anthony" }
     });
-    expect(resolve([taken, strangers], { timeframe: "Aurora" }).outcome).toBe("none");
+    const r = resolve([taken, strangers], { timeframe: "Aurora" });
+    // Not a match: nothing is claimed. Not "none" either, because we know
+    // exactly what happened and can say it.
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.labels).toEqual([]);
+    expect(r.claimedElsewhere).toEqual({ label: "Aurora Anthony", claimedName: "Dave Lane" });
   });
 
   it("re-acks by name when the sender already holds that lead", () => {
@@ -460,5 +466,189 @@ describe("matchLateClaimReply, a NAMED claim after the offer lapsed", () => {
       updated_at: new Date(NOW - 60 * 60 * 1000).toISOString()
     });
     expect(match([newer, older], { timeframe: "Aurora" })?.row.id).toBe(newer.id);
+  });
+});
+
+describe("matchLateClaimReply, a name that matches NOTHING", () => {
+  /**
+   * The Amy Laidlaw incident of 2026-08-23/24, and the reason this outcome
+   * exists at all. Jason was offered Sandy Baldwin at 08:34 and reminded at
+   * 09:07 with copy that said, literally, 'Reply "1, Sandy" to claim this
+   * one'. Gabrielle claimed Sandy at 09:12. At 09:17 Jason replied "1,Sandy".
+   *
+   * The old code found no live "Sandy", read the word as an ETA, and claimed
+   * his only other open offer: a Clever spoke check on Isiah Perez, a lead he
+   * had never spoken to. Amy was texted "Jason Lane confirmed they spoke with
+   * the Clever lead Isiah Perez ... ETA to contact lead: Sandy", the weekly
+   * AI call ladder was cancelled as handled, and Jason was told nothing.
+   */
+  it("does not claim a different lead when the named one was taken first", () => {
+    const sandy = row({
+      status: "done",
+      routing: {
+        tried: [JASON],
+        offered_log: [JASON, GABBY],
+        claimed_by: GABBY,
+        claimed_name: "Gabrielle Mota",
+        step_index: 5
+      },
+      vars: { lead_name: "Sandy Baldwin", lead_phone: "+13202931236" }
+    });
+    const isiah = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez", lead_phone: "+16232622189" }
+    });
+    const r = resolve([sandy, isiah], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.query).toBe("Sandy");
+    // Isiah is still his to take, so the ask-back can offer it by name.
+    expect(r.labels).toEqual(["Isiah Perez"]);
+    expect(r.claimedElsewhere).toEqual({
+      label: "Sandy Baldwin",
+      claimedName: "Gabrielle Mota"
+    });
+  });
+
+  it("still stamps a real ETA that happens to match no lead", () => {
+    const isiah = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    for (const eta of ["20 min", "2 hours", "tonight", "tomorrow morning", "asap", "on my way"]) {
+      const r = resolve([isiah], { timeframe: eta });
+      expect(r.outcome, eta).toBe("match");
+      if (r.outcome !== "match") continue;
+      expect(r.match.namedLabel, eta).toBeUndefined();
+    }
+  });
+
+  it("falls through to the stale-offer ack when there is nothing to say", () => {
+    // No claimable lead, and no recently claimed lead answering to the name:
+    // the stale-offer classifier downstream is the better answer.
+    const strangers = row({
+      status: "done",
+      routing: { tried: [GABBY], offered_log: [GABBY], step_index: 5 },
+      vars: { lead_name: "Jennifer Kline" }
+    });
+    expect(resolve([strangers], { timeframe: "Sandy" }).outcome).toBe("none");
+  });
+
+  it("lists a nameless lead alongside a named one it could not match", () => {
+    const isiah = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const unnamed = row({
+      status: "done",
+      routing: { tried: [JASON], offered_log: [JASON], step_index: 5 },
+      vars: { lead_phone: "+16232622189" }
+    });
+    const r = resolve([isiah, unnamed], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.labels).toEqual(["Isiah Perez", "lead 2 (no name on file)"]);
+  });
+
+  it("keeps precedence when NO candidate has a name to have mismatched", () => {
+    // Nothing on file to compare against, so "1, Aurora" tells us nothing we
+    // can act on and the old behavior is as good as any. Refusing here would
+    // strand the teammate: they cannot name a lead that has no name.
+    const newer = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
+    const older = row({
+      status: "done",
+      routing: { tried: [JASON], step_index: 5 },
+      updated_at: new Date(NOW - 60 * 60 * 1000).toISOString()
+    });
+    expect(match([newer, older], { timeframe: "Aurora" })?.row.id).toBe(newer.id);
+  });
+
+  it("stays generic when the name fits two leads other people took", () => {
+    const one = row({
+      status: "done",
+      routing: { tried: [JASON], claimed_by: GABBY, claimed_name: "Gabrielle Mota", step_index: 5 },
+      vars: { lead_name: "Sandy Baldwin", lead_phone: "+16025550111" }
+    });
+    const two = row({
+      status: "done",
+      routing: { tried: [JASON], claimed_by: DAVE, claimed_name: "Dave Lane", step_index: 5 },
+      vars: { lead_name: "Sandy Cruz", lead_phone: "+16025550222" }
+    });
+    const live = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const r = resolve([one, two, live], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.claimedElsewhere).toBeUndefined();
+  });
+
+  it("ignores a claim older than the window when explaining", () => {
+    const stale = row({
+      status: "done",
+      routing: { tried: [JASON], claimed_by: GABBY, claimed_name: "Gabrielle Mota", step_index: 5 },
+      vars: { lead_name: "Sandy Baldwin" },
+      updated_at: new Date(NOW - 3 * DAY_MS).toISOString()
+    });
+    const live = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const r = resolve([stale, live], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.claimedElsewhere).toBeUndefined();
+  });
+
+  it("does not offer back a lead the SENDER already holds", () => {
+    // Their own claimed lead is not something to "take", so it is neither an
+    // explanation nor an ask-back option. With nothing else in play the reply
+    // keeps its old meaning: the idempotent "it is already yours" re-ack.
+    // Nothing is newly claimed either way, which is the property that matters.
+    const mine = row({
+      status: "done",
+      routing: { claimed_by: JASON, claimed_name: "Jason Lane", step_index: 5 },
+      vars: { lead_name: "Sandy Baldwin" }
+    });
+    const r = resolve([mine], { timeframe: "Nancy" });
+    expect(r.outcome).toBe("match");
+    if (r.outcome !== "match") return;
+    expect(r.match.kind).toBe("mine");
+  });
+
+  it("explains even when the claimer has no roster name recorded", () => {
+    const taken = row({
+      status: "done",
+      // No claimed_name: the older claim path did not always record one.
+      routing: { tried: [JASON], claimed_by: DAVE, step_index: 5 },
+      vars: { lead_name: "Sandy Baldwin" }
+    });
+    const nameless = row({
+      status: "done",
+      // No vars at all, so no label to match: must not throw or match.
+      routing: { tried: [JASON], claimed_by: GABBY, step_index: 5 }
+    });
+    const isiah = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const r = resolve([taken, nameless, isiah], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.claimedElsewhere).toEqual({ label: "Sandy Baldwin", claimedName: "" });
+  });
+
+  it("skips a candidate row carrying no routing at all", () => {
+    const noRouting = row({ status: "done", vars: { lead_name: "Sandy Baldwin" } });
+    (noRouting.context as Record<string, unknown>).routing = null;
+    const live = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const r = resolve([noRouting, live], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.claimedElsewhere).toBeUndefined();
   });
 });

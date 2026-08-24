@@ -24,6 +24,14 @@
  * first. Every current lead flow uses `lead_name`; the rest are here so a
  * flow authored to a different convention still gets a usable label instead
  * of silently falling back to the phone number.
+ *
+ * The first-name-only vars come LAST so a run carrying both still labels
+ * itself with the full name. They are not optional extras: HomeLight Referral
+ * captures nothing but `lead_first_name`, so until it was listed here that
+ * flow's leads had no label at all, which made them unnameable in a
+ * "1, <name>" reply and invisible in the "which one?" list. A teammate typed
+ * "1, Nancy" for exactly such a lead and claimed a different one (Amy
+ * Laidlaw, Aug 2026).
  */
 export const LEAD_NAME_VARS = [
   "lead_name",
@@ -32,7 +40,9 @@ export const LEAD_NAME_VARS = [
   "client_name",
   "seller_name",
   "buyer_name",
-  "name"
+  "name",
+  "lead_first_name",
+  "first_name"
 ] as const;
 
 /** Var names a flow may keep the lead's phone under, most specific first. */
@@ -212,4 +222,31 @@ export function bareDigitAmbiguityText(labels: readonly string[]): string {
  */
 export function claimAckText(label: string): string {
   return `Got it, ${label} is yours.`;
+}
+
+/**
+ * Texted back when a teammate named a lead we cannot find among the ones they
+ * could still claim. Nothing is claimed: the whole point of the named form is
+ * that it says WHICH lead, so failing to find it means we know less than a
+ * bare "1" would have told us, not more.
+ *
+ * `claimedElsewhere` turns the most common cause into a straight answer: they
+ * replied a few minutes after a teammate took that exact lead.
+ */
+export function unmatchedClaimText(
+  query: string,
+  labels: readonly string[],
+  claimedElsewhere?: { label: string; claimedName: string }
+): string {
+  const taken = claimedElsewhere
+    ? `${claimedElsewhere.label} was already claimed by ${claimedElsewhere.claimedName || "another teammate"}. `
+    : `I could not find "${query}" in your unclaimed leads. `;
+  if (labels.length === 0) {
+    return `${taken}You have nothing else waiting right now.`;
+  }
+  const still = claimedElsewhere ? "You still have" : "You have";
+  return (
+    `${taken}${still} ${labels.length === 1 ? "" : `${labels.length} unclaimed leads: `}` +
+    `${joinLabels(labels)}. Reply "1, <name>" to say which one you are taking.`
+  );
 }
