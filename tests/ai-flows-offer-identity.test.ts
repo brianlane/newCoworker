@@ -209,7 +209,7 @@ describe("unmatchedClaimText", () => {
     });
     expect(text).toBe(
       "Sandy Baldwin was already claimed by Gabrielle Mota. You still have Isiah Perez. " +
-        'Reply "1, <name>" to say which one you are taking.'
+        'Reply "1, Isiah" to take it.'
     );
   });
 

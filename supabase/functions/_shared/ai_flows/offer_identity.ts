@@ -245,8 +245,13 @@ export function unmatchedClaimText(
     return `${taken}You have nothing else waiting right now.`;
   }
   const still = claimedElsewhere ? "You still have" : "You have";
+  // With one lead left there is no "which one" to answer, so name it in the
+  // instruction and make the reply a copy-paste.
+  if (labels.length === 1) {
+    return `${taken}${still} ${labels[0]}. Reply "1, ${leadShortLabel(labels[0])}" to take it.`;
+  }
   return (
-    `${taken}${still} ${labels.length === 1 ? "" : `${labels.length} unclaimed leads: `}` +
-    `${joinLabels(labels)}. Reply "1, <name>" to say which one you are taking.`
+    `${taken}${still} ${labels.length} unclaimed leads: ${joinLabels(labels)}. ` +
+    `Reply "1, <name>" to say which one you are taking.`
   );
 }
