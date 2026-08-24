@@ -73,6 +73,8 @@ import {
   withResumeMarkerVar
 } from "../../supabase/functions/_shared/ai_flows/branching.ts";
 import type { FlowStep } from "../../supabase/functions/_shared/ai_flows/types.ts";
+import { ownershipLeadPhone } from "../../supabase/functions/_shared/ai_flows/claim_owner_gate.ts";
+import { isE164, normalizeNanpToE164 } from "../../supabase/functions/_shared/ai_flows/engine.ts";
 import { recordOneshotApplied } from "./_ledger";
 
 loadEnv();
@@ -199,11 +201,16 @@ async function clearFalseContactOwner(args: {
   if (!leadPhone) {
     return { ok: false, reason: "no lead phone on the run, so contact ownership cannot be checked" };
   }
+  // Alias-aware, exactly like the engine's activeContactOwner: a lead whose
+  // number lives only in alias_e164s still HAS an owner, and treating a miss
+  // on customer_e164 as "nothing can auto-assign" would requeue straight back
+  // into the re-close this repair exists to prevent.
+  const ownedPredicate = `customer_e164.eq.${leadPhone},alias_e164s.cs.{${leadPhone}}`;
   const { data: contactRow, error: readErr } = await db
     .from("contacts")
     .select("id, owner_employee_id")
     .eq("business_id", businessId)
-    .eq("customer_e164", leadPhone)
+    .or(ownedPredicate)
     .maybeSingle();
   if (readErr) {
     return { ok: false, reason: `contact read failed: ${readErr.message}` };
@@ -241,7 +248,7 @@ async function clearFalseContactOwner(args: {
     .from("contacts")
     .update({ owner_employee_id: null, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
-    .eq("customer_e164", leadPhone)
+    .eq("id", contact.id ?? "")
     .eq("owner_employee_id", memberId);
   if (wipeErr) {
     return { ok: false, reason: `contact owner clear failed: ${wipeErr.message}` };
@@ -252,7 +259,7 @@ async function clearFalseContactOwner(args: {
     .from("contacts")
     .select("owner_employee_id")
     .eq("business_id", businessId)
-    .eq("customer_e164", leadPhone)
+    .eq("id", contact.id ?? "")
     .maybeSingle();
   if (afterErr) {
     return { ok: false, reason: `contact re-read failed: ${afterErr.message}` };
@@ -286,7 +293,21 @@ for (const run of rows) {
   if (!fingerprintA && !fingerprintB) continue;
 
   const leadName = typeof vars.lead_name === "string" ? vars.lead_name : "(unnamed lead)";
-  const leadPhone = typeof vars.lead_phone === "string" ? vars.lead_phone : "";
+  // The phone the ENGINE would key ownership on, through the engine's own
+  // rule, not the raw var: an extracted-but-empty lead_phone means the lead's
+  // number is UNKNOWN, never that the triggering sender is the lead (the
+  // Danfar rule in claim_owner_gate.ts).
+  const rawLeadPhone = typeof vars.lead_phone === "string" ? vars.lead_phone.trim() : "";
+  const triggerFrom =
+    typeof (context.trigger as { from?: unknown } | undefined)?.from === "string"
+      ? ((context.trigger as { from: string }).from ?? "").trim()
+      : "";
+  const leadPhone =
+    ownershipLeadPhone(
+      Object.prototype.hasOwnProperty.call(vars, "lead_phone"),
+      rawLeadPhone ? (isE164(rawLeadPhone) ? rawLeadPhone : normalizeNanpToE164(rawLeadPhone)) : null,
+      triggerFrom && isE164(triggerFrom) ? triggerFrom : null
+    ) ?? "";
   const claimedName = typeof routing.claimed_name === "string" ? routing.claimed_name : "";
   const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
   const who = claimedName || claimedBy || "a teammate";
