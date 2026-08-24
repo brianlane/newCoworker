@@ -128,11 +128,21 @@ export type SignupPaymentLinkDeps = {
 export type SignupPaymentLinkInput = {
   businessId: string;
   /**
-   * Where to bill. Defaults to the business row's owner email, which is only
-   * usable once the pending sentinel has been swapped for a real address; the
-   * caller passes one explicitly for a signup that never got that far.
+   * Where to bill, overriding everything. An operator choosing the address by
+   * hand in the admin console; not for anything a customer merely asserted.
    */
   ownerEmail?: string;
+  /**
+   * Last-resort address, used ONLY when the signup yields none of its own.
+   *
+   * The coworker tool passes the email a texter stated, and a stated email
+   * must never displace the address the signup actually recorded: someone
+   * identified by their phone number could otherwise put an arbitrary or
+   * mistyped address on the Stripe checkout. It still matters, because a
+   * questionnaire-only abandoner has no customer profile and therefore no
+   * recoverable address at all.
+   */
+  fallbackOwnerEmail?: string;
   /** Defaults to whatever the customer last chose, then to the row's tier. */
   tier?: "starter" | "standard";
   billingPeriod?: BillingPeriod;
@@ -191,6 +201,7 @@ export async function createSignupPaymentLink(
   const ownerEmail =
     input.ownerEmail ??
     (rowEmail && !isPendingSentinelEmail(rowEmail) ? rowEmail : profile?.normalized_email) ??
+    input.fallbackOwnerEmail ??
     null;
   if (!ownerEmail) return refuse("no_owner_email");
 

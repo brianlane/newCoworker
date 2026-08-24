@@ -8,7 +8,6 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import {
   AGENT_TOOL_REGISTRY,
   findAgentToolDefinition,
@@ -60,10 +59,12 @@ export async function resolveAgentTools(
     key: agent.key,
     label: agent.label,
     description: agent.description,
-    // Platform-only tools are New Coworker's own, never a tenant capability,
-    // so they are not rendered as toggles in anyone else's Settings.
+    // Platform-only tools are New Coworker's own and are managed in code, not
+    // from Settings. Hidden for EVERY business including HQ: the write path
+    // refuses them, so rendering a switch for HQ would draw a control that
+    // always errors and rolls back.
     tools: agent.tools
-      .filter((tool) => !tool.platformOnly || businessId === HQ_BUSINESS_ID)
+      .filter((tool) => !tool.platformOnly)
       .map((tool) => {
       const override = overrides.get(`${agent.key}\u0000${tool.toolKey}`);
       return {

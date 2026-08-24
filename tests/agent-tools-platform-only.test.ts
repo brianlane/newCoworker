@@ -50,9 +50,12 @@ describe("platform-only tools", () => {
     }
   });
 
-  it("are visible to New Coworker HQ, which owns them", async () => {
+  // Hidden from HQ too, deliberately. The write path refuses platform tools,
+  // so rendering a switch here would draw a control that always errors and
+  // rolls back. They are managed in code and from the admin console.
+  it("are hidden from HQ as well, because the write path refuses them", async () => {
     const resolved = await resolveAgentTools(HQ_BUSINESS_ID, makeDb());
-    expect(toolKeys(resolved, "sms")).toContain("send_signup_payment_link");
+    expect(toolKeys(resolved, "sms")).not.toContain("send_signup_payment_link");
   });
 
   it("leaves every ordinary tool visible to tenants", async () => {

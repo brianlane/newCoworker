@@ -386,13 +386,13 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
             "No unfinished signup matches that phone or email. Ask them which email they used on the questionnaire, and if they have not filled it in yet, send them to the pricing page to start."
         };
       }
-      // Pass the email through: an unpaid row still carries the onboarding
-      // sentinel, so without this the billing address can only come from a
-      // customer profile, and a questionnaire-only abandoner has none. The
-      // lookup would succeed and the mint would then refuse no_owner_email.
+      // A stated email is a FALLBACK, never an override: it only supplies an
+      // address when the signup has none of its own (a questionnaire-only
+      // abandoner has no customer profile). Passing it as `ownerEmail` would
+      // let someone matched by phone put an arbitrary address on the checkout.
       const link = await createSignupPaymentLink({
         businessId: signup.id,
-        ownerEmail: parsed.data.email
+        fallbackOwnerEmail: parsed.data.email
       });
       if (!link.ok) {
         return { ok: false, detail: link.refusal, message: link.message };
