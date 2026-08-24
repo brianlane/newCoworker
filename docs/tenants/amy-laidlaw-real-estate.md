@@ -995,6 +995,35 @@ stops skipping it by rule; re-running that script marked its six "Needs Follow
 Up" tag writers, so Clever leads now reach the cadence with their type. Both
 were applied Aug 24 2026, in that order.
 
+**`amy-clever-buyer-rotation.ts` (Aug 24 2026):** finishes what
+`amy-clever-lead-type.ts` started. Gating the AI call stopped a buyer getting
+the listing pitch but left two things: every Clever lead was still OFFERED to
+the pinned seller trio (Gabrielle, Amy, Dave), so Jason Lane, whose only roster
+tag is `buyer`, never saw one; and the offer copy still promised "the AI calls
+again in about 2 hours, then once more tomorrow morning", which for a buyer is
+now false and invites a teammate to leave the lead believing the AI has it.
+
+`clever_route_gate` forks the offer on `lead_type`, mirroring `rt_route_gate`
+in Realtor.com Lead rather than inventing a second shape for the same decision.
+The buyer arm holds `route_buyer`, a route_to_team with NO `agentNames`, which
+is what the rotation IS on this engine: offered to one teammate at a time in
+rotation order rather than broadcast to a named list. Its copy states in every
+team-facing template (offer, claimed, owner fallback, owner direct) that the AI
+has not contacted the lead and will not, so whoever claims knows they are the
+only contact. The else arm holds `route` byte for byte as it was; sellers are
+116 of 119 and nothing about them changes. The branch carries no `when`, each
+route keeps its own `price_gate` guard, again matching Realtor.com. The $1M+
+keep-for-Amy rule rides along on the buyer route: it is a price rule, not a
+seller rule.
+
+Known and not fixed there: `price_gate` and `price_under_1m` come out EMPTY on
+a buyer referral, because `read_details` asks for the "estimated home value"
+and a buyer page shows an "Est. Price Range" (neither real buyer run extracted
+one). Empty is the harmless direction, `price_gate notEquals "ai"` holds so the
+buyer route runs and `price_under_1m equals "no"` does not so the lead is
+offered rather than kept. Teaching the extraction to read a buyer's price range
+is a separate change.
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
