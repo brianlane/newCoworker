@@ -960,6 +960,41 @@ resumed the run since the read wins and the script reports a skip. First
 applied Aug 24 2026 to two runs: Sandy Baldwin (seller -> buyer) and Frank
 Demarco (seller -> both).
 
+**`amy-clever-lead-type.ts` (Aug 24 2026):** "Clever Lead - Accept" could not
+tell a buyer from a seller, and that is structural rather than careless: Clever
+Offers IS a seller program, so every `read_details` field reads "the seller's
+...", the AI call opens "about your request through Clever about selling your
+home on {{vars.lead_address}}" and pitches listing against a cash offer, and
+the unreachable-lead broadcast was pinned to the literal `seller` tag. Clever
+nonetheless sends BUYER referrals through the same "Clever referral" format the
+flow triggers on: two real ones, Kristy White (Jul 8 2026) and Donna Robinson
+(Jul 31 2026), both handled as sellers end to end.
+
+Three changes. `read_type`, a new `extract_text` at the FRONT, sets
+`lead_type` from the referral TEXT, not the browsed page: the bare "Seller" /
+"Buyer" line is a property of the SMS (116 seller, 2 buyer, 1 silent across the
+flow's 119 runs), while `read_details` is a browse_extract against the portal.
+`clever_call_gate` wraps `ai_call_1` so a buyer never receives the listing
+pitch; the step keeps its id and its own `price_under_1m` guard and simply
+moves into the else arm, because a `when` holds exactly one condition. The
+retries need no gate, they sit behind `call_outcome equals no_answer` and a
+skipped call leaves it unset. And `clever_no_phone_offer.teamTagTemplate` moves
+from `seller` to `{{vars.lead_type}}`: on this roster `seller` still reaches
+Gabrielle and Dave exactly as the literal did, while `buyer` also reaches Jason
+Lane, whose only tag is `buyer`.
+
+Two things deliberately NOT done. No buyer persona was written: this stops the
+wrong call rather than inventing a right one, and the buyer pitch is Amy's copy
+to write. And `route` keeps its pinned `agentNames`, because the schema refuses
+`teamTagTemplate` beside pinned recipients, and switching that step to
+`broadcastAll` would silently drop Amy, whose `team_broadcast_enabled` is false
+because she is the backstop.
+
+Because the flow now DECLARES `lead_type`, `amy-cadence-lead-type-from-note.ts`
+stops skipping it by rule; re-running that script marked its six "Needs Follow
+Up" tag writers, so Clever leads now reach the cadence with their type. Both
+were applied Aug 24 2026, in that order.
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
