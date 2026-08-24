@@ -91,10 +91,21 @@ These are mistakes already made on this account. Do not remake them.
   than refusing, and HomeLight Referral leads carry only `lead_first_name`,
   which was not a name var the matcher read, so those leads had no label and
   could never be named at all. The reply is now refused and the teammate is
-  told who took the lead and what they still have. Reopened by
+  told who took the lead and what they still have. Restarted by
   `repair-misclaimed-lead-followups.ts`. The lesson for this account: this is
   the roster that routinely holds several simultaneous offers per teammate, so
   every reply-disambiguation bug lands here first.
+
+- **A claim stamps the CONTACT, so clearing a run does not undo it.** Repairing
+  the four runs above meant clearing `routing.claimed_by` and requeuing them,
+  which is only half the artifact: the claim had also written
+  `contacts.owner_employee_id`, and `route_to_team` hands a lead straight back
+  to an existing owner with no claim reply at all ("New lead for a contact you
+  already own, so it's yours"). All four re-closed within seconds of being
+  reopened and texted Amy the same false confirmation a second time. Anything
+  that undoes a claim on this account has to clear the contact ownership FIRST,
+  and then requeue. `debug/clear-contact-owner.ts` is the tool;
+  `repair-misclaimed-lead-followups.ts` now does it inline.
 
 - **A teammate is never a lead.** Dave and Amy have both been filed as
   customers by flows that texted them. The rule and its guard are in the
@@ -969,15 +980,17 @@ DID re-pointed onto the tenant app. Idempotent (re-runs adopt by marker).
 Whether it has run is in the applied_oneshots ledger.
 
 **Follow-up repair (Aug 24 2026):** `repair-misclaimed-lead-followups.ts`
-reopens the runs closed by a mis-routed `"1, <name>"` claim (see Sharp edges).
-Evidence-only: it matches the artifact the bug leaves in `actions_taken`, a
-recorded claim whose ETA does not read as a timeframe, and only touches `done`
-runs with a `routing.route_step_id` to rewind to. Clears the claim, resets the
-`claimed_agent*` vars, rewinds to the route step and requeues, so the engine
-re-asks the teammate and starts the AI follow-up if no one answers.
-`tried`/`offered_log` are left intact so nobody is re-offered a lead they
-already passed. Fleet-wide by default; all four affected runs were this
-tenant's. Idempotent.
+restarts the AI follow-up on runs closed by a mis-routed `"1, <name>"` claim
+(see Sharp edges). Evidence-only, on two fingerprints: a recorded claim whose
+ETA does not read as a timeframe, or the script's own repair marker next to
+`routing.owner_assigned` (a repair the owner-assign path closed again). Clears
+`contacts.owner_employee_id` FIRST, guarded on it still naming the mis-claimer,
+then clears the claim, resets the `claimed_agent*` vars and requeues at the
+step AFTER the route step: it does NOT re-ask the team, because the claim was
+fabricated by a bug and the answer is already known (`--reask` rewinds onto the
+route step for a case where it is not). `tried`/`offered_log` are left intact
+so nobody is re-offered a lead they already passed. Fleet-wide by default; all
+four affected runs were this tenant's. Idempotent.
 
 **Transcript repair (Aug 18 2026):** `repair-clobbered-ai-transcripts.ts`
 restores AI transcript rows that the forwarded-call record overwrote on a warm

@@ -1,12 +1,12 @@
 /**
- * repair-misclaimed-lead-followups.ts: reopen the follow-up ladders that a
- * mis-routed "1, <name>" reply closed.
+ * repair-misclaimed-lead-followups.ts: restart the AI follow-up that a
+ * mis-routed "1, <name>" reply cancelled.
  *
  * Background (found investigating Amy Laidlaw, 2026-08-24). A teammate replying
  * "1, <lead name>" to claim a lead used to have that name read as a claim ETA
  * whenever it matched none of their live offers, and the reply then claimed
  * their most-recently-touched offer instead. Three things followed from one
- * mistyped-looking reply:
+ * reply that arrived a few minutes late:
  *
  *   - the owner was texted "<teammate> confirmed they spoke with <lead>" about
  *     a lead that teammate had never heard of,
@@ -17,28 +17,39 @@
  *     fingerprint this script matches on.
  *
  * The engine no longer does this (the reply is refused and the teammate is
- * told what they actually have). This reopens the runs already closed by it.
+ * told what they actually have). This restarts the follow-up already cancelled.
  *
- * EVIDENCE, NOT GUESSWORK. A run is touched only when all of these hold:
+ * WHY IT DOES NOT RE-ASK THE TEAM. The obvious repair, rewinding to the
+ * route_to_team step, asks "Did you speak with them yet?" a second time. We
+ * already know the answer: the claim was fabricated by a bug, and on the run
+ * that prompted this the teammate said so in writing. So the default resumes at
+ * the step AFTER the route step, which is the AI follow-up the false claim
+ * skipped. `--reask` restores the rewind for a case where the human answer is
+ * genuinely unknown.
  *
- *   - `vars.actions_taken` records `lead claimed by <who> (ETA: <text>)` and
- *     `<text>` does not read as a timeframe by the SAME shared helper the
- *     engine now uses (`looksLikeTimeframe`). A real ETA never matches.
- *   - the run is `done`: a live run is still doing whatever it is doing.
- *   - `routing.route_step_id` is stamped, so there is a known rewind target.
- *     Without it the run is reported and skipped rather than guessed at.
+ * CLEAR OWNERSHIP FIRST, ALWAYS. A claim also stamps
+ * `contacts.owner_employee_id`, and the route step hands a lead straight back
+ * to an existing owner with no claim reply ("New lead for a contact you already
+ * own, so it's yours"). A first version of this script cleared the run and left
+ * the ownership that run had created: all four repaired runs re-closed within
+ * seconds and texted the owner the same false confirmation a second time. The
+ * ownership is part of the artifact and is cleared before anything is requeued.
  *
- * What a repair does, mirroring the webhook's own late-claim rewind: clears the
- * false claim off `routing`, resets the `claimed_agent*` vars to "none", moves
- * the run back to its route step with a matching resume marker, and requeues
- * it. The engine then does exactly what it would have done: re-ask the
- * teammate, and start the AI follow-up when no one answers. `tried` and
- * `offered_log` are deliberately LEFT ALONE, they are the true record of who
- * was asked, and clearing them would re-offer a lead to someone who already
- * declined it.
+ * EVIDENCE, NOT GUESSWORK. A run is touched only when it is `done`, carries a
+ * `routing.route_step_id` rewind target, and matches one of two fingerprints:
  *
- * Idempotent: a repaired run no longer carries the claim clause, so a re-run
- * skips it.
+ *   A. `vars.actions_taken` records `lead claimed by <who> (ETA: <text>)` where
+ *      `<text>` does not read as a timeframe by the SAME shared helper the
+ *      engine now uses (`looksLikeTimeframe`). A real ETA never matches.
+ *   B. `vars.actions_taken` carries this script's own repair marker AND
+ *      `routing.owner_assigned` is true: a run this script already reopened
+ *      that the owner-assign path then closed again. Fingerprint A cannot see
+ *      those, because an owner-assign carries no ETA clause.
+ *
+ * A contact's ownership is cleared only when it still points at the teammate
+ * the false claim named, so a lead genuinely reassigned since is left alone.
+ *
+ * Idempotent: a repaired run leaves `done` status, so a re-run does not see it.
  *
  * Per scripts/oneshot/README.md every tenant-specific value rides argv, and the
  * script is dry-run by default.
@@ -47,20 +58,27 @@
  *   set -a && source .env && set +a
  *   # audit the whole fleet (last 14 days):
  *   npx tsx scripts/oneshot/repair-misclaimed-lead-followups.ts
- *   # scope to one tenant, or widen the window:
+ *   # scope to one tenant, one run, or widen the window:
  *   npx tsx scripts/oneshot/repair-misclaimed-lead-followups.ts --business <uuid>
  *   npx tsx scripts/oneshot/repair-misclaimed-lead-followups.ts --since 2026-08-01
+ *   # ask the team again instead of resuming the AI follow-up:
+ *   npx tsx scripts/oneshot/repair-misclaimed-lead-followups.ts --reask
  *   # land it:
  *   npx tsx scripts/oneshot/repair-misclaimed-lead-followups.ts --apply
  */
 import { loadEnv } from "../../debug/_shared.ts";
 import { looksLikeTimeframe } from "../../supabase/functions/_shared/ai_flows/claim_timeframe.ts";
-import { withResumeMarkerVar } from "../../supabase/functions/_shared/ai_flows/branching.ts";
+import {
+  flattenSteps,
+  withResumeMarkerVar
+} from "../../supabase/functions/_shared/ai_flows/branching.ts";
+import type { FlowStep } from "../../supabase/functions/_shared/ai_flows/types.ts";
 import { recordOneshotApplied } from "./_ledger";
 
 loadEnv();
 
 const APPLY = process.argv.includes("--apply");
+const REASK = process.argv.includes("--reask");
 
 function argValue(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -69,7 +87,7 @@ function argValue(flag: string): string | undefined {
 
 const BUSINESS_ID = argValue("--business") ?? null;
 const RUN_ID = argValue("--run") ?? null;
-/** Default window: recent enough that reopening a ladder is still wanted. */
+/** Default window: recent enough that restarting a follow-up is still wanted. */
 const SINCE =
   argValue("--since") ?? new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -104,6 +122,14 @@ const CLAIM_CLAUSE = /lead claimed by ([^(;]*)\(ETA: ([^)]*)\)/;
 /** The clause plus its trailing separator, so removing it leaves clean prose. */
 const CLAIM_CLAUSE_WITH_SEP = /(?:; )?lead claimed by [^(;]*\(ETA: [^)]*\)/;
 
+/** Stamped on a repaired run, and fingerprint B's first half on a re-run. */
+const REPAIR_MARKER =
+  "follow-up restarted: the recorded claim was a mis-routed reply " +
+  "(repair-misclaimed-lead-followups.ts)";
+
+/** Legacy marker from the first version of this script, still in live rows. */
+const LEGACY_MARKER = "follow-up reopened: the recorded claim was a mis-routed reply";
+
 /**
  * PAGED, not capped. PostgREST truncates an un-ranged select at 1000 rows and
  * reports no error, so a single `.limit(1000)` over a wide window scans the
@@ -135,11 +161,27 @@ for (let from = 0; ; from += PAGE) {
 
 console.log(
   `${APPLY ? "APPLY" : "DRY RUN"}: scanned ${rows.length} completed run(s) since ` +
-    `${SINCE.slice(0, 10)}${BUSINESS_ID ? ` for business ${BUSINESS_ID}` : " (whole fleet)"}\n`
+    `${SINCE.slice(0, 10)}${BUSINESS_ID ? ` for business ${BUSINESS_ID}` : " (whole fleet)"}, ` +
+    `resuming at ${REASK ? "the route step (re-asking the team)" : "the AI follow-up"}\n`
 );
+
+/** Flattened step list per flow, so one definition is read once. */
+const flatCache = new Map<string, FlowStep[]>();
+async function flatStepsFor(flowId: string): Promise<FlowStep[]> {
+  const cached = flatCache.get(flowId);
+  if (cached) return cached;
+  const { data } = await db.from("ai_flows").select("definition").eq("id", flowId).maybeSingle();
+  const definition = (data as { definition?: { steps?: unknown } } | null)?.definition;
+  const steps = flattenSteps(
+    (Array.isArray(definition?.steps) ? definition.steps : []) as FlowStep[]
+  ).map((e) => e.step);
+  flatCache.set(flowId, steps);
+  return steps;
+}
 
 let repaired = 0;
 let skipped = 0;
+let ownersCleared = 0;
 const touched: Record<string, unknown>[] = [];
 
 for (const run of rows) {
@@ -149,17 +191,22 @@ for (const run of rows) {
 
   const actions = typeof vars.actions_taken === "string" ? vars.actions_taken : "";
   const m = CLAIM_CLAUSE.exec(actions);
-  if (!m) continue;
-  const typedEta = m[2].trim();
-  // A real ETA means a real claim. Only a non-timeframe in the ETA slot is the
-  // artifact, and it is tested by the engine's own helper so the two can never
-  // drift apart.
-  if (looksLikeTimeframe(typedEta)) continue;
+  // Fingerprint A: a claim whose ETA is a name. A real ETA means a real claim,
+  // and the test is the engine's own helper so the two cannot drift apart.
+  const fingerprintA = m !== null && !looksLikeTimeframe(m[2].trim());
+  // Fingerprint B: a run this script already reopened that the owner-assign
+  // path then closed again, which carries no ETA clause to match on.
+  const fingerprintB =
+    (actions.includes(REPAIR_MARKER) || actions.includes(LEGACY_MARKER)) &&
+    routing.owner_assigned === true;
+  if (!fingerprintA && !fingerprintB) continue;
 
   const leadName = typeof vars.lead_name === "string" ? vars.lead_name : "(unnamed lead)";
+  const leadPhone = typeof vars.lead_phone === "string" ? vars.lead_phone : "";
   const claimedName = typeof routing.claimed_name === "string" ? routing.claimed_name : "";
   const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
   const who = claimedName || claimedBy || "a teammate";
+  const typedEta = fingerprintA && m ? m[2].trim() : "";
   const routeStepId = typeof routing.route_step_id === "string" ? routing.route_step_id : "";
   const routeStepIndex =
     typeof routing.route_step_index === "number" ? routing.route_step_index : -1;
@@ -168,8 +215,26 @@ for (const run of rows) {
 
   if (!routeStepId || routeStepIndex < 0) {
     console.log(
-      `  SKIP ${label}: claimed by ${who} with ETA "${typedEta}", but no route step stamped ` +
-        `(routing.route_step_id/route_step_index missing), so there is no safe rewind target.`
+      `  SKIP ${label}: recorded as claimed by ${who}, but no route step stamped ` +
+        `(routing.route_step_id/route_step_index missing), so there is no safe resume target.`
+    );
+    skipped++;
+    continue;
+  }
+
+  // Where to pick the run back up. Default is the step AFTER the route step,
+  // the AI follow-up the false claim skipped; --reask rewinds onto the route
+  // step itself. Resolved from the LIVE definition through the engine's own
+  // flattenSteps, so the index and the marker always agree with each other and
+  // with what the worker will walk.
+  const flat = await flatStepsFor(run.flow_id);
+  const routeAt = flat.findIndex((s) => s.id === routeStepId);
+  const resumeAt = REASK ? routeAt : routeAt + 1;
+  const resumeStep = routeAt === -1 ? undefined : flat[resumeAt];
+  if (!resumeStep) {
+    console.log(
+      `  SKIP ${label}: "${routeStepId}" ${routeAt === -1 ? "is not in the live definition" : "is the last step"}, ` +
+        `so there is nothing to resume into.`
     );
     skipped++;
     continue;
@@ -177,9 +242,54 @@ for (const run of rows) {
 
   console.log(
     `  ${label}\n` +
-      `      recorded as claimed by ${who}, ETA "${typedEta}" (a lead name, not a time)\n` +
-      `      reopening at step ${routeStepIndex} ("${routeStepId}")`
+      `      recorded as claimed by ${who}` +
+      `${typedEta ? `, ETA "${typedEta}" (a lead name, not a time)` : " (owner-assigned re-close of an earlier repair)"}\n` +
+      `      resuming at step ${resumeAt} ("${resumeStep.id}", ${resumeStep.type})`
   );
+
+  // OWNERSHIP FIRST. The claim stamped the contact, and the route step hands a
+  // lead straight back to an existing owner with no claim reply, so a requeue
+  // that leaves this in place simply re-closes the run.
+  let clearedOwner = false;
+  if (leadPhone && claimedBy) {
+    const { data: member } = await db
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", run.business_id)
+      .eq("phone_e164", claimedBy)
+      .maybeSingle();
+    const memberId = (member as { id?: string } | null)?.id;
+    if (memberId) {
+      // Guarded on the owner still being the teammate the false claim named:
+      // a lead genuinely reassigned since is somebody's now, and not ours to
+      // take away. A dry run READS the same predicate and writes nothing.
+      const owned = db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", run.business_id)
+        .eq("customer_e164", leadPhone)
+        .eq("owner_employee_id", memberId);
+      const wipe = db
+        .from("contacts")
+        .update({ owner_employee_id: null, updated_at: new Date().toISOString() })
+        .eq("business_id", run.business_id)
+        .eq("customer_e164", leadPhone)
+        .eq("owner_employee_id", memberId)
+        .select("id");
+      const { data: hit, error: clearErr } = await (APPLY ? wipe : owned);
+      if (clearErr) {
+        console.error(`      contact owner clear failed: ${clearErr.message}`);
+      } else if ((hit ?? []).length > 0) {
+        // A PostgREST update matching zero rows returns no error, so the
+        // count is what says whether anything actually changed.
+        console.log(
+          `      ${APPLY ? "cleared" : "would clear"} contact owner (${who}) on ${leadPhone}`
+        );
+        clearedOwner = true;
+        if (APPLY) ownersCleared++;
+      }
+    }
+  }
 
   // Clear the false claim. `tried` / `offered_log` stay: they record who was
   // actually asked, and the engine reads them to avoid re-offering a lead to
@@ -191,13 +301,13 @@ for (const run of rows) {
   delete routing.late_claimed;
   delete routing.last_event;
   delete routing.reply_from;
+  delete routing.owner_assigned;
 
   // Strip the untrue clause and say what happened instead, so the run's own
-  // record stops asserting a conversation that never took place.
-  const cleanedActions =
-    actions.replace(CLAIM_CLAUSE_WITH_SEP, "").replace(/^; /, "") +
-    "; follow-up reopened: the recorded claim was a mis-routed reply " +
-    "(repair-misclaimed-lead-followups.ts)";
+  // record stops asserting a conversation that never took place. Appended once:
+  // a re-repair must not stack a second copy of the marker.
+  let cleanedActions = actions.replace(CLAIM_CLAUSE_WITH_SEP, "").replace(/^; /, "");
+  if (!cleanedActions.includes(REPAIR_MARKER)) cleanedActions += `; ${REPAIR_MARKER}`;
 
   const nextContext = withResumeMarkerVar(
     {
@@ -211,7 +321,7 @@ for (const run of rows) {
         claimed_agent_eta_minutes: "0"
       }
     },
-    routeStepId
+    resumeStep.id
   );
 
   touched.push({
@@ -220,8 +330,10 @@ for (const run of rows) {
     flow_id: run.flow_id,
     lead_name: leadName,
     claimed_as: who,
-    typed_eta: typedEta,
-    reopened_at_step: routeStepIndex
+    ...(typedEta ? { typed_eta: typedEta } : { owner_assigned_reclose: true }),
+    resumed_at_step: resumeAt,
+    resumed_at_step_id: resumeStep.id,
+    cleared_contact_owner: clearedOwner
   });
 
   if (APPLY) {
@@ -229,7 +341,7 @@ for (const run of rows) {
       .from("ai_flow_runs")
       .update({
         status: "queued",
-        current_step: routeStepIndex,
+        current_step: resumeAt,
         awaiting_agent_e164: null,
         respond_by_at: null,
         context: nextContext,
@@ -257,8 +369,8 @@ for (const run of rows) {
 }
 
 console.log(
-  `\n${APPLY ? `Reopened ${repaired} run(s)` : `Would reopen ${touched.length} run(s)`}` +
-    `${skipped > 0 ? `, ${skipped} skipped with no rewind target` : ""}.`
+  `\n${APPLY ? `Restarted ${repaired} run(s), cleared ${ownersCleared} contact owner(s)` : `Would restart ${touched.length} run(s)`}` +
+    `${skipped > 0 ? `, ${skipped} skipped with no resume target` : ""}.`
 );
 if (!APPLY) {
   console.log("Re-run with --apply to land it.");
@@ -266,6 +378,6 @@ if (!APPLY) {
   await recordOneshotApplied(db, {
     scriptPath: process.argv[1] ?? "repair-misclaimed-lead-followups.ts",
     businessId: BUSINESS_ID,
-    details: { repaired, skipped, runs: touched }
+    details: { repaired, skipped, owners_cleared: ownersCleared, reask: REASK, runs: touched }
   });
 }
