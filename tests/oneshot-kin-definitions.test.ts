@@ -79,6 +79,14 @@ describe("kin lead definition", () => {
     expect(KIN_QUIET_HOURS.timezone).toBe("America/Edmonton");
   });
 
+  it("alerts the owner BEFORE the quiet-hours-gated greeting", () => {
+    // Quiet hours defer the run at the first gated step. If s_greet ever
+    // moves above s_notify_new again, an overnight lead parks the owner
+    // alert until 09:00 with it (the Bugbot High on PR #1596).
+    const ids = steps().map((s) => s.id);
+    expect(ids.indexOf("s_notify_new")).toBeLessThan(ids.indexOf("s_greet"));
+  });
+
   it("keeps owner alerts instant (no quiet hours on notify_owner)", () => {
     for (const s of steps().filter((x) => x.type === "notify_owner")) {
       expect(s.quietHours).toBeUndefined();

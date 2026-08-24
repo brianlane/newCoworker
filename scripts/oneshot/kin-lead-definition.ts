@@ -13,9 +13,12 @@
  *
  * Shape, and why:
  *
- *   s_extract / s_file / s_notify_new   Kingsley hears about the lead at once
- *                                       (notify_owner has no quiet hours on
- *                                       purpose; only lead-facing texts wait).
+ *   s_extract / s_file / s_notify_new   Kingsley hears about the lead at
+ *                                       once. notify_owner sits BEFORE the
+ *                                       greeting because quiet hours defer
+ *                                       the run at the first gated step; put
+ *                                       the greeting first and an overnight
+ *                                       lead delays the owner alert too.
  *   s_greet                             Names the clinic, thanks them for the
  *                                       consult request, hands them the
  *                                       JaneApp link. Speed-to-lead: the SMS
@@ -126,17 +129,22 @@ export function buildKinLeadDefinition(
         phoneVar: "lead_phone"
       },
       {
+        // BEFORE s_greet, load-bearing: quiet hours defer the whole run at
+        // the first gated step, so an overnight lead parked on the greeting
+        // would also park the owner alert until 09:00. Notify first means
+        // Kingsley hears about every lead the moment it lands, and only the
+        // lead-facing text waits for morning. Same ordering as Scar Fairy.
+        id: "s_notify_new",
+        type: "notify_owner",
+        message:
+          "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I'm sending them the consult booking link (overnight leads get their text from 9am) and I'm on follow-up duty."
+      },
+      {
         id: "s_greet",
         type: "send_sms",
         to: "{{vars.lead_phone}}",
         body: greet,
         quietHours: { ...KIN_QUIET_HOURS }
-      },
-      {
-        id: "s_notify_new",
-        type: "notify_owner",
-        message:
-          "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I sent them the consult booking link and I'm on follow-up duty."
       },
       {
         id: "s_wait_1",

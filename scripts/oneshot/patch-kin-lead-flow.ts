@@ -91,17 +91,22 @@ console.log(JSON.stringify(row.definition));
 console.log("[oneshot] NEW definition:");
 console.log(JSON.stringify(next));
 
+if (!APPLY) {
+  if (bookingLinkIsPending()) {
+    console.log(
+      "[oneshot] NOTE: the JaneApp link is still the placeholder; --apply will refuse until it lands."
+    );
+  }
+  console.log("[oneshot] dry-run only. Re-run with --apply to write.");
+  process.exit(0);
+}
+
 if (bookingLinkIsPending()) {
   console.error(
     `[oneshot] REFUSING: KIN_JANEAPP_BOOKING_LINK is still ${KIN_JANEAPP_BOOKING_LINK}. ` +
       "Set the real JaneApp link in kin-lead-definition.ts first."
   );
   process.exit(1);
-}
-
-if (!APPLY) {
-  console.log("[oneshot] dry-run only. Re-run with --apply to write.");
-  process.exit(0);
 }
 
 const { error: updateErr } = await db
