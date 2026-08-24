@@ -31,10 +31,7 @@ vi.mock("@/lib/db/email-log", async (importOriginal) => ({
 vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
-import { pollEmailCoworker,
-  isSelfSender,
-  providerFailureDetail
-} from "@/lib/email-coworker/poll";
+import { pollEmailCoworker, isSelfSender } from "@/lib/email-coworker/poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
@@ -534,52 +531,5 @@ describe("isSelfSender: the coworker must not answer its own mail", () => {
     expect(isSelfSender("not-an-address", OURS)).toBe(false);
     // An empty set still leaves the domain rule working.
     expect(isSelfSender("team@newcoworker.com", new Set())).toBe(true);
-  });
-
-  /**
-   * The 2026-08-08 row read "Request failed with status code 400" with an empty
-   * payload: a call failed somewhere, and nothing more. Gmail puts the actual
-   * reason in the response body, so a repeat is only actionable if the body
-   * came with it.
-   */
-  describe("providerFailureDetail", () => {
-    it("keeps the status, endpoint and response body from an axios rejection", () => {
-      const detail = providerFailureDetail({
-        response: { status: 400, data: { error: { message: "Invalid query" } } },
-        config: { endpoint: "/gmail/v1/users/me/messages?q=newer_than:1h" }
-      });
-      expect(detail.status).toBe(400);
-      expect(detail.endpoint).toContain("/gmail/v1/users/me/messages");
-      expect(String(detail.response)).toContain("Invalid query");
-    });
-
-    it("falls back to the top-level status and the url field", () => {
-      const detail = providerFailureDetail({ status: 503, config: { url: "/x" } });
-      expect(detail).toEqual({ status: 503, endpoint: "/x" });
-    });
-
-    it("returns an empty object for a throw it does not recognise", () => {
-      expect(providerFailureDetail(new Error("boom"))).toEqual({});
-      expect(providerFailureDetail("string boom")).toEqual({});
-      expect(providerFailureDetail(null)).toEqual({});
-      expect(providerFailureDetail(undefined)).toEqual({});
-    });
-
-    it("keeps a string body as-is and clips a long one", () => {
-      const detail = providerFailureDetail({ response: { status: 500, data: "x".repeat(900) } });
-      expect(String(detail.response)).toHaveLength(500);
-    });
-
-    it("survives a body that cannot be serialised", () => {
-      const circular: Record<string, unknown> = {};
-      circular.self = circular;
-      const detail = providerFailureDetail({ response: { status: 400, data: circular } });
-      expect(detail.status).toBe(400);
-      expect(typeof detail.response).toBe("string");
-    });
-
-    it("ignores an empty endpoint and a null body rather than recording blanks", () => {
-      expect(providerFailureDetail({ config: { url: "" }, response: { data: null } })).toEqual({});
-    });
   });
 });

@@ -43,7 +43,8 @@ import {
   looksLikeStrippedTemplate,
   type InboundEmailMessage
 } from "@/lib/ai-flows/trigger-eval";
-import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordFailure, recordSystemLog } from "@/lib/db/system-logs";
+import { providerFailureDetail } from "@/lib/workspace/failure-detail";
 import { recordInboundTriggerEmail } from "@/lib/db/email-log";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
@@ -807,13 +808,33 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await recordSystemLog({
+      // recordFailure, not recordSystemLog: this poll is kicked ~1/min and its
+      // lookback is EMAIL_POLL_LOOKBACK_MINUTES, so a single failed tick has
+      // already been retried, from the same window, before anyone could read
+      // the row. Logging that at `error` put it on the fleet System Errors
+      // feed, which is a claim that a human should look. Live, 2026-08-22: one
+      // 20-second Gmail timeout on the HQ mailbox sat there as a system error
+      // while the very next tick polled fine and the next inbound email
+      // triggered its flow normally.
+      //
+      // So the first failure inside the window is a `warn` (still in the
+      // per-business log tail, out of the error feed) and a repeat is an
+      // `error`, because by then the retry that would have cleared it has been
+      // and gone. Mail is only actually LOST once failures cover the whole
+      // lookback window, and the escalation window is sized to match it.
+      //
+      // A permanently broken mailbox (revoked grant, connection_not_found)
+      // needs no special case: it fails every tick, so it escalates on the
+      // second one, roughly a minute in.
+      await recordFailure({
         businessId,
         source: "aiflow",
-        level: "error",
         event: "ai_flow_email_poll_failed",
         message: `Email-trigger poll failed: ${message}`,
-        payload: { connection_id: connectionId }
+        // The connection id alone could not tell a 20-second abort from a DNS
+        // failure from a 401; the detail carries whichever of code / status /
+        // endpoint / body the throw actually had.
+        payload: { connection_id: connectionId, ...providerFailureDetail(err) }
       });
     }
   }
