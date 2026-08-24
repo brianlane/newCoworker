@@ -20,6 +20,7 @@ import { LocalTime } from "@/components/LocalTime";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
+import { PaymentLinkButton } from "@/components/admin/PaymentLinkButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { BillingControlsPanel } from "@/components/admin/BillingControlsPanel";
 import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
@@ -629,7 +630,12 @@ export default async function BusinessDetailPage({
           </div>
 
           {needsPayment && (
-            <SkipPaymentButton businessId={businessId} />
+            <div className="space-y-3">
+              {/* Let them pay, or provision without charging. Same situation,
+                  opposite ends, so they sit together. */}
+              <PaymentLinkButton businessId={businessId} />
+              <SkipPaymentButton businessId={businessId} />
+            </div>
           )}
         </div>
         {/* Comp levers for a live Stripe-billed tenant: pause collection, or
