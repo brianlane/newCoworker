@@ -10,7 +10,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
   providerFromKey: (key: string) => (key === "outlook" ? "microsoft" : "google")
 }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
-vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn(), recordFailure: vi.fn() }));
 vi.mock("@/lib/db/email-log", () => ({ recordInboundTriggerEmail: vi.fn() }));
 
 import {
@@ -26,7 +26,11 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
-import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordFailure, recordSystemLog } from "@/lib/db/system-logs";
+import {
+  DirectTransportError,
+  DirectTransportUnreachable
+} from "@/lib/workspace/direct-transport";
 import { recordInboundTriggerEmail } from "@/lib/db/email-log";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -267,7 +271,7 @@ describe("pollEmailTriggers", () => {
   it("stringifies a non-Error mailbox failure", async () => {
     vi.mocked(getWorkspaceOAuthConnection).mockRejectedValueOnce("weird failure");
     await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("weird failure") })
     );
   });
@@ -292,7 +296,7 @@ describe("pollEmailTriggers", () => {
     vi.mocked(getWorkspaceOAuthConnection).mockResolvedValueOnce(null);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 0, enqueued: 0 });
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_email_poll_failed",
         message: expect.stringContaining("connection_not_found")
@@ -304,7 +308,7 @@ describe("pollEmailTriggers", () => {
       provider_config_key: "slack"
     } as never);
     await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("not_email_connection") })
     );
   });
@@ -953,6 +957,7 @@ describe("pollEmailTriggers", () => {
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())], null, { rows: null }));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).not.toHaveBeenCalled();
+    expect(recordFailure).not.toHaveBeenCalled();
     // Logging now happens BEFORE the enqueue (the scope needs the row id), so
     // a lost race logs and then cleans up rather than never logging.
     expect(recordInboundTriggerEmail).toHaveBeenCalledTimes(1);
@@ -962,10 +967,49 @@ describe("pollEmailTriggers", () => {
     vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res.enqueued).toBe(0);
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_email_poll_failed",
         message: expect.stringContaining("email_not_connected")
+      })
+    );
+  });
+
+  // The live 2026-08-22 failure, reproduced: one Gmail call aborted at the
+  // direct transport's 20-second budget. It logged at `error` with only a
+  // connection id, so it sat on the fleet System Errors feed looking like a
+  // broken mailbox, while the next tick polled the same 15-minute window
+  // clean. It is a blip, and the row has to carry enough to say which kind.
+  it("routes a provider timeout through the escalating failure log, with its code", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce(
+      new DirectTransportUnreachable("upstream_timeout", "Provider request timed out")
+    );
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.enqueued).toBe(0);
+    // recordFailure, never recordSystemLog: the level is the escalation's to
+    // decide, and a call site passing its own would take that decision back.
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_failed" })
+    );
+    expect(recordFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_email_poll_failed",
+        message: "Email-trigger poll failed: Provider request timed out",
+        payload: { connection_id: CONN, code: "upstream_timeout" }
+      })
+    );
+    // No `level` key at all: the type forbids it, and this pins the intent.
+    expect(vi.mocked(recordFailure).mock.calls[0][0]).not.toHaveProperty("level");
+  });
+
+  it("keeps the status and body when the provider answers with an error", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce(
+      new DirectTransportError(401, { error: "invalid_grant" })
+    );
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(recordFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ connection_id: CONN, status: 401 })
       })
     );
   });
@@ -1033,7 +1077,7 @@ describe("pollEmailTriggers", () => {
 
     // Second poll: the list call returns null → mailbox error path.
     await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_email_poll_failed" })
     );
   });
@@ -1237,7 +1281,7 @@ describe("pollEmailTriggers", () => {
       dbWith([flowRow("f1", emailTrigger())], null, { error: { message: "db down" } })
     );
     expect(res.enqueued).toBe(0);
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_email_poll_failed",
         message: expect.stringContaining("seen lookup: db down")
@@ -1254,7 +1298,7 @@ describe("pollEmailTriggers", () => {
     await pollEmailTriggers(
       dbWith([flowRow("f1", emailTrigger())], null, { upsertError: { message: "boom" } })
     );
-    expect(recordSystemLog).toHaveBeenCalledWith(
+    expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_email_poll_failed",
         message: expect.stringContaining("seen record: boom")
