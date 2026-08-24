@@ -212,6 +212,39 @@ describe("createSignupPaymentLink", () => {
     expect(result).toMatchObject({ ok: true, ownerEmail: "owner@kin.com" });
   });
 
+  // Bugbot, PR #1593: a stated email must never displace the address the
+  // signup actually recorded, or someone matched by phone could put an
+  // arbitrary address on the checkout.
+  it("prefers the signup's own address over a merely stated one", async () => {
+    const deps = makeDeps();
+    const result = await createSignupPaymentLink(
+      { businessId: BIZ, fallbackOwnerEmail: "typed@bysomeone.com" },
+      deps
+    );
+    expect(result).toMatchObject({ ok: true, ownerEmail: "king@kinintegrated.com" });
+  });
+
+  it("uses the stated address only when the signup has none of its own", async () => {
+    const deps = makeDeps({
+      getBusinessRow: vi.fn(async () => business({ customer_profile_id: null })) as never,
+      getSubscriptionRow: vi.fn(async () => subscription({ customer_profile_id: null })) as never
+    });
+    const result = await createSignupPaymentLink(
+      { businessId: BIZ, fallbackOwnerEmail: "stated@example.com" },
+      deps
+    );
+    expect(result).toMatchObject({ ok: true, ownerEmail: "stated@example.com" });
+  });
+
+  it("an explicit operator override still wins over both", async () => {
+    const deps = makeDeps();
+    const result = await createSignupPaymentLink(
+      { businessId: BIZ, ownerEmail: "operator@choice.com", fallbackOwnerEmail: "stated@example.com" },
+      deps
+    );
+    expect(result).toMatchObject({ ok: true, ownerEmail: "operator@choice.com" });
+  });
+
   it("refuses when the business does not exist", async () => {
     const deps = makeDeps({ getBusinessRow: vi.fn(async () => null) as never });
     expect(await createSignupPaymentLink({ businessId: BIZ }, deps)).toMatchObject({

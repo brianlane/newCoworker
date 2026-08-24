@@ -59,7 +59,13 @@ export async function resolveAgentTools(
     key: agent.key,
     label: agent.label,
     description: agent.description,
-    tools: agent.tools.map((tool) => {
+    // Platform-only tools are New Coworker's own and are managed in code, not
+    // from Settings. Hidden for EVERY business including HQ: the write path
+    // refuses them, so rendering a switch for HQ would draw a control that
+    // always errors and rolls back.
+    tools: agent.tools
+      .filter((tool) => !tool.platformOnly)
+      .map((tool) => {
       const override = overrides.get(`${agent.key}\u0000${tool.toolKey}`);
       return {
         ...tool,

@@ -62,7 +62,10 @@ export async function PUT(request: Request) {
     if (!def) {
       return errorResponse("NOT_FOUND", "Unknown worker tool");
     }
-    if (!def.tool.configurable) {
+    // Platform-only tools are New Coworker's own. They are filtered out of
+    // what this route RENDERS, but the write path must refuse them too, or
+    // knowing the key would be enough to toggle one.
+    if (!def.tool.configurable || def.tool.platformOnly) {
       return errorResponse(
         "VALIDATION_ERROR",
         `${def.tool.label} is managed by the platform and can't be toggled.`

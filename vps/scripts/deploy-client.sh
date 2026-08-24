@@ -754,6 +754,7 @@ WORKFLOW_JSON=$(jq -nc \
         "send_email",
         "notify_team",
         "generate_image",
+        "send_signup_payment_link",
         "document_share",
         "start_aiflow_for_contact",
         "update_notification_preferences"
@@ -790,6 +791,7 @@ WORKFLOW_JSON=$(jq -nc \
         "send_email",
         "notify_team",
         "generate_image",
+        "send_signup_payment_link",
         "document_share",
         "start_aiflow_for_contact",
         "update_notification_preferences"
@@ -1068,6 +1070,25 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["toEmail", "subject", "bodyText"]
+      }
+    },
+    {
+      name: "send_signup_payment_link",
+      description: "Create a New Coworker checkout link for someone who has already completed the signup questionnaire and is asking how to pay. You must supply the phone they are texting from or the email they signed up with, otherwise the lookup cannot find them. Call this whenever they ask for a payment link, a way to pay, or an invoice. Never reuse a payment or signup link that appears earlier in the conversation: those go to the questionnaire rather than to checkout, and an old checkout link expires after 24 hours, so relaying one sends them back to a form they already filled in. Relay the returned url exactly as given, without shortening or rewriting it.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          email: {
+            type: "string",
+            description: "Email address the prospect signed up with, if they have said it."
+          },
+          phone: {
+            type: "string",
+            description: "Phone number of the prospect in E.164 form, normally the number that is texting you. Give this whenever you know it."
+          }
+        },
+        required: []
       }
     },
     {

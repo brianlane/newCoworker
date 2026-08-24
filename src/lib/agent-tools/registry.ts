@@ -28,6 +28,21 @@ export type AgentToolDefinition = {
   defaultEnabled: boolean;
   /** False ⇒ display-only (no platform enforcement point); writes rejected. */
   configurable: boolean;
+  /**
+   * Platform-only: New Coworker's own tooling, not a tenant capability.
+   *
+   * These are filtered out of everything a tenant can see or reach
+   * (`resolveAgentTools`, which renders Settings → Coworker tools, and the
+   * `manage_coworker_tools` MCP surface), and their handlers additionally
+   * refuse for any business other than HQ. A tenant selling dentistry has no
+   * use for a New Coworker signup checkout link, and showing them a toggle
+   * they cannot use would be noise at best and confusing at worst.
+   *
+   * The registry entry still exists because the dispatch allowlist
+   * (`TOOL_GATES`) resolves its toggle from here, and the seed-parity test
+   * asserts registry ↔ seed ↔ gates lockstep.
+   */
+  platformOnly?: boolean;
 };
 
 export type AgentDefinition = {
@@ -410,6 +425,15 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
     label: "Texting coworker",
     description: "Replies to inbound customer texts on your business number.",
     tools: [
+      {
+        toolKey: "send_signup_payment_link",
+        label: "Send signup payment link",
+        description:
+          "Create a New Coworker checkout link for a prospect who has already filled in the signup questionnaire and is asking to pay.",
+        defaultEnabled: true,
+        configurable: true,
+        platformOnly: true
+      },
       {
         toolKey: "business_knowledge_lookup",
         label: "Business knowledge lookup",

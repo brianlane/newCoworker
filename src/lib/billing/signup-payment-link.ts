@@ -38,7 +38,10 @@ import {
   updateSubscription,
   type SubscriptionRow
 } from "@/lib/db/subscriptions";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
+import { createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { authUserExistsByEmail } from "@/lib/auth";
 import {
   getCustomerProfileByEmail,
@@ -53,6 +56,8 @@ import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messagin
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 import type { BillingPeriod } from "@/lib/plans/tier";
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Why a payment link was refused. Every one is a deliberate gate, not an error. */
 export type SignupPaymentLinkRefusal =
@@ -123,11 +128,21 @@ export type SignupPaymentLinkDeps = {
 export type SignupPaymentLinkInput = {
   businessId: string;
   /**
-   * Where to bill. Defaults to the business row's owner email, which is only
-   * usable once the pending sentinel has been swapped for a real address; the
-   * caller passes one explicitly for a signup that never got that far.
+   * Where to bill, overriding everything. An operator choosing the address by
+   * hand in the admin console; not for anything a customer merely asserted.
    */
   ownerEmail?: string;
+  /**
+   * Last-resort address, used ONLY when the signup yields none of its own.
+   *
+   * The coworker tool passes the email a texter stated, and a stated email
+   * must never displace the address the signup actually recorded: someone
+   * identified by their phone number could otherwise put an arbitrary or
+   * mistyped address on the Stripe checkout. It still matters, because a
+   * questionnaire-only abandoner has no customer profile and therefore no
+   * recoverable address at all.
+   */
+  fallbackOwnerEmail?: string;
   /** Defaults to whatever the customer last chose, then to the row's tier. */
   tier?: "starter" | "standard";
   billingPeriod?: BillingPeriod;
@@ -186,6 +201,7 @@ export async function createSignupPaymentLink(
   const ownerEmail =
     input.ownerEmail ??
     (rowEmail && !isPendingSentinelEmail(rowEmail) ? rowEmail : profile?.normalized_email) ??
+    input.fallbackOwnerEmail ??
     null;
   if (!ownerEmail) return refuse("no_owner_email");
 
@@ -312,4 +328,64 @@ export async function createSignupPaymentLink(
 /** Enterprise is quoted and invoiced, so it never gets a self-serve link. */
 function pickSelfServeTier(tier: string): "starter" | "standard" | null {
   return tier === "starter" || tier === "standard" ? tier : null;
+}
+
+/**
+ * Find the unpaid signup belonging to a prospect, by the phone they are
+ * texting from or the email they signed up with.
+ *
+ * Exists for the coworker's payment-link tool, which knows a person rather
+ * than a business id. Only ever returns a signup that has NOT paid: the
+ * business row still carries the onboarding sentinel, which is a one-way
+ * state (`updateBusinessOwnerEmailIfPending` swaps it FOR a real address and
+ * nothing writes it back), so a live tenant can never be matched here.
+ *
+ * Phone is preferred over email because the phone is the channel the request
+ * actually arrived on, and an email is something a texter can simply assert.
+ */
+export type FindUnpaidSignupDeps = {
+  client?: SupabaseClient;
+};
+
+export async function findUnpaidSignupByContact(
+  contact: { phone?: string | null; email?: string | null },
+  deps: FindUnpaidSignupDeps = {}
+): Promise<BusinessRow | null> {
+  const db = deps.client ?? (await createSupabaseServiceClient());
+
+  const candidates: BusinessRow[] = [];
+
+  if (contact.phone) {
+    // Signup persists the coerced E.164 form, but a model relaying what a
+    // texter typed can hand over "(780) 707-6365" or a number with no country
+    // code. Match both so a formatted number does not read as "no signup".
+    const coerced = coerceOwnerPhoneToE164(contact.phone);
+    const forms = [...new Set([coerced, contact.phone.trim()].filter(Boolean))] as string[];
+    const { data } = await db.from("businesses").select("*").in("phone", forms);
+    candidates.push(...((data ?? []) as BusinessRow[]));
+  }
+
+  if (contact.email && candidates.length === 0) {
+    const normalized = contact.email.trim().toLowerCase();
+    const { data: profile } = await db
+      .from("customer_profiles")
+      .select("id")
+      .eq("normalized_email", normalized)
+      .maybeSingle();
+    const profileId = (profile as { id?: string } | null)?.id ?? null;
+    if (profileId) {
+      const { data } = await db.from("businesses").select("*").eq("customer_profile_id", profileId);
+      candidates.push(...((data ?? []) as BusinessRow[]));
+    }
+  }
+
+  // Unpaid only. The sentinel is the same one-way marker the abandoned-signup
+  // sweep keys on, so this cannot return a business that has an owner.
+  const unpaid = candidates.filter(
+    (b) => b.owner_email === createPendingOwnerEmail(b.id) && b.status === "offline"
+  );
+
+  // Newest first: a prospect who restarted signup means the latest attempt.
+  unpaid.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  return unpaid[0] ?? null;
 }

@@ -58,6 +58,9 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // NOT given a webchat_ twin (anonymous surface must not page the team).
   notify_team: { agentKey: "sms", toolKey: "notify_team" },
   generate_image: { agentKey: "sms", toolKey: "generate_image" },
+  // Platform-only (New Coworker HQ). The handler refuses for any other
+  // business, so a tenant box declaring it can still never mint a checkout.
+  send_signup_payment_link: { agentKey: "sms", toolKey: "send_signup_payment_link" },
   dashboard_generate_image: { agentKey: "dashboard", toolKey: "generate_image" },
   business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
   calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
