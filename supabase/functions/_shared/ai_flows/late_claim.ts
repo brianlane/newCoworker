@@ -415,26 +415,29 @@ function findClaimedElsewhere(args: {
   windowMs: number;
 }): { label: string; claimedName: string } | null {
   const { candidates, from, query, nowMs, windowMs } = args;
-  const taken: Array<{ candidate: OfferCandidate; claimedName: string }> = [];
+  const claimedRows: LateClaimCandidate[] = [];
   for (const row of candidates) {
     if (nowMs - Date.parse(row.updated_at) > windowMs) continue;
     const routing = routingOfContext(row.context);
     if (!routing) continue;
     const claimedBy = routing.claimed_by ?? "";
     if (!claimedBy || claimedBy === from) continue;
-    // Same label/phone extraction the eligible candidates get, so a lead is
-    // named identically whether it is on offer or already taken.
-    const candidate = offerCandidateOf({ kind: "late", row, stepIndex: -1 });
-    taken.push({
-      candidate: { ...candidate, runId: String(taken.length) },
-      claimedName: routing.claimed_name ?? ""
-    });
+    claimedRows.push(row);
   }
+  // Collapsed for the same reason the eligible set is: Amy's networks chain
+  // several routed runs per lead, and without this one lead showing up twice
+  // reads as two leads answering to the name, which silences the explanation.
+  // The synthetic "late" kind is inert here, every row shares it.
+  const taken = collapseByLead(
+    claimedRows.map((row) => ({ kind: "late" as const, row, stepIndex: -1 }))
+  );
   const hit = matchOfferByLeadName(
-    taken.map((t) => t.candidate),
+    // The matcher treats the id as opaque, so the position is the most useful
+    // thing to put there, exactly as the eligible-set lookup does.
+    taken.map((m, i) => ({ ...offerCandidateOf(m), runId: String(i) })),
     query
   );
   if (hit.kind !== "one") return null;
-  const found = taken[Number(hit.runId)];
-  return { label: hit.label, claimedName: found.claimedName };
+  const routing = routingOfContext(taken[Number(hit.runId)].row.context);
+  return { label: hit.label, claimedName: routing?.claimed_name ?? "" };
 }

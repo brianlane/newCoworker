@@ -639,6 +639,45 @@ describe("matchLateClaimReply, a name that matches NOTHING", () => {
     expect(r.claimedElsewhere).toEqual({ label: "Sandy Baldwin", claimedName: "" });
   });
 
+  it("still explains when the taken lead owns SEVERAL routed runs", () => {
+    // Amy's networks chain flows per lead (the filing run, the reply-reaction
+    // run, the follow-up run), so one lead routinely carries two or three
+    // routed runs. Uncollapsed they read as two leads fitting the name, and
+    // the explanation goes silent exactly when it is most useful.
+    const filing = row({
+      status: "done",
+      routing: {
+        tried: [JASON],
+        claimed_by: GABBY,
+        claimed_name: "Gabrielle Mota",
+        step_index: 5
+      },
+      vars: { lead_name: "Sandy Baldwin", lead_phone: "+13202931236" }
+    });
+    const followUp = row({
+      status: "done",
+      routing: {
+        tried: [JASON],
+        claimed_by: GABBY,
+        claimed_name: "Gabrielle Mota",
+        step_index: 9
+      },
+      vars: { lead_name: "Sandy Baldwin", lead_phone: "+13202931236" },
+      updated_at: new Date(NOW - 30 * 60 * 1000).toISOString()
+    });
+    const isiah = row({
+      routing: { offered: JASON, offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Isiah Perez" }
+    });
+    const r = resolve([filing, followUp, isiah], { timeframe: "Sandy" });
+    expect(r.outcome).toBe("unmatched");
+    if (r.outcome !== "unmatched") return;
+    expect(r.claimedElsewhere).toEqual({
+      label: "Sandy Baldwin",
+      claimedName: "Gabrielle Mota"
+    });
+  });
+
   it("skips a candidate row carrying no routing at all", () => {
     const noRouting = row({ status: "done", vars: { lead_name: "Sandy Baldwin" } });
     (noRouting.context as Record<string, unknown>).routing = null;
