@@ -10,6 +10,19 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+// The turn classifies the owner's ask before its first model step, and the
+// classifier's default generator is a real Gemini call. These tests fake a
+// GOOGLE_API_KEY, so without this the suite would attempt a live request per
+// turn. Rejecting exercises the classifier's fail-open path, which resolves
+// to UNKNOWN_ASK and therefore to the engine's pre-classifier behavior: what
+// every assertion in this file was written against. The escalated path has
+// its own coverage in dashboard-chat-ask-classifier.test.ts and
+// dashboard-chat-investigating-turn.test.ts.
+vi.mock("@/lib/gemini-generate-content", () => ({
+  geminiGenerateTextDetailed: vi.fn(async () => {
+    throw new Error("no network in unit tests");
+  })
+}));
 
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import type { GeminiChatStepParams, GeminiChatStepResult } from "@/lib/gemini-chat";

@@ -60,6 +60,15 @@ import {
   type ActionToolGates,
   type ActionToolName
 } from "@/lib/dashboard-chat/action-tools";
+import {
+  ASK_CLASSIFIER_TIMEOUT_MS,
+  classifyOwnerAsk,
+  investigationDirective,
+  maxOutputTokensForAsk,
+  thinkingLevelForAsk,
+  toolStepsForAsk,
+  UNKNOWN_ASK
+} from "@/lib/dashboard-chat/ask-classifier";
 import { logger } from "@/lib/logger";
 import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
@@ -239,6 +248,8 @@ export type InlineTurnDeps = {
   lookupKnowledge?: typeof lookupBusinessKnowledge;
   /** Injectable action-tool executor (tests). */
   runActionTool?: typeof executeActionTool;
+  /** Injectable owner-ask classifier (tests). */
+  classifyAsk?: typeof classifyOwnerAsk;
 };
 
 /**
@@ -769,10 +780,49 @@ export async function runInlineChatTurn(
   const sideEffects: SideEffectLog = { happened: false, notes: [] };
   // Per turn, not per call: the cap is about how much one message may change.
   const flowChanges: FlowChangeBudget = { spent: 0 };
-  const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
+  // Started BEFORE classification, not after: the classify call can take up
+  // to ASK_CLASSIFIER_TIMEOUT_MS, and the caller's budget is sized against
+  // its OWN abort (the SMS worker cuts owner turns at 75s, with email
+  // fulfilment still to run after this returns). Starting the clock
+  // afterwards would hand the tool loop a full budget it no longer has, and
+  // let the worker abort while a send is in flight.
   const deadlineMs =
     typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
-  const maxToolSteps = Math.max(1, args.maxToolSteps ?? MAX_TOOL_STEPS);
+
+  // Decide how hard to think about THIS ask before spending the first step.
+  // An ask that can only be satisfied by changing an automation has to read
+  // the account first, and the ordinary settings (thinking "low", the base
+  // tool budget) are tuned for the ordinary turn and cannot do that. Only an
+  // ask that earns it is escalated; everything else, including an outage that
+  // resolves to UNKNOWN_ASK, keeps byte-identical behavior. Gated on the
+  // automation-edit tool actually being declared: with no way to change a
+  // flow, investigating is a slower road to the same answer.
+  const classifyAsk = deps.classifyAsk ?? classifyOwnerAsk;
+  const canEditFlows = declaredActionTools.has("edit_aiflow");
+  const ask = canEditFlows
+    ? await classifyAsk({
+        ownerMessage: args.userMessage,
+        apiKey,
+        businessId: args.businessId,
+        // Never outlive the caller's own budget: with little left, skipping
+        // classification (UNKNOWN_ASK) is the honest degrade.
+        ...(deadlineMs === null
+          ? {}
+          : { timeoutMs: Math.max(1, Math.min(ASK_CLASSIFIER_TIMEOUT_MS, deadlineMs - Date.now())) })
+      })
+    : UNKNOWN_ASK;
+  const askDirective = investigationDirective(ask);
+  const systemInstruction = askDirective
+    ? `${args.systemInstruction}\n\n${askDirective}`
+    : args.systemInstruction;
+  if (ask.needsInvestigation) {
+    logger.info("dashboard-chat inline turn: ask needs investigation", {
+      businessId: args.businessId,
+      target: ask.target
+    });
+  }
+  const inputCharsEstimate = systemInstruction.length + args.userMessage.length;
+  const maxToolSteps = toolStepsForAsk(ask, Math.max(1, args.maxToolSteps ?? MAX_TOOL_STEPS));
 
   for (let step = 0; step < maxToolSteps; step++) {
     // Budget check BEFORE starting another model step: once the caller's
@@ -797,11 +847,15 @@ export async function runInlineChatTurn(
     try {
       const stepParams = {
         apiKey,
-        systemInstruction: args.systemInstruction,
+        systemInstruction,
         contents,
         tools,
         temperature: 0.3,
-        maxOutputTokens: 4000,
+        // Gemini 3 counts hidden thinking against this cap, so it moves with
+        // the thinking level: an escalated turn reasoning at `high` under the
+        // ordinary 4000 can spend the whole budget thinking and return an
+        // empty step (Bugbot, PR #1602). Unescalated turns keep 4000 exactly.
+        maxOutputTokens: maxOutputTokensForAsk(ask),
         signal: controller.signal
       };
       // Gemini 3 dynamic thinking bills as output and counts against the
@@ -810,10 +864,15 @@ export async function runInlineChatTurn(
       // engine; the heavyweight reasoning lives in the compile pipeline at
       // thinking HIGH, not in this loop). Computed per model because the
       // 404 fallback can swap families mid-turn; Gemini 2.5 rejects it.
+      //
+      // The one exception is an ask the classifier says has to read the
+      // account before it can answer honestly: that IS the heavyweight case,
+      // so it gets the compile pipeline's level rather than this loop's.
+      const askThinkingLevel = thinkingLevelForAsk(ask);
       const stepFor = (m: string) => ({
         ...stepParams,
         model: m,
-        ...(/^gemini-3/i.test(m) ? { thinkingLevel: "low" as const } : {})
+        ...(/^gemini-3/i.test(m) ? { thinkingLevel: askThinkingLevel } : {})
       });
       try {
         result = await chatStep(stepFor(model));
