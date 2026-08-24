@@ -101,7 +101,9 @@ export const updateCoworkerToolSettingsTool = defineMcpTool({
         results.push({ agent: agentKey, status: "not_on_this_surface" });
         continue;
       }
-      if (!def.tool.configurable) {
+      // Hiding it from the vocabulary is not enough on its own: anyone who
+      // knows the key could still toggle it, including turning it OFF for HQ.
+      if (!def.tool.configurable || def.tool.platformOnly) {
         results.push({ agent: agentKey, status: "platform_managed" });
         continue;
       }

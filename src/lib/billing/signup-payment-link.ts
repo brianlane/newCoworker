@@ -40,6 +40,7 @@ import {
 } from "@/lib/db/subscriptions";
 import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { authUserExistsByEmail } from "@/lib/auth";
 import {
@@ -344,7 +345,12 @@ export async function findUnpaidSignupByContact(
   const candidates: BusinessRow[] = [];
 
   if (contact.phone) {
-    const { data } = await db.from("businesses").select("*").eq("phone", contact.phone);
+    // Signup persists the coerced E.164 form, but a model relaying what a
+    // texter typed can hand over "(780) 707-6365" or a number with no country
+    // code. Match both so a formatted number does not read as "no signup".
+    const coerced = coerceOwnerPhoneToE164(contact.phone);
+    const forms = [...new Set([coerced, contact.phone.trim()].filter(Boolean))] as string[];
+    const { data } = await db.from("businesses").select("*").in("phone", forms);
     candidates.push(...((data ?? []) as BusinessRow[]));
   }
 

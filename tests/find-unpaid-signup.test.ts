@@ -42,6 +42,7 @@ function makeDb(rows: Record<string, unknown>) {
       const chain = {
         select: () => chain,
         eq: () => chain,
+        in: () => chain,
         maybeSingle: async () => outcome,
         then: (resolve: (v: unknown) => unknown) => resolve(outcome)
       };
@@ -64,6 +65,7 @@ describe("findUnpaidSignupByContact", () => {
         const chain = {
           select: () => chain,
           eq: () => chain,
+          in: () => chain,
           maybeSingle: async () => ({ data: { id: "profile-1" } }),
           then: (resolve: (v: unknown) => unknown) => {
             if (table === "businesses") {
@@ -125,6 +127,7 @@ describe("findUnpaidSignupByContact", () => {
         const chain = {
           select: () => chain,
           eq: () => chain,
+          in: () => chain,
           maybeSingle: async () => ({ data: null }),
           then: (resolve: (v: unknown) => unknown) => resolve({ data: null })
         };
@@ -143,6 +146,7 @@ describe("findUnpaidSignupByContact", () => {
         const chain = {
           select: () => chain,
           eq: () => chain,
+          in: () => chain,
           maybeSingle: async () => ({ data: { id: "profile-1" } }),
           then: (resolve: (v: unknown) => unknown) =>
             resolve({ data: table === "businesses" ? [biz()] : null })
@@ -167,6 +171,7 @@ describe("findUnpaidSignupByContact", () => {
         const chain = {
           select: () => chain,
           eq: () => chain,
+          in: () => chain,
           maybeSingle: async () => ({ data: { id: "profile-1" } }),
           then: (resolve: (v: unknown) => unknown) =>
             resolve({ data: table === "businesses" ? null : { id: "profile-1" } })
@@ -176,6 +181,34 @@ describe("findUnpaidSignupByContact", () => {
     } as never;
     createSupabaseServiceClient.mockResolvedValue(db);
     expect(await findUnpaidSignupByContact({ email: "king@kinintegrated.com" })).toBeNull();
+  });
+
+  // Bugbot, PR #1593: signup stores the coerced E.164 form, so a raw
+  // equality match on what a texter typed silently found nothing.
+  it("matches a formatted number against the stored E.164 form", async () => {
+    let queried: string[] = [];
+    const db = {
+      from: () => {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => chain,
+          in: (_col: string, vals: string[]) => {
+            queried = vals;
+            return chain;
+          },
+          maybeSingle: async () => ({ data: null }),
+          then: (resolve: (v: unknown) => unknown) => resolve({ data: [biz()] })
+        };
+        return chain;
+      }
+    } as never;
+    createSupabaseServiceClient.mockResolvedValue(db);
+
+    const found = await findUnpaidSignupByContact({ phone: "(780) 707-6365" });
+
+    expect(found?.id).toBe(KIN);
+    expect(queried).toContain("+17807076365");
   });
 
   // Covers the left side of `client ?? await createSupabaseServiceClient()`.

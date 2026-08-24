@@ -71,3 +71,23 @@ describe("manage_coworker_tools MCP surface", () => {
     expect(text).not.toContain("send_signup_payment_link");
   });
 });
+
+describe("platform-only tools are not writable", () => {
+  // Bugbot, PR #1593: hiding a tool from the vocabulary is not enough. Anyone
+  // who knows the key could still toggle it, including turning it OFF for HQ.
+  it("the Settings write path refuses them", async () => {
+    const route = await import("@/app/api/dashboard/agent-tools/route");
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("src/app/api/dashboard/agent-tools/route.ts", "utf8")
+    );
+    expect(typeof route.PUT).toBe("function");
+    expect(src).toContain("def.tool.platformOnly");
+  });
+
+  it("the MCP write path refuses them", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("src/lib/mcp/tools/coworker-tool-settings.ts", "utf8")
+    );
+    expect(src).toContain("def.tool.platformOnly");
+  });
+});

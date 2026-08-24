@@ -129,10 +129,18 @@ const lookupArgsSchema = z.object({ phone: phoneSchema });
  * email they signed up with, or both. Neither alone is trusted to identify a
  * paid account, since the lookup only ever matches an UNPAID signup.
  */
-const signupPaymentLinkArgsSchema = z.object({
-  phone: z.string().trim().min(1).max(32).optional(),
-  email: z.string().trim().email().optional()
-});
+const signupPaymentLinkArgsSchema = z
+  .object({
+    phone: z.string().trim().min(1).max(32).optional(),
+    email: z.string().trim().email().optional()
+  })
+  // The Rowboat webhook carries no caller context, so nothing can inject the
+  // texter's number on the model's behalf. Requiring one identifier turns
+  // "the model sent neither" into an actionable invalid_args instead of a
+  // misleading signup_not_found on the very turn this tool exists for.
+  .refine((a) => Boolean(a.phone || a.email), {
+    message: "provide the phone they are texting from, or the email they signed up with"
+  });
 const setNameArgsSchema = z.object({ displayName: z.string().min(1).max(200), phone: phoneSchema });
 const pinNoteArgsSchema = z.object({ note: z.string().min(1).max(1500), phone: phoneSchema });
 const sendSmsArgsSchema = z.object({
@@ -378,7 +386,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
             "No unfinished signup matches that phone or email. Ask them which email they used on the questionnaire, and if they have not filled it in yet, send them to the pricing page to start."
         };
       }
-      const link = await createSignupPaymentLink({ businessId: signup.id });
+      // Pass the email through: an unpaid row still carries the onboarding
+      // sentinel, so without this the billing address can only come from a
+      // customer profile, and a questionnaire-only abandoner has none. The
+      // lookup would succeed and the mint would then refuse no_owner_email.
+      const link = await createSignupPaymentLink({
+        businessId: signup.id,
+        ownerEmail: parsed.data.email
+      });
       if (!link.ok) {
         return { ok: false, detail: link.refusal, message: link.message };
       }
