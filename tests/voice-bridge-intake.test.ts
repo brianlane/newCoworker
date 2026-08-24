@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   composeIntakeLeadSms,
   DEFAULT_INTAKE_CAPTURE_FIELDS,
+  extractIntakeAlertContext,
   INBOUND_VOICEMAIL_RECOGNITION_LINE,
   inboundVoicemailMessageLine,
   intakeSystemInstruction,
@@ -308,6 +309,181 @@ describe("composeIntakeLeadSms", () => {
       starFrame: true
     });
     expect(text).toBe(`${STAR_ROW}\n\n${STAR_ROW}`);
+  });
+});
+
+/**
+ * The same summary fires for OUTBOUND `place_ai_call` calls, and the
+ * inbound-shaped message was wrong twice over there (Amy Laidlaw's Aug 23
+ * 2026 complaint, both examples verified live): the header claimed a missed
+ * warm handoff on a call the platform placed, and the dialed lead's own
+ * number (+16232622189 was Isiah Perez himself) rendered as "Transferred
+ * via". The outbound shape names the lead from the CRM row and the flow's
+ * briefing, so the alert carries what the flow knew: name, number, email,
+ * source, buy/sell intent, price when the flow had one.
+ */
+describe("composeIntakeLeadSms: outbound calls the platform placed", () => {
+  const base = {
+    businessName: "Amy Laidlaw Real Estate",
+    lead: {} as Record<string, string>,
+    transcript: "AI: Hi Isiah, this is Amy Laidlaw's office.",
+    maxChars: 3000,
+    callDirection: "outbound" as const
+  };
+
+  it("drops the missed-warm-handoff claim and uses the follow-up header", () => {
+    const text = composeIntakeLeadSms(base);
+    expect(text).toContain("Amy Laidlaw Real Estate: AI follow-up call summary (AI intake).");
+    expect(text).not.toContain("missed the warm handoff");
+    expect(text).not.toContain("New live-transfer lead");
+  });
+
+  it("labels the dialed number as the lead, never as Transferred via", () => {
+    const text = composeIntakeLeadSms({
+      ...base,
+      leadE164: "+16232622189",
+      known: { name: "Isiah Perez" }
+    });
+    expect(text).toContain("Lead: Isiah Perez (+16232622189)");
+    expect(text).not.toContain("Transferred via");
+  });
+
+  it("renders the CRM identity lines the owner asked for", () => {
+    const text = composeIntakeLeadSms({
+      ...base,
+      leadE164: "+16232622189",
+      known: {
+        name: "Isiah Perez",
+        email: "isiahperez55@yahoo.com",
+        leadSource: "Clever"
+      }
+    });
+    expect(text).toContain("Lead: Isiah Perez (+16232622189)");
+    expect(text).toContain("Lead email: isiahperez55@yahoo.com");
+    expect(text).toContain("Lead source: Clever");
+  });
+
+  it("renders the flow briefing verbatim, so the flow's knowledge reaches the owner", () => {
+    const note =
+      "Their name: Isiah Perez. They enquired through listwithclever.com about selling in Phoenix.";
+    const text = composeIntakeLeadSms({ ...base, flowContextNote: note });
+    expect(text).toContain(`Call briefing: ${note}`);
+  });
+
+  it("states a voicemail outcome instead of implying a conversation", () => {
+    const left = composeIntakeLeadSms({
+      ...base,
+      voicemail: { detected: true, messageLeft: true }
+    });
+    expect(left).toContain("Outcome: reached voicemail, left the scripted message.");
+    const silent = composeIntakeLeadSms({
+      ...base,
+      voicemail: { detected: true, messageLeft: false }
+    });
+    expect(silent).toContain("Outcome: reached voicemail, no message left.");
+    const live = composeIntakeLeadSms({
+      ...base,
+      voicemail: { detected: false, messageLeft: false }
+    });
+    expect(live).not.toContain("Outcome:");
+  });
+
+  it("a number-only lead still renders when there is no CRM row", () => {
+    const text = composeIntakeLeadSms({ ...base, leadE164: "+16025550100" });
+    expect(text).toContain("Lead: +16025550100");
+  });
+
+  it("blank enrichment renders no empty labels", () => {
+    const text = composeIntakeLeadSms({
+      ...base,
+      leadE164: "  ",
+      known: { name: " ", email: "", leadSource: "" },
+      flowContextNote: "   "
+    });
+    expect(text).not.toContain("Lead:");
+    expect(text).not.toContain("Lead email:");
+    expect(text).not.toContain("Lead source:");
+    expect(text).not.toContain("Call briefing:");
+  });
+
+  it("the inbound shape is untouched: no Outcome line, Transferred via kept", () => {
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Javier" },
+      transferFromE164: "+14159851909",
+      transcript: "AI: Hi",
+      maxChars: 3000,
+      voicemail: { detected: true, messageLeft: true }
+    });
+    expect(text).toContain("New live-transfer lead (AI intake)");
+    expect(text).toContain("Transferred via: +14159851909");
+    expect(text).not.toContain("Outcome:");
+  });
+
+  // An INBOUND session's `ai_takeover.context_note` is model-only instruction
+  // text stamped from the partner alert, not a summary for a human. Rendering
+  // it would push prompt language into an owner SMS this feature is supposed
+  // to leave alone (Bugbot, PR #1600). The briefing is outbound-only, and the
+  // composer enforces that rather than trusting the call site to.
+  it("never renders a briefing on an inbound alert, even when one is passed", () => {
+    const note = "Press 1 when the announcement asks. The seller is on the line after that.";
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Javier" },
+      transferFromE164: "+14159851909",
+      transcript: "AI: Hi",
+      maxChars: 3000,
+      flowContextNote: note
+    });
+    expect(text).not.toContain("Call briefing:");
+    expect(text).not.toContain(note);
+  });
+
+  it("carries no em dash anywhere in the enriched body", () => {
+    const text = composeIntakeLeadSms({
+      ...base,
+      leadE164: "+16232622189",
+      known: { name: "Isiah Perez", email: "isiahperez55@yahoo.com", leadSource: "Clever" },
+      flowContextNote: "Their name: Isiah Perez.",
+      voicemail: { detected: true, messageLeft: true }
+    });
+    expect(text).not.toMatch(/—/);
+  });
+});
+
+describe("extractIntakeAlertContext", () => {
+  it("pulls the live note and the voicemail stamps out of a session context", () => {
+    const ctx = extractIntakeAlertContext({
+      outbound: true,
+      machine_detected: true,
+      voicemail_spoken: true,
+      ai_takeover: { notify_e164: "+16026951142", context_note: "  Their name: Isiah.  " }
+    });
+    expect(ctx).toEqual({
+      contextNote: "Their name: Isiah.",
+      machineDetected: true,
+      voicemailSpoken: true
+    });
+  });
+
+  it("defaults safely on junk and on missing keys", () => {
+    for (const raw of [null, undefined, "x", 5, [], {}, { ai_takeover: 5 }]) {
+      const ctx = extractIntakeAlertContext(raw);
+      expect(ctx.machineDetected).toBe(false);
+      expect(ctx.voicemailSpoken).toBe(false);
+      expect(ctx.contextNote).toBeUndefined();
+    }
+  });
+
+  it("drops a blank note rather than emitting an empty briefing line", () => {
+    const ctx = extractIntakeAlertContext({ ai_takeover: { context_note: "   " } });
+    expect(ctx.contextNote).toBeUndefined();
+  });
+
+  it("stamps must be literal true, never merely truthy", () => {
+    const ctx = extractIntakeAlertContext({ machine_detected: "yes", voicemail_spoken: 1 });
+    expect(ctx.machineDetected).toBe(false);
+    expect(ctx.voicemailSpoken).toBe(false);
   });
 });
 

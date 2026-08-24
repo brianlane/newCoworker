@@ -35,7 +35,12 @@ import {
   runReachLadder,
   type ReachLadderConfig
 } from "./reach-teammate.js";
-import { composeIntakeLeadSms } from "./intake.js";
+import {
+  composeIntakeLeadSms,
+  extractIntakeAlertContext,
+  type IntakeAlertContext,
+  type IntakeKnownLead
+} from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
 import {
@@ -699,9 +704,56 @@ async function meterGeminiLiveSpend(params: {
 const INTAKE_SMS_MAX_CHARS = 3000;
 
 /**
+ * CRM contact row for the number an outbound intake call dialed, so the
+ * finished-call alert can name the lead the platform already knows (their
+ * name, email, and lead source) instead of arriving blind. `contacts` is a
+ * residency-KEPT table (deliberately central, the box copy only lags it), so
+ * this central read is correct for every tenant. Best-effort: any miss or
+ * error just drops the enrichment, never the alert.
+ */
+async function lookupIntakeKnownLead(
+  supabase: SupabaseClient,
+  businessId: string,
+  e164: string
+): Promise<IntakeKnownLead | undefined> {
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("display_name, email, lead_source")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`)
+      .limit(1);
+    if (error || !data || data.length === 0) return undefined;
+    const row = data[0] as {
+      display_name?: string | null;
+      email?: string | null;
+      lead_source?: string | null;
+    };
+    const name = typeof row.display_name === "string" ? row.display_name.trim() : "";
+    const email = typeof row.email === "string" ? row.email.trim() : "";
+    const leadSource = typeof row.lead_source === "string" ? row.lead_source.trim() : "";
+    if (!name && !email && !leadSource) return undefined;
+    return {
+      ...(name ? { name } : {}),
+      ...(email ? { email } : {}),
+      ...(leadSource ? { leadSource } : {})
+    };
+  } catch (err) {
+    console.warn("voice-bridge: intake known-lead lookup failed (non-fatal)", err);
+    return undefined;
+  }
+}
+
+/**
  * After a HomeLight AI-takeover call ends, text the owner (notify number) a
  * structured lead summary plus the full transcript. Best-effort: a missing SMS
  * config or transcript just trims the message; we never throw.
+ *
+ * `callDirection` and the enrichment fields exist because the same summary
+ * also fires for OUTBOUND `place_ai_call` calls, where the old inbound-shaped
+ * message was wrong twice over: the header claimed a missed warm handoff on a
+ * call the platform placed, and the dialed lead's own number rendered as
+ * "Transferred via". See `composeIntakeLeadSms` for the direction semantics.
  */
 async function sendIntakeLeadSms(params: {
   supabase: SupabaseClient;
@@ -709,12 +761,22 @@ async function sendIntakeLeadSms(params: {
   settings: TenantTelnyxSettings;
   notifyE164: string;
   callControlId: string;
-  /** The live-transfer line the call arrived on (transfer partner), not the seller. */
+  /** The live-transfer line the call arrived on (transfer partner), not the seller. Inbound only. */
   transferFromE164: string;
   businessName: string;
   lead: CapturedLead;
   /** Frame the summary in asterisks (the flow's options.starAlerts). */
   starFrame?: boolean;
+  /** Who dialed; outbound reshapes the header and number labeling. */
+  callDirection?: "inbound" | "outbound";
+  /** Outbound only: the number the platform dialed (the lead's own number). */
+  leadE164?: string;
+  /** CRM contact fields for the dialed number. */
+  known?: IntakeKnownLead;
+  /** The flow's briefing note for the call, rendered under "Call briefing:". */
+  flowContextNote?: string;
+  /** Machine verdict stamps read off the session context. */
+  voicemail?: { detected: boolean; messageLeft: boolean };
 }): Promise<void> {
   const { supabase, businessId, settings, notifyE164, callControlId, transferFromE164, businessName, lead } =
     params;
@@ -756,7 +818,12 @@ async function sendIntakeLeadSms(params: {
     transferFromE164,
     transcript,
     maxChars: INTAKE_SMS_MAX_CHARS,
-    starFrame: params.starFrame === true
+    starFrame: params.starFrame === true,
+    callDirection: params.callDirection,
+    leadE164: params.leadE164,
+    known: params.known,
+    flowContextNote: params.flowContextNote,
+    voicemail: params.voicemail
   });
 
   const res = await telnyxSendPlainSms(apiKey, {
@@ -2171,6 +2238,11 @@ function main(): void {
           //
           // Written BEFORE the resume below so the worker never reads a session
           // that has not been filled in yet.
+          //
+          // The same read also feeds the finished-call alert below: the LIVE
+          // context note (voice_brief rewrites land there mid-call) and the
+          // voicemail stamps. A failed read degrades to an unenriched alert.
+          let alertCtx: IntakeAlertContext = { machineDetected: false, voicemailSpoken: false };
           if (intake) {
             try {
               // Re-read rather than reuse the context parsed at attach. Two
@@ -2185,6 +2257,7 @@ function main(): void {
                 .maybeSingle();
               const liveCtx = ((liveRow as { context?: Record<string, unknown> } | null)
                 ?.context ?? {}) as Record<string, unknown>;
+              alertCtx = extractIntakeAlertContext(liveCtx);
               const liveAi = (liveCtx.ai_takeover ?? {}) as Record<string, unknown>;
               const captured = geminiGetLead ? geminiGetLead() : null;
               if (captured && Object.keys(captured).length > 0) {
@@ -2216,6 +2289,19 @@ function main(): void {
           // failure / disabled / no key) we must NOT text the owner a phantom
           // "lead" with no captured fields and no transcript.
           if (intake && intakeNotifyE164 && geminiGetLead) {
+            // Direction decides what the remote number means. Inbound: the ANI
+            // is the transfer partner's line, "Transferred via" only. Outbound:
+            // the platform dialed the LEAD, so that number goes on the Lead
+            // line and the CRM contact row for it (name, email, lead source)
+            // rides along. The lookup keys on the SIGNED caller only, matching
+            // the trust rule the persona/memory paths follow (issue #268); the
+            // unsigned value still renders as a number, just without a lookup.
+            const outboundLeadE164 =
+              callDirection === "outbound" ? trustedFromE164 || fromE164Info || "" : "";
+            const known =
+              callDirection === "outbound" && trustedFromE164
+                ? await lookupIntakeKnownLead(supabase, businessId, trustedFromE164)
+                : undefined;
             // The details go to whoever works the lead, and (when configured) a
             // copy to the owner. Deduped so one number never gets it twice, and
             // sent in sequence so the primary recipient is never starved by a
@@ -2235,11 +2321,23 @@ function main(): void {
                   notifyE164,
                   callControlId,
                   // The ANI is the transfer partner's line (e.g. HomeLight), not
-                  // the seller, so pass it only as the "transferred via" reference.
-                  transferFromE164: trustedFromE164 || fromE164Info || "",
+                  // the seller, so pass it only as the "transferred via"
+                  // reference, and only for the inbound direction it describes.
+                  transferFromE164:
+                    callDirection === "inbound" ? trustedFromE164 || fromE164Info || "" : "",
                   businessName,
                   lead: geminiGetLead(),
-                  starFrame: intakeStarFrame
+                  starFrame: intakeStarFrame,
+                  callDirection,
+                  leadE164: outboundLeadE164,
+                  known,
+                  // Prefer the live note (voice_brief may have rewritten it
+                  // mid-call); fall back to the attach-time copy.
+                  flowContextNote: alertCtx.contextNote ?? intake.contextNote ?? "",
+                  voicemail: {
+                    detected: alertCtx.machineDetected,
+                    messageLeft: alertCtx.voicemailSpoken
+                  }
                 });
               } catch (err) {
                 console.error("voice-bridge: intake SMS error", err, { notifyE164 });

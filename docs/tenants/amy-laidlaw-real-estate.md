@@ -683,6 +683,40 @@ capitals still apply.
 every flow that has one, and buyers reach it (they always read `price_gate:
 "team"`, so they clear the `notEquals "ai"` guard).
 
+### The AI-intake call alert now carries the lead (Aug 24 2026)
+
+Amy's Aug 23 ask, texted to her coworker twice: include buyer or seller,
+name, phone, email, website source, and price on notifications like the
+"New live-transfer lead (AI intake), the team missed the warm handoff" texts.
+The owner-rule capture saved that preference to her memory
+(`business_configs.memory_md`, "Owner chat (2026-08-23)"), but the alert
+itself is a fixed template in the voice bridge and read none of it. Both of
+her examples were OUTBOUND cadence calls to Clever leads that hit voicemail
+(Isiah Perez and Linda Elenes, both already carrying name, email and
+`lead_source` on their contact rows), so the header's missed-warm-handoff
+claim was false and the lead's own number rendered as "Transferred via".
+
+Closed as a PLATFORM change (`composeIntakeLeadSms` +
+`sendIntakeLeadSms`, `vps/voice-bridge/src/`), not a tenant patch, since the
+mislabeling hit every tenant with outbound `place_ai_call` summaries. An
+outbound finished-call alert now reads: an honest "AI follow-up call summary"
+header, an "Outcome: reached voicemail..." line when the model's own machine
+verdict stamped the session, `Lead: <name> (<number>)` plus
+`Lead email:` / `Lead source:` from the central contacts row for the dialed
+number (signed caller only), and `Call briefing:` with the flow's
+`contextTemplate` note verbatim, which is where buyer/seller intent and the
+source site live (the cadence note reads "They enquired through
+{{vars.lead_site}} about {{vars.lead_intent}} in {{vars.lead_city}}").
+Inbound live-transfer alerts are byte-identical to before.
+
+Two limits, both deliberate: price appears only when the flow's briefing
+carries one (the cadence's note does not; team offers already quote price),
+and her `voice_handoff_chains.capture_fields` were NOT extended to
+interrogate live callers about buyer/seller, because her Aug 5 rule says
+seller calls are "about winning the lead and not about information
+extraction". Remember the bridge is not covered by the root tsc and is live
+only after `tsx debug/redeploy-voice-bridge.ts --all`.
+
 ## Booking alerts
 
 `maybeAlertUnassignedBooking` already fired on EVERY confirmed booking, not
