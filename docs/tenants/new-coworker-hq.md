@@ -150,6 +150,14 @@ visitor actually books.
 
 ## One-shots
 
+**Discovery-call doc pricing corrected (2026-08-24):**
+`fix-hq-discovery-doc-pricing.ts --apply` replaced the garbled pricing bullet
+in the "Kingsley Moyo + New Coworker: Discovery Call" transcript document
+(the Zoom import's AI summary claimed "$999/month" and "$9.99/mo"). HQ
+documents are coworker-readable knowledge and Kingsley texts the HQ line, so
+the wrong numbers were quotable. Transcript body untouched.
+
+
 **Trash removed from inbox triage (2026-08-21):** `s_org_bulk` in
 `hq-inbox-triage-definition.ts` no longer carries `trash: true`, and the live
 row was refreshed by re-running `setup-hq-inbox-triage-flow.ts --apply`. No
