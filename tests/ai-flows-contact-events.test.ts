@@ -104,6 +104,19 @@ describe("contactEventText / contactEventTriggerScope", () => {
     ).toBe("");
   });
 
+  it("normalizes the source IDENTICALLY in the text and in the template scope", () => {
+    // These two are documented as the same value. A stored "  Clever  "
+    // reaching a template padded while the extraction reads it trimmed would
+    // make a template that compares them disagree with itself.
+    const padded = input({ contact: { e164: "+16025550111", source: "  Clever  " } });
+    expect(contactEventTriggerScope(padded).contact_source).toBe("Clever");
+    expect(contactEventText(padded)).toContain("source: Clever");
+    // Whitespace-only is no source at all, on both sides.
+    const blank = input({ contact: { e164: "+16025550111", source: "   " } });
+    expect(contactEventTriggerScope(blank).contact_source).toBe("");
+    expect(contactEventText(blank)).not.toContain("source:");
+  });
+
   it("keeps the contact KEY as `from`, which consumers look the contact up by", () => {
     // Not the bare address: the worker seeds {{vars.contact_language}} from
     // this value with a customer_e164 lookup, so it has to be the identity.

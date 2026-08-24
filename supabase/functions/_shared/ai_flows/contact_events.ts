@@ -89,6 +89,18 @@ const FLOW_PAGE = 100;
  * The "key: value" text conditions and extract_text see (same convention as
  * the calendar/webhook channels).
  */
+/**
+ * The contact's lead source as both readers must see it.
+ *
+ * One definition on purpose: the `source:` line and
+ * `{{trigger.contact_source}}` are documented as the same value, so a stored
+ * "  Clever  " must not reach a template padded while the extraction reads it
+ * trimmed. A template comparing the two would then disagree with itself.
+ */
+function normalizedSource(contact: ContactEventContact): string {
+  return typeof contact.source === "string" ? contact.source.trim() : "";
+}
+
 export function contactEventText(input: ContactEventInput): string {
   const c = input.contact;
   const tags = c.tags ?? [];
@@ -99,7 +111,7 @@ export function contactEventText(input: ContactEventInput): string {
   // is "email:val@example.com". A contact with no phone gets no phone line;
   // the `email:` line below already carries their identity.
   const phone = isEmailContactKey(c.e164) ? "" : c.e164;
-  const source = typeof c.source === "string" ? c.source.trim() : "";
+  const source = normalizedSource(c);
   const lines = [
     `event: ${input.kind}`,
     c.name ? `name: ${c.name}` : "",
@@ -138,7 +150,9 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     contact_email: input.contact.email ?? "",
     // Same value as the `source:` line in windowText, addressable directly so
     // a template can say it without an extract_text step to lift it back out.
-    contact_source: input.contact.source ?? "",
+    // Normalized through the SAME helper the line uses, so "same value" is
+    // structural rather than a claim in a comment.
+    contact_source: normalizedSource(input.contact),
     note: input.note ?? "",
     ...(input.kind === "tag_changed"
       ? { tag: input.tag ?? "", change: input.change ?? "added" }
