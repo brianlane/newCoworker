@@ -1027,13 +1027,46 @@ route keeps its own `price_gate` guard, again matching Realtor.com. The $1M+
 keep-for-Amy rule rides along on the buyer route: it is a price rule, not a
 seller rule.
 
-Known and not fixed there: `price_gate` and `price_under_1m` come out EMPTY on
-a buyer referral, because `read_details` asks for the "estimated home value"
-and a buyer page shows an "Est. Price Range" (neither real buyer run extracted
-one). Empty is the harmless direction, `price_gate notEquals "ai"` holds so the
-buyer route runs and `price_under_1m equals "no"` does not so the lead is
-offered rather than kept. Teaching the extraction to read a buyer's price range
-is a separate change.
+Known and not fixed there, and see the CORRECTION in the entry below: the
+price gates are worded for a seller's single figure and say nothing about a
+buyer's range.
+
+**`amy-clever-buyer-price-range.ts` (Aug 24 2026):** the price gates now read a
+buyer's budget RANGE. `price_gate` ($500K+ to the team, under is AI-owned) and
+`price_under_1m` (from `price_digits`, $1M+ kept for Amy) between them gate five
+steps. Both were worded for a seller's single figure ("Est. Home Value:
+$825,000.00"); a buyer referral shows "Est. Price Range: 0 to 200000" instead,
+and neither description said what to do with two numbers, so `price_gate` fell
+to its own default of "ai" and a buyer was AI-owned whatever their budget.
+
+The rule, added to `price_gate` and `price_digits`: judge a RANGE by its TOP.
+That is the buyer's ceiling, and it is the human-first direction, so a wide
+range on a high-dollar buyer is not quietly handed to the AI. `price` keeps the
+range verbatim because no gate reads it, only team-facing notices, where
+"300000 to 450000" is honest and one end would state a number the referral
+never gave. `price_band` is left alone: nothing in the flow reads it.
+
+**CORRECTION to the entry above.** It cited the two real buyer runs (Jul 8 and
+Jul 31 2026) as evidence that the extraction comes back empty for buyers. That
+evidence does not support it. `price_gate` first appears in a run on 2026-08-13
+and `price_digits` on 2026-08-14, so on those July runs the fields did not exist
+yet, which is why they are blank, and there has been NO Clever buyer since. How
+the old wording behaved on a real buyer page was untested, not known broken.
+What was certain, and what this fixes, is the wording itself.
+
+Downstream, and it is a real behavior change: a $500K+ buyer now reaches
+`route_buyer` and the rotation (today they never do), a $1M+ buyer is kept for
+Amy by `route_buyer.ownerDirectWhen` (today it never fires for a buyer), and an
+under-$500K buyer becomes AI-owned per Amy's own rule. Traced against the live
+definition, that last case is not a hole: `clever_gated_after_call` runs, no
+call arm matches because the AI call is gated off for buyers, so its else tags
+them "Needs Follow Up" carrying `lead_type: {{vars.lead_type}}` and the cadence
+works them as a buyer.
+
+Trap worth keeping: `extractFieldSchema` caps a field description at 300
+characters and a breach surfaces only as "Invalid AiFlow definition" naming no
+field. The first draft of this patch was rejected for exactly that;
+`tests/oneshot-amy-clever-buyer-price-range.ts` now pins the length.
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
