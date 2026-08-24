@@ -41,6 +41,7 @@ const TENANT_TOKENS: ReadonlyArray<{ token: string; dossiers: string[] }> = [
   { token: "kyp", dossiers: ["kyp-ads.md"] },
   { token: "truly", dossiers: ["truly-insurance.md"] },
   { token: "privyr", dossiers: ["truly-insurance.md"] },
+  { token: "kin", dossiers: ["kin-integrated-child-health.md"] },
   { token: "scar", dossiers: ["scar-fairy.md"] },
   { token: "fairy", dossiers: ["scar-fairy.md"] },
   { token: "hq", dossiers: ["new-coworker-hq.md"] }
