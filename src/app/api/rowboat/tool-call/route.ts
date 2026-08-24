@@ -6,6 +6,11 @@ import { resolveRowboatWebhookClaims } from "@/lib/rowboat/webhook-jwt";
 import { resolveBusinessIdForRowboatProject } from "@/lib/db/vps-gateway-tokens";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import {
+  createSignupPaymentLink,
+  findUnpaidSignupByContact
+} from "@/lib/billing/signup-payment-link";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
+import {
   CUSTOMER_TOOL_SURFACES,
   TOOL_GATES,
   baseToolKey,
@@ -119,6 +124,15 @@ const contentSchema = z.object({
 const phoneSchema = z.string().regex(E164_RE, "phone must be E.164, e.g. +15551234567");
 
 const lookupArgsSchema = z.object({ phone: phoneSchema });
+/**
+ * Both optional: the model may know only the number texting it, only the
+ * email they signed up with, or both. Neither alone is trusted to identify a
+ * paid account, since the lookup only ever matches an UNPAID signup.
+ */
+const signupPaymentLinkArgsSchema = z.object({
+  phone: z.string().trim().min(1).max(32).optional(),
+  email: z.string().trim().email().optional()
+});
 const setNameArgsSchema = z.object({ displayName: z.string().min(1).max(200), phone: phoneSchema });
 const pinNoteArgsSchema = z.object({ note: z.string().min(1).max(1500), phone: phoneSchema });
 const sendSmsArgsSchema = z.object({
@@ -341,6 +355,45 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
 async function dispatch(businessId: string, name: string, args: unknown): Promise<ToolResult> {
   const surface = CUSTOMER_TOOL_SURFACES[name];
   switch (baseToolKey(name)) {
+    case "send_signup_payment_link": {
+      // Platform-only. The seed declares this on every box so the workflow
+      // stays identical fleet-wide, but only New Coworker sells New Coworker,
+      // so a tenant box can never actually mint a signup checkout.
+      if (businessId !== HQ_BUSINESS_ID) {
+        return { ok: false, detail: "not_available" };
+      }
+      const parsed = signupPaymentLinkArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const signup = await findUnpaidSignupByContact({
+        phone: parsed.data.phone ?? null,
+        email: parsed.data.email ?? null
+      });
+      if (!signup) {
+        return {
+          ok: false,
+          detail: "signup_not_found",
+          message:
+            "No unfinished signup matches that phone or email. Ask them which email they used on the questionnaire, and if they have not filled it in yet, send them to the pricing page to start."
+        };
+      }
+      const link = await createSignupPaymentLink({ businessId: signup.id });
+      if (!link.ok) {
+        return { ok: false, detail: link.refusal, message: link.message };
+      }
+      return {
+        ok: true,
+        data: {
+          url: link.url,
+          businessName: signup.name,
+          tier: link.tier,
+          billingPeriod: link.billingPeriod
+        },
+        message:
+          "Send this url to them exactly as written. It expires 24 hours from now, so if they come back later, call this tool again for a fresh one rather than resending the old link."
+      };
+    }
     case "customer_lookup_by_phone": {
       const parsed = lookupArgsSchema.safeParse(args);
       if (!parsed.success) {

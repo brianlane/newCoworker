@@ -27,17 +27,27 @@ import { upsertAgentToolSetting } from "@/lib/db/agent-tool-settings";
 
 const AGENT_KEYS = ["dashboard", "voice", "sms", "webchat", "email", "slack"] as const;
 
+/**
+ * Platform-only tools are invisible on this surface for EVERY caller,
+ * including HQ. This is the tenant-facing "manage my coworker tools" bridge;
+ * New Coworker's own tooling is managed from the admin console instead, so
+ * failing closed here costs nothing and keeps one less path to reason about.
+ */
+function tenantTools(agent: { tools: { toolKey: string; platformOnly?: boolean }[] }) {
+  return agent.tools.filter((tool) => !tool.platformOnly);
+}
+
 /** Which surfaces declare this toolKey at all, for actionable refusals. */
 function surfacesDeclaring(toolKey: string): string[] {
   return AGENT_TOOL_REGISTRY.filter((agent) =>
-    agent.tools.some((tool) => tool.toolKey === toolKey)
+    tenantTools(agent).some((tool) => tool.toolKey === toolKey)
   ).map((agent) => agent.key);
 }
 
 /** The toolKey vocabulary for one surface, for unknown-key refusals. */
 function toolKeysForSurface(agentKey: string): string[] {
   const agent = AGENT_TOOL_REGISTRY.find((a) => a.key === agentKey);
-  return agent ? agent.tools.map((t) => t.toolKey) : [];
+  return agent ? tenantTools(agent).map((t) => t.toolKey) : [];
 }
 
 export const updateCoworkerToolSettingsTool = defineMcpTool({

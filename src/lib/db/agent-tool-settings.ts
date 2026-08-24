@@ -8,6 +8,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import {
   AGENT_TOOL_REGISTRY,
   findAgentToolDefinition,
@@ -59,7 +60,11 @@ export async function resolveAgentTools(
     key: agent.key,
     label: agent.label,
     description: agent.description,
-    tools: agent.tools.map((tool) => {
+    // Platform-only tools are New Coworker's own, never a tenant capability,
+    // so they are not rendered as toggles in anyone else's Settings.
+    tools: agent.tools
+      .filter((tool) => !tool.platformOnly || businessId === HQ_BUSINESS_ID)
+      .map((tool) => {
       const override = overrides.get(`${agent.key}\u0000${tool.toolKey}`);
       return {
         ...tool,
