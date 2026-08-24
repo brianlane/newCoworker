@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  EVIDENCE_VAR,
   LEAD_TYPES,
   decideHeal,
   runMentionsPhone,
@@ -100,6 +101,22 @@ describe("decideHeal", () => {
         t === "seller" ? "already_right" : "correct"
       );
     }
+  });
+});
+
+describe("EVIDENCE_VAR", () => {
+  it("reads lead_type ONLY, never the lookalike route_lead_type", () => {
+    // Two different traps behind one name on this account:
+    //  - "Follow Up Requested" defines route_lead_type as `... when it does
+    //    not say, "seller"`, the identical default this heal exists to
+    //    overturn. Reading it would launder that guess into evidence: it
+    //    either blesses a wrongly-parked seller as already_right, or collides
+    //    with a real answer and forces a conflicting refusal. Both leave a
+    //    fixable misroute alone.
+    //  - "ReferralExchange Lead" defines it by REACHABILITY, answering "none"
+    //    when the lead is email-only. That is a routing decision keyed on
+    //    contact channel, not a statement about the person.
+    expect(EVIDENCE_VAR).toBe("lead_type");
   });
 });
 

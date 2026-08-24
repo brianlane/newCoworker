@@ -19,9 +19,10 @@
  * EVIDENCE ONLY. This never guesses a type. For each parked run it looks at
  * every OTHER run in the same business that mentions the same `lead_phone` and
  * established a `lead_type` of its own (ReferralExchange Lead, Realtor.com
- * Lead, New Lead Intake all extract one). It rewrites the parked run only when
- * those agree on exactly ONE value from buyer/seller/both AND that value
- * differs from what the run currently holds. No evidence, or evidence that
+ * Lead, New Lead Intake all extract one), reading `lead_type` ONLY and never
+ * the lookalike `route_lead_type`, for the two reasons on EVIDENCE_VAR below.
+ * It rewrites the parked run only when those agree on exactly ONE value from
+ * buyer/seller/both AND that value differs from what the run currently holds. No evidence, or evidence that
  * disagrees with itself, means the run is left alone and reported: a lead
  * routed to the wrong half of the roster is the failure being fixed, and
  * guessing would just relocate it.
@@ -55,6 +56,27 @@
  *   npx tsx scripts/oneshot/amy-heal-parked-cadence-lead-type.ts --business <uuid> --apply
  */
 import { CADENCE_FLOW_NAME } from "./amy-cadence-lead-type-from-note";
+
+/**
+ * The ONE variable that counts as an established lead type.
+ *
+ * Deliberately not `route_lead_type`, which looks like a synonym and is not,
+ * in two different ways on this account:
+ *
+ *   - "Follow Up Requested" defines it as `... when it does not say, "seller"`,
+ *     the identical default this script exists to overturn. Reading it as
+ *     evidence would launder that guess into truth: it would either mark a
+ *     wrongly-parked seller `already_right`, or collide with a real filing
+ *     flow's answer and force a `conflicting` refusal. Either way a fixable
+ *     misroute is left alone.
+ *   - "ReferralExchange Lead" defines it by REACHABILITY, answering "none"
+ *     when the lead has no phone option at all. It is a routing decision
+ *     keyed on contact channel, not a statement about the person.
+ *
+ * `lead_type` is the only var on this account that means "what kind of lead is
+ * this", so it is the only one read here.
+ */
+export const EVIDENCE_VAR = "lead_type";
 
 /** The only answers a lead type may take; anything else is not evidence. */
 export const LEAD_TYPES = ["buyer", "seller", "both"] as const;
@@ -196,11 +218,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const o of others ?? []) {
       if (!runMentionsPhone(o.context, phone)) continue;
       const ov = ((o.context as Record<string, unknown>)?.vars ?? {}) as Record<string, unknown>;
-      for (const k of ["lead_type", "route_lead_type"]) {
-        const val = ov[k];
-        if (typeof val === "string" && (LEAD_TYPES as readonly string[]).includes(val)) {
-          evidence.push({ flowName: nameOf.get(o.flow_id as string) ?? String(o.flow_id), leadType: val });
-        }
+      const val = ov[EVIDENCE_VAR];
+      if (typeof val === "string" && (LEAD_TYPES as readonly string[]).includes(val)) {
+        evidence.push({ flowName: nameOf.get(o.flow_id as string) ?? String(o.flow_id), leadType: val });
       }
     }
     const decision = decideHeal(vars.lead_type, evidence);
