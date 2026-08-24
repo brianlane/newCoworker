@@ -7,6 +7,7 @@
  * tested under vitest without booting the Deno HTTP server, and so the worker
  * and webhook share one definition of the cap.
  */
+import { normalizeLeadName } from "./offer_identity.ts";
 
 /** Cap the comma'd free text so a reply can't bloat the owner's notice. */
 export const MAX_CLAIM_TIMEFRAME_LEN = 120;
@@ -61,4 +62,92 @@ export function parseEtaMinutes(timeframe: string): number {
   }
   if (!matched) return 0;
   return Math.min(Math.round(total), MAX_ETA_MINUTES);
+}
+
+/**
+ * Words and phrases that read as "when I'll get to it" rather than as a lead's
+ * name. `parseEtaMinutes` deliberately returns 0 for every one of them (it
+ * parses explicit durations only), so on its own it cannot tell an ordinary
+ * "1, tonight" from a "1, Sandy". Whole-word matched, so a lead named "Amanda"
+ * is not caught by "am" and "Sunday" is not caught by "sun".
+ */
+const TIMEFRAME_WORDS = [
+  "now",
+  "asap",
+  "immediately",
+  "right away",
+  "right now",
+  "soon",
+  "shortly",
+  "later",
+  "today",
+  "tonight",
+  "tomorrow",
+  "morning",
+  "afternoon",
+  "evening",
+  "noon",
+  "midnight",
+  "lunch",
+  "eod",
+  "cob",
+  "end of day",
+  "after work",
+  "in a bit",
+  "this week",
+  "next week",
+  "weekend",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "min",
+  "mins",
+  "minute",
+  "minutes",
+  "hour",
+  "hours",
+  "hr",
+  "hrs",
+  "day",
+  "days",
+  "week",
+  "weeks",
+  "am",
+  "pm",
+  "omw",
+  "on my way",
+  "on it",
+  "just did",
+  "just called",
+  "already did",
+  "already called",
+  "done"
+] as const;
+
+/**
+ * Does the comma'd text read as a TIMEFRAME rather than as a lead's name?
+ *
+ * The two share one slot ("1, 20 min" vs "1, Sandy"), and the name reading is
+ * always tried first against the sender's own live leads. This answers the
+ * question that is left when nothing matched: is this an ETA we should stamp,
+ * or a lead name we simply could not find? Stamping the second as the first is
+ * what texted an owner "ETA to contact lead: Sandy" while claiming a lead the
+ * teammate never named (Amy Laidlaw, Aug 2026).
+ *
+ * Deliberately generous about what counts as a timeframe: a false "yes" only
+ * restores the older behavior for that one reply, while a false "no" costs one
+ * ask-back text and assigns nothing wrongly.
+ */
+export function looksLikeTimeframe(text: string): boolean {
+  const t = normalizeLeadName(text);
+  if (!t) return false;
+  // Any digit at all: "20 min", "2h", "at 4", "830", "1.5 hours", "in 15".
+  // No lead is named with a number, and every numeric ETA lands here.
+  if (/\d/.test(t)) return true;
+  const padded = ` ${t} `;
+  return TIMEFRAME_WORDS.some((w) => padded.includes(` ${w} `));
 }

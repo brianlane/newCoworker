@@ -50,7 +50,14 @@ export const OFFER_REPLY_DECISION = {
    * Nothing was claimed; we asked which one. Watch this: a rising count means
    * the offer copy is not teaching the "1, <name>" form well enough.
    */
-  claim_ambiguous: "claim_ambiguous"
+  claim_ambiguous: "claim_ambiguous",
+  /**
+   * "1, <name>" naming a lead the sender cannot claim (someone took it, or it
+   * is not theirs), where the text is not an ETA either. Nothing was claimed;
+   * we said what they still have. Before this existed the reply silently
+   * claimed their most-recently-touched lead and stamped the name as an ETA.
+   */
+  claim_name_unmatched: "claim_name_unmatched"
 } as const;
 
 export type OfferReplyDecision =

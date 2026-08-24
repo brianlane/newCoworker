@@ -8845,10 +8845,16 @@ async function routeToTeamStep(
     // Name resolution: offered_name (stamped by the worker on a single offer,
     // or by the webhook when it consumed the claim), else the broadcast
     // fan-out's name map.
-    const claimedName =
+    let claimedName =
       (typeof routing.offered_name === "string" && routing.offered_name) ||
       routing.offered_names?.[claimedBy] ||
       "";
+    // Belt and braces: ask the roster directly when nothing rode along with
+    // the claim. The late-claim path in the webhook already does this, so an
+    // on-time claim naming nobody was the odd one out.
+    if (!claimedName && claimedBy) {
+      claimedName = (await activeRosterMemberByPhone(supabase, run.business_id, claimedBy))?.name ?? "";
+    }
     // BROADCAST: the OTHER live offerees lost the race, captured here (before
     // the routing cleanup below) so they can be texted a courtesy notice.
     const broadcastLosers = Array.isArray(routing.offered_all)
@@ -9674,6 +9680,12 @@ async function remindOrOwnerFallback(
 
   routing.reminder_rounds = round;
   routing.offered_all = live;
+  // The names map has to be re-stamped with the phones, not just left from
+  // the original fan-out: the webhook reads offered_names[claimer] to name the
+  // claimer in the owner's notice, and a re-park that set only offered_all
+  // sent Amy Laidlaw "[AiFlow]  confirmed they spoke with ..." with an empty
+  // name for every lead claimed off a reminder (Aug 2026).
+  routing.offered_names = await rosterNamesFor(supabase, run.business_id, live);
   routing.offer_deadline_ms = deadlineMs;
   // A reminder is not a new offeree: `offered` belongs to the single-offer
   // shape and must stay clear while a broadcast park is live.
@@ -10318,6 +10330,39 @@ async function activeRosterMemberByPhone(
   // degrades, the internal-send semantics must not.
   const name = (data as { name?: string | null }).name?.trim();
   return { name: name || "a teammate" };
+}
+
+/**
+ * Roster names for a set of phones, shaped as `routing.offered_names`.
+ *
+ * One query rather than a lookup per recipient: a broadcast park re-stamps
+ * this on every reminder round, and the map is what lets the webhook name the
+ * claimer without a second read. Phones with no active roster row are simply
+ * absent, same as the original fan-out's map.
+ */
+async function rosterNamesFor(
+  supabase: Supabase,
+  businessId: string,
+  phones: readonly string[]
+): Promise<Record<string, string>> {
+  if (phones.length === 0) return {};
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("name, phone_e164")
+    .eq("business_id", businessId)
+    .in("phone_e164", phones);
+  if (error) {
+    console.error("rosterNamesFor", error);
+    return {};
+  }
+  const rows = (data ?? []) as Array<{ name?: string | null; phone_e164?: string | null }>;
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const phone = r.phone_e164?.trim();
+    const name = r.name?.trim();
+    if (phone && name) out[phone] = name;
+  }
+  return out;
 }
 
 /** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */

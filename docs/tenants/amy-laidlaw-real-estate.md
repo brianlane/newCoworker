@@ -75,6 +75,27 @@ These are mistakes already made on this account. Do not remake them.
   account is that a live transfer's outcome ("transferred") is not evidence the
   conversation went well.
 
+- **A claim reply names a lead, and naming the wrong one used to assign it.**
+  Aug 17-24 2026, four times: a teammate replying `"1, <lead name>"` whose name
+  matched none of their LIVE offers had that name read as a claim ETA, and the
+  reply then claimed their most-recently-touched offer instead. Jason replied
+  `"1,Sandy"` at 09:17 on Aug 23, five minutes after Gabrielle took Sandy
+  Baldwin, and was silently given the Clever spoke check on Isiah Perez; Amy was
+  texted "Jason Lane confirmed they spoke with the Clever lead Isiah Perez ...
+  ETA to contact lead: Sandy" the next morning, and the weekly AI call ladder
+  was cancelled as handled. Same shape for `"1, Jennifer"` (Lauren Bennett,
+  Aug 17), `"1, Michael"` (Kirsten Wade, Aug 22) and `"1, Nancy"` (Linda
+  Elenes, Aug 24). Four leads, roughly $1.5M in list price, were marked spoken
+  to by conversations that never happened, and nobody was following them up.
+  Two causes, both fixed: the router treated an unmatched name as an ETA rather
+  than refusing, and HomeLight Referral leads carry only `lead_first_name`,
+  which was not a name var the matcher read, so those leads had no label and
+  could never be named at all. The reply is now refused and the teammate is
+  told who took the lead and what they still have. Reopened by
+  `repair-misclaimed-lead-followups.ts`. The lesson for this account: this is
+  the roster that routinely holds several simultaneous offers per teammate, so
+  every reply-disambiguation bug lands here first.
+
 - **A teammate is never a lead.** Dave and Amy have both been filed as
   customers by flows that texted them. The rule and its guard are in the
   README ("A teammate is never a lead, however the step addressed them");
@@ -921,6 +942,17 @@ app + outbound voice profile (both named with the searchable marker
 tier, a per-tenant $25/day spend fuse, the full destination whitelist, and the
 DID re-pointed onto the tenant app. Idempotent (re-runs adopt by marker).
 Whether it has run is in the applied_oneshots ledger.
+
+**Follow-up repair (Aug 24 2026):** `repair-misclaimed-lead-followups.ts`
+reopens the runs closed by a mis-routed `"1, <name>"` claim (see Sharp edges).
+Evidence-only: it matches the artifact the bug leaves in `actions_taken`, a
+recorded claim whose ETA does not read as a timeframe, and only touches `done`
+runs with a `routing.route_step_id` to rewind to. Clears the claim, resets the
+`claimed_agent*` vars, rewinds to the route step and requeues, so the engine
+re-asks the teammate and starts the AI follow-up if no one answers.
+`tried`/`offered_log` are left intact so nobody is re-offered a lead they
+already passed. Fleet-wide by default; all four affected runs were this
+tenant's. Idempotent.
 
 **Transcript repair (Aug 18 2026):** `repair-clobbered-ai-transcripts.ts`
 restores AI transcript rows that the forwarded-call record overwrote on a warm

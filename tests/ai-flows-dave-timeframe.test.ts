@@ -6,6 +6,7 @@ import {
 } from "../scripts/oneshot/update-dave-routed-aiflows";
 import { parseAiFlowDefinition } from "../src/lib/ai-flows/schema";
 import {
+  looksLikeTimeframe,
   parseClaimWithTimeframe,
   parseEtaMinutes,
   MAX_CLAIM_TIMEFRAME_LEN,
@@ -298,5 +299,76 @@ describe("migrateEmailMatchToPrice", () => {
       steps: [{ id: "url", type: "extract_url", saveAs: "lead_url" }]
     };
     expect(migrateEmailMatchToPrice(def)).toBe(false);
+  });
+});
+
+describe("looksLikeTimeframe", () => {
+  /**
+   * The comma'd slot means two things ("1, 20 min" and "1, Sandy") and only
+   * the lead list can usually tell them apart. This answers what is left when
+   * the name matched nothing: stamp it as an ETA, or admit we could not find
+   * the lead they named. Reading a name as an ETA is what told Amy Laidlaw
+   * "ETA to contact lead: Sandy" on a lead nobody had spoken to.
+   */
+  it("accepts explicit durations and clock times", () => {
+    for (const t of ["20 min", "1 hour", "1.5 hours", "2h", "45", "at 4", "3:30", "830", "in 15"]) {
+      expect(looksLikeTimeframe(t), t).toBe(true);
+    }
+  });
+
+  it("accepts the vague times parseEtaMinutes cannot score", () => {
+    for (const t of [
+      "now",
+      "asap",
+      "tonight",
+      "tomorrow",
+      "this afternoon",
+      "end of day",
+      "after work",
+      "next week",
+      "Monday",
+      "on my way",
+      "omw",
+      "on it"
+    ]) {
+      expect(looksLikeTimeframe(t), t).toBe(true);
+      // Exactly the gap this closes: none of these parse to minutes.
+      expect(parseEtaMinutes(t), t).toBe(0);
+    }
+  });
+
+  it("rejects the lead names teammates actually type", () => {
+    // Every one of these was a real reply on Amy Laidlaw's account.
+    for (const t of [
+      "Sandy",
+      "Nancy",
+      "Jennifer",
+      "Michael",
+      "Kirsten Wade",
+      "Aurora Anthony",
+      "Jose",
+      "Nancy Prince",
+      "Jack Briggs"
+    ]) {
+      expect(looksLikeTimeframe(t), t).toBe(false);
+    }
+  });
+
+  it("matches whole words only, so names are not caught by their letters", () => {
+    // "Amanda" contains "am", "Sunday" contains "sun", "Dominic" contains "min".
+    expect(looksLikeTimeframe("Amanda")).toBe(false);
+    expect(looksLikeTimeframe("Dominic")).toBe(false);
+    expect(looksLikeTimeframe("Normandy")).toBe(false);
+  });
+
+  it("is false for empty and punctuation-only text", () => {
+    expect(looksLikeTimeframe("")).toBe(false);
+    expect(looksLikeTimeframe("   ")).toBe(false);
+    expect(looksLikeTimeframe("!!!")).toBe(false);
+  });
+
+  it("folds case, accents and punctuation before deciding", () => {
+    expect(looksLikeTimeframe("TONIGHT!")).toBe(true);
+    expect(looksLikeTimeframe("Sofía Muñoz")).toBe(false);
   });
 });
