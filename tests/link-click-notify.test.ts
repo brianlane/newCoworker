@@ -8,20 +8,28 @@ const {
   hasRecentNotificationForContact,
   createSupabaseServiceClient,
   businessLookup,
+  linkSourceLookup,
   linkUpdate
 } = vi.hoisted(() => {
   const businessLookup = vi.fn();
+  const linkSourceLookup = vi.fn();
   const linkUpdate = vi.fn();
   return {
     dispatchUrgentNotification: vi.fn(),
     resolveContactNames: vi.fn(),
     hasRecentNotificationForContact: vi.fn(),
     businessLookup,
+    linkSourceLookup,
     linkUpdate,
+    // Table-aware on purpose: the alert reads `businesses` for the name AND
+    // `sms_links` for the sending surface, and a mock that answered both with
+    // one stub would let a broken source lookup pass as a business row.
     createSupabaseServiceClient: vi.fn().mockResolvedValue({
       from: (table: string) => ({
         select: () => ({
-          eq: () => ({ maybeSingle: businessLookup })
+          eq: () => ({
+            maybeSingle: table === "sms_links" ? linkSourceLookup : businessLookup
+          })
         }),
         update: (patch: Record<string, unknown>) => ({
           eq: (...args: unknown[]) => linkUpdate(table, patch, ...args)
@@ -86,6 +94,8 @@ describe("notifyLinkClick", () => {
     hasRecentNotificationForContact.mockResolvedValue(false);
     businessLookup.mockReset();
     businessLookup.mockResolvedValue({ data: { name: "KYP Ads" }, error: null });
+    linkSourceLookup.mockReset();
+    linkSourceLookup.mockResolvedValue({ data: { source: "ai_flow" }, error: null });
     linkUpdate.mockReset();
     linkUpdate.mockResolvedValue({ data: null, error: null });
   });
@@ -97,8 +107,9 @@ describe("notifyLinkClick", () => {
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "link_click",
-        summary: "Muhammad al tapped your booking link",
-        smsBody: "KYP Ads: Muhammad al (+16478879033) just opened your booking link.",
+        summary: "Muhammad al tapped your booking link: calendly.com/kyp-ads/strategy",
+        smsBody:
+          "KYP Ads: Muhammad al (+16478879033) just opened your booking link: calendly.com/kyp-ads/strategy",
         payload: expect.objectContaining({
           thread_href: `/dashboard/messages/${encodeURIComponent("+16478879033")}`
         })
@@ -157,7 +168,7 @@ describe("notifyLinkClick", () => {
     );
     expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ summary: "A lead tapped your example.com" })
+      expect.objectContaining({ summary: "A lead tapped your example.com/offer" })
     );
   });
 
@@ -167,7 +178,7 @@ describe("notifyLinkClick", () => {
       rpcResult({ original_url: "https://cal.com/kyp/intro", url: "https://cal.com/kyp/intro" })
     );
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ summary: "Muhammad al tapped your booking link" })
+      expect.objectContaining({ summary: "Muhammad al tapped your booking link: cal.com/kyp/intro" })
     );
   });
 
@@ -178,9 +189,9 @@ describe("notifyLinkClick", () => {
     await notifyLinkClick(rpcResult({ original_url: "https://www.example.com/offer" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({
-        summary: "+16478879033 tapped your example.com",
+        summary: "+16478879033 tapped your example.com/offer",
         // No name resolved → no "(number)" suffix duplicating the label.
-        smsBody: "Your business: +16478879033 just opened your example.com."
+        smsBody: "Your business: +16478879033 just opened your example.com/offer"
       })
     );
   });
@@ -188,10 +199,10 @@ describe("notifyLinkClick", () => {
   it("falls back to 'link' for a URL with an empty host; a non-Error dispatch failure releases the stamp", async () => {
     dispatchUrgentNotification.mockRejectedValueOnce("string failure");
     const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
-    // Parses as a URL but carries no hostname → the `host || "link"` branch.
+    // Parses as a URL but carries no hostname, so the path alone is the label.
     await notifyLinkClick(rpcResult({ to_e164: null, original_url: "file:///local/path" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ summary: "A lead tapped your link" })
+      expect.objectContaining({ summary: "A lead tapped your /local/path" })
     );
     // Thrown dispatch → notified_at released so the next human tap retries.
     expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
@@ -219,5 +230,159 @@ describe("notifyLinkClick", () => {
     dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
     linkUpdate.mockRejectedValueOnce("string failure");
     await expect(notifyLinkClick(rpcResult())).resolves.toBeUndefined();
+  });
+});
+
+describe("describeLinkDestination", () => {
+  it("names a Stripe Checkout URL a payment link", async () => {
+    const { describeLinkDestination } = await import("@/lib/notifications/link-click-notify");
+    const { label } = describeLinkDestination("https://checkout.stripe.com/c/pay/cs_live_abc");
+    expect(label).toBe("payment link");
+  });
+
+  it("names a link on our own /pay/ path a payment link too", async () => {
+    const { describeLinkDestination } = await import("@/lib/notifications/link-click-notify");
+    expect(describeLinkDestination("https://www.newcoworker.com/pay/tok_1").label).toBe(
+      "payment link"
+    );
+  });
+
+  it("names our /book/ path a booking link", async () => {
+    const { describeLinkDestination } = await import("@/lib/notifications/link-click-notify");
+    expect(describeLinkDestination("https://newcoworker.com/book/ncb_abc").label).toBe(
+      "booking link"
+    );
+  });
+
+  // The exact confusion that prompted this: a lead asked to pay and was sent
+  // the questionnaire. The two must never read alike in an alert.
+  it("names the onboarding questionnaire, distinctly from a payment link", async () => {
+    const { describeLinkDestination, linkDestinationPhrase } = await import(
+      "@/lib/notifications/link-click-notify"
+    );
+    const url = "https://www.newcoworker.com/onboard/questionnaire?tier=standard&period=monthly";
+    expect(describeLinkDestination(url).label).toBe("signup questionnaire");
+    expect(linkDestinationPhrase(url)).toBe(
+      "signup questionnaire: newcoworker.com/onboard/questionnaire"
+    );
+  });
+
+  it("truncates an address too long to inline, keeping the alert one SMS", async () => {
+    const { describeLinkDestination } = await import("@/lib/notifications/link-click-notify");
+    const { display } = describeLinkDestination(
+      `https://checkout.stripe.com/c/pay/${"cs_live_".repeat(20)}`
+    );
+    expect(display.length).toBe(60);
+    expect(display.endsWith("...")).toBe(true);
+  });
+
+  it("falls back to 'link' when there is no host and no path", async () => {
+    const { describeLinkDestination, linkDestinationPhrase } = await import(
+      "@/lib/notifications/link-click-notify"
+    );
+    expect(describeLinkDestination("file:///")).toEqual({ label: "link", display: "link" });
+    // label === display, so the phrase must not read "link: link".
+    expect(linkDestinationPhrase("file:///")).toBe("link");
+  });
+
+  it("falls back to 'link' for an unparseable URL", async () => {
+    const { linkDestinationPhrase } = await import("@/lib/notifications/link-click-notify");
+    expect(linkDestinationPhrase("not-a-url")).toBe("link");
+  });
+});
+
+describe("linkSourceLabel", () => {
+  it("maps known sending surfaces to owner-readable text", async () => {
+    const { linkSourceLabel } = await import("@/lib/notifications/link-click-notify");
+    expect(linkSourceLabel("sms_auto_reply")).toBe("your AI coworker's reply");
+    expect(linkSourceLabel("ai_flow")).toBe("an AiFlow");
+    expect(linkSourceLabel("aiflow")).toBe("an AiFlow");
+    expect(linkSourceLabel("voice_follow_up")).toBe("a call follow up");
+    expect(linkSourceLabel("owner_notify")).toBe("an owner alert");
+    expect(linkSourceLabel("owner_manual")).toBe("a message you sent");
+  });
+
+  it("passes an unknown source through rather than hiding it", async () => {
+    const { linkSourceLabel } = await import("@/lib/notifications/link-click-notify");
+    expect(linkSourceLabel("some_new_surface")).toBe("some_new_surface");
+  });
+
+  it("returns null when there is no source", async () => {
+    const { linkSourceLabel } = await import("@/lib/notifications/link-click-notify");
+    expect(linkSourceLabel(null)).toBeNull();
+    expect(linkSourceLabel(undefined)).toBeNull();
+  });
+});
+
+describe("notifyLinkClick alert contents", () => {
+  beforeEach(() => {
+    dispatchUrgentNotification.mockReset();
+    dispatchUrgentNotification.mockResolvedValue({ results: [] });
+    resolveContactNames.mockReset();
+    resolveContactNames.mockResolvedValue(new Map([["+16478879033", { name: "Muhammad al" }]]));
+    hasRecentNotificationForContact.mockReset();
+    hasRecentNotificationForContact.mockResolvedValue(false);
+    businessLookup.mockReset();
+    businessLookup.mockResolvedValue({ data: { name: "KYP Ads" }, error: null });
+    linkSourceLookup.mockReset();
+    linkSourceLookup.mockResolvedValue({ data: { source: "sms_auto_reply" }, error: null });
+    linkUpdate.mockReset();
+    linkUpdate.mockResolvedValue({ data: null, error: null });
+  });
+
+  it("carries the untruncated destination and the sending surface in the email", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    const url = "https://www.newcoworker.com/onboard/questionnaire?tier=standard&period=monthly";
+    await notifyLinkClick(rpcResult({ original_url: url, url }));
+
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailSubject: "Lead link click: Muhammad al opened your signup questionnaire",
+        // Full URL, query string included: the email has room the SMS does not.
+        emailBody: [
+          "Muhammad al (+16478879033) opened your signup questionnaire: newcoworker.com/onboard/questionnaire.",
+          `Where it went: ${url}`,
+          "Sent by: your AI coworker's reply"
+        ].join("\n\n"),
+        ctaPath: `/dashboard/messages/${encodeURIComponent("+16478879033")}`,
+        ctaLabel: "Open the conversation",
+        payload: expect.objectContaining({
+          destination_label: "signup questionnaire",
+          source: "your AI coworker's reply"
+        })
+      })
+    );
+  });
+
+  it("omits the attribution line when the link has no recorded source", async () => {
+    linkSourceLookup.mockResolvedValue({ data: { source: null }, error: null });
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+
+    const call = dispatchUrgentNotification.mock.calls[0][0];
+    expect(call.emailBody).not.toContain("Sent by:");
+    expect(call.payload.source).toBeNull();
+  });
+
+  it("still alerts when the source lookup fails; attribution is not worth losing the alert over", async () => {
+    linkSourceLookup.mockRejectedValueOnce(new Error("db down"));
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+
+    expect(dispatchUrgentNotification).toHaveBeenCalledTimes(1);
+    expect(dispatchUrgentNotification.mock.calls[0][0].emailBody).not.toContain("Sent by:");
+  });
+
+  it("still alerts when the source lookup rejects with a non-Error", async () => {
+    linkSourceLookup.mockRejectedValueOnce("string failure");
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+    expect(dispatchUrgentNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the source from sms_links, not from the businesses row", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+    expect(linkSourceLookup).toHaveBeenCalled();
   });
 });
