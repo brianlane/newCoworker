@@ -143,7 +143,13 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  *   - `claimed_agent`: set by `route_to_team` to the claiming teammate's name
  *     (or "none" on owner-fallback / no claim), so LATER steps can gate on
  *     `when: { var: "claimed_agent", notEquals: "none" }` to run only after a
- *     teammate accepted the lead. Empty string before any route_to_team runs.
+ *     teammate accepted the lead. "none" BEFORE any route_to_team runs too:
+ *     the worker seeds the sentinel at run start (ai-flow-worker seeds it
+ *     when undefined) precisely so that gate stays closed, since an absent
+ *     var would trim to "" and spuriously satisfy `notEquals: "none"`. So
+ *     "none" means "nobody has claimed", never "routing already happened":
+ *     a flow cannot tell the two apart from this var, and no consumer needs
+ *     to, they all treat empty and "none" the same.
  *   - `claimed_agent_phone`: the claiming teammate's E.164 phone (or "none",
  *     same lifecycle as `claimed_agent`), so a LATER `wait_for_reply` can
  *     park on the CLAIMER's next text (e.g. "that lead's number is

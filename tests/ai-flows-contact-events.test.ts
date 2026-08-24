@@ -29,7 +29,13 @@ const BIZ = "00000000-0000-0000-0000-000000000001";
 
 const input = (over: Partial<ContactEventInput> = {}): ContactEventInput => ({
   kind: "tag_changed",
-  contact: { e164: "+16025550111", name: "Joe", email: "joe@x.com", tags: ["VIP", "Engaged"] },
+  contact: {
+    e164: "+16025550111",
+    name: "Joe",
+    email: "joe@x.com",
+    tags: ["VIP", "Engaged"],
+    source: "ReferralExchange"
+  },
   tag: "Engaged",
   change: "added",
   dedupeKey: "ce:test:1",
@@ -44,6 +50,7 @@ describe("contactEventText / contactEventTriggerScope", () => {
     expect(text).toContain("phone: +16025550111");
     expect(text).toContain("email: joe@x.com");
     expect(text).toContain("tags: VIP, Engaged");
+    expect(text).toContain("source: ReferralExchange");
     expect(text).toContain("tag: Engaged");
     expect(text).toContain("change: added");
   });
@@ -67,6 +74,34 @@ describe("contactEventText / contactEventTriggerScope", () => {
     expect(text).not.toContain("email:valm0417@gmail.com");
     expect(text).toContain("email: valm0417@gmail.com");
     expect(text).toContain("name: Valerie Marino");
+  });
+
+  it("carries the lead SOURCE, so a flow never has to guess the network", () => {
+    // Amy Laidlaw's "Needs Follow Up (AI cadence)" reads this text to fill
+    // {{vars.lead_site}}. Across its first 42 runs, 23 fell back to the
+    // flow's "it does not say" answer while contacts.lead_source held
+    // "ReferralExchange"; the 17 that got it right only did so because a
+    // matching TAG happened to leak through the tags line. The column is the
+    // answer, so the text states it.
+    const text = contactEventText(input({ contact: { e164: "+16025550111", source: " Clever " } }));
+    expect(text).toContain("source: Clever");
+  });
+
+  it("omits the source line entirely when the contact has no lead source", () => {
+    // An absent line reads as "unknown" to the extraction, which is true. A
+    // "source: " line with nothing after it reads as a value that is blank,
+    // which invites a model to answer with the empty string.
+    const text = contactEventText(input({ contact: { e164: "+16025550111", name: "Joe" } }));
+    expect(text).not.toContain("source:");
+    expect(text).toContain("name: Joe");
+  });
+
+  it("exposes the source to templates as {{trigger.contact_source}}", () => {
+    expect(contactEventTriggerScope(input()).contact_source).toBe("ReferralExchange");
+    // Empty, never undefined: a template renders the gap as nothing.
+    expect(
+      contactEventTriggerScope(input({ contact: { e164: "+16025550111" } })).contact_source
+    ).toBe("");
   });
 
   it("keeps the contact KEY as `from`, which consumers look the contact up by", () => {
@@ -633,7 +668,8 @@ describe("hydrateContactEventContact", () => {
       e164: PHONE,
       name: "Joe",
       email: "joe@x.com",
-      tags: []
+      tags: [],
+      source: "Clever"
     });
     expect(out.tags).toEqual([]);
     expect(cleared.calls).toHaveLength(0);
@@ -645,9 +681,10 @@ describe("hydrateContactEventContact", () => {
         e164: PHONE,
         name: "",
         email: "",
-        tags: []
+        tags: [],
+        source: ""
       })
-    ).toEqual({ e164: PHONE, name: "", email: "", tags: [] });
+    ).toEqual({ e164: PHONE, name: "", email: "", tags: [], source: "" });
     expect(blank.calls).toHaveLength(0);
 
     // An empty list still leaves name/email open to hydration.
@@ -659,13 +696,14 @@ describe("hydrateContactEventContact", () => {
     });
   });
 
-  it("reads nothing when the caller already carries all three fields", async () => {
+  it("reads nothing when the caller already carries every hydrated field", async () => {
     const { db, calls } = makeDb([]);
     const full: ContactEventContact = {
       e164: PHONE,
       name: "Joe",
       email: "joe@x.com",
-      tags: ["VIP"]
+      tags: ["VIP"],
+      source: "Clever"
     };
     expect(await hydrateContactEventContact(db, BIZ, full)).toBe(full);
     expect(calls).toHaveLength(0);
@@ -690,6 +728,66 @@ describe("hydrateContactEventContact", () => {
       "customer_e164",
       KEY
     ]);
+  });
+
+  it("hydrates the lead source from the row, and lets the caller override it", async () => {
+    const { db, calls } = makeDb([
+      {
+        data: {
+          display_name: "Sandy Baldwin",
+          email: "sandy@x.com",
+          tags: ["Needs Follow Up"],
+          lead_source: "  ReferralExchange  "
+        },
+        error: null
+      }
+    ]);
+    expect(await hydrateContactEventContact(db, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE,
+      name: "Sandy Baldwin",
+      email: "sandy@x.com",
+      tags: ["Needs Follow Up"],
+      source: "ReferralExchange"
+    });
+    // The column is in the projection: without it the read returns undefined
+    // and the source silently never hydrates.
+    expect(calls.find((c) => c.name === "select")!.args[0]).toContain("lead_source");
+
+    // A caller who knows the source keeps it, same rule as name/email/tags.
+    const supplied = makeDb([{ data: { lead_source: "Stale" }, error: null }]);
+    expect(
+      await hydrateContactEventContact(supplied.db, BIZ, {
+        e164: PHONE,
+        name: "Joe",
+        email: "joe@x.com",
+        tags: [],
+        source: "HomeLight"
+      })
+    ).toEqual({ e164: PHONE, name: "Joe", email: "joe@x.com", tags: [], source: "HomeLight" });
+  });
+
+  it("adds no source key when the row's lead_source is null or blank", async () => {
+    // The absent-vs-empty distinction the text relies on: no key here means
+    // contactEventText prints no source line at all.
+    for (const lead_source of [null, "   "]) {
+      const { db } = makeDb([{ data: { display_name: "Joe", lead_source }, error: null }]);
+      const out = await hydrateContactEventContact(db, BIZ, { e164: PHONE });
+      expect(out.source).toBeUndefined();
+      expect(out.name).toBe("Joe");
+    }
+  });
+
+  it("reads the row when the source is the ONLY field the caller left out", async () => {
+    const { db, calls } = makeDb([{ data: { lead_source: "Clever" }, error: null }]);
+    expect(
+      await hydrateContactEventContact(db, BIZ, {
+        e164: PHONE,
+        name: "Joe",
+        email: "joe@x.com",
+        tags: ["VIP"]
+      })
+    ).toEqual({ e164: PHONE, name: "Joe", email: "joe@x.com", tags: ["VIP"], source: "Clever" });
+    expect(calls.some((c) => c.name === "select")).toBe(true);
   });
 
   it("skips the read for a malformed email key", async () => {
