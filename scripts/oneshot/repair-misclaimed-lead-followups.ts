@@ -104,26 +104,37 @@ const CLAIM_CLAUSE = /lead claimed by ([^(;]*)\(ETA: ([^)]*)\)/;
 /** The clause plus its trailing separator, so removing it leaves clean prose. */
 const CLAIM_CLAUSE_WITH_SEP = /(?:; )?lead claimed by [^(;]*\(ETA: [^)]*\)/;
 
-let query = db
-  .from("ai_flow_runs")
-  .select("id, business_id, flow_id, status, current_step, revision, updated_at, context")
-  .eq("status", "done")
-  .gte("updated_at", SINCE)
-  // Bound explicitly: an un-limited PostgREST select silently truncates at
-  // 1000 rows, which would read as "nothing left to repair".
-  .limit(1000)
-  .order("updated_at", { ascending: true });
-if (BUSINESS_ID) query = query.eq("business_id", BUSINESS_ID);
-if (RUN_ID) query = query.eq("id", RUN_ID);
-
-const { data: rows, error } = await query;
-if (error) {
-  console.error(`read ai_flow_runs: ${error.message}`);
-  process.exit(1);
+/**
+ * PAGED, not capped. PostgREST truncates an un-ranged select at 1000 rows and
+ * reports no error, so a single `.limit(1000)` over a wide window scans the
+ * OLDEST thousand runs and prints "0 to repair", which reads as "the fleet is
+ * clean" when it means "we never looked at the recent half". Observed on the
+ * first fleet-wide dry run of this very script.
+ */
+const PAGE = 500;
+const rows: RunRow[] = [];
+for (let from = 0; ; from += PAGE) {
+  let query = db
+    .from("ai_flow_runs")
+    .select("id, business_id, flow_id, status, current_step, revision, updated_at, context")
+    .eq("status", "done")
+    .gte("updated_at", SINCE)
+    .order("updated_at", { ascending: true })
+    .range(from, from + PAGE - 1);
+  if (BUSINESS_ID) query = query.eq("business_id", BUSINESS_ID);
+  if (RUN_ID) query = query.eq("id", RUN_ID);
+  const { data: page, error } = await query;
+  if (error) {
+    console.error(`read ai_flow_runs: ${error.message}`);
+    process.exit(1);
+  }
+  const batch = (page ?? []) as RunRow[];
+  rows.push(...batch);
+  if (batch.length < PAGE) break;
 }
 
 console.log(
-  `${APPLY ? "APPLY" : "DRY RUN"}: scanned ${(rows ?? []).length} completed run(s) since ` +
+  `${APPLY ? "APPLY" : "DRY RUN"}: scanned ${rows.length} completed run(s) since ` +
     `${SINCE.slice(0, 10)}${BUSINESS_ID ? ` for business ${BUSINESS_ID}` : " (whole fleet)"}\n`
 );
 
@@ -131,7 +142,7 @@ let repaired = 0;
 let skipped = 0;
 const touched: Record<string, unknown>[] = [];
 
-for (const run of (rows ?? []) as RunRow[]) {
+for (const run of rows) {
   const context = run.context ?? {};
   const vars = (context.vars ?? {}) as Record<string, unknown>;
   const routing = { ...((context.routing ?? {}) as Record<string, unknown>) };
