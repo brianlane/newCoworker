@@ -321,15 +321,81 @@ function fieldLabel(key: string): string {
 }
 
 /**
+ * What the platform already knew about the person on this call, gathered at
+ * alert time from OUTSIDE the conversation: the CRM contact row for the
+ * number the flow dialed. The finished-call SMS renders these lines so the
+ * owner alert carries the flow's knowledge instead of arriving blind, which
+ * is what an owner actually asked for (Amy Laidlaw, 2026-08-23: "include
+ * whether it's a buyer or seller and their name number and email and website
+ * source of the lead and price"). Every field is optional; an absent one
+ * renders nothing.
+ */
+export interface IntakeKnownLead {
+  /** `contacts.display_name` for the dialed number. */
+  name?: string;
+  /** `contacts.email`. */
+  email?: string;
+  /** `contacts.lead_source`, the network the lead arrived from. */
+  leadSource?: string;
+}
+
+/**
+ * The slice of `voice_handoff_sessions.context` the finished-call alert
+ * reads, pulled out of the raw row the notify path already fetches.
+ *
+ * `contextNote` is the flow's briefing for the call (`place_ai_call`'s
+ * rendered `contextTemplate`, kept current by `voice_brief` rewrites), so it
+ * holds whatever the flow knew: the lead's name, the site they enquired
+ * through, buying vs selling intent, price when the flow had one. Rendering
+ * it in the alert is how the flow's knowledge reaches the owner.
+ *
+ * `machineDetected` / `voicemailSpoken` are the top-level stamps the
+ * voicemail path merges via `voice_session_context_merge` (the edge's
+ * `stampMachine` mirrors both), which lets the alert say honestly that the
+ * call reached a recording rather than implying a conversation happened.
+ */
+export interface IntakeAlertContext {
+  contextNote?: string;
+  machineDetected: boolean;
+  voicemailSpoken: boolean;
+}
+
+/** Parse `IntakeAlertContext` out of a raw `voice_handoff_sessions.context`. */
+export function extractIntakeAlertContext(ctx: unknown): IntakeAlertContext {
+  const c = (ctx && typeof ctx === "object" ? ctx : {}) as Record<string, unknown>;
+  const ai = (c.ai_takeover && typeof c.ai_takeover === "object" ? c.ai_takeover : {}) as Record<
+    string,
+    unknown
+  >;
+  const note = typeof ai.context_note === "string" ? ai.context_note.trim() : "";
+  return {
+    ...(note ? { contextNote: note } : {}),
+    machineDetected: c.machine_detected === true,
+    voicemailSpoken: c.voicemail_spoken === true
+  };
+}
+
+/**
  * Build the owner-facing SMS body for a completed intake call: a short header,
- * the structured captured fields, and the transcript. Truncated to `maxChars`
+ * what the platform already knew about the lead, the structured captured
+ * fields, the flow's briefing, and the transcript. Truncated to `maxChars`
  * (Telnyx segments long bodies automatically).
  *
- * The only trustworthy callback is the phone the AI captured via `capture_lead`
- * (`lead.phone`). The inbound ANI on a live-transfer call is the transfer
- * partner's line (e.g. HomeLight `+14159851909`), NOT the seller, so it is
- * shown only as `transferFromE164` ("Transferred via"), never as the callback,
- * to avoid handing the owner a wrong number/identity.
+ * Direction decides what the remote number MEANS, and the two cases are
+ * opposites:
+ *
+ * - Inbound (`callDirection` omitted or "inbound"): the ANI is the transfer
+ *   partner's line (e.g. HomeLight `+14159851909`), NOT the seller, so it is
+ *   shown only as `transferFromE164` ("Transferred via"), never as the
+ *   callback. The only trustworthy callback is the phone the AI captured via
+ *   `capture_lead`.
+ * - Outbound ("outbound", a call the platform placed): the number we dialed
+ *   IS the lead's own number (`leadE164`), so hiding it behind "Transferred
+ *   via" mislabels the one number the owner most wants. It renders on the
+ *   `Lead:` line instead, and the header drops the missed-warm-handoff claim,
+ *   which is simply false for a follow-up call we placed. When the model
+ *   reported a recording (`voicemail`), the alert says so instead of letting
+ *   an empty capture read like a conversation.
  *
  * Wording is generic (no hardcoded agent names) because `voice_handoff_chains`
  * is a per-tenant table any business can configure.
@@ -342,16 +408,48 @@ function fieldLabel(key: string): string {
 export function composeIntakeLeadSms(input: {
   businessName: string;
   lead: CapturedLead;
-  /** The live-transfer line the call arrived on (transfer partner), not the seller. */
+  /** The live-transfer line the call arrived on (transfer partner), not the seller. Inbound only. */
   transferFromE164?: string;
   transcript: string;
   maxChars: number;
   /** Frame the message in a row of asterisks (flow opted into star alerts). */
   starFrame?: boolean;
+  /** Who dialed. "outbound" = the platform placed this call to the lead. Defaults to inbound. */
+  callDirection?: "inbound" | "outbound";
+  /** Outbound only: the number the platform dialed, which is the lead's own number. */
+  leadE164?: string;
+  /** CRM contact fields for the dialed number (outbound), rendered as Lead lines. */
+  known?: IntakeKnownLead;
+  /** The flow's briefing for this call, rendered verbatim under "Call briefing:". */
+  flowContextNote?: string;
+  /** The model's own machine verdict for the call, and whether a scripted message was left. */
+  voicemail?: { detected: boolean; messageLeft: boolean };
 }): string {
+  const outbound = input.callDirection === "outbound";
   const lines: string[] = [
-    `${input.businessName}: New live-transfer lead (AI intake), the team missed the warm handoff, so I captured this on the call.`
+    outbound
+      ? `${input.businessName}: AI follow-up call summary (AI intake).`
+      : `${input.businessName}: New live-transfer lead (AI intake), the team missed the warm handoff, so I captured this on the call.`
   ];
+  if (outbound && input.voicemail?.detected) {
+    lines.push(
+      input.voicemail.messageLeft
+        ? "Outcome: reached voicemail, left the scripted message."
+        : "Outcome: reached voicemail, no message left."
+    );
+  }
+  // What the platform already knew, before anything the conversation added.
+  // Labels are distinct from the captured-field labels below on purpose, so a
+  // CRM email and a spoken-on-the-call email can never collide into one line.
+  const knownName = input.known?.name?.trim() ?? "";
+  const leadE164 = input.leadE164?.trim() ?? "";
+  if (knownName || leadE164) {
+    lines.push(`Lead: ${knownName && leadE164 ? `${knownName} (${leadE164})` : knownName || leadE164}`);
+  }
+  const knownEmail = input.known?.email?.trim() ?? "";
+  if (knownEmail) lines.push(`Lead email: ${knownEmail}`);
+  const knownSource = input.known?.leadSource?.trim() ?? "";
+  if (knownSource) lines.push(`Lead source: ${knownSource}`);
   // Render known fields first in a stable order, then any custom captured
   // fields (capture_lead honors the chain's ai_takeover.capture_fields, so the
   // SMS must surface whatever the AI stored, not just the standard five).
@@ -367,6 +465,11 @@ export function composeIntakeLeadSms(input: {
     if (rendered.has(key)) continue;
     if (typeof v === "string" && v.trim()) lines.push(`${fieldLabel(key)}: ${v.trim()}`);
   }
+  // The flow's own briefing, verbatim. It reads like what it is (what the AI
+  // was told going in: name, source site, buy/sell intent, price when known),
+  // so the owner sees the flow's knowledge even when the call captured nothing.
+  const note = input.flowContextNote?.trim() ?? "";
+  if (note) lines.push(`Call briefing: ${note}`);
   if (input.transferFromE164 && input.transferFromE164.trim()) {
     lines.push(`Transferred via: ${input.transferFromE164.trim()}`);
   }
