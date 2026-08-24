@@ -22,10 +22,21 @@ vi.mock("@/lib/logger", () => ({
 import type { GeminiChatStepParams, GeminiChatStepResult } from "@/lib/gemini-chat";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
 import {
+  ASK_CLASSIFIER_TIMEOUT_MS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  INVESTIGATING_MAX_OUTPUT_TOKENS,
   UNKNOWN_ASK,
   type OwnerAskClassification
 } from "@/lib/dashboard-chat/ask-classifier";
 import type { ActionToolGates } from "@/lib/dashboard-chat/action-tools";
+
+/** The argument shape the engine hands its injected classifier. */
+type ClassifyArgs = {
+  ownerMessage: string;
+  apiKey: string;
+  businessId?: string;
+  timeoutMs?: number;
+};
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -110,7 +121,7 @@ const PREFERENCE_ASK: OwnerAskClassification = {
 describe("an ask that needs the account read", () => {
   it("raises thinking to high and appends the investigation directive", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("here is what I found"));
-    const classifyAsk = vi.fn(async () => AUTOMATION_ASK);
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
 
     const res = await runInlineChatTurn(baseArgs(), {
       chatStep,
@@ -128,14 +139,63 @@ describe("an ask that needs the account read", () => {
     expect(params.systemInstruction).toContain("list_aiflows");
   });
 
-  it("classifies the owner's message, with the resolved key", async () => {
+  it("classifies the owner's message, with the resolved key and business", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
-    const classifyAsk = vi.fn(async () => AUTOMATION_ASK);
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
     await runInlineChatTurn(baseArgs(), { chatStep, classifyAsk: classifyAsk as never });
+    // businessId rides along so the classifier call is metered against the
+    // same AI budget that gates this surface.
     expect(classifyAsk).toHaveBeenCalledWith({
       ownerMessage: "[SMS from owner] please put the price on these lead alerts",
-      apiKey: "test-key"
+      apiKey: "test-key",
+      businessId: BIZ
     });
+  });
+
+  // Gemini 3 counts hidden thinking against maxOutputTokens, which is why the
+  // loop pinned "low" at 4000 in the first place. Raising the level without
+  // the cap lets reasoning eat the budget and return an EMPTY step, and an
+  // escalated ask that comes back empty falls to a path that cannot
+  // investigate at all: worse than never escalating (Bugbot, PR #1602).
+  it("raises the output cap alongside the thinking level", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("found it"));
+    await runInlineChatTurn(baseArgs(), {
+      chatStep,
+      classifyAsk: (async () => AUTOMATION_ASK) as never
+    });
+    expect(chatStep.mock.calls[0][0].maxOutputTokens).toBe(INVESTIGATING_MAX_OUTPUT_TOKENS);
+  });
+
+  // The caller's budget is sized against its OWN abort (the SMS worker cuts
+  // owner turns at 75s), so classify time has to come out of it, not sit
+  // outside it.
+  it("counts classify time against the turn budget, and never outlives it", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
+    await runInlineChatTurn(
+      { ...baseArgs(), budgetMs: 2_000 },
+      { chatStep, classifyAsk: classifyAsk as never }
+    );
+    const passed = classifyAsk.mock.calls[0][0];
+    expect(passed.timeoutMs).toBeGreaterThan(0);
+    expect(passed.timeoutMs).toBeLessThanOrEqual(2_000);
+  });
+
+  it("keeps its own ceiling when the turn budget is generous", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
+    await runInlineChatTurn(
+      { ...baseArgs(), budgetMs: 300_000 },
+      { chatStep, classifyAsk: classifyAsk as never }
+    );
+    expect(classifyAsk.mock.calls[0][0].timeoutMs).toBe(ASK_CLASSIFIER_TIMEOUT_MS);
+  });
+
+  it("passes no timeout when the caller set no budget", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
+    await runInlineChatTurn(baseArgs(), { chatStep, classifyAsk: classifyAsk as never });
+    expect(classifyAsk.mock.calls[0][0].timeoutMs).toBeUndefined();
   });
 
   // A turn that runs out of tool steps mid-investigation answers from a
@@ -183,6 +243,7 @@ describe("every other ask is left exactly as it was", () => {
     const params = chatStep.mock.calls[0][0];
     expect(params.thinkingLevel).toBe("low");
     expect(params.systemInstruction).toBe("SYSTEM");
+    expect(params.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 
   // The degrade contract. A classifier outage must cost the OLD behavior,
@@ -196,6 +257,7 @@ describe("every other ask is left exactly as it was", () => {
     const params = chatStep.mock.calls[0][0];
     expect(params.thinkingLevel).toBe("low");
     expect(params.systemInstruction).toBe("SYSTEM");
+    expect(params.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 
   // Investigating is only worth its cost on a surface that could act on what
@@ -203,7 +265,7 @@ describe("every other ask is left exactly as it was", () => {
   // answer, so the classifier is not even called.
   it("does not classify at all when the surface cannot edit automations", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("got it"));
-    const classifyAsk = vi.fn(async () => AUTOMATION_ASK);
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
     await runInlineChatTurn(baseArgs(GATES_WITHOUT_EDIT), {
       chatStep,
       classifyAsk: classifyAsk as never
@@ -215,7 +277,7 @@ describe("every other ask is left exactly as it was", () => {
 
   it("does not classify when the surface declares no action tools at all", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("got it"));
-    const classifyAsk = vi.fn(async () => AUTOMATION_ASK);
+    const classifyAsk = vi.fn(async (_a: ClassifyArgs) => AUTOMATION_ASK);
     await runInlineChatTurn(
       { businessId: BIZ, systemInstruction: "SYSTEM", userMessage: "hello" },
       { chatStep, classifyAsk: classifyAsk as never }

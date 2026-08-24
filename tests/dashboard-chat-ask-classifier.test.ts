@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { geminiGenerateText } from "@/lib/gemini-generate-content";
+import type { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
 import {
   ASK_CLASSIFIER_MAX_INPUT_CHARS,
   ASK_CLASSIFIER_MODEL,
+  ASK_CLASSIFIER_SPEND_SURFACE,
   ASK_CLASSIFIER_THINKING_LEVEL,
   classifyOwnerAsk,
   investigationDirective,
@@ -29,7 +30,7 @@ import {
 const ok = (body: unknown) => JSON.stringify(body);
 
 /** The shape `classifyOwnerAsk` hands its injected generator. */
-type GenParams = Parameters<typeof geminiGenerateText>[0];
+type GenParams = Parameters<typeof geminiGenerateTextDetailed>[0];
 
 function classification(over: Partial<OwnerAskClassification> = {}): OwnerAskClassification {
   return { kind: "automation_change", needsInvestigation: true, target: "the lead alerts", ...over };
@@ -153,9 +154,10 @@ describe("investigationDirective", () => {
 
 describe("classifyOwnerAsk", () => {
   it("sends the production call shape and returns the parsed answer", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "automation_change", needs_investigation: true, target: "lead alerts" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "automation_change", needs_investigation: true, target: "lead alerts" }),
+      usage: null
+    }));
     const out = await classifyOwnerAsk({
       ownerMessage: "[SMS from owner] please add the price to these alerts",
       apiKey: "k",
@@ -177,9 +179,10 @@ describe("classifyOwnerAsk", () => {
   });
 
   it("strips a dashboard marker too", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "question", needs_investigation: false, target: "" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "question", needs_investigation: false, target: "" }),
+      usage: null
+    }));
     await classifyOwnerAsk({
       ownerMessage: "[Dashboard] what did we book today?",
       apiKey: "k",
@@ -189,9 +192,10 @@ describe("classifyOwnerAsk", () => {
   });
 
   it("caps a long paste so a forwarded transcript cannot blow the input", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "preference", needs_investigation: false, target: "" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "preference", needs_investigation: false, target: "" }),
+      usage: null
+    }));
     await classifyOwnerAsk({
       ownerMessage: "x".repeat(ASK_CLASSIFIER_MAX_INPUT_CHARS + 500),
       apiKey: "k",
@@ -201,9 +205,10 @@ describe("classifyOwnerAsk", () => {
   });
 
   it("honors a model override", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "action", needs_investigation: false, target: "" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "action", needs_investigation: false, target: "" }),
+      usage: null
+    }));
     await classifyOwnerAsk({
       ownerMessage: "text Dave",
       apiKey: "k",
@@ -214,9 +219,10 @@ describe("classifyOwnerAsk", () => {
   });
 
   it("never calls the model with nothing to classify", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "action", needs_investigation: false, target: "" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "action", needs_investigation: false, target: "" }),
+      usage: null
+    }));
     for (const ownerMessage of ["", "   ", "[SMS from owner]   "]) {
       expect(
         await classifyOwnerAsk({ ownerMessage, apiKey: "k", generate: generate as never })
@@ -233,9 +239,10 @@ describe("classifyOwnerAsk", () => {
   });
 
   it("does not call the model without a key", async () => {
-    const generate = vi.fn(async (_p: GenParams) =>
-      ok({ kind: "action", needs_investigation: false, target: "" })
-    );
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "action", needs_investigation: false, target: "" }),
+      usage: null
+    }));
     expect(
       await classifyOwnerAsk({ ownerMessage: "hi", apiKey: "", generate: generate as never })
     ).toEqual(UNKNOWN_ASK);
@@ -252,7 +259,7 @@ describe("classifyOwnerAsk", () => {
       await classifyOwnerAsk({ ownerMessage: "hi", apiKey: "k", generate: thrower as never })
     ).toEqual(UNKNOWN_ASK);
 
-    const junk = vi.fn(async () => "<html>proxy error</html>");
+    const junk = vi.fn(async () => ({ text: "<html>proxy error</html>", usage: null }));
     expect(
       await classifyOwnerAsk({ ownerMessage: "hi", apiKey: "k", generate: junk as never })
     ).toEqual(UNKNOWN_ASK);
@@ -262,7 +269,7 @@ describe("classifyOwnerAsk", () => {
     const generate = vi.fn(async (p: { signal?: AbortSignal }) => {
       expect(p.signal).toBeInstanceOf(AbortSignal);
       expect(p.signal?.aborted).toBe(false);
-      return ok({ kind: "question", needs_investigation: false, target: "" });
+      return { text: ok({ kind: "question", needs_investigation: false, target: "" }), usage: null };
     });
     const out = await classifyOwnerAsk({
       ownerMessage: "hi",
@@ -272,12 +279,76 @@ describe("classifyOwnerAsk", () => {
     expect(out.kind).toBe("question");
   });
 
+  // This call runs on every edit-capable owner turn. An unmetered call is
+  // spend the cap gating this very surface cannot see (Bugbot, PR #1602).
+  it("meters the call against the business AI budget", async () => {
+    const usage = { inputTokens: 120, outputTokens: 8, totalTokens: 128 };
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "automation_change", needs_investigation: true, target: "alerts" }),
+      usage
+    }));
+    const meter = vi.fn(async () => undefined);
+    await classifyOwnerAsk({
+      ownerMessage: "add the price to these alerts",
+      apiKey: "k",
+      businessId: "biz-1",
+      generate: generate as never,
+      meter: meter as never
+    });
+    expect(meter).toHaveBeenCalledWith({
+      businessId: "biz-1",
+      model: ASK_CLASSIFIER_MODEL,
+      surface: ASK_CLASSIFIER_SPEND_SURFACE,
+      usage,
+      inputChars: OWNER_ASK_CLASSIFIER_PROMPT.length + "add the price to these alerts".length,
+      outputChars: ok({
+        kind: "automation_change",
+        needs_investigation: true,
+        target: "alerts"
+      }).length
+    });
+  });
+
+  it("skips metering when no business is given", async () => {
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "question", needs_investigation: false, target: "" }),
+      usage: null
+    }));
+    const meter = vi.fn(async () => undefined);
+    await classifyOwnerAsk({
+      ownerMessage: "hi",
+      apiKey: "k",
+      generate: generate as never,
+      meter: meter as never
+    });
+    expect(meter).not.toHaveBeenCalled();
+  });
+
+  // Bookkeeping must never cost the owner their answer.
+  it("still answers when metering throws", async () => {
+    const generate = vi.fn(async (_p: GenParams) => ({
+      text: ok({ kind: "automation_change", needs_investigation: true, target: "alerts" }),
+      usage: null
+    }));
+    const meter = vi.fn(async () => {
+      throw new Error("meter down");
+    });
+    const out = await classifyOwnerAsk({
+      ownerMessage: "add the price",
+      apiKey: "k",
+      businessId: "biz-1",
+      generate: generate as never,
+      meter: meter as never
+    });
+    expect(out.kind).toBe("automation_change");
+  });
+
   it("aborts a classifier that outruns its budget, and still answers", async () => {
     vi.useFakeTimers();
     try {
       const generate = vi.fn(
         (p: { signal?: AbortSignal }) =>
-          new Promise<string>((_resolve, reject) => {
+          new Promise<{ text: string; usage: null }>((_resolve, reject) => {
             p.signal?.addEventListener("abort", () => reject(new Error("aborted")));
           })
       );

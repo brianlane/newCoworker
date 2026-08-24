@@ -61,8 +61,10 @@ import {
   type ActionToolName
 } from "@/lib/dashboard-chat/action-tools";
 import {
+  ASK_CLASSIFIER_TIMEOUT_MS,
   classifyOwnerAsk,
   investigationDirective,
+  maxOutputTokensForAsk,
   thinkingLevelForAsk,
   toolStepsForAsk,
   UNKNOWN_ASK
@@ -778,6 +780,15 @@ export async function runInlineChatTurn(
   const sideEffects: SideEffectLog = { happened: false, notes: [] };
   // Per turn, not per call: the cap is about how much one message may change.
   const flowChanges: FlowChangeBudget = { spent: 0 };
+  // Started BEFORE classification, not after: the classify call can take up
+  // to ASK_CLASSIFIER_TIMEOUT_MS, and the caller's budget is sized against
+  // its OWN abort (the SMS worker cuts owner turns at 75s, with email
+  // fulfilment still to run after this returns). Starting the clock
+  // afterwards would hand the tool loop a full budget it no longer has, and
+  // let the worker abort while a send is in flight.
+  const deadlineMs =
+    typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
+
   // Decide how hard to think about THIS ask before spending the first step.
   // An ask that can only be satisfied by changing an automation has to read
   // the account first, and the ordinary settings (thinking "low", the base
@@ -789,7 +800,16 @@ export async function runInlineChatTurn(
   const classifyAsk = deps.classifyAsk ?? classifyOwnerAsk;
   const canEditFlows = declaredActionTools.has("edit_aiflow");
   const ask = canEditFlows
-    ? await classifyAsk({ ownerMessage: args.userMessage, apiKey })
+    ? await classifyAsk({
+        ownerMessage: args.userMessage,
+        apiKey,
+        businessId: args.businessId,
+        // Never outlive the caller's own budget: with little left, skipping
+        // classification (UNKNOWN_ASK) is the honest degrade.
+        ...(deadlineMs === null
+          ? {}
+          : { timeoutMs: Math.max(1, Math.min(ASK_CLASSIFIER_TIMEOUT_MS, deadlineMs - Date.now())) })
+      })
     : UNKNOWN_ASK;
   const askDirective = investigationDirective(ask);
   const systemInstruction = askDirective
@@ -802,8 +822,6 @@ export async function runInlineChatTurn(
     });
   }
   const inputCharsEstimate = systemInstruction.length + args.userMessage.length;
-  const deadlineMs =
-    typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
   const maxToolSteps = toolStepsForAsk(ask, Math.max(1, args.maxToolSteps ?? MAX_TOOL_STEPS));
 
   for (let step = 0; step < maxToolSteps; step++) {
@@ -833,7 +851,11 @@ export async function runInlineChatTurn(
         contents,
         tools,
         temperature: 0.3,
-        maxOutputTokens: 4000,
+        // Gemini 3 counts hidden thinking against this cap, so it moves with
+        // the thinking level: an escalated turn reasoning at `high` under the
+        // ordinary 4000 can spend the whole budget thinking and return an
+        // empty step (Bugbot, PR #1602). Unescalated turns keep 4000 exactly.
+        maxOutputTokens: maxOutputTokensForAsk(ask),
         signal: controller.signal
       };
       // Gemini 3 dynamic thinking bills as output and counts against the

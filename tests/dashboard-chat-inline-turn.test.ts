@@ -19,7 +19,7 @@ vi.mock("@/lib/logger", () => ({
 // its own coverage in dashboard-chat-ask-classifier.test.ts and
 // dashboard-chat-investigating-turn.test.ts.
 vi.mock("@/lib/gemini-generate-content", () => ({
-  geminiGenerateText: vi.fn(async () => {
+  geminiGenerateTextDetailed: vi.fn(async () => {
     throw new Error("no network in unit tests");
   })
 }));
