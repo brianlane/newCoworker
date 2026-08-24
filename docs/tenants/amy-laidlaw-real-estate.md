@@ -984,8 +984,9 @@ restarts the AI follow-up on runs closed by a mis-routed `"1, <name>"` claim
 (see Sharp edges). Evidence-only, on two fingerprints: a recorded claim whose
 ETA does not read as a timeframe, or the script's own repair marker next to
 `routing.owner_assigned` (a repair the owner-assign path closed again). Clears
-`contacts.owner_employee_id` FIRST, guarded on it still naming the mis-claimer,
-then clears the claim, resets the `claimed_agent*` vars and requeues at the
+`contacts.owner_employee_id` FIRST as a precondition (guarded on it still
+naming the mis-claimer, verified by re-read, and skipping any run whose
+ownership it cannot positively clear), then clears the claim, resets the `claimed_agent*` vars and requeues at the
 step AFTER the route step: it does NOT re-ask the team, because the claim was
 fabricated by a bug and the answer is already known (`--reask` rewinds onto the
 route step for a case where it is not). `tried`/`offered_log` are left intact

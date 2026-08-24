@@ -179,6 +179,90 @@ async function flatStepsFor(flowId: string): Promise<FlowStep[]> {
   return steps;
 }
 
+/**
+ * Make sure the lead's contact carries no owner, so a requeued run races the
+ * team instead of being handed straight back to whoever the false claim named.
+ *
+ * Returns `ok: false` for every state we cannot positively clear, and the
+ * caller then leaves the run alone: a wipe that errored, a contact we cannot
+ * look up, and, deliberately, a contact owned by SOMEONE ELSE now. That last
+ * one is not ours to take away, and requeuing into it would just re-close the
+ * run against a different teammate.
+ */
+async function clearFalseContactOwner(args: {
+  businessId: string;
+  leadPhone: string;
+  claimedBy: string;
+  who: string;
+}): Promise<{ ok: true; cleared: boolean } | { ok: false; reason: string }> {
+  const { businessId, leadPhone, claimedBy, who } = args;
+  if (!leadPhone) {
+    return { ok: false, reason: "no lead phone on the run, so contact ownership cannot be checked" };
+  }
+  const { data: contactRow, error: readErr } = await db
+    .from("contacts")
+    .select("id, owner_employee_id")
+    .eq("business_id", businessId)
+    .eq("customer_e164", leadPhone)
+    .maybeSingle();
+  if (readErr) {
+    return { ok: false, reason: `contact read failed: ${readErr.message}` };
+  }
+  const contact = contactRow as { id?: string; owner_employee_id?: string | null } | null;
+  // No contact, or nobody owns it: nothing can auto-assign, nothing to clear.
+  if (!contact || !contact.owner_employee_id) return { ok: true, cleared: false };
+
+  if (!claimedBy) {
+    return {
+      ok: false,
+      reason: `contact ${leadPhone} has an owner but the run records no claimer phone, so the owner cannot be shown to be the artifact`
+    };
+  }
+  const { data: memberRow, error: memberErr } = await db
+    .from("ai_flow_team_members")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("phone_e164", claimedBy)
+    .maybeSingle();
+  if (memberErr) {
+    return { ok: false, reason: `roster read failed: ${memberErr.message}` };
+  }
+  const memberId = (memberRow as { id?: string } | null)?.id;
+  if (!memberId || memberId !== contact.owner_employee_id) {
+    return {
+      ok: false,
+      reason: `contact ${leadPhone} is owned by someone other than ${who} now, so the owner is not this bug's artifact and is left alone`
+    };
+  }
+  // Dry run stops here: the predicate matched, and saying so is the whole job.
+  if (!APPLY) return { ok: true, cleared: true };
+
+  const { error: wipeErr } = await db
+    .from("contacts")
+    .update({ owner_employee_id: null, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("customer_e164", leadPhone)
+    .eq("owner_employee_id", memberId);
+  if (wipeErr) {
+    return { ok: false, reason: `contact owner clear failed: ${wipeErr.message}` };
+  }
+  // Verify rather than trust: a PostgREST update matching zero rows returns no
+  // error, and requeuing on an unverified clear is the whole failure mode.
+  const { data: after, error: afterErr } = await db
+    .from("contacts")
+    .select("owner_employee_id")
+    .eq("business_id", businessId)
+    .eq("customer_e164", leadPhone)
+    .maybeSingle();
+  if (afterErr) {
+    return { ok: false, reason: `contact re-read failed: ${afterErr.message}` };
+  }
+  if ((after as { owner_employee_id?: string | null } | null)?.owner_employee_id) {
+    return { ok: false, reason: `contact ${leadPhone} still has an owner after the clear` };
+  }
+  return { ok: true, cleared: true };
+}
+
 let repaired = 0;
 let skipped = 0;
 let ownersCleared = 0;
@@ -247,49 +331,27 @@ for (const run of rows) {
       `      resuming at step ${resumeAt} ("${resumeStep.id}", ${resumeStep.type})`
   );
 
-  // OWNERSHIP FIRST. The claim stamped the contact, and the route step hands a
-  // lead straight back to an existing owner with no claim reply, so a requeue
-  // that leaves this in place simply re-closes the run.
-  let clearedOwner = false;
-  if (leadPhone && claimedBy) {
-    const { data: member } = await db
-      .from("ai_flow_team_members")
-      .select("id")
-      .eq("business_id", run.business_id)
-      .eq("phone_e164", claimedBy)
-      .maybeSingle();
-    const memberId = (member as { id?: string } | null)?.id;
-    if (memberId) {
-      // Guarded on the owner still being the teammate the false claim named:
-      // a lead genuinely reassigned since is somebody's now, and not ours to
-      // take away. A dry run READS the same predicate and writes nothing.
-      const owned = db
-        .from("contacts")
-        .select("id")
-        .eq("business_id", run.business_id)
-        .eq("customer_e164", leadPhone)
-        .eq("owner_employee_id", memberId);
-      const wipe = db
-        .from("contacts")
-        .update({ owner_employee_id: null, updated_at: new Date().toISOString() })
-        .eq("business_id", run.business_id)
-        .eq("customer_e164", leadPhone)
-        .eq("owner_employee_id", memberId)
-        .select("id");
-      const { data: hit, error: clearErr } = await (APPLY ? wipe : owned);
-      if (clearErr) {
-        console.error(`      contact owner clear failed: ${clearErr.message}`);
-      } else if ((hit ?? []).length > 0) {
-        // A PostgREST update matching zero rows returns no error, so the
-        // count is what says whether anything actually changed.
-        console.log(
-          `      ${APPLY ? "cleared" : "would clear"} contact owner (${who}) on ${leadPhone}`
-        );
-        clearedOwner = true;
-        if (APPLY) ownersCleared++;
-      }
-    }
+  // OWNERSHIP FIRST, AND IT IS A PRECONDITION, NOT A BEST EFFORT. The claim
+  // stamped the contact, and the route step hands a lead straight back to an
+  // existing owner with no claim reply, so requeuing while an owner is still
+  // on the contact simply re-closes the run. Anything short of "the contact
+  // provably has no owner" skips the run instead of requeuing it.
+  const ownership = await clearFalseContactOwner({
+    businessId: run.business_id,
+    leadPhone,
+    claimedBy,
+    who
+  });
+  if (!ownership.ok) {
+    console.log(`      SKIPPED: ${ownership.reason}`);
+    skipped++;
+    continue;
   }
+  if (ownership.cleared) {
+    console.log(`      ${APPLY ? "cleared" : "would clear"} contact owner (${who}) on ${leadPhone}`);
+    if (APPLY) ownersCleared++;
+  }
+  const clearedOwner = ownership.cleared;
 
   // Clear the false claim. `tried` / `offered_log` stay: they record who was
   // actually asked, and the engine reads them to avoid re-offering a lead to
