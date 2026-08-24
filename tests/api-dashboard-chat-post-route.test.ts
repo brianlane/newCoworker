@@ -1066,6 +1066,69 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     });
   });
 
+  it("gates edit_aiflow and undo_aiflow_edit on the caller's manage_aiflows role", async () => {
+    // Chat access is only operate_messages (staff), and these two rewrite a
+    // live automation: the change outlives the turn, since every future run
+    // follows the new definition. /api/aiflows/[id] and every bridged MCP
+    // flow handler already require manage_aiflows, so without this bar the
+    // same capability was reachable at a strictly lower bar through chat.
+    gateStates(true);
+
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("staff" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "change my lead alert wording" }));
+    const staffArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(staffArgs.actionToolGates).toMatchObject({
+      edit_aiflow: false,
+      undo_aiflow_edit: false,
+      // Operating is untouched: running an ENABLED automation the owner
+      // already approved is not reconfiguring it.
+      list_aiflows: true,
+      run_aiflow: true
+    });
+
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("manager" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "change my lead alert wording" }));
+    expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].actionToolGates).toMatchObject({
+      edit_aiflow: true,
+      undo_aiflow_edit: true
+    });
+
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("owner" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "change my lead alert wording" }));
+    expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].actionToolGates).toMatchObject({
+      edit_aiflow: true,
+      undo_aiflow_edit: true
+    });
+
+    // A role lookup failure fails CLOSED, never the turn.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockRejectedValueOnce(new Error("db down"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].actionToolGates).toMatchObject({
+      edit_aiflow: false,
+      undo_aiflow_edit: false
+    });
+  });
+
+  it("keeps the flow-edit tools off when the Settings toggle is off, whatever the role", async () => {
+    // Both halves are required: the toggle is the owner's own choice about
+    // whether this surface may edit at all, and the role bar is who may use
+    // it. A manager must not re-open a tool the owner switched off.
+    vi.mocked(getAgentToolStates).mockImplementation(
+      async (_biz: string, _agent: string, keys: readonly string[]) =>
+        Object.fromEntries(keys.map((k) => [k, k !== "edit_aiflow"]))
+    );
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("owner" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "change my lead alert wording" }));
+    expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].actionToolGates).toMatchObject({
+      edit_aiflow: false,
+      undo_aiflow_edit: false
+    });
+  });
+
   it("returns creation drafts from the inline turn to the client", async () => {
     vi.mocked(runInlineChatTurn).mockResolvedValueOnce({
       ok: true,

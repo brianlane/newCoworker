@@ -829,6 +829,13 @@ export async function POST(request: Request) {
     })().catch(() => null);
     const { can } = await import("@/lib/authz/policy");
     const canManageSettings = callerRole != null && can(callerRole, "manage_settings");
+    // AiFlow AUTHORING sits at its own bar, the one every other door into
+    // the same capability already enforces: every /api/aiflows/* route, and
+    // every bridged MCP flow handler (MCP_BRIDGE_TOOL_ACTIONS). Both resolve
+    // to manager today, but `manage_aiflows` is the honest action name here,
+    // so a future split in the matrix moves this with flows rather than with
+    // settings.
+    const canManageAiflows = callerRole != null && can(callerRole, "manage_aiflows");
     const actionToolGates = {
       send_sms: smsToolEnabled,
       // Declared only when a WhatsApp integration is actually connected,
@@ -843,10 +850,33 @@ export async function POST(request: Request) {
       calendar_cancel_appointment: calCancelEnabled,
       calendar_join_waitlist: calWaitlistEnabled,
       // One Settings toggle gates the pair: listing exists to serve running.
+      //
+      // Deliberately NOT role-barred, unlike the two below. Running an
+      // ENABLED automation the owner already approved is operating, not
+      // reconfiguring, which is the same line Slack draws in words ("a team
+      // member in the workspace can read and act, never reconfigure") and
+      // the same reason `set_contact_reply_mode` stays at chat access.
+      // Note the asymmetry this leaves with the bridge: `trigger_flow` and
+      // `get_flow` ARE pruned for staff, because those handlers enforce
+      // manage_aiflows internally and declaring them would only produce a
+      // refusal. Narrowing these two to match is a product decision about
+      // what an operator may set in motion, not a security fix, so it is
+      // left alone here rather than changed in passing.
       list_aiflows: runAiflowEnabled,
       run_aiflow: runAiflowEnabled,
-      edit_aiflow: editAiflowEnabled,
-      undo_aiflow_edit: editAiflowEnabled,
+      // Rewriting a live automation is configuration, and it outlives the
+      // turn: every future run follows the new definition. Chat access is
+      // only operate_messages (staff), so without this bar a staff teammate
+      // could rewrite the automations that route the team's leads, through
+      // a door where /api/aiflows/[id] and every bridged MCP flow handler
+      // both require manage_aiflows. FAILS CLOSED: an unresolved role is
+      // null, which denies.
+      edit_aiflow: editAiflowEnabled && canManageAiflows,
+      // The surface that can rewrite a live automation must be able to take
+      // that rewrite back, so undo rides the exact same bar. Never a wider
+      // one: undo is itself an edit (it restores through updateAiFlow and is
+      // snapshotted like any other change).
+      undo_aiflow_edit: editAiflowEnabled && canManageAiflows,
       generate_image: generateImageEnabled,
       update_notification_preferences: notificationPrefsToolEnabled && canManageSettings,
       // Same role bar as the settings-page suppression API
