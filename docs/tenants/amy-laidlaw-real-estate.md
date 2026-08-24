@@ -935,6 +935,31 @@ reads, so run this only after that merge deploys. And the flow BUILDERS still
 emit the base note, so re-seeding any of those flows drops the marker: re-run
 this script (it is idempotent) after any re-seed. `--revert --apply` undoes it.
 
+**`amy-heal-parked-cadence-lead-type.ts` (Aug 24 2026):** the companion to the
+above, for runs already in flight. A cadence run sits in `wait_for_reply` for
+three days at a time, so a `lead_type` written before the tag carried one is
+not history: it decides which half of the roster hears about the lead when they
+answer. Evidence-only. For each `awaiting_reply` cadence run it reads every
+OTHER run mentioning the same `lead_phone` that established a `lead_type`, and
+rewrites the parked run only when those agree on exactly one value AND it
+differs. No evidence, or evidence that disagrees with itself, leaves the run
+alone and says so.
+
+Clever runs are skipped by that rule rather than by a special case: "Clever
+Lead - Accept" extracts no `lead_type`, so it offers no evidence. That is the
+right answer for them. Clever Offers is a seller program, its referral text
+carries a bare "Seller" line, and every field in that flow reads "the
+seller's", so their seller is correct rather than a default that happened to
+land. The exception worth knowing: Clever DOES occasionally send a buyer
+referral through the same "Clever referral" format (Kristy White Jul 8 2026,
+Donna Robinson Jul 31 2026), and that flow handles them as sellers end to end.
+Giving it a `lead_type` field is the open follow-up.
+
+The write is a compare-and-swap on `ai_flow_runs.revision`, so a worker that
+resumed the run since the read wins and the script reports a skip. First
+applied Aug 24 2026 to two runs: Sandy Baldwin (seller -> buyer) and Frank
+Demarco (seller -> both).
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
