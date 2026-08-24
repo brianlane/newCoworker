@@ -420,6 +420,25 @@ describe("composeIntakeLeadSms: outbound calls the platform placed", () => {
     expect(text).not.toContain("Outcome:");
   });
 
+  // An INBOUND session's `ai_takeover.context_note` is model-only instruction
+  // text stamped from the partner alert, not a summary for a human. Rendering
+  // it would push prompt language into an owner SMS this feature is supposed
+  // to leave alone (Bugbot, PR #1600). The briefing is outbound-only, and the
+  // composer enforces that rather than trusting the call site to.
+  it("never renders a briefing on an inbound alert, even when one is passed", () => {
+    const note = "Press 1 when the announcement asks. The seller is on the line after that.";
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Javier" },
+      transferFromE164: "+14159851909",
+      transcript: "AI: Hi",
+      maxChars: 3000,
+      flowContextNote: note
+    });
+    expect(text).not.toContain("Call briefing:");
+    expect(text).not.toContain(note);
+  });
+
   it("carries no em dash anywhere in the enriched body", () => {
     const text = composeIntakeLeadSms({
       ...base,

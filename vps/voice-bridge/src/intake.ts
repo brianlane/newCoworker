@@ -465,10 +465,14 @@ export function composeIntakeLeadSms(input: {
     if (rendered.has(key)) continue;
     if (typeof v === "string" && v.trim()) lines.push(`${fieldLabel(key)}: ${v.trim()}`);
   }
-  // The flow's own briefing, verbatim. It reads like what it is (what the AI
-  // was told going in: name, source site, buy/sell intent, price when known),
-  // so the owner sees the flow's knowledge even when the call captured nothing.
-  const note = input.flowContextNote?.trim() ?? "";
+  // The flow's own briefing, verbatim, and OUTBOUND ONLY. On an outbound
+  // `place_ai_call` the note is the flow's rendered `contextTemplate` (name,
+  // source site, buy/sell intent, price when known), which is exactly the
+  // knowledge the owner is missing. On an INBOUND live transfer the same
+  // field holds model-only instruction text stamped from the partner alert,
+  // so rendering it there would push prompt language into an owner SMS that
+  // is otherwise unchanged by this feature (Bugbot, PR #1600).
+  const note = outbound ? input.flowContextNote?.trim() ?? "" : "";
   if (note) lines.push(`Call briefing: ${note}`);
   if (input.transferFromE164 && input.transferFromE164.trim()) {
     lines.push(`Transferred via: ${input.transferFromE164.trim()}`);

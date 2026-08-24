@@ -692,9 +692,9 @@ The owner-rule capture saved that preference to her memory
 (`business_configs.memory_md`, "Owner chat (2026-08-23)"), but the alert
 itself is a fixed template in the voice bridge and read none of it. Both of
 her examples were OUTBOUND cadence calls to Clever leads that hit voicemail
-(+16232622189 is Isiah Perez, +19098450027 is Linda Elenes), so the header's
-missed-warm-handoff claim was false and the lead's own number rendered as
-"Transferred via".
+(Isiah Perez and Linda Elenes, both already carrying name, email and
+`lead_source` on their contact rows), so the header's missed-warm-handoff
+claim was false and the lead's own number rendered as "Transferred via".
 
 Closed as a PLATFORM change (`composeIntakeLeadSms` +
 `sendIntakeLeadSms`, `vps/voice-bridge/src/`), not a tenant patch, since the
