@@ -12,7 +12,9 @@
  * Conditions evaluate over a "key: value" text of the contact's fields (the
  * same shape email/webhook windowText uses, so extract_text and templates
  * work unchanged); `from` is the contact's phone so `from_matches` can scope
- * a flow to a person.
+ * a flow to a person. The text carries what the PLATFORM already knows about
+ * the contact, `lead_source` included, because the alternative is every flow
+ * re-deriving it from free text and falling back when it cannot.
  *
  * Callers only have to supply the phone. Whatever name/email/tags they leave
  * out is read from the contact row here (see `hydrateContactEventContact`),
@@ -46,6 +48,12 @@ export type ContactEventContact = {
   name?: string;
   email?: string;
   tags?: string[];
+  /**
+   * `contacts.lead_source`, the network the lead arrived from
+   * ("ReferralExchange", "Clever", "HomeLight"). Hydrated from the row like
+   * name/email/tags, so a flow reading this event never has to guess it.
+   */
+  source?: string;
 };
 
 export type ContactEventInput = {
@@ -81,6 +89,18 @@ const FLOW_PAGE = 100;
  * The "key: value" text conditions and extract_text see (same convention as
  * the calendar/webhook channels).
  */
+/**
+ * The contact's lead source as both readers must see it.
+ *
+ * One definition on purpose: the `source:` line and
+ * `{{trigger.contact_source}}` are documented as the same value, so a stored
+ * "  Clever  " must not reach a template padded while the extraction reads it
+ * trimmed. A template comparing the two would then disagree with itself.
+ */
+function normalizedSource(contact: ContactEventContact): string {
+  return typeof contact.source === "string" ? contact.source.trim() : "";
+}
+
 export function contactEventText(input: ContactEventInput): string {
   const c = input.contact;
   const tags = c.tags ?? [];
@@ -91,12 +111,20 @@ export function contactEventText(input: ContactEventInput): string {
   // is "email:val@example.com". A contact with no phone gets no phone line;
   // the `email:` line below already carries their identity.
   const phone = isEmailContactKey(c.e164) ? "" : c.e164;
+  const source = normalizedSource(c);
   const lines = [
     `event: ${input.kind}`,
     c.name ? `name: ${c.name}` : "",
     phone ? `phone: ${phone}` : "",
     c.email ? `email: ${c.email}` : "",
     tags.length > 0 ? `tags: ${tags.join(", ")}` : "",
+    // Where the lead came from, straight off `contacts.lead_source`. Without
+    // it a flow reading this event can only guess the network from whatever
+    // happens to be in `tags:`, and a lead whose source is a column rather
+    // than a tag reads as unknown: on Amy Laidlaw's follow-up cadence, 23 of
+    // 42 runs fell back to "your recent enquiry" while the contact row said
+    // "ReferralExchange" the whole time.
+    source ? `source: ${source}` : "",
     input.kind === "tag_changed" ? `tag: ${input.tag ?? ""}` : "",
     input.kind === "tag_changed" ? `change: ${input.change ?? "added"}` : "",
     input.kind === "owner_assigned" && input.ownerName ? `owner: ${input.ownerName}` : "",
@@ -120,6 +148,11 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     from: input.contact.e164,
     contact_name: input.contact.name ?? "",
     contact_email: input.contact.email ?? "",
+    // Same value as the `source:` line in windowText, addressable directly so
+    // a template can say it without an extract_text step to lift it back out.
+    // Normalized through the SAME helper the line uses, so "same value" is
+    // structural rather than a claim in a comment.
+    contact_source: normalizedSource(input.contact),
     note: input.note ?? "",
     ...(input.kind === "tag_changed"
       ? { tag: input.tag ?? "", change: input.change ?? "added" }
@@ -138,7 +171,7 @@ type EventTrigger = {
 /**
  * Fill in the identity fields the write site did not have in hand.
  *
- * `contactEventText` documents a `name: / phone: / email: / tags: …` shape,
+ * `contactEventText` documents a `name: / phone: / email: / tags: / source: …` shape,
  * and flows are written against it: a condition asking "does this lead carry
  * the Clever tag?", an extract_text step reading the name line. But most
  * write sites only know the phone: a route_to_team claim has the lead's
@@ -168,7 +201,8 @@ export async function hydrateContactEventContact(
   const needsName = contact.name === undefined;
   const needsEmail = contact.email === undefined;
   const needsTags = contact.tags === undefined;
-  if (!needsName && !needsEmail && !needsTags) return contact;
+  const needsSource = contact.source === undefined;
+  if (!needsName && !needsEmail && !needsTags && !needsSource) return contact;
   // The key is interpolated into a PostgREST `or` filter, where a stray comma
   // or paren would change what the filter means. A clean E.164 number is safe;
   // so is an `email:` key, whose address was validated against the same
@@ -181,7 +215,7 @@ export async function hydrateContactEventContact(
   try {
     const base = supabase
       .from("contacts")
-      .select("display_name, email, tags")
+      .select("display_name, email, tags, lead_source")
       .eq("business_id", businessId);
     const { data, error } = await (emailKeyed
       ? base.eq("customer_e164", e164)
@@ -195,16 +229,19 @@ export async function hydrateContactEventContact(
       display_name?: string | null;
       email?: string | null;
       tags?: string[] | null;
+      lead_source?: string | null;
     } | null;
     if (!row) return contact;
     const rowTags = (Array.isArray(row.tags) ? row.tags : []).filter(
       (t): t is string => typeof t === "string" && t.trim().length > 0
     );
+    const rowSource = typeof row.lead_source === "string" ? row.lead_source.trim() : "";
     return {
       ...contact,
       ...(needsName && row.display_name ? { name: row.display_name } : {}),
       ...(needsEmail && row.email ? { email: row.email } : {}),
-      ...(needsTags && rowTags.length > 0 ? { tags: rowTags } : {})
+      ...(needsTags && rowTags.length > 0 ? { tags: rowTags } : {}),
+      ...(needsSource && rowSource ? { source: rowSource } : {})
     };
   } catch (e) {
     console.error("contact_events: hydrate", e);

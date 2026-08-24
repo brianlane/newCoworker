@@ -55,6 +55,43 @@ export const FOLLOW_UP_TAG = "Needs Follow Up";
 export const AUTO_TAG_NOTE =
   "auto_first_contact: the AI already called and texted this lead just now";
 
+/**
+ * The label an upstream flow uses to hand the cadence the lead type it
+ * ALREADY knows.
+ *
+ * Why this exists (Sandy Baldwin, +1 320 293 1236, Aug 23 2026): the cadence
+ * runs off a `tag_changed` event, and that event's text is the contact's
+ * fields (name / phone / email / tags / source / tag / change / note). None of
+ * those says whether the person is buying or selling, so `lead_type` fell to
+ * its written default of "seller" on 42 of the flow's first 42 runs. Every
+ * `r*_route_buyer` branch was therefore unreachable, and Jason Lane, whose
+ * roster tag is buyer-only, could never be offered a lead this flow promoted.
+ * Sandy was a ReferralExchange BUYER and her parked run says seller.
+ *
+ * The upstream flow does know: ReferralExchange, Realtor.com and New Lead
+ * Intake each extract `lead_type` before they ever tag the lead. So the tag
+ * carries it, on the SAME line as any existing note (the event renders one
+ * `note:` line, and a newline here would put the type on a line the note
+ * label does not cover).
+ */
+export const LEAD_TYPE_NOTE_LABEL = "lead_type:";
+
+/**
+ * Append the lead-type marker to a tag note, idempotently.
+ *
+ * Idempotence matters twice over: the one-shot that applies this is
+ * re-runnable, and `auto_first_contact` must survive verbatim because round
+ * 1's call gate (`tag_auto`) tests for that exact phrase. Appending never
+ * disturbs it; a note that lacks it must NOT gain it, or a first call that
+ * used to happen would silently stop.
+ */
+export function withLeadTypeNote(note: string | undefined | null, varName = "lead_type"): string {
+  const base = typeof note === "string" ? note.trim() : "";
+  if (base.includes(LEAD_TYPE_NOTE_LABEL)) return base;
+  const marker = `${LEAD_TYPE_NOTE_LABEL} {{vars.${varName}}}`;
+  return base ? `${base}; ${marker}` : marker;
+}
+
 /** Amy's line, given in every message. */
 const CALLBACK = "602-695-1142";
 
@@ -215,9 +252,10 @@ export const READ_FIELDS = [
   {
     name: "lead_site",
     description:
-      "Which site or service this lead came from, from the tags or text (e.g. Clever, " +
-      "HomeLight, Realtor.com, RealEstateAgents.com). If it does not say, answer exactly: " +
-      "your recent enquiry"
+      "Which site or service this lead came from. Prefer the source line when there is " +
+      "one, it is the platform's own record of the network; otherwise use the tags or " +
+      "text (e.g. Clever, HomeLight, Realtor.com, RealEstateAgents.com). If nothing says, " +
+      "answer exactly: your recent enquiry"
   },
   {
     name: "lead_city",
@@ -229,7 +267,9 @@ export const READ_FIELDS = [
     name: "lead_type",
     description:
       "Is this lead buying or selling? Answer exactly one lowercase word: buyer, " +
-      "seller, or both. When the text does not say, answer exactly: seller"
+      "seller, or both. When the note line carries a lead_type: value, answer that " +
+      "value and nothing else, it is what the flow that filed this lead already " +
+      "established. Only when nothing says, answer exactly: seller"
   },
   {
     name: "lead_email",

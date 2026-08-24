@@ -888,6 +888,32 @@ the live runs per flow and REFUSES to apply while any is parked at or after the
 block, naming each one (`--force` overrides deliberately). `--revert --apply`
 puts the inline rounds back.
 
+**`amy-cadence-lead-type-from-note.ts` (Aug 24 2026):** "Needs Follow Up (AI
+cadence)" could not tell a buyer from a seller. It triggers on a `tag_changed`
+event, whose text is the contact's fields (name / phone / email / tags /
+source / tag / change / note), and none of those says which. So its `lead_type`
+field fell to its written default on all 42 of the flow's first 42 runs: every
+`r*_route_buyer` branch was unreachable, a ready-to-talk buyer went to the
+seller trio instead of the buyer rotation, and Jason Lane (roster tag `buyer`
+only) could not be reached by this flow at all. Found via Sandy Baldwin (Aug 23
+2026), a ReferralExchange BUYER whose parked cadence run says seller.
+
+The fix has two halves. The upstream flows that DO establish a type
+(ReferralExchange Lead, Realtor.com Lead, New Lead Intake) now append
+`lead_type: {{vars.lead_type}}` to the `noteTemplate` of every
+`update_contact` that adds the tag, and the cadence's `read_lead` reads that
+note first. Appended, never replacing: round 1's call gate tests the note for
+the exact phrase `auto_first_contact`, so a note that has it keeps it and a
+note that lacks it must not gain one. Clever Lead - Accept and "Follow Up
+Requested" are skipped by rule (no `lead_type` field), so they keep today's
+seller default; changing that is Amy's call.
+
+Two ordering notes. The same PR taught `contactEventText` to emit a `source:`
+line from `contacts.lead_source`, which is what the reworded `lead_site` field
+reads, so run this only after that merge deploys. And the flow BUILDERS still
+emit the base note, so re-seeding any of those flows drops the marker: re-run
+this script (it is idempotent) after any re-seed. `--revert --apply` undoes it.
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
