@@ -35,11 +35,16 @@ import {
   createSubscription,
   findCheckoutBlockingSubscription,
   getSubscription,
+  updateSubscription,
   type SubscriptionRow
 } from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
 import { authUserExistsByEmail } from "@/lib/auth";
-import { getCustomerProfileById, LIFETIME_SUBSCRIPTION_CAP } from "@/lib/db/customer-profiles";
+import {
+  getCustomerProfileByEmail,
+  getCustomerProfileById,
+  LIFETIME_SUBSCRIPTION_CAP
+} from "@/lib/db/customer-profiles";
 import { resolveBusinessCountry } from "@/lib/plans/business-country";
 import { getCommitmentMonths, renewalDateAfterMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
@@ -108,6 +113,8 @@ export type SignupPaymentLinkDeps = {
   findBlocking?: typeof findCheckoutBlockingSubscription;
   authUserExists?: typeof authUserExistsByEmail;
   getProfile?: typeof getCustomerProfileById;
+  getProfileByEmail?: typeof getCustomerProfileByEmail;
+  updateSubscriptionRow?: typeof updateSubscription;
   createSession?: typeof createCheckoutSession;
   createSubscriptionRow?: typeof createSubscription;
   appUrl?: string;
@@ -148,6 +155,8 @@ export async function createSignupPaymentLink(
   const findBlocking = deps.findBlocking ?? findCheckoutBlockingSubscription;
   const authExists = deps.authUserExists ?? authUserExistsByEmail;
   const readProfile = deps.getProfile ?? getCustomerProfileById;
+  const readProfileByEmail = deps.getProfileByEmail ?? getCustomerProfileByEmail;
+  const patchSubscription = deps.updateSubscriptionRow ?? updateSubscription;
   const openSession = deps.createSession ?? createCheckoutSession;
   const insertSubscription = deps.createSubscriptionRow ?? createSubscription;
   const appUrl = deps.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -191,7 +200,18 @@ export async function createSignupPaymentLink(
   // agent must respect it exactly as the self-serve route does. The count
   // only increments on `checkout.session.completed`, so re-issuing a link to
   // an abandoned cart never burns one.
-  if (profile && profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP) {
+  //
+  // Enforced against the profile for the email actually being CHARGED, not
+  // whichever one hangs off the business row. Those differ in two real cases:
+  // a row with no `customer_profile_id` at all, and a caller passing an
+  // explicit `ownerEmail`. Checking only the linked id would walk a capped
+  // customer straight past the gate, which is the bypass `/api/checkout`
+  // avoids by resolving the profile from the email before it enforces.
+  const chargedProfile =
+    profile && profile.normalized_email === ownerEmail
+      ? profile
+      : await readProfileByEmail(ownerEmail);
+  if (chargedProfile && chargedProfile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP) {
     return refuse("lifetime_cap");
   }
 
@@ -210,7 +230,22 @@ export async function createSignupPaymentLink(
   // webhook resolves by newest-first, so stacking rows would leave an
   // orphan `pending` behind on every re-issue.
   const reusedPendingSubscription = existing?.status === "pending";
-  if (!reusedPendingSubscription) {
+  if (reusedPendingSubscription && existing) {
+    // A reused row must describe what Stripe is about to charge. Without this
+    // an explicit tier/period override moved the session but left the row on
+    // the old plan, and activation only writes Stripe ids and status, so the
+    // local subscription would disagree with the invoice permanently.
+    const drifted =
+      existing.tier !== tier || (existing.billing_period ?? null) !== billingPeriod;
+    if (drifted) {
+      await patchSubscription(existing.id, {
+        tier,
+        billing_period: billingPeriod,
+        commitment_months: commitmentMonths,
+        renewal_at: renewalDateAfterMonths(new Date(), commitmentMonths).toISOString()
+      });
+    }
+  } else {
     await insertSubscription({
       id: randomUUID(),
       business_id: input.businessId,
@@ -221,7 +256,7 @@ export async function createSignupPaymentLink(
       billing_period: billingPeriod,
       renewal_at: renewalDateAfterMonths(new Date(), commitmentMonths).toISOString(),
       commitment_months: commitmentMonths,
-      customer_profile_id: profileId
+      customer_profile_id: chargedProfile?.id ?? profileId
     });
   }
 
@@ -247,7 +282,9 @@ export async function createSignupPaymentLink(
       tier,
       billingPeriod,
       userId: input.businessId,
-      ...(profileId ? { customerProfileId: profileId } : {}),
+      ...(chargedProfile?.id ?? profileId
+      ? { customerProfileId: (chargedProfile?.id ?? profileId) as string }
+      : {}),
       ...(canadian ? { canadianMessagingFee: "1" } : {}),
       ...(mexican ? { mexicanMessagingFee: "1" } : {}),
       reissued: "1"

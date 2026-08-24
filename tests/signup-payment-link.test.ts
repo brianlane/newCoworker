@@ -70,6 +70,8 @@ function makeDeps(overrides: Partial<SignupPaymentLinkDeps> = {}): SignupPayment
       normalized_email: "king@kinintegrated.com",
       lifetime_subscription_count: 0
     })) as never,
+    getProfileByEmail: vi.fn(async () => null) as never,
+    updateSubscriptionRow: vi.fn(async () => subscription()) as never,
     createSession: vi.fn(async () => ({ id: "cs_live_1", url: "https://checkout.stripe.com/x" })) as never,
     createSubscriptionRow: vi.fn(async () => subscription()) as never,
     appUrl: "https://www.newcoworker.com",
@@ -258,6 +260,106 @@ describe("createSignupPaymentLink", () => {
     const result = await createSignupPaymentLink({ businessId: BIZ }, deps);
     expect(result).toMatchObject({ ok: false, refusal: "lifetime_cap" });
     expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  // Bugbot, PR #1591: the cap was only ever read off the profile LINKED to the
+  // business, so a row with no link, or a caller naming a different address,
+  // walked a capped customer straight past it.
+  it("enforces the cap on the email being charged when the business has no linked profile", async () => {
+    const deps = makeDeps({
+      getBusinessRow: vi.fn(async () =>
+        business({ customer_profile_id: null, owner_email: "capped@example.com" })
+      ) as never,
+      getSubscriptionRow: vi.fn(async () => subscription({ customer_profile_id: null })) as never,
+      getProfileByEmail: vi.fn(async () => ({
+        id: "profile-capped",
+        normalized_email: "capped@example.com",
+        lifetime_subscription_count: LIFETIME_SUBSCRIPTION_CAP
+      })) as never
+    });
+
+    const result = await createSignupPaymentLink({ businessId: BIZ }, deps);
+
+    expect(result).toMatchObject({ ok: false, refusal: "lifetime_cap" });
+    expect(deps.getProfileByEmail).toHaveBeenCalledWith("capped@example.com");
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it("enforces the cap on an explicitly supplied email, not the linked profile", async () => {
+    const deps = makeDeps({
+      // Linked profile is clean, so an id-only check would have let this pass.
+      getProfileByEmail: vi.fn(async () => ({
+        id: "profile-other",
+        normalized_email: "other@example.com",
+        lifetime_subscription_count: LIFETIME_SUBSCRIPTION_CAP
+      })) as never
+    });
+
+    const result = await createSignupPaymentLink(
+      { businessId: BIZ, ownerEmail: "other@example.com" },
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: false, refusal: "lifetime_cap" });
+  });
+
+  it("does not re-read by email when the linked profile already is the charged one", async () => {
+    const deps = makeDeps();
+    await createSignupPaymentLink({ businessId: BIZ }, deps);
+    expect(deps.getProfileByEmail).not.toHaveBeenCalled();
+  });
+
+  // Bugbot, PR #1591: an override moved the Stripe session but left the reused
+  // row on the old plan, and activation never rewrites those fields.
+  it("rewrites a reused pending row when an override changes what Stripe will charge", async () => {
+    const deps = makeDeps();
+    await createSignupPaymentLink(
+      { businessId: BIZ, tier: "starter", billingPeriod: "annual" },
+      deps
+    );
+
+    expect(deps.updateSubscriptionRow).toHaveBeenCalledWith(
+      "sub-row-1",
+      expect.objectContaining({ tier: "starter", billing_period: "annual", commitment_months: 12 })
+    );
+  });
+
+  // A legacy pending row can carry a null billing_period, which still counts
+  // as drift against a concrete period.
+  it("rewrites a reused row whose billing period was never recorded", async () => {
+    const deps = makeDeps({
+      getSubscriptionRow: vi.fn(async () => subscription({ billing_period: null })) as never
+    });
+    await createSignupPaymentLink({ businessId: BIZ }, deps);
+    expect(deps.updateSubscriptionRow).toHaveBeenCalledWith(
+      "sub-row-1",
+      expect.objectContaining({ billing_period: "biennial" })
+    );
+  });
+
+  it("links a new row to the business profile when the charged email has none", async () => {
+    const deps = makeDeps({
+      getSubscriptionRow: vi.fn(async () => null) as never,
+      // Linked profile belongs to a different address than the one billed.
+      getProfile: vi.fn(async () => ({
+        id: "profile-1",
+        normalized_email: "someone@else.com",
+        lifetime_subscription_count: 0
+      })) as never,
+      getProfileByEmail: vi.fn(async () => null) as never
+    });
+
+    await createSignupPaymentLink({ businessId: BIZ, ownerEmail: "fresh@example.com" }, deps);
+
+    expect(deps.createSubscriptionRow).toHaveBeenCalledWith(
+      expect.objectContaining({ customer_profile_id: "profile-1" })
+    );
+  });
+
+  it("leaves a reused row alone when the plan has not moved", async () => {
+    const deps = makeDeps();
+    await createSignupPaymentLink({ businessId: BIZ }, deps);
+    expect(deps.updateSubscriptionRow).not.toHaveBeenCalled();
   });
 
   it("refuses when there is no real email anywhere to bill", async () => {
