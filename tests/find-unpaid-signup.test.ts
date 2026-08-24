@@ -192,7 +192,6 @@ describe("findUnpaidSignupByContact", () => {
         const chain = {
           select: () => chain,
           eq: () => chain,
-          in: () => chain,
           in: (_col: string, vals: string[]) => {
             queried = vals;
             return chain;
