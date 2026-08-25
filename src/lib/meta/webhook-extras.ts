@@ -20,11 +20,14 @@ import {
 } from "@/lib/db/meta-connections";
 import {
   appendMessengerMessage,
+  applyMessengerDeliveryStatus,
   findMessengerConversation,
   setMessengerConversationReferral,
+  type MessengerDeliveryStatus,
   type MessengerPlatform
 } from "@/lib/messenger/db";
 import {
+  getActiveWhatsAppConnectionByPhoneNumberId,
   listActiveWhatsAppConnectionsByWabaId,
   updateWhatsAppTemplates
 } from "@/lib/db/whatsapp-connections";
@@ -33,6 +36,7 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import type {
   MetaEchoEvent,
+  MetaMessageStatusEvent,
   MetaReferralEvent,
   MetaTemplateStatusEvent
 } from "@/lib/meta/webhook";
@@ -276,4 +280,93 @@ export async function processMetaTemplateStatusEvent(
     });
   }
   return applied;
+}
+
+/** Meta's receipt vocabulary, narrowed to what the column accepts. */
+const DELIVERY_STATUSES = new Set<MessengerDeliveryStatus>([
+  "sent",
+  "delivered",
+  "read",
+  "failed"
+]);
+
+function asDeliveryStatus(raw: string): MessengerDeliveryStatus | null {
+  const normalized = raw.trim().toLowerCase();
+  return DELIVERY_STATUSES.has(normalized as MessengerDeliveryStatus)
+    ? (normalized as MessengerDeliveryStatus)
+    : null;
+}
+
+/**
+ * Record a Meta delivery receipt against the message it belongs to.
+ *
+ * Why this exists: the send call returning `ok` means Meta ACCEPTED the
+ * message, not that anyone received it. Until this landed, that was the only
+ * signal the platform kept, so a message accepted and then dropped looked
+ * exactly like a delivered one, forever. KYP Ads spent two weeks unable to
+ * start a single WhatsApp conversation, and every internal record said its
+ * sends were fine.
+ *
+ * A `failed` receipt is the whole point, so it is escalated to a system log
+ * (owner-visible) rather than an info line. The routine sent/delivered/read
+ * receipts stay quiet.
+ */
+export async function processMetaMessageStatusEvent(
+  event: MetaMessageStatusEvent
+): Promise<boolean> {
+  const status = asDeliveryStatus(event.status);
+  // Meta adds states over time (e.g. "deleted"). An unknown one is not an
+  // error, it is simply not something this column models.
+  if (!status) return false;
+
+  const connection = await getActiveWhatsAppConnectionByPhoneNumberId(event.accountId).catch(
+    () => null
+  );
+  if (!connection) {
+    logger.warn("meta message status for unconnected number", { accountId: event.accountId });
+    return false;
+  }
+
+  let outcome: Awaited<ReturnType<typeof applyMessengerDeliveryStatus>>;
+  try {
+    outcome = await applyMessengerDeliveryStatus({
+      businessId: connection.business_id,
+      mid: event.mid,
+      status,
+      errorCode: event.errorCode,
+      errorTitle: event.errorTitle,
+      timestamp: event.occurredAt
+    });
+  } catch (err) {
+    logger.warn("meta message status apply failed", {
+      businessId: connection.business_id,
+      mid: event.mid,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+
+  // Receipts also arrive for messages this system never wrote (a human
+  // replying from the Meta inbox), and for anything sent before the wamid
+  // was stored. Neither is a problem worth reporting.
+  if (outcome !== "applied") return false;
+
+  if (status === "failed") {
+    await recordSystemLog({
+      businessId: connection.business_id,
+      level: "error",
+      source: "whatsapp",
+      event: "whatsapp_message_failed",
+      message:
+        "WhatsApp did not deliver a message" +
+        (event.errorTitle ? `: ${event.errorTitle}` : "") +
+        (event.errorCode ? ` (Meta code ${event.errorCode})` : ""),
+      payload: {
+        mid: event.mid,
+        errorCode: event.errorCode,
+        errorTitle: event.errorTitle
+      }
+    });
+  }
+  return true;
 }

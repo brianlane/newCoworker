@@ -45,7 +45,8 @@ import { clearMetaTokenInvalid, reportMetaCallFailure } from "@/lib/meta/token-h
 import {
   processMetaEchoEvent,
   processMetaReferralEvent,
-  processMetaTemplateStatusEvent
+  processMetaTemplateStatusEvent,
+  processMetaMessageStatusEvent
 } from "@/lib/meta/webhook-extras";
 
 /** Serialized payload ceiling: a leadgen notification is tiny. */
@@ -149,8 +150,9 @@ const webhookBodySchema = z.object({
 
 /**
  * WhatsApp deliveries carry a different change shape than leadgen:
- * value.messages[] (inbound texts) + value.statuses[] (receipts, ignored)
- * + value.contacts[] (sender profile names) under field "messages".
+ * value.messages[] (inbound texts) + value.statuses[] (delivery receipts for
+ * what WE sent) + value.contacts[] (sender profile names), all under field
+ * "messages".
  */
 const whatsappChangeValueSchema = z
   .object({
@@ -178,6 +180,32 @@ const whatsappChangeValueSchema = z
           button: z
             .object({ text: z.string().optional(), payload: z.string().optional() })
             .passthrough()
+            .optional()
+        })
+      )
+      .optional(),
+    /**
+     * Receipts for messages WE sent, keyed by the wamid the send returned.
+     * `errors[]` is present only on `failed` and is the only place Meta ever
+     * explains a message it accepted and then did not deliver.
+     */
+    statuses: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          status: z.string().optional(),
+          timestamp: z.union([z.string(), z.number()]).optional(),
+          recipient_id: z.union([z.string(), z.number()]).optional(),
+          errors: z
+            .array(
+              z
+                .object({
+                  code: z.union([z.string(), z.number()]).optional(),
+                  title: z.string().optional(),
+                  message: z.string().optional()
+                })
+                .passthrough()
+            )
             .optional()
         })
       )
@@ -326,6 +354,22 @@ export type MetaTemplateStatusEvent = {
   reason: string;
 };
 
+/**
+ * A delivery receipt for one message we sent. `mid` is the wamid the send
+ * stored on the transcript row, which is what joins the two.
+ */
+export type MetaMessageStatusEvent = {
+  /** Phone number id: resolves to the tenant that owns the send. */
+  accountId: string;
+  mid: string;
+  /** Raw Meta status; the processor validates it against the known set. */
+  status: string;
+  errorCode: string | null;
+  errorTitle: string | null;
+  /** Meta's unix-seconds stamp, already widened to an ISO string. */
+  occurredAt: string | null;
+};
+
 export type MetaWebhookEvents = {
   leadgen: MetaLeadgenEvent[];
   messages: MetaMessageEvent[];
@@ -334,6 +378,8 @@ export type MetaWebhookEvents = {
   echoes: MetaEchoEvent[];
   referrals: MetaReferralEvent[];
   templateStatuses: MetaTemplateStatusEvent[];
+  /** Delivery receipts for messages we sent (WhatsApp only). */
+  messageStatuses: MetaMessageStatusEvent[];
 };
 
 /** Shown in transcripts for image/audio/file messages we don't ingest. */
@@ -356,7 +402,8 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
     comments: [],
     echoes: [],
     referrals: [],
-    templateStatuses: []
+    templateStatuses: [],
+    messageStatuses: []
   };
   const object = parsed.data.object;
   if (object === "whatsapp_business_account") {
@@ -419,7 +466,32 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
             displayName: names.get(senderId) ?? null
           });
         }
-        // value.statuses[] (sent/delivered/read receipts) intentionally ignored.
+        // Delivery receipts. These used to be dropped on the floor, which
+        // left `ok` from the send call as the only thing the platform ever
+        // recorded, and `ok` means Meta ACCEPTED the message, not that it
+        // arrived. A tenant whose sends were all being rejected downstream
+        // looked identical to a healthy one.
+        for (const status of value.data.statuses ?? []) {
+          const mid = status.id ?? "";
+          const state = status.status?.trim() ?? "";
+          if (!mid || !state) continue;
+          const firstError = status.errors?.[0];
+          // Meta sends unix SECONDS; a bare Number() would land in 1970.
+          const seconds = Number(status.timestamp ?? Number.NaN);
+          events.messageStatuses.push({
+            accountId: phoneNumberId,
+            mid,
+            status: state,
+            errorCode:
+              firstError?.code === undefined || firstError.code === null
+                ? null
+                : String(firstError.code),
+            errorTitle: firstError?.title?.trim() || firstError?.message?.trim() || null,
+            occurredAt: Number.isFinite(seconds)
+              ? new Date(seconds * 1000).toISOString()
+              : null
+          });
+        }
       }
     }
     return events;
@@ -896,6 +968,9 @@ export async function processMetaWebhookEvents(
   }
   for (const event of events.templateStatuses) {
     if (await processMetaTemplateStatusEvent(event)) handled += 1;
+  }
+  for (const event of events.messageStatuses) {
+    if (await processMetaMessageStatusEvent(event)) handled += 1;
   }
   return { handled, messagesEnqueued, messagesRateLimited };
 }

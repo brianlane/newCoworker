@@ -316,7 +316,11 @@ export async function deliverWhatsApp(
         conversationId: conversation.id,
         businessId: input.businessId,
         role: "owner",
-        content: transcriptText
+        content: transcriptText,
+        // The wamid is what a delivery receipt names. Without it stored,
+        // Meta's sent/delivered/failed webhooks have nothing to attach to
+        // and "we sent it" can never be told apart from "it arrived".
+        mid: messageId
       });
     }
   } catch (err) {

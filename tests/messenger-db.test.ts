@@ -12,6 +12,8 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   appendMessengerMessage,
+  applyMessengerDeliveryStatus,
+  deliveryStatusOutranks,
   claimMessengerJob,
   completeMessengerJob,
   deleteMessengerMessage,
@@ -660,5 +662,128 @@ describe("findMessengerConversation / setMessengerConversationReferral", () => {
     await findMessengerConversation(BIZ, "messenger", "x");
     await setMessengerConversationReferral("conv-1", {});
     expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("deliveryStatusOutranks", () => {
+  it("advances through the progression and never walks backwards", () => {
+    // Meta's receipts arrive out of order, so a raw last-write-wins update
+    // would report a delivered message as merely sent.
+    expect(deliveryStatusOutranks("sent", null)).toBe(true);
+    expect(deliveryStatusOutranks("delivered", "sent")).toBe(true);
+    expect(deliveryStatusOutranks("read", "delivered")).toBe(true);
+    expect(deliveryStatusOutranks("sent", "delivered")).toBe(false);
+    expect(deliveryStatusOutranks("delivered", "read")).toBe(false);
+    expect(deliveryStatusOutranks("read", "read")).toBe(false);
+  });
+
+  it("lets failed win over every non-terminal state and stick", () => {
+    // A send can fail with a `sent` receipt already in flight. If that
+    // receipt could overwrite the failure, the one state worth surfacing
+    // would be the one we lose.
+    expect(deliveryStatusOutranks("failed", "sent")).toBe(true);
+    expect(deliveryStatusOutranks("failed", "delivered")).toBe(true);
+    expect(deliveryStatusOutranks("failed", "read")).toBe(true);
+    expect(deliveryStatusOutranks("sent", "failed")).toBe(false);
+    expect(deliveryStatusOutranks("read", "failed")).toBe(false);
+  });
+});
+
+describe("applyMessengerDeliveryStatus", () => {
+  const base = { businessId: BIZ, mid: "wamid.ABC", status: "delivered" as const };
+
+  it("writes the receipt onto the row the wamid names", async () => {
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: "sent" }, error: null });
+    const db = makeDb(c);
+    expect(await applyMessengerDeliveryStatus({ ...base, timestamp: "2026-08-25T06:00:00Z" }, db)).toBe(
+      "applied"
+    );
+    expect(c.update).toHaveBeenCalledWith({
+      delivery_status: "delivered",
+      delivery_error_code: null,
+      delivery_error_title: null,
+      delivery_updated_at: "2026-08-25T06:00:00Z"
+    });
+    expect(c.eq).toHaveBeenCalledWith("id", 7);
+  });
+
+  it("keeps the error code only on a failure", async () => {
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus(
+      { ...base, status: "failed", errorCode: "131049", errorTitle: "Undeliverable" },
+      makeDb(c)
+    );
+    expect(c.update.mock.calls[0][0]).toMatchObject({
+      delivery_status: "failed",
+      delivery_error_code: "131049",
+      delivery_error_title: "Undeliverable"
+    });
+
+    // A later non-failure must CLEAR the code rather than leave a stale one
+    // attached to a row that is no longer failed.
+    const c2 = chain({ error: null });
+    c2.maybeSingle.mockResolvedValue({ data: { id: 8, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, errorCode: "131049" }, makeDb(c2));
+    expect(c2.update.mock.calls[0][0]).toMatchObject({
+      delivery_error_code: null,
+      delivery_error_title: null
+    });
+  });
+
+  it("stores nulls for a failure Meta did not explain", async () => {
+    // errorCode/errorTitle are optional on the input, and a failed receipt
+    // with neither must still write a clean row rather than undefined.
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, status: "failed" }, makeDb(c));
+    expect(c.update.mock.calls[0][0]).toMatchObject({
+      delivery_status: "failed",
+      delivery_error_code: null,
+      delivery_error_title: null
+    });
+  });
+
+  it("stamps its own time when Meta sends none", async () => {
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, timestamp: null }, makeDb(c));
+    expect(
+      typeof (c.update.mock.calls[0][0] as { delivery_updated_at: string }).delivery_updated_at
+    ).toBe("string");
+  });
+
+  it("reports not_found for a message this system never wrote", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    const db = makeDb(c);
+    expect(await applyMessengerDeliveryStatus(base, db)).toBe("not_found");
+    expect(c.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses to downgrade an already-advanced row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: "read" }, error: null });
+    const db = makeDb(c);
+    expect(await applyMessengerDeliveryStatus({ ...base, status: "sent" }, db)).toBe("stale");
+    expect(c.update).not.toHaveBeenCalled();
+  });
+
+  it("throws on a read or write error rather than reporting success", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(applyMessengerDeliveryStatus(base, makeDb(c))).rejects.toThrow("boom");
+
+    const c2 = chain({ error: { message: "write boom" } });
+    c2.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await expect(applyMessengerDeliveryStatus(base, makeDb(c2))).rejects.toThrow("write boom");
+  });
+
+  it("falls back to the default client when none is injected", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await applyMessengerDeliveryStatus(base)).toBe("not_found");
   });
 });
