@@ -87,7 +87,18 @@ const ALL_GATES: ActionToolGates = {
   // Also production-declared here ("stop texting chris please", Jul 24).
   set_contact_reply_mode: true,
   // Roster changes happen away from a laptop ("Sandy starts today").
-  manage_employee: true
+  manage_employee: true,
+  custom_table_list: false,
+  custom_table_find_rows: false,
+  custom_table_history: false,
+  custom_table_add_row: false,
+  custom_table_update_row: false,
+  custom_table_delete_row: false,
+  custom_table_undo: false,
+  custom_table_create: false,
+  custom_table_update_schema: false,
+  custom_table_delete: false,
+  custom_table_restore: false
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 

@@ -611,7 +611,23 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     update_notification_preferences: true,
     flag_contact_spam: true,
     set_contact_reply_mode: true,
-    manage_employee: true
+    manage_employee: true,
+    // Off here on purpose: this suite pins the DECLARED tool order for the
+    // send_sms + calendar surface, and the custom-table tools have their own
+    // coverage. Spelled out rather than spread from the name list so a new
+    // tool shows up as a compile error here, not as a silently reordered
+    // expectation.
+    custom_table_list: false,
+    custom_table_find_rows: false,
+    custom_table_history: false,
+    custom_table_add_row: false,
+    custom_table_update_row: false,
+    custom_table_delete_row: false,
+    custom_table_undo: false,
+    custom_table_create: false,
+    custom_table_update_schema: false,
+    custom_table_delete: false,
+    custom_table_restore: false
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -940,6 +956,105 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
           chatStep,
           runActionTool
         }
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("tells the owner what a custom-table write actually did when the wrap-up dies", async () => {
+    // Without a note per tool these fell through to the default, which is
+    // the calendar-cancel line, so a table write reported "The appointment
+    // was canceled." A confident wrong account is worse than silence.
+    for (const [tool, result, needle] of [
+      [
+        "custom_table_add_row",
+        { ok: true, table: "Properties", summary: "Address: 12 Maple St" },
+        'A row was added in "Properties": Address: 12 Maple St.'
+      ],
+      [
+        "custom_table_update_row",
+        { ok: true, table: "Properties", summary: "Address: 9 Oak" },
+        "it now reads: Address: 9 Oak"
+      ],
+      [
+        "custom_table_delete_row",
+        { ok: true, table: "Properties", deleted: "Address: 12 Maple St" },
+        "put back from Recent changes"
+      ],
+      ["custom_table_undo", { ok: true }, "was put back"],
+      ["custom_table_create", { ok: true, table: "Vehicles" }, 'new table "Vehicles" was created'],
+      [
+        "custom_table_update_schema",
+        { ok: true, table: "Properties", note: "Added the Price column." },
+        "Added the Price column."
+      ],
+      [
+        "custom_table_delete",
+        { ok: true, table: "Properties" },
+        'table "Properties" was deleted'
+      ],
+      [
+        "custom_table_restore",
+        { ok: true, table: "Properties" },
+        'table "Properties" was brought back'
+      ]
+    ] as const) {
+      const runActionTool = vi.fn(async () => result);
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep(tool, {}))
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(
+        baseArgs({
+          actionToolGates: {
+            ...ALL_ON,
+            custom_table_add_row: true,
+            custom_table_update_row: true,
+            custom_table_delete_row: true,
+            custom_table_undo: true,
+            custom_table_create: true,
+            custom_table_update_schema: true,
+            custom_table_delete: true,
+            custom_table_restore: true
+          }
+        }),
+        { chatStep, runActionTool }
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("falls back gracefully when a table write result carries no detail", async () => {
+    for (const [tool, needle] of [
+      ["custom_table_add_row", "A row was added."],
+      ["custom_table_update_row", "A row was changed."],
+      ["custom_table_delete_row", "A row was deleted."],
+      ["custom_table_create", "A new table was created"],
+      ["custom_table_update_schema", "A column was changed."],
+      ["custom_table_delete", "The table was deleted."],
+      ["custom_table_restore", "The table was brought back"]
+    ] as const) {
+      const runActionTool = vi.fn(async () => ({ ok: true }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep(tool, {}))
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(
+        baseArgs({
+          actionToolGates: {
+            ...ALL_ON,
+            custom_table_add_row: true,
+            custom_table_update_row: true,
+            custom_table_delete_row: true,
+            custom_table_create: true,
+            custom_table_update_schema: true,
+            custom_table_delete: true,
+            custom_table_restore: true
+          }
+        }),
+        { chatStep, runActionTool }
       );
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.content).toContain(needle);

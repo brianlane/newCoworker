@@ -113,7 +113,21 @@ async function emailToolGates(businessId: string) {
     set_contact_reply_mode: false,
     // The correspondent here is a delegate or prospect, not the owner, so
     // this surface never holds roster CRUD.
-    manage_employee: false
+    manage_employee: false,
+    // Nor the owner's own tables, for the same reason and more sharply: a
+    // prospect emailing in must never be able to read a table called
+    // "Vendor pricing", let alone write to one.
+    custom_table_list: false,
+    custom_table_find_rows: false,
+    custom_table_history: false,
+    custom_table_add_row: false,
+    custom_table_update_row: false,
+    custom_table_delete_row: false,
+    custom_table_undo: false,
+    custom_table_create: false,
+    custom_table_update_schema: false,
+    custom_table_delete: false,
+    custom_table_restore: false
   };
 }
 
@@ -167,6 +181,10 @@ export async function runEmailCoworkerTurn(args: {
 
   const [integrationsLine, businessContextBlock, gates, bookingLinkLine] = await Promise.all([
     buildIntegrationsStatusLine(businessId),
+    // Deliberately WITHOUT the custom-tables digest: the correspondent here
+    // is a prospect or a delegate, not the owner, so the names of the
+    // owner's own tables and columns are none of their business. The table
+    // tools are off on this surface for the same reason.
     buildBusinessContextBlock(businessId),
     emailToolGates(businessId),
     // The booking page link, so "just send me the calendar" from a

@@ -60,24 +60,15 @@ import {
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
-const ALL_ON: ActionToolGates = {
-  send_sms: true,
-  send_whatsapp: true,
-  calendar_find_slots: true,
-  calendar_book_appointment: true,
-  calendar_reschedule_appointment: true,
-  calendar_cancel_appointment: true,
-  calendar_join_waitlist: true,
-  list_aiflows: true,
-  run_aiflow: true,
-  edit_aiflow: true,
-  undo_aiflow_edit: true,
-  generate_image: true,
-  update_notification_preferences: true,
-  flag_contact_spam: true,
-  set_contact_reply_mode: true,
-  manage_employee: true
-};
+/**
+ * Derived from the name list rather than hand-written, so adding a tool
+ * cannot leave this fixture quietly stale (it did, on the first custom-table
+ * commit: the every-declaration test failed because the new gates defaulted
+ * to undefined here).
+ */
+const ALL_ON: ActionToolGates = Object.fromEntries(
+  ACTION_TOOL_NAMES.map((name) => [name, true])
+) as ActionToolGates;
 
 function insertResult(result: { error: { message: string } | null }) {
   return {
@@ -261,20 +252,18 @@ describe("declarations & naming", () => {
     const all = actionToolDeclarations(ALL_ON);
     expect(all.map((d) => d.name)).toEqual([...ACTION_TOOL_NAMES]);
 
+    // Built by turning everything OFF and naming the four that stay on,
+    // rather than by naming the ones to switch off: the latter goes stale
+    // silently every time a tool is added.
+    const allOff = Object.fromEntries(
+      ACTION_TOOL_NAMES.map((name) => [name, false])
+    ) as ActionToolGates;
     const some = actionToolDeclarations({
-      ...ALL_ON,
-      send_sms: false,
-      send_whatsapp: false,
-      calendar_cancel_appointment: false,
-      list_aiflows: false,
-      run_aiflow: false,
-      edit_aiflow: false,
-      undo_aiflow_edit: false,
-      generate_image: false,
-      update_notification_preferences: false,
-      flag_contact_spam: false,
-      set_contact_reply_mode: false,
-      manage_employee: false
+      ...allOff,
+      calendar_find_slots: true,
+      calendar_book_appointment: true,
+      calendar_reschedule_appointment: true,
+      calendar_join_waitlist: true
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -1488,5 +1477,119 @@ describe("never-throws contract", () => {
         message: expect.stringContaining("never pretend")
       });
     }
+  });
+});
+
+// ---------------------------------------------------------------------
+// Custom tables: the inline executor dispatch.
+//
+// The cores themselves are covered in tests/custom-tables-tool-handlers.
+// What matters HERE is that each name reaches its core with parsed args,
+// that a bad shape refuses before any core runs, and that the attribution
+// stamp names the surface the owner is actually talking on.
+// ---------------------------------------------------------------------
+vi.mock("@/lib/custom-tables/tool-handlers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/custom-tables/tool-handlers")>();
+  return {
+    ...actual,
+    customTableListTool: vi.fn(async () => ({ ok: true, tables: [] })),
+    customTableFindRowsTool: vi.fn(async () => ({ ok: true, rows: [] })),
+    customTableHistoryTool: vi.fn(async () => ({ ok: true, changes: [] })),
+    customTableAddRowTool: vi.fn(async () => ({ ok: true, rowId: "row-1" })),
+    customTableUpdateRowTool: vi.fn(async () => ({ ok: true, rowId: "row-1" })),
+    customTableDeleteRowTool: vi.fn(async () => ({ ok: true, deleted: "x" })),
+    customTableUndoTool: vi.fn(async () => ({ ok: true, undid: "schema" })),
+    customTableCreateTool: vi.fn(async () => ({ ok: true, table: "Vehicles" })),
+    customTableUpdateSchemaTool: vi.fn(async () => ({ ok: true, table: "Properties" })),
+    customTableDeleteTool: vi.fn(async () => ({ ok: true, table: "Properties" })),
+    customTableRestoreTool: vi.fn(async () => ({ ok: true, table: "Properties" }))
+  };
+});
+
+describe("custom table tools (inline dispatch)", () => {
+  const CASES = [
+    ["custom_table_list", {}, "customTableListTool"],
+    ["custom_table_find_rows", { table: "Properties" }, "customTableFindRowsTool"],
+    ["custom_table_history", { table: "Properties" }, "customTableHistoryTool"],
+    ["custom_table_add_row", { table: "Properties", values: [] }, "customTableAddRowTool"],
+    [
+      "custom_table_update_row",
+      { table: "Properties", row: "row-1", values: [] },
+      "customTableUpdateRowTool"
+    ],
+    [
+      "custom_table_delete_row",
+      { table: "Properties", row: "row-1", confirm: true },
+      "customTableDeleteRowTool"
+    ],
+    ["custom_table_undo", { changeId: 7 }, "customTableUndoTool"],
+    [
+      "custom_table_create",
+      { name: "Vehicles", columns: [{ label: "Name" }] },
+      "customTableCreateTool"
+    ],
+    [
+      "custom_table_update_schema",
+      { table: "Properties", action: "add_column", column: "Price" },
+      "customTableUpdateSchemaTool"
+    ],
+    ["custom_table_delete", { table: "Properties", confirm: true }, "customTableDeleteTool"],
+    ["custom_table_restore", { table: "Properties" }, "customTableRestoreTool"]
+  ] as const;
+
+  it.each(CASES)("routes %s to its shared core", async (name, args) => {
+    const res = (await executeActionTool(
+      BIZ,
+      { name: name as never, args: args as Record<string, unknown> },
+      happyDeps()
+    )) as { ok: boolean };
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    ["custom_table_find_rows", {}],
+    ["custom_table_history", {}],
+    ["custom_table_add_row", { table: "P" }],
+    ["custom_table_update_row", { table: "P", row: "r" }],
+    ["custom_table_delete_row", { table: "P" }],
+    ["custom_table_undo", { changeId: 0 }],
+    ["custom_table_create", { name: "V" }],
+    ["custom_table_update_schema", { table: "P", action: "nope", column: "C" }],
+    ["custom_table_delete", {}],
+    ["custom_table_restore", {}]
+  ] as const)("refuses %s with a bad shape before any core runs", async (name, args) => {
+    const res = (await executeActionTool(
+      BIZ,
+      { name: name as never, args: args as Record<string, unknown> },
+      happyDeps()
+    )) as { ok: boolean; message: string };
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/^invalid_args:/);
+  });
+
+  it("stamps the surface the owner is talking on, so the history reads right", async () => {
+    const { customTableAddRowTool } = await import("@/lib/custom-tables/tool-handlers");
+    await executeActionTool(
+      BIZ,
+      { name: "custom_table_add_row" as never, args: { table: "P", values: [] } },
+      { ...happyDeps(), flowEditSource: "ai_edit_sms", flowEditActor: "+15550001111" }
+    );
+    expect(customTableAddRowTool).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      { edit: { source: "ai_sms", actor: "+15550001111" } }
+    );
+
+    vi.mocked(customTableAddRowTool).mockClear();
+    await executeActionTool(
+      BIZ,
+      { name: "custom_table_add_row" as never, args: { table: "P", values: [] } },
+      happyDeps()
+    );
+    expect(customTableAddRowTool).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      { edit: { source: "ai_dashboard", actor: null } }
+    );
   });
 });

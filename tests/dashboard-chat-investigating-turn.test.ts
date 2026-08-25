@@ -74,7 +74,18 @@ const GATES_WITH_EDIT: ActionToolGates = {
   update_notification_preferences: false,
   flag_contact_spam: false,
   set_contact_reply_mode: false,
-  manage_employee: false
+  manage_employee: false,
+  custom_table_list: false,
+  custom_table_find_rows: false,
+  custom_table_history: false,
+  custom_table_add_row: false,
+  custom_table_update_row: false,
+  custom_table_delete_row: false,
+  custom_table_undo: false,
+  custom_table_create: false,
+  custom_table_update_schema: false,
+  custom_table_delete: false,
+  custom_table_restore: false
 };
 
 const GATES_WITHOUT_EDIT: ActionToolGates = { ...GATES_WITH_EDIT, edit_aiflow: false };

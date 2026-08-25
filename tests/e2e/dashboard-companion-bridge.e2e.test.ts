@@ -70,7 +70,18 @@ const ALL_ACTION_GATES: ActionToolGates = {
   update_notification_preferences: true,
   flag_contact_spam: true,
   set_contact_reply_mode: true,
-  manage_employee: true
+  manage_employee: true,
+  custom_table_list: false,
+  custom_table_find_rows: false,
+  custom_table_history: false,
+  custom_table_add_row: false,
+  custom_table_update_row: false,
+  custom_table_delete_row: false,
+  custom_table_undo: false,
+  custom_table_create: false,
+  custom_table_update_schema: false,
+  custom_table_delete: false,
+  custom_table_restore: false
 };
 
 const ALL_BRIDGE_GATES = Object.fromEntries(
