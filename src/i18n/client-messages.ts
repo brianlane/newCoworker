@@ -103,6 +103,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.segments.actions",
       "dashboard.settings",
       "dashboard.smsComposer",
+      "dashboard.tables",
       "dashboard.tasksData",
       "dashboard.termsGate",
       "dashboard.todos",

@@ -12,6 +12,7 @@
  * first client paint agree.
  */
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Columns3, DollarSign, List, ListTodo, Table2 } from "lucide-react";
 import { TaskCenter } from "@/components/dashboard/TaskCenter";
@@ -47,10 +48,15 @@ export function TasksWorkspace({
   // preference (a brief flash beats an SSR/client mismatch), same pattern
   // as the AiFlows Visual|Classic toggle.
   const [view, setView] = useState<View>("board");
+  // `?view=` wins over the stored preference, so the Tables directory can
+  // deep-link straight at the Leads, Deals, or To-dos view instead of
+  // dropping the visitor on whichever tab they last used.
+  const searchParams = useSearchParams();
+  const requestedView = searchParams.get("view");
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
+      const stored = requestedView ?? window.localStorage.getItem(VIEW_STORAGE_KEY);
       // One-shot post-mount sync from external storage (the documented
       // exception to the rule): reading localStorage during render would
       // desync SSR markup from the first client paint.
@@ -63,11 +69,13 @@ export function TasksWorkspace({
       ) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setView(stored);
+        // A deep link is also a choice worth remembering, same as a click.
+        if (requestedView) window.localStorage.setItem(VIEW_STORAGE_KEY, stored);
       }
     } catch {
       /* storage unavailable, keep the default */
     }
-  }, []);
+  }, [requestedView]);
 
   const pick = (v: View) => {
     setView(v);

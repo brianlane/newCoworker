@@ -701,31 +701,26 @@ export async function updateCustomTableRow(
   client?: SupabaseClient
 ): Promise<CustomTableRow> {
   const db = await resolveClient(client);
-  const current = await getCustomTableRow(table.id, rowId, table.fields, db);
-  const update: Record<string, unknown> = {
-    ...editColumns(edit),
-    updated_at: new Date().toISOString()
-  };
-  // `clear` stands on its own: emptying a cell is a change even when no
-  // other cell is being set, and gating it behind `values` would make a
-  // clear-only patch a silent no-op.
-  if (patch.values || patch.clear?.length) {
-    const supplied = patch.values ?? {};
-    const next = patch.replace ? { ...supplied } : { ...current.values, ...supplied };
-    for (const id of patch.clear ?? []) delete next[id];
-    update.field_values = next;
-  }
-  if (patch.contactId !== undefined) update.contact_id = patch.contactId;
-  const { data, error } = await db
-    .from("custom_table_rows")
-    .update(update)
-    .eq("table_id", table.id)
-    .eq("id", rowId)
-    .select(ROW_COLUMNS)
-    .maybeSingle();
+  // ONE statement, no read first. Merging in app code meant reading the row,
+  // combining, and writing back, and two cells edited in quick succession
+  // both read before either wrote, so the second silently dropped the first.
+  // Postgres' row lock serializes this instead. See the migration comment on
+  // custom_table_row_apply.
+  const { data, error } = await db.rpc("custom_table_row_apply", {
+    p_table_id: table.id,
+    p_row_id: rowId,
+    p_patch: patch.values ?? {},
+    p_clear: [...(patch.clear ?? [])],
+    p_replace: patch.replace === true,
+    p_set_contact: patch.contactId !== undefined,
+    p_contact_id: patch.contactId ?? null,
+    p_edit_source: edit?.source ?? null,
+    p_edit_actor: edit?.actor ?? null
+  });
   if (error) throw new Error(`updateCustomTableRow: ${error.message}`);
-  if (!data) throw new CustomTableError("not_found", "That row is gone.");
-  return toRow(data as RowRow, table.fields);
+  const rows = (data ?? []) as RowRow[];
+  if (rows.length === 0) throw new CustomTableError("not_found", "That row is gone.");
+  return toRow(rows[0]!, table.fields);
 }
 
 /**
