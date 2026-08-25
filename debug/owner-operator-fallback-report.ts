@@ -50,6 +50,18 @@ const db = createClient(
   { auth: { persistSession: false } }
 );
 
+/**
+ * Which of the three groups a fallback reason belongs to. Only
+ * "attempted and failed" is an alarm: a config reason means the path was
+ * never tried on this deployment, and `over_cap` is the spend cap doing its
+ * job, which must not read as an outage.
+ */
+function fallbackKind(reason: string): string {
+  if (reason === "disabled" || reason === "not_configured") return "config";
+  if (reason === "over_cap") return "deliberate degrade";
+  return "attempted and failed";
+}
+
 /** Every row of one telemetry event type in the window (paged past the 1000 cap). */
 async function readEvents(eventType: string): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
@@ -106,11 +118,7 @@ if (fb > 0) {
   }
   console.log("\nby reason:");
   for (const [reason, n] of [...byReason.entries()].sort((a, b) => b[1] - a[1])) {
-    // disabled / not_configured mean the path was never ATTEMPTED on this
-    // deployment: a config answer, not a health answer.
-    const kind =
-      reason === "disabled" || reason === "not_configured" ? "config" : "attempted and failed";
-    console.log(`  ${reason.padEnd(16)} ${String(n).padStart(5)}   (${kind})`);
+    console.log(`  ${reason.padEnd(16)} ${String(n).padStart(5)}   (${fallbackKind(reason)})`);
   }
   console.log("\nby business:");
   for (const [biz, n] of [...byBiz.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
@@ -124,7 +132,13 @@ if (fb > 0) {
     for (const d of [...new Set(details)].slice(0, 5)) console.log(`  ${d}`);
   }
   console.log(
-    "\nA sustained non-config fallback rate is the trigger to revisit giving the box worker its own flow-edit path; a config reason means fixing the deployment instead."
+    "\nA sustained attempted-and-failed rate is the trigger to revisit giving the box worker its own flow-edit path. A config reason means fixing the deployment, and over_cap means the spend cap did its job."
+  );
+} else if (total === 0) {
+  // No turns at all is not a clean bill of health, it is no evidence either
+  // way, and saying otherwise contradicts the "n/a" rate printed above.
+  console.log(
+    "\nNo owner turns in this window at all, so there is nothing to conclude about fallbacks. Widen --days (up to the 30-day retention) for a reading."
   );
 } else {
   console.log("\nNo fallbacks in the window: every owner turn got the full operator surface.");

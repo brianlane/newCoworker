@@ -193,15 +193,21 @@ const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
  * ever reached, not fallbacks at all). One event per give-up makes the
  * question a single query.
  *
- * The distinction that matters when reading these: `not_configured` and
- * `disabled` mean the platform path was never attempted on this deployment,
- * so a steady stream of them is a config problem, not a health problem.
- * Everything else means it WAS attempted and failed, which is the shape worth
- * alerting on.
+ * Reading these, there are three groups and only one is an alarm:
+ *
+ *   - `not_configured` / `disabled`: never ATTEMPTED on this deployment. A
+ *     steady stream is a config problem, not a health problem.
+ *   - `over_cap`: attempted and DELIBERATELY refused. The platform route
+ *     answers 200 with `detail: "over_cap"` when the tenant is past its AI
+ *     spend cap, which is the system working as designed. Counting it as
+ *     breakage would make a billing state look like an outage.
+ *   - `http_error` / `bad_payload` / `request_failed`: attempted and failed.
+ *     This is the shape worth alerting on.
  */
 type OwnerOperatorFallbackReason =
   | "disabled"
   | "not_configured"
+  | "over_cap"
   | "http_error"
   | "bad_payload"
   | "request_failed";
@@ -253,15 +259,23 @@ async function callOwnerOperatorTurn(args: {
       }),
       signal: controller.signal
     });
-    if (!res.ok) {
-      console.error("owner operator turn HTTP", res.status);
-      return await fellBack("http_error", String(res.status));
-    }
+    // The route answers `{ ok, reply }` on success and `{ ok: false, detail }`
+    // on every refusal, so the body is worth reading on BOTH paths: without
+    // it a spend-cap degrade and a genuine outage are the same row.
     const payload = (await res.json().catch(() => null)) as
-      | { ok?: boolean; reply?: string }
+      | { ok?: boolean; reply?: string; detail?: string }
       | null;
+    const detail = typeof payload?.detail === "string" ? payload.detail.slice(0, 200) : undefined;
+    if (!res.ok) {
+      console.error("owner operator turn HTTP", res.status, detail ?? "");
+      return await fellBack("http_error", detail ? `${res.status} ${detail}` : String(res.status));
+    }
     if (!payload?.ok || typeof payload.reply !== "string" || !payload.reply.trim()) {
-      return await fellBack("bad_payload");
+      // Deliberate refusal vs breakage. Named at the source rather than by
+      // the report parsing detail strings, so the classification lives with
+      // the code that knows what the route means.
+      if (detail === "over_cap") return await fellBack("over_cap", detail);
+      return await fellBack("bad_payload", detail);
     }
     return payload.reply.trim();
   } catch (e) {
