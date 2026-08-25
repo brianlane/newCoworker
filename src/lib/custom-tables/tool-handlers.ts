@@ -60,6 +60,7 @@ import {
 } from "@/lib/custom-tables/versions";
 import { buildCustomTableHistory } from "@/lib/custom-tables/version-history";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
   CUSTOM_TABLE_FIELD_TYPES,
   CUSTOM_TABLE_TRASH_RETENTION_DAYS,
@@ -311,12 +312,27 @@ async function resolveContact(
   phone: string,
   lookup: typeof getCustomerMemory
 ): Promise<{ ok: true; contactId: string } | { ok: false; result: CustomTableToolResult }> {
-  const contact = await lookup(businessId, phone.trim());
+  // Normalize HERE, not at each caller. getCustomerMemory matches
+  // contacts.customer_e164 exactly (its own comment notes it assumes strict
+  // `+digits`), so a number the model typed as "(555) 234-5678" would miss a
+  // contact that exists and read back as contact_not_found. Every surface
+  // that reaches this function gets the fix at once: dashboard chat, owner
+  // SMS, Slack, and the connectors.
+  const normalized = normalizeContactNumber(phone);
+  if (!normalized.ok) {
+    return {
+      ok: false,
+      result: failure(
+        `invalid_phone: "${phone}" is not a usable phone number (${normalized.reason}), so the row cannot be attached to anyone.`
+      )
+    };
+  }
+  const contact = await lookup(businessId, normalized.value);
   if (!contact) {
     return {
       ok: false,
       result: failure(
-        `contact_not_found: there is no contact with the number ${phone.trim()}, so the row cannot be attached to them. Add the contact first, or add the row without a number and let the owner attach it.`
+        `contact_not_found: there is no contact with the number ${normalized.value}, so the row cannot be attached to them. Add the contact first, or add the row without a number and let the owner attach it.`
       )
     };
   }

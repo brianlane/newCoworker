@@ -257,6 +257,47 @@ describe("customTableFindRowsTool", () => {
     );
     expect((out as unknown as { message: string }).message).toMatch(/contact_not_found/);
   });
+
+  // getCustomerMemory matches contacts.customer_e164 EXACTLY, so a number the
+  // model typed the way a person says it has to be normalized before it gets
+  // there. Without this the lookup misses a contact that exists and the model
+  // relays "no such contact" as fact.
+  it.each([
+    ["(555) 000-1111", "+15550001111"],
+    ["555-000-1111", "+15550001111"],
+    ["5550001111", "+15550001111"],
+    ["+1 555 000 1111", "+15550001111"]
+  ])("normalizes %s before looking the contact up", async (typed, expected) => {
+    const linked = table({ rowLink: "contact" });
+    const lookupContact = vi.fn(async () => ({ id: "c-1" }));
+    const out = await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties", contactPhone: typed },
+      deps({
+        listTables: vi.fn(async () => [linked]) as never,
+        lookupContact: lookupContact as never
+      })
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(lookupContact).toHaveBeenCalledWith("biz-1", expected);
+  });
+
+  it("refuses a phone that is not a phone at all, and says so distinctly", async () => {
+    const linked = table({ rowLink: "contact" });
+    const lookupContact = vi.fn(async () => ({ id: "c-1" }));
+    const out = await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties", contactPhone: "not a phone" },
+      deps({
+        listTables: vi.fn(async () => [linked]) as never,
+        lookupContact: lookupContact as never
+      })
+    );
+    // invalid_phone, NOT contact_not_found: the two send the model down
+    // different paths, and "add the contact first" would be wrong advice here.
+    expect((out as unknown as { message: string }).message).toMatch(/invalid_phone/);
+    expect(lookupContact).not.toHaveBeenCalled();
+  });
 });
 
 describe("customTableAddRowTool", () => {

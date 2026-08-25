@@ -275,7 +275,22 @@ export const restoreCustomTableTool = defineMcpTool({
   outputSchema: resultShape,
   description:
     "Bring back a table that was deleted, with everything that was in it. Use it when the person changes their mind about a deletion. Managers and owners only.",
-  schema: { business_id: businessIdField, table: tableField },
+  schema: {
+    business_id: businessIdField,
+    // NOT the shared tableField: that one points at list_custom_tables,
+    // which only ever returns LIVE tables, so a deleted one is structurally
+    // absent from it. Steering restore at that list would have the model
+    // conclude the table is gone instead of bringing it back. A name that
+    // matches nothing in the trash comes back with the deleted names listed,
+    // so a guess costs one round trip rather than a dead end.
+    table: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        "Name of the DELETED table to bring back, as the person calls it. Deleted tables are not in list_custom_tables, so use the name they gave you; if it does not match, the reply lists what is actually in the trash."
+      )
+  },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
     await requireMcpBusinessRole(auth, businessId, "manage_settings");

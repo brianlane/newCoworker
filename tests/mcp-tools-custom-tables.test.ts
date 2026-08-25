@@ -246,3 +246,23 @@ describe("the exported set", () => {
     ]);
   });
 });
+
+describe("what the parameter descriptions steer the model toward", () => {
+  // list_custom_tables returns LIVE tables only, so a deleted one is
+  // structurally absent from it. Pointing restore at that list would have the
+  // model tell the owner the table is gone instead of bringing it back.
+  it("does not send restore to a list that cannot contain a deleted table", () => {
+    const described = (restoreCustomTableTool.schema.table as { description?: string })
+      .description;
+    expect(described).toBeTruthy();
+    expect(described).not.toMatch(/list_custom_tables gave it/);
+    expect(described).toMatch(/DELETED/);
+  });
+
+  it("still points the read and write tools at the live list", () => {
+    for (const tool of [getCustomTableRowsTool, updateCustomTableRowTool]) {
+      const described = (tool.schema.table as { description?: string }).description;
+      expect(described).toMatch(/list_custom_tables/);
+    }
+  });
+});
