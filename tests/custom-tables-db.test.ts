@@ -52,6 +52,7 @@ function chain(result: Result) {
     "not",
     "lt",
     "gt",
+    "or",
     "order",
     "limit",
     "single",
@@ -704,10 +705,12 @@ describe("listCustomTableRows", () => {
     expect(out.nextCursor).toBeNull();
   });
 
-  it("returns a cursor only when there is another page", async () => {
+  it("returns a cursor carrying BOTH halves of the sort key", async () => {
+    // A bulk insert gives every row the same now(), so a cursor of
+    // created_at alone would skip or repeat the rest of that timestamp.
     const rows = [
       { ...ROW_ROW, id: "row-1", created_at: "2026-08-05T00:00:00.000Z" },
-      { ...ROW_ROW, id: "row-2", created_at: "2026-08-04T00:00:00.000Z" }
+      { ...ROW_ROW, id: "row-2", created_at: "2026-08-05T00:00:00.000Z" }
     ];
     const out = await listCustomTableRows(
       "tbl-1",
@@ -716,19 +719,31 @@ describe("listCustomTableRows", () => {
       asClient(mockDb([{ data: rows, error: null }]))
     );
     expect(out.rows).toHaveLength(1);
-    expect(out.nextCursor).toBe("2026-08-05T00:00:00.000Z");
+    expect(out.nextCursor).toBe("2026-08-05T00:00:00.000Z|row-1");
   });
 
-  it("filters by contact and pages from a cursor", async () => {
+  it("filters by contact and pages strictly after the compound cursor", async () => {
     const db = mockDb([{ data: [], error: null }]);
     await listCustomTableRows(
       "tbl-1",
       [FIELD],
-      { contactId: "c-1", cursor: "2026-08-05T00:00:00.000Z" },
+      { contactId: "c-1", cursor: "2026-08-05T00:00:00.000Z|row-1" },
       asClient(db)
     );
     expect(db.chains[0].eq).toHaveBeenCalledWith("contact_id", "c-1");
-    expect(db.chains[0].lt).toHaveBeenCalledWith("created_at", "2026-08-05T00:00:00.000Z");
+    expect(db.chains[0].or).toHaveBeenCalledWith(
+      "created_at.lt.2026-08-05T00:00:00.000Z,and(created_at.eq.2026-08-05T00:00:00.000Z,id.lt.row-1)"
+    );
+  });
+
+  it.each([
+    ["no separator", "2026-08-05T00:00:00.000Z"],
+    ["nothing before it", "|row-1"],
+    ["nothing after it", "2026-08-05T00:00:00.000Z|"]
+  ])("ignores a malformed cursor with %s rather than paging wrongly", async (_label, cursor) => {
+    const db = mockDb([{ data: [], error: null }]);
+    await listCustomTableRows("tbl-1", [FIELD], { cursor }, asClient(db));
+    expect(db.chains[0].or).not.toHaveBeenCalled();
   });
 
   it("returns nothing for a null payload and throws on failure", async () => {
@@ -917,6 +932,38 @@ describe("createCustomTableRow", () => {
 });
 
 describe("updateCustomTableRow", () => {
+  it("clears the cells the writer explicitly blanked", async () => {
+    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
+    const table = { ...TABLE, fields: two };
+    const db = mockDb([
+      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "Phoenix" } }, error: null },
+      { data: ROW_ROW, error: null }
+    ]);
+    await updateCustomTableRow(table, "row-1", { values: {}, clear: ["city"] }, undefined, asClient(db));
+    expect(db.chains[1].update).toHaveBeenCalledWith(
+      expect.objectContaining({ field_values: { address: "12 Maple St" } })
+    );
+  });
+
+  it("replaces the whole bag when asked, which is what an undo needs", async () => {
+    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
+    const table = { ...TABLE, fields: two };
+    const db = mockDb([
+      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "added later" } }, error: null },
+      { data: ROW_ROW, error: null }
+    ]);
+    await updateCustomTableRow(
+      table,
+      "row-1",
+      { values: { address: "12 Maple St" }, replace: true },
+      undefined,
+      asClient(db)
+    );
+    expect(db.chains[1].update).toHaveBeenCalledWith(
+      expect.objectContaining({ field_values: { address: "12 Maple St" } })
+    );
+  });
+
   it("merges values rather than replacing the bag", async () => {
     const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
     const table = { ...TABLE, fields: two };

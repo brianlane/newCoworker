@@ -149,7 +149,19 @@ export type RowValueErrorCode =
 export type RowValueError = { fieldId: string; code: RowValueErrorCode };
 
 export type ValidateRowResult =
-  | { ok: true; values: Record<string, CustomTableFieldValue> }
+  | {
+      ok: true;
+      values: Record<string, CustomTableFieldValue>;
+      /**
+       * Columns the writer explicitly SENT as empty.
+       *
+       * Empty values are never stored (an absent key is what empty means),
+       * so without this a merge could only ever add and change cells, never
+       * clear one. "Not mentioned" and "sent as blank" are different
+       * intentions and the storage layer needs to tell them apart.
+       */
+      cleared: string[];
+    }
   | { ok: false; errors: RowValueError[] };
 
 function validateOne(
@@ -238,14 +250,19 @@ export function validateRowValues(
 ): ValidateRowResult {
   const input = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const values: Record<string, CustomTableFieldValue> = {};
+  const cleared: string[] = [];
   const errors: RowValueError[] = [];
 
   for (const field of fields) {
     if (!field.enabled) continue;
+    const mentioned = Object.prototype.hasOwnProperty.call(input, field.id);
     const supplied = input[field.id];
     if (isEmptyValue(supplied)) {
       if (field.required) errors.push({ fieldId: field.id, code: "required" });
-      // Absent key means empty. Nulls are never stored.
+      // Absent key means empty; nulls are never stored. But a writer who
+      // SENT the key as blank is asking to clear it, which a merge would
+      // otherwise be unable to express.
+      else if (mentioned) cleared.push(field.id);
       continue;
     }
     const checked = validateOne(field, supplied);
@@ -260,7 +277,53 @@ export function validateRowValues(
   if (JSON.stringify(values).length > MAX_SERIALIZED_ROW_BYTES) {
     return { ok: false, errors: [{ fieldId: "", code: "row_too_large" }] };
   }
-  return { ok: true, values };
+  return { ok: true, values, cleared };
+}
+
+/**
+ * Field-level errors as one plain-English sentence.
+ *
+ * The API envelope carries a code and a message and nothing else, so the
+ * cells that failed have to be named in the text. This is also what the AI
+ * relays, which is why a bad `select` lists the real options: "Status must
+ * be one of: New, Won, Lost" is actionable, "invalid value" is not.
+ *
+ * The grid does not depend on this to highlight cells. It imports
+ * validateRowValues directly (this module is pure and client-safe) and marks
+ * them from the structured errors; the server stays the authority.
+ */
+export function describeRowErrors(
+  fields: readonly CustomTableField[],
+  errors: readonly RowValueError[]
+): string {
+  const parts = errors.map((err) => {
+    const field = fields.find((f) => f.id === err.fieldId);
+    const label = field?.label ?? "That row";
+    switch (err.code) {
+      case "required":
+        return `${label} is required`;
+      case "too_long":
+        return `${label} is too long`;
+      case "out_of_range":
+        return `${label} is too big a number`;
+      case "bad_date":
+        return `${label} needs a date like 2026-09-01`;
+      case "not_an_option": {
+        const options = field?.options ?? [];
+        // Naming the real choices is what makes this actionable, but a
+        // column that has since been deleted has none to name, and a
+        // dangling "one of: ." would read as a bug.
+        return options.length > 0
+          ? `${label} must be one of: ${options.join(", ")}`
+          : `${label} is not one of the choices`;
+      }
+      case "row_too_large":
+        return "That row holds too much text";
+      default:
+        return `${label} is the wrong kind of value`;
+    }
+  });
+  return parts.join(". ") + ".";
 }
 
 /**

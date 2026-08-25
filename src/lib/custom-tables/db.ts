@@ -491,6 +491,24 @@ export async function countCustomTableRows(
 }
 
 /**
+ * The keyset cursor: both halves of the sort key, not just the timestamp.
+ *
+ * Rows are ordered by (created_at desc, id desc), and a bulk insert gives
+ * every row the same `now()`. A cursor of created_at alone would then either
+ * skip the rest of that timestamp's rows (with `lt`) or repeat them (with
+ * `lte`), so the id has to ride along.
+ */
+function encodeRowCursor(row: RowRow): string {
+  return `${row.created_at}|${row.id}`;
+}
+
+function decodeRowCursor(cursor: string): { createdAt: string; id: string } | null {
+  const at = cursor.lastIndexOf("|");
+  if (at <= 0 || at === cursor.length - 1) return null;
+  return { createdAt: cursor.slice(0, at), id: cursor.slice(at + 1) };
+}
+
+/**
  * One page of rows, keyset on created_at + id.
  *
  * Paged rather than un-limited because PostgREST silently truncates an
@@ -513,7 +531,14 @@ export async function listCustomTableRows(
     .order("id", { ascending: false })
     .limit(limit + 1);
   if (options.contactId) query = query.eq("contact_id", options.contactId);
-  if (options.cursor) query = query.lt("created_at", options.cursor);
+  const after = options.cursor ? decodeRowCursor(options.cursor) : null;
+  if (after) {
+    // Strictly after the cursor in (created_at desc, id desc) order: an
+    // older timestamp, or the same timestamp with a lower id.
+    query = query.or(
+      `created_at.lt.${after.createdAt},and(created_at.eq.${after.createdAt},id.lt.${after.id})`
+    );
+  }
   const { data, error } = await query;
   if (error) throw new Error(`listCustomTableRows: ${error.message}`);
   const raw = (data ?? []) as RowRow[];
@@ -522,7 +547,7 @@ export async function listCustomTableRows(
   // the page is full, so its last entry exists and carries the next cursor.
   return {
     rows: page.map((r) => toRow(r, fields)),
-    nextCursor: raw.length > limit ? page[page.length - 1]!.created_at : null
+    nextCursor: raw.length > limit ? encodeRowCursor(page[page.length - 1]!) : null
   };
 }
 
@@ -644,13 +669,27 @@ export async function createCustomTableRow(
 }
 
 /**
- * Merge semantics: only the supplied cells change, so the grid can PATCH one
- * cell on blur and the AI can set one column without blanking the rest.
+ * Change some cells.
+ *
+ * MERGE by default, so the grid can save one cell on blur and the coworker
+ * can set one column without blanking the rest. Three knobs make that safe:
+ *
+ * - `clear` names cells the writer explicitly sent as empty. Empty values
+ *   are never stored, so without this a merge could add and change cells but
+ *   never clear one.
+ * - `replace` swaps the whole bag instead of merging. Restoring an old
+ *   snapshot needs this: a merge could never take back a cell that was
+ *   filled in AFTER the snapshot, so undo would silently leave it behind.
  */
 export async function updateCustomTableRow(
   table: CustomTable,
   rowId: string,
-  patch: { values?: Record<string, CustomTableFieldValue>; contactId?: string | null },
+  patch: {
+    values?: Record<string, CustomTableFieldValue>;
+    clear?: readonly string[];
+    replace?: boolean;
+    contactId?: string | null;
+  },
   edit?: EditStamp,
   client?: SupabaseClient
 ): Promise<CustomTableRow> {
@@ -660,7 +699,11 @@ export async function updateCustomTableRow(
     ...editColumns(edit),
     updated_at: new Date().toISOString()
   };
-  if (patch.values) update.field_values = { ...current.values, ...patch.values };
+  if (patch.values) {
+    const next = patch.replace ? { ...patch.values } : { ...current.values, ...patch.values };
+    for (const id of patch.clear ?? []) delete next[id];
+    update.field_values = next;
+  }
   if (patch.contactId !== undefined) update.contact_id = patch.contactId;
   const { data, error } = await db
     .from("custom_table_rows")

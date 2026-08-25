@@ -134,7 +134,11 @@ describe("listCustomTableVersions", () => {
     expect(version.fields).toBeNull();
   });
 
-  it("projects a row snapshot against the fields the snapshot carries", async () => {
+  it("returns row values RAW, because a row snapshot carries no field list", async () => {
+    // The row triggers write field_values and leave `fields` null; they have
+    // no reason to copy the whole schema onto every row edit. Projecting
+    // here would filter every value against an empty column list and blank
+    // the entire history, so the filtering happens at restore time instead.
     const db = mockDb([
       {
         data: [
@@ -142,7 +146,8 @@ describe("listCustomTableVersions", () => {
             ...VERSION_ROW,
             kind: "row_updated",
             row_id: "row-1",
-            field_values: { address: "12 Maple St", ghost: "orphan" }
+            fields: null,
+            field_values: { address: "12 Maple St" }
           }
         ],
         error: null
@@ -152,15 +157,12 @@ describe("listCustomTableVersions", () => {
     expect(version.values).toEqual({ address: "12 Maple St" });
   });
 
-  it("projects a row snapshot with no field list against nothing", async () => {
+  it("keeps a null value bag null", async () => {
     const db = mockDb([
-      {
-        data: [{ ...VERSION_ROW, kind: "row_deleted", fields: null, field_values: { a: 1 } }],
-        error: null
-      }
+      { data: [{ ...VERSION_ROW, kind: "row_deleted", fields: null, field_values: null }], error: null }
     ]);
     const [version] = await listCustomTableVersions("biz-1", "tbl-1", 20, asClient(db));
-    expect(version.values).toEqual({});
+    expect(version.values).toBeNull();
   });
 
   it("defaults the limit, returns nothing for a null payload, and throws on failure", async () => {
@@ -246,6 +248,76 @@ describe("restoreCustomTableVersion", () => {
     );
   });
 
+  it("puts the column DEFINITIONS back, not just the table name", async () => {
+    // The History panel says "Renamed Status to Stage" and puts a Restore
+    // button next to it. Restoring only the table name would leave the
+    // column exactly as it was, so the button would lie.
+    const renamed = { ...FIELD, label: "Renamed since", required: true, enabled: false };
+    vi.mocked(getCustomTable).mockResolvedValue({ ...TABLE, fields: [renamed] });
+    vi.mocked(patchCustomTableFields).mockResolvedValue({
+      table: { ...TABLE, fields: [FIELD] },
+      sweptRows: 0
+    });
+    const db = mockDb([{ data: VERSION_ROW, error: null }]);
+    await restoreCustomTableVersion("biz-1", 5, EDIT, asClient(db));
+    expect(patchCustomTableFields).toHaveBeenCalledWith(
+      "biz-1",
+      "tbl-1",
+      {
+        action: "update",
+        fieldId: "address",
+        label: "Address",
+        help: "",
+        required: false,
+        enabled: true
+      },
+      EDIT,
+      expect.anything()
+    );
+  });
+
+  it("puts a choice column's options back", async () => {
+    const live = {
+      ...FIELD,
+      id: "status",
+      label: "Status",
+      type: "select" as const,
+      options: ["New"]
+    };
+    const snapshot = { ...live, options: ["New", "Won", "Lost"] };
+    vi.mocked(getCustomTable).mockResolvedValue({ ...TABLE, fields: [live] });
+    vi.mocked(patchCustomTableFields).mockResolvedValue({
+      table: { ...TABLE, fields: [snapshot] },
+      sweptRows: 0
+    });
+    const db = mockDb([{ data: { ...VERSION_ROW, fields: [snapshot] }, error: null }]);
+    await restoreCustomTableVersion("biz-1", 5, EDIT, asClient(db));
+    expect(patchCustomTableFields).toHaveBeenCalledWith(
+      "biz-1",
+      "tbl-1",
+      expect.objectContaining({ fieldId: "status", options: ["New", "Won", "Lost"] }),
+      EDIT,
+      expect.anything()
+    );
+  });
+
+  it("touches nothing when the columns already match the snapshot", async () => {
+    const db = mockDb([{ data: VERSION_ROW, error: null }]);
+    await restoreCustomTableVersion("biz-1", 5, EDIT, asClient(db));
+    expect(patchCustomTableFields).not.toHaveBeenCalled();
+  });
+
+  it("skips a snapshot column the table no longer has", async () => {
+    const db = mockDb([
+      {
+        data: { ...VERSION_ROW, fields: [FIELD, { ...FIELD, id: "gone", label: "Gone" }] },
+        error: null
+      }
+    ]);
+    await restoreCustomTableVersion("biz-1", 5, EDIT, asClient(db));
+    expect(patchCustomTableFields).not.toHaveBeenCalled();
+  });
+
   it("reorders the columns back when the snapshot covers exactly the live set", async () => {
     const second = { ...FIELD, id: "city", label: "City" };
     vi.mocked(getCustomTable).mockResolvedValue({ ...TABLE, fields: [FIELD, second] });
@@ -299,13 +371,17 @@ describe("restoreCustomTableVersion", () => {
     });
   });
 
-  it("puts a row edit back through the normal row update", async () => {
+  it("puts a row edit back by REPLACING the bag, not merging into it", async () => {
+    // A merge could never take back a cell filled in AFTER the snapshot, so
+    // the undo would quietly leave newer data in the row it claimed to
+    // restore.
     const db = mockDb([
       {
         data: {
           ...VERSION_ROW,
           kind: "row_updated",
           row_id: "row-1",
+          fields: null,
           field_values: { address: "was" },
           contact_id: "c-1"
         },
@@ -317,7 +393,33 @@ describe("restoreCustomTableVersion", () => {
     expect(updateCustomTableRow).toHaveBeenCalledWith(
       TABLE,
       "row-1",
-      { values: { address: "was" }, contactId: "c-1" },
+      { values: { address: "was" }, replace: true, contactId: "c-1" },
+      EDIT,
+      expect.anything()
+    );
+  });
+
+  it("drops snapshot values whose column has since been deleted", async () => {
+    // Deleting a column swept its data out of every row. Letting a restore
+    // put it back through the side door would resurrect exactly what the
+    // sweep was there to remove.
+    const db = mockDb([
+      {
+        data: {
+          ...VERSION_ROW,
+          kind: "row_updated",
+          row_id: "row-1",
+          fields: null,
+          field_values: { address: "was", deleted_column: "should not come back" }
+        },
+        error: null
+      }
+    ]);
+    await restoreCustomTableVersion("biz-1", 5, EDIT, asClient(db));
+    expect(updateCustomTableRow).toHaveBeenCalledWith(
+      TABLE,
+      "row-1",
+      { values: { address: "was" }, replace: true, contactId: null },
       EDIT,
       expect.anything()
     );

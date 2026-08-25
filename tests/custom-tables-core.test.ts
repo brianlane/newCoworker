@@ -3,6 +3,7 @@ import {
   applyFieldDefinitionPatch,
   buildCustomTablesDigestMd,
   coerceFieldValue,
+  describeRowErrors,
   fieldHasOptions,
   formatFieldValue,
   formatRowSummary,
@@ -162,6 +163,7 @@ describe("validateRowValues", () => {
     });
     expect(out).toEqual({
       ok: true,
+      cleared: [],
       values: {
         name: "Maple St",
         notes: "long",
@@ -177,12 +179,12 @@ describe("validateRowValues", () => {
 
   it("treats a non-object input as empty", () => {
     const out = validateRowValues([field({ required: false })], "nope");
-    expect(out).toEqual({ ok: true, values: {} });
+    expect(out).toEqual({ ok: true, values: {}, cleared: [] });
   });
 
   it("skips disabled columns entirely, even required ones", () => {
     const out = validateRowValues([field({ required: true, enabled: false })], {});
-    expect(out).toEqual({ ok: true, values: {} });
+    expect(out).toEqual({ ok: true, values: {}, cleared: [] });
   });
 
   it.each([
@@ -197,7 +199,9 @@ describe("validateRowValues", () => {
     });
     expect(validateRowValues([field({ required: false })], { name: value })).toEqual({
       ok: true,
-      values: {}
+      values: {},
+      // Sent, but blank: the writer is asking to clear it.
+      cleared: ["name"]
     });
   });
 
@@ -256,6 +260,30 @@ describe("validateRowValues", () => {
     });
   });
 
+  it("tells a cell that was never mentioned apart from one sent blank", () => {
+    // Both store nothing. Only the second is a request to CLEAR, and a
+    // merge that could not tell them apart would make emptying a cell
+    // impossible: you could correct a typo but never simply remove it.
+    const two = [field({ id: "a" }), field({ id: "b" })];
+    expect(validateRowValues(two, { a: "kept" })).toEqual({
+      ok: true,
+      values: { a: "kept" },
+      cleared: []
+    });
+    expect(validateRowValues(two, { a: "kept", b: "" })).toEqual({
+      ok: true,
+      values: { a: "kept" },
+      cleared: ["b"]
+    });
+  });
+
+  it("does not report a required cell as cleared, it reports it as missing", () => {
+    expect(validateRowValues([field({ id: "a", required: true })], { a: "" })).toEqual({
+      ok: false,
+      errors: [{ fieldId: "a", code: "required" }]
+    });
+  });
+
   it("refuses every value when a choice column somehow lost its options", () => {
     // parseTableFields drops a select with under two options, so this shape
     // only reaches the validator from a hand-built definition. It must still
@@ -279,7 +307,7 @@ describe("validateRowValues", () => {
       known: "yes",
       vanished: "old column"
     });
-    expect(out).toEqual({ ok: true, values: { known: "yes" } });
+    expect(out).toEqual({ ok: true, values: { known: "yes" }, cleared: [] });
   });
 
   it("collects every failing cell, not just the first", () => {
@@ -306,6 +334,54 @@ describe("validateRowValues", () => {
       ok: false,
       errors: [{ fieldId: "", code: "row_too_large" }]
     });
+  });
+});
+
+describe("describeRowErrors", () => {
+  const fields = [
+    field({ id: "name", label: "Name" }),
+    field({ id: "status", label: "Status", type: "select", options: ["New", "Won", "Lost"] })
+  ];
+
+  it.each([
+    ["required", "Name is required."],
+    ["too_long", "Name is too long."],
+    ["out_of_range", "Name is too big a number."],
+    ["bad_date", "Name needs a date like 2026-09-01."],
+    ["wrong_type", "Name is the wrong kind of value."]
+  ])("renders %s", (code, expected) => {
+    expect(describeRowErrors(fields, [{ fieldId: "name", code: code as never }])).toBe(expected);
+  });
+
+  it("lists the real options, which is what makes the message actionable", () => {
+    expect(describeRowErrors(fields, [{ fieldId: "status", code: "not_an_option" }])).toBe(
+      "Status must be one of: New, Won, Lost."
+    );
+  });
+
+  it("names the row, not a column, when the whole row is too big", () => {
+    expect(describeRowErrors(fields, [{ fieldId: "", code: "row_too_large" }])).toBe(
+      "That row holds too much text."
+    );
+  });
+
+  it("falls back gracefully for a column that no longer exists", () => {
+    expect(describeRowErrors(fields, [{ fieldId: "ghost", code: "required" }])).toBe(
+      "That row is required."
+    );
+    // And without a dangling "one of: ." when there are no options to name.
+    expect(describeRowErrors(fields, [{ fieldId: "ghost", code: "not_an_option" }])).toBe(
+      "That row is not one of the choices."
+    );
+  });
+
+  it("joins several failures into one sentence", () => {
+    expect(
+      describeRowErrors(fields, [
+        { fieldId: "name", code: "required" },
+        { fieldId: "status", code: "not_an_option" }
+      ])
+    ).toBe("Name is required. Status must be one of: New, Won, Lost.");
   });
 });
 
