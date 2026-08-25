@@ -593,12 +593,26 @@ export async function dispatchUrgentNotification(
           (channel !== "whatsapp" || targets.whatsappConnected) &&
           (channel !== "slack" || targets.slackConnected)
       );
+      // Every row of a suppressed dispatch is stamped so the backstop count
+      // cannot see it. Without this the dashboard row, which IS genuinely
+      // sent, counts as an alert event, and a burst of squashed repeats
+      // would burn the budget and mute the next real escalation: exactly
+      // the failure this gate was rewritten to prevent. Bugbot, PR #1617.
+      const suppressedPayload = { ...payload, suppressed: reason };
       results.push(
-        await recordRow(input.businessId, "dashboard", "sent", summary, kind, payload)
+        await recordRow(input.businessId, "dashboard", "sent", summary, kind, suppressedPayload)
       );
       for (const channel of gatedChannels) {
         results.push(
-          await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
+          await recordRow(
+            input.businessId,
+            channel,
+            "skipped",
+            summary,
+            kind,
+            suppressedPayload,
+            reason
+          )
         );
       }
       logger.warn("notifications.dispatch: contact alert suppressed", {

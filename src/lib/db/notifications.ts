@@ -179,7 +179,7 @@ export async function listRecentAlertsAbout(
   const sinceIso = new Date(Date.now() - windowMs).toISOString();
   const { data, error } = await db
     .from("notifications")
-    .select("payload->dispatch_id, summary")
+    .select("payload->dispatch_id, payload->suppressed, summary")
     .eq("business_id", businessId)
     .eq("kind", kind)
     .eq("status", "sent")
@@ -196,7 +196,16 @@ export async function listRecentAlertsAbout(
   const seen = new Set<string>();
   const summaries = new Map<string, string>();
   let unstamped = 0;
-  for (const row of (data ?? []) as { dispatch_id?: unknown; summary?: unknown }[]) {
+  for (const row of (data ?? []) as {
+    dispatch_id?: unknown;
+    suppressed?: unknown;
+    summary?: unknown;
+  }[]) {
+    // A dispatch the gate already suppressed still writes a dashboard row,
+    // which is genuinely sent and genuinely shown. It is NOT a delivered
+    // alert, so counting it would let squashed repeats eat the backstop
+    // budget meant to stop a runaway loop.
+    if (row.suppressed) continue;
     const text = typeof row.summary === "string" ? row.summary : "";
     if (typeof row.dispatch_id === "string" && row.dispatch_id.length > 0) {
       seen.add(row.dispatch_id);

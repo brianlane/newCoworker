@@ -1915,6 +1915,28 @@ describe("notifications/dispatch", () => {
       expect(results.find((r) => r.channel === "sms")?.reason).toBe("contact_alert_duplicate");
     });
 
+    it("does not let squashed repeats eat the backstop budget", async () => {
+      // The dashboard row of a suppressed dispatch is written as sent, so
+      // without the marker a burst of repeats would count as real alerts and
+      // mute the next genuine escalation.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({
+        events: 1,
+        summaries: ["Texter follow-up needed: Follow up with Aaron"]
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Texter follow-up needed: Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      for (const row of vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as { payload: Record<string, unknown> })) {
+        expect(row.payload.suppressed).toBe("contact_alert_duplicate");
+      }
+    });
+
     it("lets an ESCALATION through however fast it arrives", async () => {
       // The exact shape that was lost: three alerts in twelve minutes, each
       // saying something new, the last one the most urgent.

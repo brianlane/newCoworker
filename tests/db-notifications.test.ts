@@ -375,7 +375,10 @@ describe("db/notifications", () => {
       // Rows can carry no usable summary; they still COUNT as events but
       // contribute nothing for the duplicate check to compare against.
       { dispatch_id: "d3" },
-      { dispatch_id: null, summary: 42 }
+      { dispatch_id: null, summary: 42 },
+      // A dispatch the gate suppressed: its dashboard row is genuinely sent,
+      // but it is not a delivered alert and must not eat the backstop budget.
+      { dispatch_id: "d4", suppressed: "contact_alert_duplicate", summary: "a repeat" }
     ];
     const db = mockDb({
       limit: vi.fn().mockReturnThis(),
