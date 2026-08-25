@@ -246,7 +246,8 @@ function isEmptyValue(raw: unknown): boolean {
  */
 export function validateRowValues(
   fields: readonly CustomTableField[],
-  raw: unknown
+  raw: unknown,
+  options: { partial?: boolean } = {}
 ): ValidateRowResult {
   const input = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const values: Record<string, CustomTableFieldValue> = {};
@@ -258,7 +259,14 @@ export function validateRowValues(
     const mentioned = Object.prototype.hasOwnProperty.call(input, field.id);
     const supplied = input[field.id];
     if (isEmptyValue(supplied)) {
-      if (field.required) errors.push({ fieldId: field.id, code: "required" });
+      // In PARTIAL mode a column nobody mentioned is a column nobody is
+      // touching, so it cannot be "missing". Without this, saving one cell
+      // on a table that has ANY required column would fail on every OTHER
+      // column, and marking one required would freeze the whole grid.
+      // Explicitly blanking a required cell is still refused, in both modes.
+      if (field.required && (mentioned || !options.partial)) {
+        errors.push({ fieldId: field.id, code: "required" });
+      }
       // Absent key means empty; nulls are never stored. But a writer who
       // SENT the key as blank is asking to clear it, which a merge would
       // otherwise be unable to express.

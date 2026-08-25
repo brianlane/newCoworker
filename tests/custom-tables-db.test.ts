@@ -798,7 +798,7 @@ describe("listCustomTableRowsWithContacts", () => {
     ]);
     await expect(
       listCustomTableRowsWithContacts("biz-1", "tbl-1", [FIELD], {}, asClient(db))
-    ).rejects.toThrow("listCustomTableRowsWithContacts: boom");
+    ).rejects.toThrow("attachContacts: boom");
   });
 
   it("treats a null contact payload as no names", async () => {
@@ -934,95 +934,96 @@ describe("createCustomTableRow", () => {
 });
 
 describe("updateCustomTableRow", () => {
-  it("clears the cells the writer explicitly blanked", async () => {
-    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
-    const table = { ...TABLE, fields: two };
-    const db = mockDb([
-      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "Phoenix" } }, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(table, "row-1", { values: {}, clear: ["city"] }, undefined, asClient(db));
-    expect(db.chains[1].update).toHaveBeenCalledWith(
-      expect.objectContaining({ field_values: { address: "12 Maple St" } })
-    );
-  });
+  /** The rpc stub: one call, no read-then-write. */
+  function rpcDb(result: Result) {
+    const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => result);
+    return { rpc, from: vi.fn() };
+  }
+  const asRpc = (db: ReturnType<typeof rpcDb>) =>
+    db as unknown as Parameters<typeof listCustomTables>[1];
 
-  it("clears a cell even when no other cell is being set", async () => {
-    // A clear-only patch is a real change. Gating `clear` behind `values`
-    // would make it a silent no-op.
-    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
-    const table = { ...TABLE, fields: two };
-    const db = mockDb([
-      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "Phoenix" } }, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(table, "row-1", { clear: ["city"] }, undefined, asClient(db));
-    expect(db.chains[1].update).toHaveBeenCalledWith(
-      expect.objectContaining({ field_values: { address: "12 Maple St" } })
-    );
-  });
-
-  it("leaves the bag alone when neither values nor clear is sent", async () => {
-    const db = mockDb([
-      { data: ROW_ROW, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(TABLE, "row-1", { clear: [] }, undefined, asClient(db));
-    expect(db.chains[1].update.mock.calls[0][0]).not.toHaveProperty("field_values");
-  });
-
-  it("replaces the whole bag when asked, which is what an undo needs", async () => {
-    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
-    const table = { ...TABLE, fields: two };
-    const db = mockDb([
-      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "added later" } }, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(
-      table,
+  it("merges in ONE statement, so two edits at once cannot lose one", async () => {
+    // Reading the row first and merging in app code is exactly what dropped
+    // a cell when two saves overlapped: both read the old bag.
+    const db = rpcDb({ data: [ROW_ROW], error: null });
+    const row = await updateCustomTableRow(
+      TABLE,
       "row-1",
-      { values: { address: "12 Maple St" }, replace: true },
+      { values: { address: "12 Maple St" } },
+      { source: "dashboard", actor: "owner@example.com" },
+      asRpc(db)
+    );
+    expect(row.values).toEqual({ address: "12 Maple St" });
+    expect(db.from).not.toHaveBeenCalled();
+    expect(db.rpc).toHaveBeenCalledWith("custom_table_row_apply", {
+      p_table_id: "tbl-1",
+      p_row_id: "row-1",
+      p_patch: { address: "12 Maple St" },
+      p_clear: [],
+      p_replace: false,
+      p_set_contact: false,
+      p_contact_id: null,
+      p_edit_source: "dashboard",
+      p_edit_actor: "owner@example.com"
+    });
+  });
+
+  it("passes the cells to clear through", async () => {
+    const db = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(TABLE, "row-1", { clear: ["city"] }, undefined, asRpc(db));
+    expect(db.rpc.mock.calls[0][1]).toMatchObject({ p_clear: ["city"], p_patch: {} });
+  });
+
+  it("asks for a replace when an undo needs the whole bag swapped", async () => {
+    const db = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(
+      TABLE,
+      "row-1",
+      { values: { address: "was" }, replace: true },
       undefined,
-      asClient(db)
+      asRpc(db)
     );
-    expect(db.chains[1].update).toHaveBeenCalledWith(
-      expect.objectContaining({ field_values: { address: "12 Maple St" } })
-    );
+    expect(db.rpc.mock.calls[0][1]).toMatchObject({ p_replace: true });
   });
 
-  it("merges values rather than replacing the bag", async () => {
-    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
-    const table = { ...TABLE, fields: two };
-    const db = mockDb([
-      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "Phoenix" } }, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(table, "row-1", { values: { city: "Tempe" } }, undefined, asClient(db));
-    expect(db.chains[1].update).toHaveBeenCalledWith(
-      expect.objectContaining({ field_values: { address: "12 Maple St", city: "Tempe" } })
-    );
+  it("only touches the contact when one was actually supplied", async () => {
+    const noContact = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(TABLE, "row-1", { values: {} }, undefined, asRpc(noContact));
+    expect(noContact.rpc.mock.calls[0][1]).toMatchObject({
+      p_set_contact: false,
+      p_contact_id: null
+    });
+
+    const unlink = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(TABLE, "row-1", { contactId: null }, undefined, asRpc(unlink));
+    expect(unlink.rpc.mock.calls[0][1]).toMatchObject({
+      p_set_contact: true,
+      p_contact_id: null
+    });
+
+    const link = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(TABLE, "row-1", { contactId: "c-1" }, undefined, asRpc(link));
+    expect(link.rpc.mock.calls[0][1]).toMatchObject({
+      p_set_contact: true,
+      p_contact_id: "c-1"
+    });
   });
 
-  it("can unlink a contact without touching the values", async () => {
-    const db = mockDb([
-      { data: ROW_ROW, error: null },
-      { data: ROW_ROW, error: null }
-    ]);
-    await updateCustomTableRow(TABLE, "row-1", { contactId: null }, undefined, asClient(db));
-    const patch = db.chains[1].update.mock.calls[0][0] as Record<string, unknown>;
-    expect(patch.contact_id).toBeNull();
-    expect(patch).not.toHaveProperty("field_values");
+  it("nulls the attribution carrier when the writer did not stamp one", async () => {
+    const db = rpcDb({ data: [ROW_ROW], error: null });
+    await updateCustomTableRow(TABLE, "row-1", { values: {} }, undefined, asRpc(db));
+    expect(db.rpc.mock.calls[0][1]).toMatchObject({
+      p_edit_source: null,
+      p_edit_actor: null
+    });
   });
 
   it("reports a vanished row as not_found and throws on failure", async () => {
     await expect(
-      updateCustomTableRow(
-        TABLE,
-        "row-1",
-        {},
-        undefined,
-        asClient(mockDb([{ data: ROW_ROW, error: null }, { data: null, error: null }]))
-      )
+      updateCustomTableRow(TABLE, "row-1", {}, undefined, asRpc(rpcDb({ data: [], error: null })))
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      updateCustomTableRow(TABLE, "row-1", {}, undefined, asRpc(rpcDb({ data: null, error: null })))
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
       updateCustomTableRow(
@@ -1030,7 +1031,7 @@ describe("updateCustomTableRow", () => {
         "row-1",
         {},
         undefined,
-        asClient(mockDb([{ data: ROW_ROW, error: null }, { data: null, error: { message: "boom" } }]))
+        asRpc(rpcDb({ data: null, error: { message: "boom" } }))
       )
     ).rejects.toThrow("updateCustomTableRow: boom");
   });

@@ -12,6 +12,7 @@
  * identically. Export downloads the visible rows as CSV.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Download, RefreshCw, Trash2, X } from "lucide-react";
 import { Card } from "@/components/ui/Card";
@@ -314,7 +315,19 @@ export function LeadDataGrid({
     <div className="space-y-4">
       {/* Toolbar: pipeline tabs (stage column source), scope, refresh, export */}
       <div className="flex flex-wrap items-center gap-2">
-        {pipelines?.map((p) => (
+        {/*
+          These pills pick which pipeline's stages fill the Stage COLUMN.
+          They are not a dataset picker, but they were read as one often
+          enough that it prompted building the Tables section, so they now
+          say what they do. A business with exactly one pipeline sees no
+          pills at all: a single pill that cannot be deselected is pure
+          noise, and is how most owners first met them.
+        */}
+        {pipelines && pipelines.length > 1 && (
+          <span className="text-xs text-parchment/40">{t("stageColumnLabel")}</span>
+        )}
+        {(pipelines?.length ?? 0) > 1 &&
+          pipelines?.map((p) => (
           <button
             key={p.id}
             onClick={() => setSelectedId(p.id)}
@@ -547,6 +560,16 @@ export function LeadDataGrid({
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Where the OTHER datasets live, including the ones the owner made. */}
+      {!error && rows && rows.length > 0 && (
+        <p className="text-xs text-parchment/35">
+          {t("tablesPointer")}{" "}
+          <Link href="/dashboard/tables" className="text-signal-teal/70 hover:text-signal-teal">
+            {t("tablesPointerLink")}
+          </Link>
+        </p>
       )}
 
       {loading && !rows && (

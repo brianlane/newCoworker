@@ -44,6 +44,7 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "bookings", labelKey: "bookings", href: "/dashboard/bookings" },
   { key: "memory", labelKey: "memory", href: "/dashboard/memory" },
   { key: "documents", labelKey: "documents", href: "/dashboard/documents" },
+  { key: "tables", labelKey: "tables", href: "/dashboard/tables" },
   { key: "marketing", labelKey: "marketing", href: "/dashboard/marketing" },
   { key: "import-export", labelKey: "importExport", href: "/dashboard/import-export" },
   { key: "integrations", labelKey: "integrations", href: "/dashboard/integrations" },
