@@ -1102,6 +1102,56 @@ characters and a breach surfaces only as "Invalid AiFlow definition" naming no
 field. The first draft of this patch was rejected for exactly that;
 `tests/oneshot-amy-clever-buyer-price-range.ts` now pins the length.
 
+**`amy-clever-buyer-ai-call.ts` (Aug 24 2026):** the AI works a Clever BUYER
+the way it works a Clever seller. Amy asked for Clever buyers to be treated
+"similar to the response for a realestateagent.com buyer lead", and separately
+asked whether it made more sense for the AI to work them "until they're serious
+and want to either make an appointment or do a Live transfer". Those read as
+two options and are one: RealEstateAgents.com is not a flow, all 119 runs whose
+`web_source` names it run on ReferralExchange Lead, and that flow's
+`ai_call_buyer` already does exactly the second thing.
+
+`clever_call_gate`'s empty buyer arm now holds `ai_call_buyer`, copied from
+ReferralExchange's buyer persona with the source named outright (Clever has no
+`web_source`) and the budget and search area declared as already known.
+
+The trap this exists to avoid: `ai_call_2` and `ai_call_3` are seller-worded
+and fire on `call_outcome equals no_answer`, which a buyer call sets too, so
+filling only the first arm would have called a buyer twice more with a listing
+pitch. They could NOT be wrapped in gates like round 1: they sit at
+`call_followups[cf_no_answer] > retry_2.else > retry_3.else` and the schema
+rejects branches nested more than three deep. They use the idiom the schema
+documents instead, two gated siblings: the seller rung gains
+`lead_type notEquals buyer` and the buyer rung sits beside it. No nesting added.
+
+**The transfer ladder is capped at THREE** (`reachTeammate.refs`), and Amy named
+four people ("me or Dave or Gabby or Jason"). This is a warm transfer, so the
+lead is held on the line while each rung is dialled; the cap is a hold-time
+budget. The buyer ladder is Dave, Gabrielle and Jason. Amy is the least-loss
+name to drop because this account already treats her as the BACKSTOP rather
+than part of the audience (`team_broadcast.ts`, and her
+`team_broadcast_enabled` is false by design): she still gets an unclaimed buyer
+through the owner fallback, and a $1M+ buyer never reaches the ladder because
+`ownerDirectWhen` keeps them hers. Jason has no other route onto a live
+transfer, since `buyer` is his only roster tag.
+
+Jason was ALREADY in the round-robin rotation and needed no change there: an
+unpinned `route_to_team` offers to every ACTIVE roster member in
+least-recently-offered order, not a tag-filtered subset, and he has been
+offered 18 leads that way since Jul 1, including Sandy Baldwin's where he was
+rung first. Only the explicit transfer list excluded him.
+
+Not changed, both decided Aug 24: `route_buyer` keeps its `price_gate` guard
+(Amy chose to keep the under-$500K AI-owned rule for buyers rather than adopt
+ReferralExchange's ungated buyer routing), and no lead-facing SMS was added
+because this flow texts the lead nothing for sellers either; the texts come
+from the follow-up cadence. Seller calls and their ladders are untouched.
+
+The ReferralExchange half is OPT-IN behind `--with-referral` and was NOT
+applied: that ladder is already full, so seating Jason there unseats Amy on a
+live path with 119 runs behind it, which should be a decision somebody typed
+rather than a side effect.
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
