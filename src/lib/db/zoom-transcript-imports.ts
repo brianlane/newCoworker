@@ -198,43 +198,91 @@ export async function getZoomTranscriptImportByDocument(
   );
 }
 
+/** What a reopen found, and therefore what the caller may do next. */
+export type ReopenClassificationResult =
+  /** A finished (or abandoned) classification was cleared; go claim it. */
+  | "reopened"
+  /** Nothing has ever classified this meeting; go claim it. */
+  | "not_classified"
+  /** A pass holds a FRESH claim right now; writing would duplicate it. */
+  | "in_flight";
+
+/**
+ * A classification claim (`classified_at` set, `outcome` still null) older
+ * than this is treated as abandoned: the pass crashed or timed out between
+ * claiming and stamping. Generously above the import route's 120s budget and
+ * the classifier's two 30s model calls, and the same window
+ * `ZOOM_IMPORT_CLAIM_LEASE_MS` uses one column over.
+ */
+export const ZOOM_CLASSIFY_CLAIM_LEASE_MS = 10 * 60 * 1000;
+
 /**
  * Hand a classified meeting back to be classified again, atomically.
  *
  * The classification stamp is deliberately permanent: it is what stops a
  * re-import writing a second note and a second set of to-dos. An owner
  * saying "this meeting was with somebody else" is the one event that
- * genuinely invalidates a past decision, so it clears the stamp, and the
+ * genuinely invalidates a past decision, so it clears the stamp and the
  * normal claim/stamp cycle runs again on top.
  *
- * The clear is conditional on the stamp being SET so that it reports
- * honestly (false means "there was nothing to clear"), but the caller does
- * NOT gate on that: a null stamp means either "never classified" or "a pass
- * is running right now", and these columns cannot tell those apart.
- * `claimZoomTranscriptClassification` is the arbiter for both. Never
- * throws; a ledger blip answers false and the claim decides.
+ * What it must NOT clear is a claim somebody is standing on. `classified_at`
+ * set with `outcome` still null means a pass took this meeting and has not
+ * finished; stealing that claim lets two passes run, and the loser stamps
+ * its own answer over the winner's (Bugbot, PR #1618). In the motivating
+ * case the in-flight pass is the auto-import's, which matches nobody, so it
+ * would stamp `contact_id: null` straight over the correction. Two
+ * simultaneous reassigns hit the same shape and would each file a note.
+ *
+ * So the clear is conditional on the row being FINISHED (`outcome` non-null)
+ * or the claim being ABANDONED (older than the lease). A fresh in-flight
+ * claim answers `in_flight` and the caller declines to re-classify rather
+ * than racing it. Never throws: a ledger blip also answers `in_flight`,
+ * because failing closed costs a re-run the owner can repeat and failing
+ * open costs a duplicate somebody has to clean up by hand.
  */
 export async function reopenZoomTranscriptClassification(
   businessId: string,
   meetingUuid: string,
-  client?: SupabaseClient
-): Promise<boolean> {
+  client?: SupabaseClient,
+  now: () => number = Date.now
+): Promise<ReopenClassificationResult> {
   const db = await ledgerClientOrNull(client, "classification reopen");
-  if (!db) return false;
+  if (!db) return "in_flight";
+  const cutoff = new Date(now() - ZOOM_CLASSIFY_CLAIM_LEASE_MS).toISOString();
   const { data, error } = await db
     .from("zoom_transcript_imports")
     .update({ classified_at: null, outcome: null })
     .match({ business_id: businessId, meeting_uuid: meetingUuid })
     .not("classified_at", "is", null)
+    .or(`outcome.not.is.null,classified_at.lt.${cutoff}`)
     .select("id");
   if (error) {
     logger.warn("zoom transcript ledger: classification reopen failed", {
       businessId,
       error: error.message
     });
-    return false;
+    return "in_flight";
   }
-  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
+  if (((data as { id: string }[] | null)?.length ?? 0) > 0) return "reopened";
+
+  // Nothing was cleared, which is two different situations: the meeting was
+  // never classified (nobody to race), or a fresh claim is standing on it.
+  // Only the row itself can tell them apart.
+  const { data: row, error: readError } = await db
+    .from("zoom_transcript_imports")
+    .select("classified_at")
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .maybeSingle();
+  if (readError) {
+    logger.warn("zoom transcript ledger: reopen follow-up read failed", {
+      businessId,
+      error: readError.message
+    });
+    return "in_flight";
+  }
+  return (row as { classified_at: string | null } | null)?.classified_at
+    ? "in_flight"
+    : "not_classified";
 }
 
 /** A classification that has already been applied to this meeting. */

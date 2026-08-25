@@ -61,6 +61,7 @@ type ReassignResult = {
   renamedTo: string;
   rewrote: Array<"title" | "summary" | "content">;
   reclassified: boolean;
+  reclassifyBlocked: boolean;
   outcome: string | null;
   wroteNote: boolean;
   todosCreated: number;
@@ -87,6 +88,11 @@ function describeReassign(result: ReassignResult): string {
     parts.push(`created ${result.todosCreated} to-do${result.todosCreated === 1 ? "" : "s"}`);
   }
   if (result.graphEntitiesRenamed > 0) parts.push("renamed what your coworker remembers");
+  if (result.reclassifyBlocked) {
+    // Honest rather than tidy: the rename landed, the note did not, and the
+    // owner is the one who can retry.
+    return `${`Done: ${parts.join(", ")}.`} Your coworker is still processing this meeting, so no note or to-dos were filed. Reassign again in a minute to add them.`;
+  }
   if (result.reclassified && !result.wroteNote && result.todosCreated === 0) {
     parts.push(`re-read the meeting (${result.outcome ?? "unclear"}), nothing else to file`);
   }
@@ -154,8 +160,16 @@ export function DocumentDetail({
   const [sigMessage, setSigMessage] = useState("");
   const [sigSending, setSigSending] = useState(false);
 
-  /** Re-read the document after a save (keeps badges/folder chips honest). */
-  const refreshDoc = useCallback(async () => {
+  /**
+   * Re-read the document after a save (keeps badges/folder chips honest).
+   *
+   * `reseedDrafts` re-points the three text editors at the server copy. Only
+   * the reassign passes it, because only the reassign rewrites the title,
+   * summary and content underneath the owner. An ordinary save must NOT do
+   * it: someone editing the minutes and then setting an expiry date would
+   * watch their unsaved edits vanish (Bugbot, PR #1618).
+   */
+  const refreshDoc = useCallback(async ({ reseedDrafts = false } = {}) => {
     try {
       const res = await fetch(
         `/api/dashboard/documents/${doc.id}?businessId=${encodeURIComponent(businessId)}`,
@@ -168,9 +182,11 @@ export function DocumentDetail({
         // A reassign rewrites all three of these server-side. Leaving the
         // drafts alone would show the old name in the editors and let the
         // next save put it straight back.
-        setDraftTitle(fresh.title);
-        setDraftSummary(fresh.summary ?? "");
-        setDraftContent(fresh.content_md);
+        if (reseedDrafts) {
+          setDraftTitle(fresh.title);
+          setDraftSummary(fresh.summary ?? "");
+          setDraftContent(fresh.content_md);
+        }
       }
     } catch {
       /* keep the current view */
@@ -291,7 +307,7 @@ export function DocumentDetail({
       }
       setReassignNotice(describeReassign(json.data.reassign));
       setReassignContactId("");
-      await refreshDoc();
+      await refreshDoc({ reseedDrafts: true });
     } catch {
       setError("Could not reassign this meeting, try again.");
     } finally {

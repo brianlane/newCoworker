@@ -185,16 +185,21 @@ describe("extractHostAddressedNames", () => {
     expect(extractHostAddressedNames(vtt, ["Brian Lane"])).toEqual([]);
   });
 
-  it("never returns the host's own name", () => {
+  it("never returns a name from our own side, matched on host TOKENS", () => {
+    // Bugbot, PR #1618: the host set was built from whole display names
+    // ("brian lane") while a vocative is a first name, so "Thanks, Brian."
+    // offered Brian as the guest and a contact named Brian would have
+    // collected the meeting. Note the host list here carries only the FULL
+    // name, which is what the import actually resolves.
     const vtt = [
       "WEBVTT",
       "",
       "1",
       "00:00:01.000 --> 00:00:04.000",
-      "Brian Lane: Yeah, Brian, here. And hello, Bobby.",
+      "Brian Lane: Thanks, Brian. And hello, Bobby.",
       ""
     ].join("\n");
-    expect(extractHostAddressedNames(vtt, ["Brian Lane", "Brian"])).toEqual(["Bobby"]);
+    expect(extractHostAddressedNames(vtt, ["New Coworker", "Brian Lane"])).toEqual(["Bobby"]);
   });
 
   it("returns each name once even when the host repeats it", () => {

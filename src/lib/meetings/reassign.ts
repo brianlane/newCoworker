@@ -40,7 +40,8 @@ import {
 } from "@/lib/memory/graph-db";
 import {
   getZoomTranscriptImportByDocument,
-  reopenZoomTranscriptClassification
+  reopenZoomTranscriptClassification,
+  type ReopenClassificationResult
 } from "@/lib/db/zoom-transcript-imports";
 import { fetchStoredTranscript } from "@/lib/zoom/stored-transcript";
 import { resolveHostNames } from "@/lib/zoom/import-core";
@@ -50,7 +51,11 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 import { applyMeetingClassification } from "./apply-outcome";
-import { deriveWrongGuestName, renameGuestInText } from "./rename-guest";
+import {
+  deriveWrongGuestName,
+  guestNameVariants,
+  renameGuestInText
+} from "./rename-guest";
 
 /** Owner-facing activity trail, alongside the classify source. */
 export const MEETING_REASSIGN_LOG_SOURCE = "zoom-meeting-reassign";
@@ -79,6 +84,12 @@ export type ReassignMeetingResult =
       rewrote: Array<"title" | "summary" | "content">;
       /** Whether the classification pass re-ran, and what it did. */
       reclassified: boolean;
+      /**
+       * True when a pass was already mid-flight on this meeting, so the
+       * note, card and to-dos were deliberately left to it. The rename and
+       * the link still happened; the owner can re-run in a minute.
+       */
+      reclassifyBlocked: boolean;
       outcome: string | null;
       wroteNote: boolean;
       todosCreated: number;
@@ -233,6 +244,7 @@ export async function reassignMeetingContact(
     title: nextTitle,
     rewrote,
     reclassified: false,
+    reclassifyBlocked: false,
     outcome: null,
     wroteNote: false,
     todosCreated: 0,
@@ -246,34 +258,40 @@ export async function reassignMeetingContact(
   // claim, so a second run could not be told from the first and would file
   // the note twice.
   //
-  // The reopen clears a stamp that is now provably about the wrong person;
-  // its RESULT is deliberately not a gate, because "already null" has two
-  // meanings (never classified, or a pass running right now) that the
-  // columns cannot tell apart. `applyMeetingClassification` claims the
-  // meeting itself, and that claim is the atomic arbiter for both: a
-  // never-classified meeting gets classified, and a double-click loses the
-  // claim and re-links the document without writing anything twice.
+  // The reopen clears a stamp that is now provably about the wrong person,
+  // but it refuses to clear a claim somebody is standing on, and THAT is a
+  // gate: re-classifying alongside an in-flight pass lets the loser stamp
+  // its own answer over this correction. `in_flight` is also what a ledger
+  // blip answers, so the failure direction is "the owner re-runs the
+  // reassign" rather than "somebody cleans up a duplicate note".
   if (ledger?.meeting_uuid) {
-    await attempt("classification reopen", businessId, false, () =>
-      reopenClassification(businessId, ledger.meeting_uuid)
-    );
-    const applied = await classifyAndApply({
+    const reopened = await attempt(
+      "classification reopen",
       businessId,
-      documentId,
-      documentTitle: nextTitle,
-      minutes: nextContent,
-      summary: nextSummary || null,
-      vtt,
-      meetingUuid: ledger.meeting_uuid,
-      zoomMeetingId: null,
-      hostNames,
-      forcedContact: { contactId: contact.id, contactKey: contact.customer_e164 }
-    });
-    result.reclassified = !applied.reusedPriorClassification;
-    result.outcome = applied.outcome;
-    result.wroteNote = applied.wroteNote;
-    result.todosCreated = applied.todosCreated;
-    result.stageOutcome = applied.stageOutcome;
+      "in_flight" as ReopenClassificationResult,
+      () => reopenClassification(businessId, ledger.meeting_uuid)
+    );
+    if (reopened === "in_flight") {
+      result.reclassifyBlocked = true;
+    } else {
+      const applied = await classifyAndApply({
+        businessId,
+        documentId,
+        documentTitle: nextTitle,
+        minutes: nextContent,
+        summary: nextSummary || null,
+        vtt,
+        meetingUuid: ledger.meeting_uuid,
+        zoomMeetingId: null,
+        hostNames,
+        forcedContact: { contactId: contact.id, contactKey: contact.customer_e164 }
+      });
+      result.reclassified = !applied.reusedPriorClassification;
+      result.outcome = applied.outcome;
+      result.wroteNote = applied.wroteNote;
+      result.todosCreated = applied.todosCreated;
+      result.stageOutcome = applied.stageOutcome;
+    }
   }
 
   if (wrongName) {
@@ -313,6 +331,7 @@ export async function reassignMeetingContact(
         rightName,
         rewrote,
         reclassified: result.reclassified,
+        reclassifyBlocked: result.reclassifyBlocked,
         outcome: result.outcome,
         wroteNote: result.wroteNote,
         todosCreated: result.todosCreated,
@@ -335,9 +354,10 @@ export async function reassignMeetingContact(
  * to this person, and the contact key is stamped on so the node stops being
  * a floating stranger.
  *
- * Renames ONLY when exactly one person node carries the name, the same rule
- * every other name-based match in this feature obeys: two Alexanders means
- * the graph is left alone and the owner is told nothing was renamed.
+ * Renames ONLY when exactly one person node answers to ANY form of the wrong
+ * name, the same rule every other name-based match in this feature obeys:
+ * two Alexanders means the graph is left alone and the owner is told nothing
+ * was renamed.
  *
  * The quoted `source_text` is rewritten on the renamed node's own facts.
  * That is a deliberate scope: those are the statements the extractor made
@@ -365,7 +385,13 @@ export async function repairGraphGuestName(
 
   return attempt("graph rename", businessId, none, async () => {
     const entities = await listEntities(businessId);
-    const matches = entities.filter((e) => entityAnswersToName(e, wrongName));
+    // Every form the document rewrite touches, not just the full Zoom label.
+    // The extractor reads the MINUTES, which use the first name, so a Zoom
+    // display name of "Alexander Delacroix" typically produced a node called
+    // "Alexander": matching only the full string would correct the document
+    // and leave the node wrong (Bugbot, PR #1618).
+    const names = guestNameVariants(wrongName, input.hostNames);
+    const matches = entities.filter((e) => names.some((name) => entityAnswersToName(e, name)));
     if (matches.length !== 1) {
       if (matches.length > 1) {
         logger.warn("meeting reassign: ambiguous graph node; left alone", {
@@ -409,11 +435,16 @@ export async function repairGraphGuestName(
   });
 }
 
-/** Does this graph node go by the given name, as its name or an alias? */
+/**
+ * Does this graph node go by the given name, as its name or an alias?
+ *
+ * `name` always comes from `guestNameVariants`, which yields trimmed,
+ * non-empty tokens and nothing at all for an empty input, so there is no
+ * blank case to guard here.
+ */
 function entityAnswersToName(entity: MemoryEntityRow, name: string): boolean {
   if (entity.kind !== "person") return false;
   const needle = name.trim().toLowerCase();
-  if (needle === "") return false;
   if (entity.canonical_name.trim().toLowerCase() === needle) return true;
   return entity.aliases.some((alias) => alias.trim().toLowerCase() === needle);
 }

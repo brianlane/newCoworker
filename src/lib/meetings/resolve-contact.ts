@@ -21,7 +21,8 @@
  *      display name, so a guest on a shared or stale account speaks under
  *      somebody else's name and source 3 finds nobody. Our own side still
  *      addressed them correctly on the call ("Hey, Bobby"), so host-spoken
- *      vocatives are read last, under the same unique-contact rule.
+ *      vocatives are read last. Matched on the GIVEN name, since that is
+ *      what people say out loud, and still under a unique-contact rule.
  *
  * Never throws: a lookup blip means "unattributed", and an unattributed
  * meeting still becomes a document in the library.
@@ -70,6 +71,8 @@ export type ResolveMeetingContactDeps = {
   findByEmail?: typeof findCustomerByEmail;
   /** Unique display-name lookup; injected in tests. */
   findByName?: (businessId: string, name: string) => Promise<string | null>;
+  /** Unique given-name lookup, for the vocative source; injected in tests. */
+  findByGivenName?: (businessId: string, name: string) => Promise<string | null>;
 };
 
 /**
@@ -98,6 +101,14 @@ export function contactKeyFromAttendeeKey(attendeeKey: string): string | null {
   }
   return null;
 }
+
+/**
+ * How many same-prefix contacts a given-name lookup will consider.
+ *
+ * Any name shared by this many people is ambiguous whatever the true count
+ * is, so a low cap costs nothing and keeps the query bounded.
+ */
+export const GIVEN_NAME_CANDIDATE_LIMIT = 10;
 
 /** Addresses spoken or pasted into a meeting, lowercased and de-duped. */
 const EMAIL_IN_TEXT_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
@@ -165,6 +176,62 @@ export async function findContactIdByUniqueName(
   }
 }
 
+/**
+ * The single contact whose display name IS this name or BEGINS with it, or
+ * null.
+ *
+ * Source 4 reads vocatives, and a vocative is a first name: the host says
+ * "Hey, Bobby", never "Hey, Bobby Smith". Contacts are stored under full
+ * names, so the exact-equality rule source 3 uses finds nobody and the whole
+ * wrong-Zoom-account fallback never fires (Bugbot, PR #1618).
+ *
+ * Widening the match does NOT widen the guarantee: the answer is still the
+ * SINGLE contact who qualifies, counted across the exact form and the
+ * "given name plus surname" form together. A "Bobby" and a "Bobby Smith" on
+ * the same roster is ambiguous and resolves to nobody, exactly as two
+ * Bobby Smiths would.
+ *
+ * A prefix is deliberately not enough on its own: "Bobby" must not match
+ * "Bobbyson", so the candidates come back on a prefix query and are then
+ * re-checked in JS for equality or a word boundary. Same belt-and-braces
+ * re-verify `findContactIdByUniqueName` applies.
+ */
+export async function findContactIdByUniqueGivenName(
+  businessId: string,
+  name: string
+): Promise<string | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  try {
+    const db = await createSupabaseServiceClient();
+    // Escaped, so a name containing `_` or `%` cannot widen the query into a
+    // wildcard, the same escape every other lookup here uses.
+    const pattern = `${trimmed.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+    const { data, error } = await db
+      .from("contacts")
+      .select("id, display_name")
+      .eq("business_id", businessId)
+      .ilike("display_name", pattern)
+      // A handful is plenty: past this the name is ambiguous either way, and
+      // an un-limited select would silently truncate at PostgREST's own cap.
+      .limit(GIVEN_NAME_CANDIDATE_LIMIT);
+    if (error) return null;
+    const rows = (data ?? []) as Array<{ id: string; display_name: string | null }>;
+    const needle = trimmed.toLowerCase();
+    const hits = rows.filter((row) => {
+      const display = (row.display_name ?? "").trim().toLowerCase();
+      return display === needle || display.startsWith(`${needle} `);
+    });
+    return hits.length === 1 ? (hits[0] as { id: string }).id : null;
+  } catch (err) {
+    logger.warn("meeting contact: given-name lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
 /** Load a contact row by key and shape it as a resolution, or null. */
 async function resolveByKey(
   businessId: string,
@@ -194,6 +261,7 @@ export async function resolveMeetingContact(
   const getContact = deps.getContact ?? getCustomerMemory;
   const findByEmail = deps.findByEmail ?? findCustomerByEmail;
   const findByName = deps.findByName ?? findContactIdByUniqueName;
+  const findByGivenName = deps.findByGivenName ?? findContactIdByUniqueGivenName;
   /* c8 ignore stop */
   const { businessId } = input;
 
@@ -260,7 +328,7 @@ export async function resolveMeetingContact(
   //    and `extractHostAddressedNames` only reads OUR side's lines, so a
   //    guest naming a third party never lands here.
   for (const addressed of extractHostAddressedNames(input.vtt, input.hostNames)) {
-    const contactId = await findByName(businessId, addressed);
+    const contactId = await findByGivenName(businessId, addressed);
     if (contactId) {
       const key = await contactKeyForId(businessId, contactId);
       if (key) return { contactId, contactKey: key, matchedOn: "addressed_name" };

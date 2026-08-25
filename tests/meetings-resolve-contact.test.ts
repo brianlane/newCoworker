@@ -7,8 +7,10 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   contactKeyFromAttendeeKey,
+  findContactIdByUniqueGivenName,
   findContactIdByUniqueName,
   extractTranscriptEmails,
+  GIVEN_NAME_CANDIDATE_LIMIT,
   resolveMeetingContact
 } from "@/lib/meetings/resolve-contact";
 
@@ -48,6 +50,7 @@ function deps(over: Record<string, unknown> = {}) {
     getContact: vi.fn(async () => null),
     findByEmail: vi.fn(async () => null),
     findByName: vi.fn(async () => null),
+    findByGivenName: vi.fn(async () => null),
     ...over
   } as never;
 }
@@ -537,7 +540,7 @@ describe("resolveMeetingContact: a name the HOST used", () => {
   it("finds the contact the host addressed when the speaker label matches nobody", async () => {
     keyClient("+17208438676");
     const d = deps({
-      findByName: vi.fn(async (_biz: string, name: string) =>
+      findByGivenName: vi.fn(async (_biz: string, name: string) =>
         name === "Bobby" ? "c-bobby" : null
       )
     });
@@ -556,17 +559,99 @@ describe("resolveMeetingContact: a name the HOST used", () => {
   });
 
   it("answers nobody when the addressed name matches no contact", async () => {
-    const d = deps({ findByName: vi.fn(async () => null) });
+    const d = deps({ findByGivenName: vi.fn(async () => null) });
     expect(await resolveMeetingContact(wrongAccountInput, d)).toBeNull();
   });
 
   it("answers nobody when the addressed contact has no usable key", async () => {
     keyClient(null);
     const d = deps({
-      findByName: vi.fn(async (_biz: string, name: string) =>
+      findByGivenName: vi.fn(async (_biz: string, name: string) =>
         name === "Bobby" ? "c-bobby" : null
       )
     });
     expect(await resolveMeetingContact(wrongAccountInput, d)).toBeNull();
+  });
+});
+
+describe("findContactIdByUniqueGivenName", () => {
+  /**
+   * Vocatives are first names ("Hey, Bobby"), contacts are stored under full
+   * names ("Bobby Smith"). Exact equality found nobody and the whole
+   * wrong-Zoom-account fallback never fired (Bugbot, PR #1618). Widening the
+   * MATCH must not widen the guarantee: still exactly one contact, or none.
+   */
+  function givenNameClient(rows: unknown, error: unknown = null) {
+    const calls: Array<{ name: string; args: unknown[] }> = [];
+    const builder: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "ilike", "limit"]) {
+      builder[m] = (...args: unknown[]) => {
+        calls.push({ name: m, args });
+        return builder;
+      };
+    }
+    builder.then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ data: rows, error }).then(resolve);
+    createSupabaseServiceClient.mockResolvedValue({ from: () => builder } as never);
+    return calls;
+  }
+
+  it("resolves a first name to the only contact who goes by it", async () => {
+    const calls = givenNameClient([{ id: "c-bobby", display_name: "Bobby Smith" }]);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBe("c-bobby");
+    expect(calls.find((c) => c.name === "ilike")?.args).toEqual(["display_name", "Bobby%"]);
+    expect(calls.find((c) => c.name === "limit")?.args).toEqual([
+      GIVEN_NAME_CANDIDATE_LIMIT
+    ]);
+  });
+
+  it("resolves an exact match too", async () => {
+    givenNameClient([{ id: "c-bobby", display_name: "Bobby" }]);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBe("c-bobby");
+  });
+
+  it("refuses a mere prefix, so Bobby never becomes Bobbyson", async () => {
+    givenNameClient([{ id: "c-1", display_name: "Bobbyson Clarke" }]);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+  });
+
+  it("refuses when a bare Bobby and a Bobby Smith both qualify", async () => {
+    givenNameClient([
+      { id: "c-1", display_name: "Bobby" },
+      { id: "c-2", display_name: "Bobby Smith" }
+    ]);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+  });
+
+  it("escapes LIKE metacharacters in the spoken name", async () => {
+    const calls = givenNameClient([]);
+    await findContactIdByUniqueGivenName(BIZ, "bob_by");
+    expect(calls.find((c) => c.name === "ilike")?.args).toEqual([
+      "display_name",
+      "bob\\_by%"
+    ]);
+  });
+
+  it("ignores a row whose display name is null", async () => {
+    givenNameClient([{ id: "c-1", display_name: null }]);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+  });
+
+  it("returns null for a blank name, an error, or missing data", async () => {
+    expect(await findContactIdByUniqueGivenName(BIZ, "   ")).toBeNull();
+
+    givenNameClient(null, { message: "boom" });
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+
+    givenNameClient(null);
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+  });
+
+  it("survives a client blow-up", async () => {
+    createSupabaseServiceClient.mockRejectedValue(new Error("no env"));
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
+
+    createSupabaseServiceClient.mockRejectedValue("raw string");
+    expect(await findContactIdByUniqueGivenName(BIZ, "Bobby")).toBeNull();
   });
 });

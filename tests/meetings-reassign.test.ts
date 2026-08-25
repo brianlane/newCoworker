@@ -127,7 +127,7 @@ function deps(over: Record<string, unknown> = {}) {
       outcome: "unclear"
     })),
     loadHostNames: vi.fn(async () => ["New Coworker", "Brian Lane"]),
-    reopenClassification: vi.fn(async () => true),
+    reopenClassification: vi.fn(async () => "reopened"),
     fetchTranscript: vi.fn(async () => VTT),
     classifyAndApply: vi.fn(async () => ({
       outcome: "follow_up",
@@ -277,16 +277,46 @@ describe("reassignMeetingContact: the repair", () => {
     expect(result.ok === true && result.reclassified).toBe(false);
   });
 
-  it("re-runs the classification even when the reopen found no stamp to clear", async () => {
-    // A meeting imported before classification shipped has a null stamp and
-    // has never been classified: the claim inside the applier is the arbiter,
-    // not the reopen's answer.
-    const d = deps({ reopenClassification: vi.fn(async () => false) });
+  it("re-runs the classification for a meeting nothing has ever classified", async () => {
+    // An import predating the classifier has a null stamp and no owner.
+    const d = deps({ reopenClassification: vi.fn(async () => "not_classified") });
     await reassignMeetingContact(
       { businessId: BIZ, documentId: DOC, contactId: CONTACT_ID },
       d as never
     );
     expect(d.classifyAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves an in-flight pass alone and says the note was not filed", async () => {
+    // Bugbot, PR #1618: running alongside it lets the loser stamp its own
+    // answer over this correction, and in the motivating case that answer is
+    // "nobody". The rename and the link still stand.
+    const d = deps({ reopenClassification: vi.fn(async () => "in_flight") });
+    const result = await reassignMeetingContact(
+      { businessId: BIZ, documentId: DOC, contactId: CONTACT_ID },
+      d as never
+    );
+    expect(d.classifyAndApply).not.toHaveBeenCalled();
+    expect(result.ok === true && result.reclassifyBlocked).toBe(true);
+    expect(result.ok === true && result.reclassified).toBe(false);
+    expect(callArgs(d.patchDocument)[2]).toMatchObject({
+      title: "Bobby Zoom meeting recording",
+      contact_id: CONTACT_ID
+    });
+  });
+
+  it("treats a ledger blip as in-flight, so a blip never buys a duplicate note", async () => {
+    const d = deps({
+      reopenClassification: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const result = await reassignMeetingContact(
+      { businessId: BIZ, documentId: DOC, contactId: CONTACT_ID },
+      d as never
+    );
+    expect(d.classifyAndApply).not.toHaveBeenCalled();
+    expect(result.ok === true && result.reclassifyBlocked).toBe(true);
   });
 
   it("skips the classification for a document the import ledger does not know", async () => {
@@ -431,7 +461,6 @@ describe("reassignMeetingContact: nothing after the document write may throw", (
     ["getLedgerRow", "ledger"],
     ["loadHostNames", "host names"],
     ["fetchTranscript", "transcript"],
-    ["reopenClassification", "reopen"],
     ["syncVault", "vault"],
     ["logSystem", "log"]
   ])("survives %s throwing", async (dep) => {
@@ -535,6 +564,34 @@ describe("repairGraphGuestName", () => {
     expect(result.factsRewritten).toBe(0);
   });
 
+  it("matches the node under the FIRST name when Zoom recorded a full one", async () => {
+    // Bugbot, PR #1618: the extractor reads the minutes, which use the first
+    // name, so the node is usually "Alexander" even when the Zoom label was
+    // "Alexander Delacroix". Matching only the full string corrected the
+    // document and left the node wrong.
+    const d = deps();
+    const result = await repairGraphGuestName(
+      { ...input, wrongName: "Alexander Delacroix" },
+      d as never
+    );
+    expect(result.entitiesRenamed).toBe(1);
+    expect(callArgs(d.updateEntity)[1]).toMatchObject({ canonical_name: "Bobby" });
+  });
+
+  it("still refuses when two nodes answer to different forms of the name", async () => {
+    const d = deps({
+      listEntities: vi.fn(async () => [
+        entityRow(),
+        entityRow({ id: "e-2", canonical_name: "Alexander Delacroix" })
+      ])
+    });
+    const result = await repairGraphGuestName(
+      { ...input, wrongName: "Alexander Delacroix" },
+      d as never
+    );
+    expect(result.entitiesRenamed).toBe(0);
+  });
+
   it("matches a node that carries the wrong name as an ALIAS", async () => {
     const d = deps({
       listEntities: vi.fn(async () => [
@@ -578,9 +635,12 @@ describe("repairGraphGuestName", () => {
   });
 
   it("treats an empty name as no match rather than matching everything", async () => {
+    // No variants means no candidates: an empty wrong name must never match
+    // a node whose own name is blank.
     const d = deps({ listEntities: vi.fn(async () => [entityRow({ canonical_name: "  " })]) });
     const result = await repairGraphGuestName({ ...input, wrongName: "   " }, d as never);
     expect(result.entitiesRenamed).toBe(0);
+    expect(d.updateEntity).not.toHaveBeenCalled();
   });
 });
 

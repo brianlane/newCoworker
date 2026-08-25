@@ -23,6 +23,7 @@ import {
   getZoomTranscriptClassification,
   getZoomTranscriptImportByDocument,
   reopenZoomTranscriptClassification,
+  ZOOM_CLASSIFY_CLAIM_LEASE_MS,
   reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport,
   stampZoomTranscriptClassification,
@@ -41,6 +42,7 @@ type Chain = {
   select: ReturnType<typeof vi.fn>;
   match: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
   not: ReturnType<typeof vi.fn>;
   lt: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -54,6 +56,7 @@ function chain(terminal: unknown): Chain & PromiseLike<unknown> {
     select: vi.fn(() => c),
     match: vi.fn(() => c),
     is: vi.fn(() => c),
+    or: vi.fn(() => c),
     not: vi.fn(() => c),
     lt: vi.fn(() => c),
     maybeSingle: vi.fn(),
@@ -466,35 +469,74 @@ describe("getZoomTranscriptImportByDocument", () => {
 });
 
 describe("reopenZoomTranscriptClassification", () => {
-  it("clears a stamp that is now provably about the wrong person", async () => {
+  it("clears a FINISHED classification and says so", async () => {
     const c = chain({ data: [{ id: "row-1" }], error: null });
-    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(true);
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c), () => NOW)).toBe(
+      "reopened"
+    );
     expect(c.update).toHaveBeenCalledWith({ classified_at: null, outcome: null });
-    // Conditional on the stamp being SET: that is what makes the answer mean
-    // "there was something to clear" rather than "I cleared it".
+    // Only a row that is finished (outcome stamped) or abandoned (claim past
+    // the lease) may be cleared; a fresh claim is somebody else's.
     expect(c.not).toHaveBeenCalledWith("classified_at", "is", null);
+    expect(c.or).toHaveBeenCalledWith(
+      `outcome.not.is.null,classified_at.lt.${new Date(NOW - ZOOM_CLASSIFY_CLAIM_LEASE_MS).toISOString()}`
+    );
   });
 
-  it("answers false when there was no stamp to clear", async () => {
-    const c = chain({ data: [], error: null });
-    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+  it("refuses to steal a FRESH in-flight claim", async () => {
+    // Bugbot, PR #1618: stealing it lets two passes run, and the loser
+    // stamps its own answer over the correction. In the motivating case the
+    // loser matched nobody, so it would stamp contact_id null.
+    const update = chain({ data: [], error: null });
+    const read = chain(null);
+    read.maybeSingle.mockResolvedValue({
+      data: { classified_at: new Date(NOW).toISOString() },
+      error: null
+    });
+    expect(
+      await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(update, read), () => NOW)
+    ).toBe("in_flight");
   });
 
-  it("treats a null payload as nothing cleared", async () => {
-    const c = chain({ data: null, error: null });
-    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+  it("reports a meeting nothing has ever classified, so the caller may claim it", async () => {
+    const update = chain({ data: [], error: null });
+    const read = chain(null);
+    read.maybeSingle.mockResolvedValue({ data: { classified_at: null }, error: null });
+    expect(
+      await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(update, read), () => NOW)
+    ).toBe("not_classified");
   });
 
-  it("answers false and warns on an update error", async () => {
+  it("treats a missing ledger row as never classified", async () => {
+    const update = chain({ data: null, error: null });
+    const read = chain(null);
+    read.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(
+      await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(update, read), () => NOW)
+    ).toBe("not_classified");
+  });
+
+  it("fails CLOSED on an update error, so a blip costs a re-run not a duplicate", async () => {
     const c = chain({ data: null, error: { message: "boom" } });
-    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c), () => NOW)).toBe(
+      "in_flight"
+    );
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it("answers false when the service client cannot be built", async () => {
+  it("fails closed on the follow-up read error too", async () => {
+    const update = chain({ data: [], error: null });
+    const read = chain(null);
+    read.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    expect(
+      await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(update, read), () => NOW)
+    ).toBe("in_flight");
+  });
+
+  it("fails closed when the service client cannot be built", async () => {
     defaultClientSpy.mockImplementation(() => {
       throw new Error("no env");
     });
-    await expect(reopenZoomTranscriptClassification(BIZ, UUID)).resolves.toBe(false);
+    await expect(reopenZoomTranscriptClassification(BIZ, UUID)).resolves.toBe("in_flight");
   });
 });

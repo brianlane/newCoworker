@@ -2961,9 +2961,12 @@ on the call, and repairs all of it: `POST
    the coworker. The old name is kept as an alias so a later mention still
    resolves here, the contact key is stamped on, and the quoted `source_text`
    is rewritten on that node's own facts only (a mention of the old name in
-   another entity's provenance may be a different Alexander). Renames ONLY
-   when exactly one person node answers to the name, the same rule as
-   everywhere else here.
+   another entity's provenance may be a different Alexander). Matched on every
+   form `guestNameVariants` produces, not just the full Zoom label: the
+   extractor reads the MINUTES, which use the first name, so a label of
+   "Alexander Delacroix" typically produced a node called "Alexander". Renames
+   ONLY when exactly one person node answers to any of those forms, the same
+   rule as everywhere else here.
 5. **Re-sync the box**, which holds its own copy of both the document digest
    and the graph notes, so neither correction is live until it does.
 

@@ -174,8 +174,19 @@ export function guestNameFromTitle(title: string): string | null {
  * here obeys.
  */
 export function extractHostAddressedNames(vtt: string, hostNames: string[]): string[] {
-  const hosts = new Set(
+  // Two different sets from the same input. A speaker LABEL is the whole
+  // display name ("Brian Lane:"), while a vocative is a single first name
+  // ("Thanks, Brian."), so excluding our own side needs the tokens too:
+  // otherwise the host thanking a colleague by first name offers that name
+  // as the guest, and a contact who shares it collects the meeting (Bugbot,
+  // PR #1618). `guestNameVariants` already tokenizes for the same reason.
+  const hostLabels = new Set(
     hostNames.map((name) => name.trim().toLowerCase()).filter((name) => name !== "")
+  );
+  const hostTokens = new Set(
+    hostNames
+      .flatMap((name) => name.trim().toLowerCase().split(/\s+/))
+      .filter((token) => token !== "")
   );
   const seen = new Set<string>();
   const out: string[] = [];
@@ -185,12 +196,12 @@ export function extractHostAddressedNames(vtt: string, hostNames: string[]): str
     const speakerSplit = line.match(/^\s*([^:]{1,60}?)\s*:\s+(\S.*)$/);
     if (!speakerSplit) continue;
     const speaker = (speakerSplit[1] as string).trim().toLowerCase();
-    if (!hosts.has(speaker)) continue;
+    if (!hostLabels.has(speaker)) continue;
     for (const name of vocativeNames(speakerSplit[2] as string)) {
       const key = name.toLowerCase();
-      // Never surface the host's own name: "Yeah, Brian here" is not the
-      // host addressing the guest.
-      if (hosts.has(key) || seen.has(key)) continue;
+      // Never surface a name from our own side: "Thanks, Brian" is one
+      // teammate to another, not the host addressing the guest.
+      if (hostTokens.has(key) || seen.has(key)) continue;
       seen.add(key);
       out.push(name);
     }
