@@ -46,6 +46,7 @@ import {
 } from "@/lib/contacts/edit-events";
 import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
 import { deleteNotesForContact } from "@/lib/notes/db";
+import { deleteCustomTableRowsForContact } from "@/lib/custom-tables/db";
 import { classifyContactKey } from "../../../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
@@ -347,6 +348,13 @@ export async function DELETE(
       // would otherwise leave unreachable orphan rows (soft-deleted ones
       // included), same reasoning as the documents cleanup above.
       await deleteNotesForContact(businessId, existing.id);
+      // And their rows in the owner's own tables (policies, vehicles,
+      // memberships). Same reasoning again: SET NULL would leave a deleted
+      // person's record sitting in a list the owner reads as "everyone
+      // else". This also clears the history snapshots that deleting those
+      // rows just wrote, which would otherwise copy the data rather than
+      // remove it.
+      await deleteCustomTableRowsForContact(businessId, existing.id);
     }
     // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
     // it alias-aware to the surviving row. Delete by that row's PRIMARY

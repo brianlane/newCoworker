@@ -106,6 +106,17 @@ export const KG_SOURCES = {
   contact_notes: {
     status: "exempt",
     reason: "Team-internal log; owners are told the AI reads pinned notes, not these."
+  },
+  /** Owner-defined custom tables (custom_tables / custom_table_rows). The
+   * columns are the OWNER's invention, so a row carries no stable meaning
+   * an extractor could map onto entities or facts: "Status: Won" means
+   * whatever that tenant decided it means. And the coworker already reads
+   * these rows on demand through the custom_table_ tools, which is a live
+   * read of the truth rather than a stale graph copy of it. */
+  custom_tables: {
+    status: "exempt",
+    reason:
+      "Owner-defined schema with no stable semantics; the coworker reads rows live through the custom_table_ tools."
   }
 } as const satisfies Record<string, KgSourceEntry>;
 

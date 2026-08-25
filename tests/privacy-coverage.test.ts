@@ -133,6 +133,12 @@ const EXEMPT: Record<string, string> = {
   contact_notes:
     "team-authored notes about a contact: owner work product, the business_documents boundary. Erasure severs the person key (deleting the person's contact row SET-NULLs contact_id, and the dashboard profile delete removes the rows outright); what remains is free-text owner content with no person columns",
   contact_segments: "saved list definitions (name + filter), not person rows",
+  custom_tables:
+    "owner-defined table definitions (name, description, column labels): configuration, not person data; the table carries no person columns",
+  custom_table_rows:
+    "records in the owner's own tables (policies, vehicles, memberships), the business_documents boundary. Erasure severs the person key BY DELETING the rows, not by SET-NULLing them: the contact-delete path calls deleteCustomTableRowsForContact, which removes the person's rows and the history snapshots that delete writes. What remains is owner-authored content with no person columns",
+  custom_table_versions:
+    "before-images of custom-table changes, so an AI edit can be undone. Person-linked snapshots go with the rows in deleteCustomTableRowsForContact; the rest are schema states (column labels), which carry no person columns",
   dashboard_chat_activity: "owner dashboard chat",
   dashboard_chat_jobs: "owner dashboard chat",
   dashboard_chat_threads: "owner dashboard chat",
