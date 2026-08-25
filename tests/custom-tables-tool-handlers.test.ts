@@ -298,6 +298,26 @@ describe("customTableFindRowsTool", () => {
     expect((out as unknown as { message: string }).message).toMatch(/invalid_phone/);
     expect(lookupContact).not.toHaveBeenCalled();
   });
+
+  // These strings steer the model, so a read must not be told a write failed.
+  // On a find the phone only FILTERS rows: "the row cannot be attached" would
+  // describe a write nobody attempted, and "add the contact first" is advice
+  // that does not apply to a read.
+  it("words a read refusal as a read, not as a failed attach", async () => {
+    const linked = table({ rowLink: "contact" });
+    const out = await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties", contactPhone: "+15559999999" },
+      deps({
+        listTables: vi.fn(async () => [linked]) as never,
+        lookupContact: vi.fn(async () => null) as never
+      })
+    );
+    const { message } = out as unknown as { message: string };
+    expect(message).toMatch(/no rows to show for them/);
+    expect(message).not.toMatch(/cannot be attached/);
+    expect(message).not.toMatch(/Add the contact first/);
+  });
 });
 
 describe("customTableAddRowTool", () => {
@@ -391,7 +411,7 @@ describe("customTableAddRowTool", () => {
     );
   });
 
-  it("refuses a phone with no contact behind it", async () => {
+  it("refuses a phone with no contact behind it, and words it as a failed attach", async () => {
     const linked = table({ rowLink: "contact" });
     const out = await customTableAddRowTool(
       "biz-1",
@@ -401,7 +421,12 @@ describe("customTableAddRowTool", () => {
         lookupContact: vi.fn(async () => null) as never
       })
     );
-    expect((out as unknown as { message: string }).message).toMatch(/contact_not_found/);
+    const { message } = out as unknown as { message: string };
+    expect(message).toMatch(/contact_not_found/);
+    // The write side keeps the attach wording and the remedy, which is the
+    // half the read side must NOT get.
+    expect(message).toMatch(/cannot be attached to them/);
+    expect(message).toMatch(/Add the contact first/);
   });
 
   it("tells the owner the row is not attached to anyone when no phone was given", async () => {
