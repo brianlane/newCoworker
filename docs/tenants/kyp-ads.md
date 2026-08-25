@@ -334,6 +334,36 @@ the next run. The flow had not fired since Jul 23 2026, so it was caught while
 still latent, unlike the same bug on Amy's ReferralExchange flow. Check for the
 shape with `tsx debug/audit-phone-field-names.ts`.
 
+### A booked lead can stay in the nudge ladder (identity mismatch)
+
+A nudge ladder stops for exactly two reasons: the lead texts back, or a
+booking observer identifies them and fast-forwards the run. Identification is
+by phone and email, so a lead who books under a DIFFERENT email than their
+lead form captured, on a booking with no phone, is invisible to it.
+
+On 2026-08-19 a lead booked 1.8 seconds BEFORE the flow's first message, using
+a different address than her lead record and giving Calendly no phone. Three
+more nudges followed over three days, the last inviting her to book the call
+she had already booked. She never replied, so nothing else could stop the
+ladder. James raised it on 2026-08-21 and the run was cancelled by hand.
+
+This is not rare: 4 of the tenant's 37 August bookings used an address that did
+not match their lead record. The pattern is a personal address on the ad form
+and a work address at booking.
+
+The AI's Aug 21 answer, disabling the booking-confirmation SMS, addressed a
+message that lead never received; there is no confirmation text anywhere in her
+history. James's "i just want a text 1 hour before the call thats it" is a
+booking-detection ask, not a confirmation-text ask.
+
+Closed by the name fallback in `src/lib/ai-flows/booking-goal-fire.ts`: when
+phone and email both fail to identify a booking, its name is matched against
+the lead names of LIVE runs only, requiring at least two name tokens. Audit it
+with `tsx debug/booked-lead-nudge-audit.ts`, where a NAME-ONLY hit on a nudge
+flow means the fallback missed. James has declined to make the phone field
+required on his Calendly event type, so the fallback is the load-bearing fix
+rather than a backstop.
+
 ## History
 
 PRs #617, #641, #693, #715, #756, #768, #770, #795, #1011. Diagnostics:
