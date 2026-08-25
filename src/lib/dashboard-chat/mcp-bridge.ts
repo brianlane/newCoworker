@@ -152,7 +152,21 @@ export const MCP_BRIDGE_EXCLUDED: Readonly<Record<string, string>> = {
   update_flow: "capability duplicate of inline edit_aiflow, which validates and self-repairs instead of replacing raw JSON",
   restore_flow_version: "capability duplicate of inline undo_aiflow_edit, which resolves the flow by name the way the owner refers to it",
   list_businesses: "the surface is pinned to one business; a cross-business enumerator invites scope-hopping",
-  search: "cross-business fan-out; with a pinned business it degenerates to search_contacts + get_sms_thread"
+  search: "cross-business fan-out; with a pinned business it degenerates to search_contacts + get_sms_thread",
+  // Custom tables: capability duplicates of the inline custom_table_* tools,
+  // which share the same cores but carry the confirm-gated deletes, the undo
+  // tool, and the column editor. Two ways to add a row is the
+  // model-confusion trap this list exists to prevent.
+  list_custom_tables: "capability duplicate of inline custom_table_list (same core)",
+  get_custom_table_rows: "capability duplicate of inline custom_table_find_rows (same core)",
+  create_custom_table_row: "capability duplicate of inline custom_table_add_row (same core)",
+  update_custom_table_row: "capability duplicate of inline custom_table_update_row (same core)",
+  delete_custom_table_row:
+    "capability duplicate of inline custom_table_delete_row, whose copy carries the confirm handshake",
+  create_custom_table: "capability duplicate of inline custom_table_create (same core)",
+  delete_custom_table:
+    "capability duplicate of inline custom_table_delete, whose copy carries the confirm handshake",
+  restore_custom_table: "capability duplicate of inline custom_table_restore (same core)"
 };
 
 /**

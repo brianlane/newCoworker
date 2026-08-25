@@ -465,3 +465,51 @@ re-annotated without this file being updated in the same PR.
 - **Read Only: False** It writes per-surface tool policy rows that control what the coworker may do on each channel.
 - **Open World: False** A settings write in our own database. No message is sent by this call.
 - **Destructive: True** Destructive because each listed surface's stored setting is overwritten, and disabling a tool immediately removes a capability the coworker was using on that channel.
+
+### `list_custom_tables`
+
+- **Read Only: True** Reads the business's own table definitions and row counts from our database. No writes.
+- **Open World: False** Reads rows from our own database. No external service is contacted.
+- **Destructive: False** Nothing is created, changed or removed. It reports the current tables and their columns only.
+
+### `get_custom_table_rows`
+
+- **Read Only: True** Reads rows out of one table the business built for itself. No writes.
+- **Open World: False** Reads rows from our own database, including an optional contact lookup that stays inside our platform. No external service is contacted.
+- **Destructive: False** Nothing is created, changed or removed. It reports the rows that match the caller's filter only.
+
+### `create_custom_table_row`
+
+- **Read Only: False** It inserts a new row into one of the business's own tables.
+- **Open World: False** A row insert in our own database. No message is sent and no third party is contacted.
+- **Destructive: False** It only adds a row. No existing row is overwritten and nothing is removed.
+
+### `update_custom_table_row`
+
+- **Read Only: False** It writes new cell values onto an existing row in one of the business's own tables.
+- **Open World: False** A row update in our own database. No message is sent by this call.
+- **Destructive: True** Destructive because each submitted cell overwrites whatever that cell held before, and a cell submitted empty is cleared. The previous values are recoverable from the table's history for 90 days, but they are gone from the live row after the write.
+
+### `delete_custom_table_row`
+
+- **Read Only: False** It removes a row from one of the business's own tables.
+- **Open World: False** A row delete in our own database. No message is sent and no third party is contacted.
+- **Destructive: True** Destructive because the row leaves the live table immediately. A snapshot is kept in the table's history so the owner can restore it, but the row is no longer returned by any read once this call succeeds.
+
+### `create_custom_table`
+
+- **Read Only: False** It creates a new table for the business, with the columns the caller defined.
+- **Open World: False** A table insert in our own database. No message is sent and no third party is contacted.
+- **Destructive: False** It only adds a table. No existing table is changed and nothing is removed. A name that is already taken is refused rather than merged.
+
+### `delete_custom_table`
+
+- **Read Only: False** It marks one of the business's own tables as deleted.
+- **Open World: False** A table update in our own database. No message is sent by this call.
+- **Destructive: True** Destructive because the table and every row in it stop appearing anywhere in the product the moment this call succeeds. The delete is soft and the owner can restore it for 30 days, after which the table and its rows are purged for good.
+
+### `restore_custom_table`
+
+- **Read Only: False** It clears the deleted mark on a table so the table and its rows are live again.
+- **Open World: False** A table update in our own database. No message is sent and no third party is contacted.
+- **Destructive: True** Marked destructive because it changes what the business's live data contains: a table that was deliberately removed comes back, along with every row it held. It is refused when a live table already uses the same name, so it never overwrites one.
