@@ -138,7 +138,7 @@ export async function POST(request: Request) {
           "manage_coworker_tools"
         ] as const),
         buildIntegrationsStatusLine(body.businessId),
-        buildBusinessContextBlock(body.businessId),
+        buildBusinessContextBlock(body.businessId, {}, { includeCustomTables: true }),
         // The public booking link, so "schedule Liz through her assistant"
         // can send the page instead of negotiating times over email.
         bookingLinkPromptLine(body.businessId)

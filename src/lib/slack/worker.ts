@@ -293,7 +293,7 @@ async function runOneSlackJob(
         "custom_table_manage"
       ] as const),
       buildIntegrationsStatusLine(businessId),
-      buildBusinessContextBlock(businessId),
+      buildBusinessContextBlock(businessId, {}, { includeCustomTables: true }),
       bookingLinkPromptLine(businessId)
     ]);
   const {

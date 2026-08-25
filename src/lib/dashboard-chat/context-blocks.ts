@@ -116,7 +116,8 @@ export const BUSINESS_CONTEXT_MAX_CHARS = 12_000;
  */
 export async function buildBusinessContextBlock(
   businessId: string,
-  deps: ContextBlockDeps = {}
+  deps: ContextBlockDeps = {},
+  options: { includeCustomTables?: boolean } = {}
 ): Promise<string | null> {
   /* c8 ignore next 2 -- production defaults; tests inject */
   const fetchConfig = deps.fetchConfig ?? getBusinessConfig;
@@ -138,24 +139,31 @@ export async function buildBusinessContextBlock(
     // Best-effort: a tables read that fails must not cost the owner their
     // identity and memory context, which is the load-bearing half.
     let tablesMd = "";
-    try {
-      const tables = await fetchTables(businessId);
-      if (tables.length > 0) {
-        const counts = await countRows(businessId);
-        tablesMd = buildCustomTablesDigestMd(
-          tables.map((t) => ({
-            name: t.name,
-            rowLink: t.rowLink,
-            fields: t.fields,
-            rowCount: counts.get(t.id) ?? 0
-          }))
-        );
+    // OPT-IN, and defaulting to off on purpose. This block is also injected
+    // into the email coworker's prompt, whose correspondent is a prospect or
+    // a delegate rather than the owner. Table names and column labels are
+    // the owner's own business, so a surface has to ask for them; a future
+    // caller that forgets gets silence rather than a leak.
+    if (options.includeCustomTables) {
+      try {
+        const tables = await fetchTables(businessId);
+        if (tables.length > 0) {
+          const counts = await countRows(businessId);
+          tablesMd = buildCustomTablesDigestMd(
+            tables.map((t) => ({
+              name: t.name,
+              rowLink: t.rowLink,
+              fields: t.fields,
+              rowCount: counts.get(t.id) ?? 0
+            }))
+          );
+        }
+      } catch (err) {
+        logger.warn("owner chat: custom tables digest read failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
       }
-    } catch (err) {
-      logger.warn("owner chat: custom tables digest read failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
     }
     if (!identity && !memory && !tablesMd) return null;
     const parts = [

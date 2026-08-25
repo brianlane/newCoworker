@@ -66,6 +66,20 @@ describe("buildIntegrationsStatusLine", () => {
 });
 
 describe("buildBusinessContextBlock, custom tables digest", () => {
+  it("is OFF unless the surface asks, so the email coworker never sees it", async () => {
+    // That block goes into the prospect-facing email coworker's prompt too.
+    // Table and column names are the owner's business, so a surface has to
+    // opt in and a caller that forgets gets silence rather than a leak.
+    const fetchTables = vi.fn(async () => []);
+    const block = await buildBusinessContextBlock("biz", {
+      fetchConfig: vi.fn(async () => ({ identity_md: "Business: X", memory_md: "" })) as never,
+      fetchTables: fetchTables as never
+    });
+    expect(fetchTables).not.toHaveBeenCalled();
+    expect(block).toContain("# identity.md");
+    expect(block).not.toContain("# tables.md");
+  });
+
   const TABLE = {
     id: "tbl-1",
     businessId: BIZ,
@@ -89,7 +103,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchConfig: vi.fn(async () => ({ identity_md: "Business: X", memory_md: "" })) as never,
       fetchTables: vi.fn(async () => [TABLE]) as never,
       countRows: vi.fn(async () => new Map([["tbl-1", 42]])) as never
-    });
+    }, { includeCustomTables: true });
     expect(block).toContain("# tables.md");
     expect(block).toContain("**Properties** (standalone, 42 rows): Address");
   });
@@ -99,7 +113,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchConfig: vi.fn(async () => ({ identity_md: "X", memory_md: "" })) as never,
       fetchTables: vi.fn(async () => [TABLE]) as never,
       countRows: vi.fn(async () => new Map()) as never
-    });
+    }, { includeCustomTables: true });
     expect(block).toContain("0 rows");
   });
 
@@ -108,7 +122,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchConfig: vi.fn(async () => ({ identity_md: "", memory_md: "" })) as never,
       fetchTables: vi.fn(async () => [TABLE]) as never,
       countRows: vi.fn(async () => new Map()) as never
-    });
+    }, { includeCustomTables: true });
     expect(block).toContain("# tables.md");
     expect(block).not.toContain("# identity.md");
   });
@@ -119,7 +133,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchConfig: vi.fn(async () => ({ identity_md: "X", memory_md: "" })) as never,
       fetchTables: vi.fn(async () => []) as never,
       countRows: countRows as never
-    });
+    }, { includeCustomTables: true });
     expect(countRows).not.toHaveBeenCalled();
     expect(block).not.toContain("# tables.md");
   });
@@ -132,7 +146,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchTables: vi.fn(async () => {
         throw new Error("tables down");
       }) as never
-    });
+    }, { includeCustomTables: true });
     expect(block).toContain("# identity.md");
     expect(block).not.toContain("# tables.md");
   });
@@ -143,7 +157,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
       fetchTables: vi.fn(async () => {
         throw "not an error";
       }) as never
-    });
+    }, { includeCustomTables: true });
     expect(block).toContain("# identity.md");
   });
 
@@ -153,7 +167,7 @@ describe("buildBusinessContextBlock, custom tables digest", () => {
         fetchConfig: vi.fn(async () => ({ identity_md: "", memory_md: "" })) as never,
         fetchTables: vi.fn(async () => []) as never,
         countRows: vi.fn(async () => new Map()) as never
-      })
+      }, { includeCustomTables: true })
     ).toBeNull();
   });
 });

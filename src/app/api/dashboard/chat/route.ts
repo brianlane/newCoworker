@@ -1049,7 +1049,7 @@ export async function POST(request: Request) {
       // blind ("are you connected to Calendly?" guesses, invented policy).
       // Deliberately NOT added to inputMessages: the worker prompt already
       // has it agent-side, and duplicating it would balloon CPU prefill.
-      const businessContextBlock = await buildBusinessContextBlock(body.businessId);
+      const businessContextBlock = await buildBusinessContextBlock(body.businessId, {}, { includeCustomTables: true });
       const systemInstruction = [
         ...inputMessages.filter((m) => m.role === "system").map((m) => m.content),
         ...(businessContextBlock ? [businessContextBlock] : []),

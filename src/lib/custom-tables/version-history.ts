@@ -42,11 +42,13 @@ export type CustomTableHistoryEntry = {
  * reason the trigger nulls the carrier columns after copying them.
  */
 export function describeTableEditSource(source: string | null): string {
+  // Every surface spells its undo the same way, `<surface>_restore`, so one
+  // rule covers them all rather than a case per surface that a new one would
+  // silently miss.
+  if (source?.endsWith("_restore")) return "Restored from history";
   switch (source) {
     case "dashboard":
       return "Changed in the dashboard";
-    case "dashboard_restore":
-      return "Restored from history";
     case "ai_dashboard":
       return "Changed by your coworker, in dashboard chat";
     case "ai_sms":
@@ -57,8 +59,6 @@ export function describeTableEditSource(source: string | null): string {
       return "Changed by your coworker, by email";
     case "mcp":
       return "Changed through a connected app";
-    case "mcp_restore":
-      return "Restored through a connected app";
     case "sweep":
       return "Cleaned up automatically";
     default:

@@ -34,16 +34,23 @@ const CURRENT = { name: "Properties", description: null, fields: [field()] };
 describe("describeTableEditSource", () => {
   it.each([
     ["dashboard", "Changed in the dashboard"],
-    ["dashboard_restore", "Restored from history"],
     ["ai_dashboard", "Changed by your coworker, in dashboard chat"],
     ["ai_sms", "Changed by your coworker, by text"],
     ["ai_slack", "Changed by your coworker, in Slack"],
     ["ai_email", "Changed by your coworker, by email"],
     ["mcp", "Changed through a connected app"],
-    ["mcp_restore", "Restored through a connected app"],
     ["sweep", "Cleaned up automatically"]
   ])("names the %s surface", (source, expected) => {
     expect(describeTableEditSource(source)).toBe(expected);
+  });
+
+  it.each([
+    "dashboard_restore",
+    "mcp_restore",
+    "ai_dashboard_restore",
+    "ai_slack_restore"
+  ])("reads %s as a restore, whichever surface did it", (source) => {
+    expect(describeTableEditSource(source)).toBe("Restored from history");
   });
 
   it("stays vague for an unstamped or unknown source, rather than guessing", () => {

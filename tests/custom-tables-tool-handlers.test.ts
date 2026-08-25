@@ -66,6 +66,7 @@ function deps(over: Partial<CustomTableToolDeps> = {}): CustomTableToolDeps {
     listVersions: vi.fn(async () => []) as never,
     restoreVersion: vi.fn(async () => ({ kind: "schema" })) as never,
     lookupContact: vi.fn(async () => ({ id: "c-1" })) as never,
+    getRow: vi.fn(async () => row()) as never,
     ...over
   };
 }
@@ -526,6 +527,182 @@ describe("customTableUpdateRowTool", () => {
   });
 });
 
+describe("rows past the first page", () => {
+  const UUID = "aaaaaaaa-1111-4111-8111-111111111111";
+
+  it("fetches a row by id directly, so an older row is not invisible", async () => {
+    // Scanning one page meant an update or delete with a REAL id refused as
+    // row_not_found once a table grew past it.
+    const getRow = vi.fn(async () => row({ id: UUID }));
+    const listRows = vi.fn(async () => ({ rows: [], nextCursor: null }));
+    const out = await customTableUpdateRowTool(
+      "biz-1",
+      { table: "Properties", row: UUID, values: [] },
+      deps({ getRow: getRow as never, listRows: listRows as never })
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(getRow).toHaveBeenCalledWith("tbl-1", UUID, expect.anything());
+    // One query, no scan at all: this is the common case.
+    expect(listRows).not.toHaveBeenCalled();
+  });
+
+  it("reports a genuinely missing id as not found, not as a crash", async () => {
+    const out = await customTableUpdateRowTool(
+      "biz-1",
+      { table: "Properties", row: UUID, values: [] },
+      deps({
+        getRow: vi.fn(async () => {
+          throw new CustomTableError("not_found", "gone");
+        }) as never
+      })
+    );
+    expect((out as unknown as { message: string }).message).toMatch(/row_not_found.*has the id/s);
+  });
+
+  it("lets an unexpected failure through when fetching by id", async () => {
+    await expect(
+      customTableUpdateRowTool(
+        "biz-1",
+        { table: "Properties", row: UUID, values: [] },
+        deps({
+          getRow: vi.fn(async () => {
+            throw new Error("db down");
+          }) as never
+        })
+      )
+    ).rejects.toThrow("db down");
+  });
+
+  it("pages through the whole table when searching, not just the newest page", async () => {
+    const first = Array.from({ length: 3 }, (_, i) => row({ id: `p1-${i}` }));
+    const second = [row({ id: "p2-0", values: { address: "99 Birch" } })];
+    const listRows = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: first, nextCursor: "cursor-1" })
+      .mockResolvedValueOnce({ rows: second, nextCursor: null });
+    const out = await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties", query: "birch" },
+      deps({ listRows: listRows as never })
+    );
+    expect(listRows).toHaveBeenCalledTimes(2);
+    expect(listRows.mock.calls[1][2]).toMatchObject({ cursor: "cursor-1" });
+    expect((out as unknown as { rows: { id: string }[] }).rows).toEqual([
+      { id: "p2-0", summary: "Address: 99 Birch" }
+    ]);
+  });
+
+  it("stops paging at the bound rather than following a runaway cursor", async () => {
+    const listRows = vi.fn(async () => ({ rows: [row()], nextCursor: "never-ends" }));
+    await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties" },
+      deps({ listRows: listRows as never })
+    );
+    // 5000 rows at 1000 per page, plus one, is the hard stop.
+    expect(listRows).toHaveBeenCalledTimes(6);
+  });
+
+  it("describes history against the rows it actually mentions, fetched by id", async () => {
+    const versions = [
+      {
+        id: 7,
+        tableId: "tbl-1",
+        rowId: "row-1",
+        kind: "row_updated" as const,
+        name: null,
+        description: null,
+        rowLink: null,
+        fields: null,
+        values: { address: "was" },
+        contactId: null,
+        source: "ai_dashboard",
+        actor: null,
+        replacedAt: "2026-08-20T00:00:00.000Z"
+      }
+    ];
+    const getRow = vi.fn(async () => row({ values: { address: "now" } }));
+    const listRows = vi.fn(async () => ({ rows: [], nextCursor: null }));
+    const out = await customTableHistoryTool(
+      "biz-1",
+      { table: "Properties" },
+      deps({
+        listVersions: vi.fn(async () => versions) as never,
+        getRow: getRow as never,
+        listRows: listRows as never
+      })
+    );
+    expect(getRow).toHaveBeenCalledWith("tbl-1", "row-1", expect.anything());
+    expect(listRows).not.toHaveBeenCalled();
+    const changes = (out as unknown as { changes: { changed: string[] }[] }).changes;
+    expect(changes[0].changed).toEqual(['Address: "was" to "now"']);
+  });
+
+  it("treats a row that is genuinely gone as gone, in the history", async () => {
+    const versions = [
+      {
+        id: 7,
+        tableId: "tbl-1",
+        rowId: "row-1",
+        kind: "row_updated" as const,
+        name: null,
+        description: null,
+        rowLink: null,
+        fields: null,
+        values: { address: "was" },
+        contactId: null,
+        source: null,
+        actor: null,
+        replacedAt: "2026-08-20T00:00:00.000Z"
+      }
+    ];
+    const out = await customTableHistoryTool(
+      "biz-1",
+      { table: "Properties" },
+      deps({
+        listVersions: vi.fn(async () => versions) as never,
+        getRow: vi.fn(async () => {
+          throw new CustomTableError("not_found", "gone");
+        }) as never
+      })
+    );
+    const changes = (out as unknown as { changes: { canUndo: boolean }[] }).changes;
+    expect(changes[0].canUndo).toBe(false);
+  });
+
+  it("lets an unexpected history row failure through", async () => {
+    const versions = [
+      {
+        id: 7,
+        tableId: "tbl-1",
+        rowId: "row-1",
+        kind: "row_updated" as const,
+        name: null,
+        description: null,
+        rowLink: null,
+        fields: null,
+        values: {},
+        contactId: null,
+        source: null,
+        actor: null,
+        replacedAt: "2026-08-20T00:00:00.000Z"
+      }
+    ];
+    await expect(
+      customTableHistoryTool(
+        "biz-1",
+        { table: "Properties" },
+        deps({
+          listVersions: vi.fn(async () => versions) as never,
+          getRow: vi.fn(async () => {
+            throw new Error("db down");
+          }) as never
+        })
+      )
+    ).rejects.toThrow("db down");
+  });
+});
+
 describe("customTableDeleteRowTool", () => {
   it("refuses without confirm, and reads the row back so the owner hears it", async () => {
     const deleteRow = vi.fn(async () => undefined);
@@ -635,7 +812,10 @@ describe("customTableHistoryTool and undo", () => {
       { changeId: 7 },
       deps({ restoreVersion: restoreVersion as never })
     );
-    expect(restoreVersion).toHaveBeenCalledWith("biz-1", 7, { source: "ai_restore" });
+    expect(restoreVersion).toHaveBeenCalledWith("biz-1", 7, {
+      source: "ai_restore",
+      actor: null
+    });
     expect((out as unknown as { note: string }).note).toMatch(/new id/);
   });
 
@@ -935,7 +1115,10 @@ describe("customTableRestoreTool", () => {
         restoreTable: restoreTable as never
       })
     );
-    expect(restoreTable).toHaveBeenCalledWith("biz-1", "tbl-1", { source: "ai_restore" });
+    expect(restoreTable).toHaveBeenCalledWith("biz-1", "tbl-1", {
+      source: "ai_restore",
+      actor: null
+    });
     expect((out as unknown as { note: string }).note).toMatch(/is back, with everything/);
   });
 

@@ -181,6 +181,10 @@ export async function runEmailCoworkerTurn(args: {
 
   const [integrationsLine, businessContextBlock, gates, bookingLinkLine] = await Promise.all([
     buildIntegrationsStatusLine(businessId),
+    // Deliberately WITHOUT the custom-tables digest: the correspondent here
+    // is a prospect or a delegate, not the owner, so the names of the
+    // owner's own tables and columns are none of their business. The table
+    // tools are off on this surface for the same reason.
     buildBusinessContextBlock(businessId),
     emailToolGates(businessId),
     // The booking page link, so "just send me the calendar" from a

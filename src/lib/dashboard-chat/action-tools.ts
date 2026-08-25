@@ -1083,6 +1083,18 @@ export type ActionToolDeps = {
  * Execute one inline action tool call; the returned payload becomes the
  * Gemini functionResponse. Never throws.
  */
+/**
+ * Which surface a custom-table write is filed under, from the flow-edit
+ * source the caller already passes. Unknown values fall back to the
+ * dashboard rather than inventing a surface name the history cannot read.
+ */
+const CT_SOURCE_BY_FLOW_EDIT: Readonly<Record<string, string>> = {
+  ai_edit_dashboard: "ai_dashboard",
+  ai_edit_sms: "ai_sms",
+  ai_edit_slack: "ai_slack",
+  ai_edit_email: "ai_email"
+};
+
 export async function executeActionTool(
   businessId: string,
   call: { name: ActionToolName; args: Record<string, unknown> },
@@ -1111,11 +1123,13 @@ export async function executeActionTool(
   const setReplyMode = deps.setReplyMode ?? setContactTextingMode;
   /* c8 ignore stop */
   // Attribution for the custom-table history rows, so "Changed by your
-  // coworker, in dashboard chat" is what the owner reads back later. The
-  // surface kind rides the same deps the flow-edit tools already use.
+  // coworker, in Slack" is what the owner reads back later. The surface
+  // rides the same dep the flow-edit tools already carry; mapping anything
+  // that is not SMS to "dashboard" would file a Slack write under dashboard
+  // chat, which is a false attribution in an audit trail.
   const ctDeps = {
     edit: {
-      source: deps.flowEditSource === "ai_edit_sms" ? "ai_sms" : "ai_dashboard",
+      source: CT_SOURCE_BY_FLOW_EDIT[deps.flowEditSource ?? ""] ?? "ai_dashboard",
       actor: deps.flowEditActor ?? null
     }
   };

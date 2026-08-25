@@ -45,6 +45,7 @@ import {
   createCustomTable,
   createCustomTableRow,
   deleteCustomTableRow,
+  getCustomTableRow,
   listCustomTableRows,
   listCustomTables,
   listDeletedCustomTables,
@@ -63,6 +64,7 @@ import {
   CUSTOM_TABLE_FIELD_TYPES,
   CUSTOM_TABLE_TRASH_RETENTION_DAYS,
   MAX_FIELDS_PER_TABLE,
+  MAX_ROWS_PER_TABLE,
   type CustomTable,
   type CustomTableFieldValue
 } from "@/lib/custom-tables/types";
@@ -75,13 +77,28 @@ export type CustomTableToolResult =
 /** Rows a find returns at once. Enough to answer, small enough to read. */
 export const CUSTOM_TABLE_TOOL_ROW_LIMIT = 25;
 
-/** How many rows a read scans before matching. One page, never the table. */
-const SCAN_LIMIT = 200;
+/**
+ * Rows fetched per scan page.
+ *
+ * 1000 is the PostgREST ceiling, and MAX_ROWS_PER_TABLE is 5000, so a full
+ * scan is at most five round trips. It used to be one page of 200, which
+ * meant a table's older rows were invisible: a search reported "nothing
+ * matches" for a row that exists, and an update or delete with a REAL row id
+ * refused as row_not_found. A false negative is worse than an error, because
+ * the model relays it as fact.
+ */
+const SCAN_PAGE = 1000;
+
+/** Hard stop for a full scan, so a runaway cursor cannot loop forever. */
+const MAX_SCAN_PAGES = Math.ceil(MAX_ROWS_PER_TABLE / SCAN_PAGE) + 1;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type CustomTableToolDeps = {
   listTables?: typeof listCustomTables;
   listDeleted?: typeof listDeletedCustomTables;
   listRows?: typeof listCustomTableRows;
+  getRow?: typeof getCustomTableRow;
   countRows?: typeof countCustomTableRows;
   createTable?: typeof createCustomTable;
   patchFields?: typeof patchCustomTableFields;
@@ -201,6 +218,7 @@ function resolved(deps: CustomTableToolDeps) {
     listTables: deps.listTables ?? listCustomTables,
     listDeleted: deps.listDeleted ?? listDeletedCustomTables,
     listRows: deps.listRows ?? listCustomTableRows,
+    getRow: deps.getRow ?? getCustomTableRow,
     countRows: deps.countRows ?? countCustomTableRows,
     createTable: deps.createTable ?? createCustomTable,
     patchFields: deps.patchFields ?? patchCustomTableFields,
@@ -214,9 +232,14 @@ function resolved(deps: CustomTableToolDeps) {
     lookupContact: deps.lookupContact ?? getCustomerMemory,
     edit: deps.edit ?? { source: "ai" },
     // A restore is attributed as a restore, so the history reads "Restored
-    // from history" rather than "Changed by your coworker". A caller that
-    // supplied its own stamp still wins.
-    restoreEdit: deps.edit ?? { source: "ai_restore" }
+    // from history" rather than "Changed by your coworker". Derived from the
+    // caller's surface rather than replaced by it: taking `deps.edit`
+    // wholesale meant every production path (which always supplies one)
+    // filed its undos as ordinary edits.
+    restoreEdit: {
+      source: `${deps.edit?.source ?? "ai"}_restore`,
+      actor: deps.edit?.actor ?? null
+    }
   };
 }
 /* c8 ignore stop */
@@ -298,6 +321,76 @@ async function resolveContact(
     };
   }
   return { ok: true, contactId: contact.id };
+}
+
+/**
+ * Every row of a table, paged.
+ *
+ * Callers need the whole table, not its newest page: an owner asking about a
+ * row they added last year is the normal case, and a bounded scan that
+ * silently stopped would answer "no such row".
+ */
+async function scanAllRows(
+  table: CustomTable,
+  listRows: typeof listCustomTableRows,
+  options: { contactId?: string } = {}
+) {
+  const all: Awaited<ReturnType<typeof listCustomTableRows>>["rows"] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_SCAN_PAGES; page += 1) {
+    const got: Awaited<ReturnType<typeof listCustomTableRows>> = await listRows(
+      table.id,
+      table.fields,
+      { limit: SCAN_PAGE, cursor, ...(options.contactId ? { contactId: options.contactId } : {}) }
+    );
+    all.push(...got.rows);
+    if (!got.nextCursor) break;
+    cursor = got.nextCursor;
+  }
+  return all;
+}
+
+/**
+ * Find the row the model named.
+ *
+ * A uuid is fetched DIRECTLY, one query, no scan: that is the common case,
+ * because find_rows hands the model an id and the write tools tell it to use
+ * one. Anything else falls back to matching the rendered summary across the
+ * whole table.
+ */
+async function findRow(
+  table: CustomTable,
+  ref: string,
+  d: { listRows: typeof listCustomTableRows; getRow: typeof getCustomTableRow },
+  verb: string
+): Promise<
+  | { ok: true; row: Awaited<ReturnType<typeof getCustomTableRow>> }
+  | { ok: false; result: CustomTableToolResult }
+> {
+  if (UUID_RE.test(ref.trim())) {
+    try {
+      return { ok: true, row: await d.getRow(table.id, ref.trim(), table.fields) };
+    } catch (err) {
+      if (err instanceof CustomTableError) {
+        return {
+          ok: false,
+          result: failure(`row_not_found: no row in "${table.name}" has the id ${ref.trim()}.`)
+        };
+      }
+      throw err;
+    }
+  }
+  const rows = await scanAllRows(table, d.listRows);
+  const found = resolveRowReference(table.fields, rows, ref);
+  if (found.ok) return { ok: true, row: found.row };
+  return {
+    ok: false,
+    result: failure(
+      found.detail === "row_ambiguous"
+        ? `row_ambiguous: more than one row in "${table.name}" matches "${ref}". ${verb}`
+        : `row_not_found: no row in "${table.name}" matches "${ref}". Find it first with custom_table_find_rows.`
+    )
+  };
 }
 
 /** One row rendered for the model: an addressable id plus a readable line. */
@@ -441,11 +534,8 @@ export async function customTableFindRowsTool(
     if (!contact.ok) return contact.result;
     contactId = contact.contactId;
   }
-  const page = await d.listRows(table.id, table.fields, {
-    limit: SCAN_LIMIT,
-    ...(contactId ? { contactId } : {})
-  });
-  const matched = args.query ? matchRowsByQuery(table.fields, page.rows, args.query) : page.rows;
+  const scanned = await scanAllRows(table, d.listRows, contactId ? { contactId } : {});
+  const matched = args.query ? matchRowsByQuery(table.fields, scanned, args.query) : scanned;
   const limit = args.limit ?? CUSTOM_TABLE_TOOL_ROW_LIMIT;
   const rows = matched.slice(0, limit).map((row) => renderRow(table, row));
   return {
@@ -471,11 +561,22 @@ export async function customTableHistoryTool(
   const rt = await resolveTable(businessId, args.table, false, d.listTables);
   if (!rt.ok) return rt.result;
   const table = rt.table;
-  const [versions, page] = await Promise.all([
-    d.listVersions(businessId, table.id),
-    d.listRows(table.id, table.fields, { limit: SCAN_LIMIT })
-  ]);
-  const live = new Map(page.rows.map((r) => [r.id, r.values as Record<string, unknown>]));
+  const versions = await d.listVersions(businessId, table.id);
+  // Only the rows this history actually mentions, fetched by id. Reading a
+  // page instead meant an older row's edits were described as "changed a row
+  // that was deleted later" purely because it fell off the newest page.
+  const rowIds = [...new Set(versions.map((v) => v.rowId).filter((id): id is string => !!id))];
+  const live = new Map<string, Record<string, unknown>>();
+  for (const rowId of rowIds) {
+    try {
+      const row = await d.getRow(table.id, rowId, table.fields);
+      live.set(rowId, row.values as Record<string, unknown>);
+    } catch (err) {
+      // A row that is genuinely gone stays absent, which is what the builder
+      // reads as "changed a row that was deleted later".
+      if (!(err instanceof CustomTableError)) throw err;
+    }
+  }
   const entries = buildCustomTableHistory(versions, table, live).map((entry) => ({
     id: entry.versionId,
     when: entry.replacedAt,
@@ -556,15 +657,13 @@ export async function customTableUpdateRowTool(
   if (!rt.ok) return rt.result;
   const table = rt.table;
 
-  const page = await d.listRows(table.id, table.fields, { limit: SCAN_LIMIT });
-  const found = resolveRowReference(table.fields, page.rows, args.row);
-  if (!found.ok) {
-    return failure(
-      found.detail === "row_ambiguous"
-        ? `row_ambiguous: more than one row in "${table.name}" matches "${args.row}". Find the row first with custom_table_find_rows and use the id it returns.`
-        : `row_not_found: no row in "${table.name}" matches "${args.row}". Find it first with custom_table_find_rows.`
-    );
-  }
+  const found = await findRow(
+    table,
+    args.row,
+    d,
+    "Find the row first with custom_table_find_rows and use the id it returns."
+  );
+  if (!found.ok) return found.result;
   // Partial: the model is changing SOME cells, and a required column it did
   // not mention is one nobody is touching. Without this, marking any column
   // required would make every other cell uneditable by the coworker, which
@@ -601,15 +700,13 @@ export async function customTableDeleteRowTool(
   if (!rt.ok) return rt.result;
   const table = rt.table;
 
-  const page = await d.listRows(table.id, table.fields, { limit: SCAN_LIMIT });
-  const found = resolveRowReference(table.fields, page.rows, args.row);
-  if (!found.ok) {
-    return failure(
-      found.detail === "row_ambiguous"
-        ? `row_ambiguous: more than one row in "${table.name}" matches "${args.row}". Never guess which to delete: find it with custom_table_find_rows and use the id.`
-        : `row_not_found: no row in "${table.name}" matches "${args.row}".`
-    );
-  }
+  const found = await findRow(
+    table,
+    args.row,
+    d,
+    "Never guess which to delete: find it with custom_table_find_rows and use the id."
+  );
+  if (!found.ok) return found.result;
   const summary = formatRowSummary(table.fields, found.row);
 
   // Confirm is a real gate, not a formality: this is the one row-level
