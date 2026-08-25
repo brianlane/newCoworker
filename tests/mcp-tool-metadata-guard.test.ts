@@ -45,7 +45,7 @@ describe("MCP tool metadata", () => {
   it("registers at least the tools we think it does", () => {
     // Cheap canary: a registry that silently emptied would pass every
     // per-tool loop below, because a loop over nothing asserts nothing.
-    expect(allMcpTools.length).toBeGreaterThanOrEqual(33);
+    expect(allMcpTools.length).toBeGreaterThanOrEqual(41);
   });
 
   for (const tool of allMcpTools) {

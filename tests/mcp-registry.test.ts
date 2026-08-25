@@ -31,6 +31,18 @@ describe("allMcpTools", () => {
         "calendar_find_slots",
         "create_agent",
         "create_contact",
+      // Custom tables: the owner's own Tables. Verb-first names, the MCP
+      // convention, calling the same cores as the inline custom_table_*
+      // tools; all eight are excluded from the inline bridge as capability
+      // duplicates (see MCP_BRIDGE_EXCLUDED).
+      "list_custom_tables",
+      "get_custom_table_rows",
+      "create_custom_table_row",
+      "update_custom_table_row",
+      "delete_custom_table_row",
+      "create_custom_table",
+      "delete_custom_table",
+      "restore_custom_table",
         "create_employee",
         "create_flow",
         "delete_agent",

@@ -60,6 +60,7 @@ import {
 } from "@/lib/custom-tables/versions";
 import { buildCustomTableHistory } from "@/lib/custom-tables/version-history";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
   CUSTOM_TABLE_FIELD_TYPES,
   CUSTOM_TABLE_TRASH_RETENTION_DAYS,
@@ -304,19 +305,50 @@ async function resolveTable(
  * draws: a record without its person is meaningless, and inventing a bare
  * contact here would bypass the contacts path that owns dedupe and merge.
  * A miss refuses honestly rather than filing the row under nobody.
+ *
+ * `intent` exists ONLY to word the refusals, and it earns its place because
+ * these strings are model-facing steering rather than UI copy. The two
+ * callers want opposite things from the same lookup: a find uses the phone
+ * to FILTER rows, an add uses it to ATTACH one. Telling a find that "the row
+ * cannot be attached" describes a write that was never attempted, and
+ * "add the contact first" is advice that does not apply when the model was
+ * only trying to read.
  */
 async function resolveContact(
   businessId: string,
-  table: CustomTable,
+  intent: "filter" | "attach",
   phone: string,
   lookup: typeof getCustomerMemory
 ): Promise<{ ok: true; contactId: string } | { ok: false; result: CustomTableToolResult }> {
-  const contact = await lookup(businessId, phone.trim());
-  if (!contact) {
+  const consequence =
+    intent === "attach"
+      ? "so the row cannot be attached to them"
+      : "so there are no rows to show for them";
+  // Normalize HERE, not at each caller. getCustomerMemory matches
+  // contacts.customer_e164 exactly (its own comment notes it assumes strict
+  // `+digits`), so a number the model typed as "(555) 234-5678" would miss a
+  // contact that exists and read back as contact_not_found. Every surface
+  // that reaches this function gets the fix at once: dashboard chat, owner
+  // SMS, Slack, and the connectors.
+  const normalized = normalizeContactNumber(phone);
+  if (!normalized.ok) {
     return {
       ok: false,
       result: failure(
-        `contact_not_found: there is no contact with the number ${phone.trim()}, so the row cannot be attached to them. Add the contact first, or add the row without a number and let the owner attach it.`
+        `invalid_phone: "${phone}" is not a usable phone number (${normalized.reason}), ${consequence}. Ask for the number again.`
+      )
+    };
+  }
+  const contact = await lookup(businessId, normalized.value);
+  if (!contact) {
+    const remedy =
+      intent === "attach"
+        ? " Add the contact first, or add the row without a number and let the owner attach it."
+        : "";
+    return {
+      ok: false,
+      result: failure(
+        `contact_not_found: there is no contact with the number ${normalized.value}, ${consequence}.${remedy}`
       )
     };
   }
@@ -530,7 +562,7 @@ export async function customTableFindRowsTool(
 
   let contactId: string | undefined;
   if (args.contactPhone) {
-    const contact = await resolveContact(businessId, table, args.contactPhone, d.lookupContact);
+    const contact = await resolveContact(businessId, "filter", args.contactPhone, d.lookupContact);
     if (!contact.ok) return contact.result;
     contactId = contact.contactId;
   }
@@ -620,7 +652,7 @@ export async function customTableAddRowTool(
 
   let contactId: string | null = null;
   if (args.contactPhone) {
-    const contact = await resolveContact(businessId, table, args.contactPhone, d.lookupContact);
+    const contact = await resolveContact(businessId, "attach", args.contactPhone, d.lookupContact);
     if (!contact.ok) return contact.result;
     contactId = contact.contactId;
   }
