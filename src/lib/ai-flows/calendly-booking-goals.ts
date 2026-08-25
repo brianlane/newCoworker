@@ -235,6 +235,8 @@ export type CalendlyBookingInvitee = {
   status?: string;
   email?: string;
   text_reminder_number?: string;
+  /** Feeds the name fallback when phone and email both fail to identify. */
+  name?: string;
 };
 
 type RawBooking = {
@@ -282,6 +284,8 @@ export type BookingGoalSweepDeps = {
  * E.164) and the invitee email (resolved through the business's contacts)
  * both seed the firing set, fanned out over each matched contact row's
  * primary + merged aliases, `applyGoalEvent` matches runs by exact E.164.
+ * The invitee NAME rides along as the last-resort fallback for a booking
+ * that carries neither a usable phone nor a recognized email.
  * The fan-out itself lives in the provider-neutral
  * `fireBookingGoalsForIdentities` (booking-goal-fire.ts), shared with the
  * Vagaro observers.
@@ -297,7 +301,8 @@ export async function fireBookingGoalsForInvitees(
     .filter((invitee) => invitee != null && invitee.status !== "canceled")
     .map((invitee) => ({
       phone: invitee.text_reminder_number ?? null,
-      email: invitee.email ?? null
+      email: invitee.email ?? null,
+      name: invitee.name ?? null
     }));
   return fireBookingGoalsForIdentities(db, businessId, identities, deps);
 }

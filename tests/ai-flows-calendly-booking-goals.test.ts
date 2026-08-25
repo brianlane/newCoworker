@@ -43,6 +43,11 @@ import {
   type BookingGoalSweepDeps
 } from "@/lib/ai-flows/calendly-booking-goals";
 import { ensureCalendlyWebhookSubscription } from "@/lib/calendly/webhook-subscriptions";
+import {
+  activeRunNumbersByLeadName,
+  fireBookingGoalsForIdentities,
+  normalizeLeadName
+} from "@/lib/ai-flows/booking-goal-fire";
 import { CALENDAR_CREATED_LOOKBACK_MINUTES } from "@/lib/ai-flows/calendar-poll";
 import { CALENDLY_POLL_PAGE_COUNT } from "@/lib/ai-flows/calendly-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -891,5 +896,198 @@ describe("fireBookingGoalsForInvitees (direct, production defaults)", () => {
     );
     expect(out).toEqual({ goalsFired: 0, jumpedRuns: 0 });
     expect(findByEmails).toHaveBeenCalledWith(BIZ, ["no-phone@example.com"], db);
+  });
+});
+
+describe("normalizeLeadName", () => {
+  it("collapses formatting and refuses anything under two tokens", () => {
+    expect(normalizeLeadName("  Patricia   JONES ")).toBe("patricia jones");
+    expect(normalizeLeadName("Will schiller")).toBe("will schiller");
+    // Real August bookings arrived under bare first names. Matching a lead on
+    // one of these would collide across unrelated people, so they are refused
+    // outright rather than matched loosely.
+    for (const single of ["Ahmet", "Joy", "Arif", "Minh", "  Joy  "]) {
+      expect(normalizeLeadName(single)).toBeNull();
+    }
+    expect(normalizeLeadName("")).toBeNull();
+    expect(normalizeLeadName(null)).toBeNull();
+    expect(normalizeLeadName(undefined)).toBeNull();
+  });
+});
+
+describe("activeRunNumbersByLeadName", () => {
+  const RUNS = [
+    { context: { vars: { lead_name: "Patricia Jones", lead_phone: "+16049058930" } } },
+    { context: { vars: { lead_name: "patricia   jones", lead_phone: "6049058930" } } },
+    { context: { vars: { lead_name: "Someone Else", lead_phone: "+15551110000" } } },
+    { context: { vars: { lead_name: "Patricia Jones" } } },
+    { context: {} },
+    {}
+  ];
+
+  it("returns the lead numbers of live runs whose name matches, deduped", async () => {
+    const { db, chains } = fakeDb({ ai_flow_runs: [{ data: RUNS }] });
+    expect(await activeRunNumbersByLeadName(db, BIZ, " PATRICIA  jones ")).toEqual([
+      "+16049058930"
+    ]);
+    // Loose NANP formatting normalizes onto the same number, so the second
+    // run does not produce a duplicate goal.
+    const statuses = chains[0].calls.find((c) => c.name === "in");
+    expect(statuses?.args[1]).toEqual(["awaiting_reply", "queued", "running"]);
+  });
+
+  it("never scans for a name it would not be safe to match on", async () => {
+    const { db, chains } = fakeDb({ ai_flow_runs: [{ data: RUNS }] });
+    expect(await activeRunNumbersByLeadName(db, BIZ, "Joy")).toEqual([]);
+    // The single-token guard short-circuits BEFORE the query, so a bare first
+    // name cannot even read the run table.
+    expect(chains.length).toBe(0);
+  });
+
+  it("treats an empty run table as no match", async () => {
+    const { db } = fakeDb({ ai_flow_runs: [{ data: null }] });
+    expect(await activeRunNumbersByLeadName(db, BIZ, "Patricia Jones")).toEqual([]);
+  });
+
+  it("degrades to no match on a read error or a throw", async () => {
+    const errored = fakeDb({ ai_flow_runs: [{ error: { message: "boom" } }] });
+    expect(await activeRunNumbersByLeadName(errored.db, BIZ, "Patricia Jones")).toEqual([]);
+    const threw = fakeDb({ ai_flow_runs: [{ reject: new Error("down") }] });
+    expect(await activeRunNumbersByLeadName(threw.db, BIZ, "Patricia Jones")).toEqual([]);
+    const threwNonError = fakeDb({ ai_flow_runs: [{ reject: "plain" }] });
+    expect(await activeRunNumbersByLeadName(threwNonError.db, BIZ, "Patricia Jones")).toEqual([]);
+  });
+});
+
+describe("fireBookingGoalsForIdentities: the name fallback", () => {
+  const patricia = {
+    phone: null,
+    email: "kissmediagroup@gmail.com",
+    name: "Patricia Jones"
+  };
+  // A FACTORY, not a shared literal: fakeDb consumes its queues with
+  // shift(), so a shared object would leave later tests with an empty queue
+  // and fail a correct implementation.
+  const liveRun = () => ({
+    ai_flow_runs: [
+      { data: [{ context: { vars: { lead_name: "Patricia Jones", lead_phone: "+16049058930" } } }] }
+    ],
+    contacts: [{ data: { customer_e164: "+16049058930", alias_e164s: [] } }]
+  });
+
+  beforeEach(() => vi.mocked(recordSystemLog).mockReset());
+
+  it("stops the ladder for a booking whose email matches no contact", async () => {
+    // The exact Patricia Jones case: booked as kissmediagroup@gmail.com with
+    // no phone while her lead record said paojones@hotmail.com. Before this,
+    // she was invisible and the nudge ladder sold to her for three days.
+    const { db } = fakeDb(liveRun());
+    const applyGoal = vi.fn().mockResolvedValue({ jumpedRuns: 1 });
+    const result = await fireBookingGoalsForIdentities(db, BIZ, [patricia], {
+      applyGoal,
+      findByEmails: vi.fn().mockResolvedValue(new Map()),
+      ingestBookingEvent: vi.fn(),
+      recordLog: vi.fn()
+    });
+    expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+16049058930", {
+      kind: "appointment_booked"
+    });
+    expect(result.jumpedRuns).toBe(1);
+  });
+
+  it("does not reach for the name when a real identifier already worked", async () => {
+    // Phone present: the fallback must not run at all, so no run scan happens.
+    const withPhone = fakeDb({ contacts: [{ data: null }] });
+    await fireBookingGoalsForIdentities(
+      withPhone.db,
+      BIZ,
+      [{ phone: "+16049058930", email: null, name: "Patricia Jones" }],
+      {
+        applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
+        findByEmails: vi.fn().mockResolvedValue(new Map()),
+        ingestBookingEvent: vi.fn(),
+        recordLog: vi.fn()
+      }
+    );
+    expect(withPhone.chains.some((c) => c.table === "ai_flow_runs")).toBe(false);
+
+    // Email that DID resolve to a contact: likewise no fallback.
+    const withEmail = fakeDb({ contacts: [{ data: null }] });
+    await fireBookingGoalsForIdentities(withEmail.db, BIZ, [patricia], {
+      applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
+      findByEmails: vi
+        .fn()
+        .mockResolvedValue(
+          new Map([["kissmediagroup@gmail.com", { customerE164: "+16049058930" }]])
+        ),
+      ingestBookingEvent: vi.fn(),
+      recordLog: vi.fn()
+    });
+    expect(withEmail.chains.some((c) => c.table === "ai_flow_runs")).toBe(false);
+  });
+
+  it("records every name match for audit", async () => {
+    // This is the one path that identifies a person without a unique key, so
+    // it must never be silent.
+    const { db } = fakeDb(liveRun());
+    const recordLog = vi.fn();
+    await fireBookingGoalsForIdentities(db, BIZ, [patricia], {
+      applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 1 }),
+      findByEmails: vi.fn().mockResolvedValue(new Map()),
+      ingestBookingEvent: vi.fn(),
+      recordLog
+    });
+    const logged = recordLog.mock.calls[0][0];
+    expect(logged.event).toBe("ai_flow_booking_goal_name_match");
+    expect(logged.level).toBe("warn");
+    expect(logged.payload.matches).toEqual([
+      { name: "Patricia Jones", number: "+16049058930" }
+    ]);
+  });
+
+  it("skips an identity that carries no name at all", async () => {
+    // Vagaro and Acuity observers may not supply one. That identity simply
+    // has no fallback available; it must not scan or throw.
+    const { db, chains } = fakeDb({});
+    await fireBookingGoalsForIdentities(db, BIZ, [{ phone: null, email: null }], {
+      applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
+      findByEmails: vi.fn().mockResolvedValue(new Map()),
+      ingestBookingEvent: vi.fn(),
+      recordLog: vi.fn()
+    });
+    expect(chains.some((c) => c.table === "ai_flow_runs")).toBe(false);
+  });
+
+  it("stays silent when nothing was matched by name", async () => {
+    const { db } = fakeDb({ ai_flow_runs: [{ data: [] }] });
+    const recordLog = vi.fn();
+    await fireBookingGoalsForIdentities(db, BIZ, [patricia], {
+      applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
+      findByEmails: vi.fn().mockResolvedValue(new Map()),
+      ingestBookingEvent: vi.fn(),
+      recordLog
+    });
+    expect(recordLog).not.toHaveBeenCalled();
+  });
+
+  it("falls back per identity, so one identified invitee does not mask another", async () => {
+    // A booking can carry several invitees. The known one must not suppress
+    // the fallback for the unknown one.
+    const { db } = fakeDb(liveRun());
+    const applyGoal = vi.fn().mockResolvedValue({ jumpedRuns: 1 });
+    await fireBookingGoalsForIdentities(
+      db,
+      BIZ,
+      [{ phone: "+15551112222", email: null, name: "Known Person" }, patricia],
+      {
+        applyGoal,
+        findByEmails: vi.fn().mockResolvedValue(new Map()),
+        ingestBookingEvent: vi.fn(),
+        recordLog: vi.fn()
+      }
+    );
+    const fired = applyGoal.mock.calls.map((c) => c[2]);
+    expect(fired).toContain("+16049058930");
+    expect(fired).toContain("+15551112222");
   });
 });
