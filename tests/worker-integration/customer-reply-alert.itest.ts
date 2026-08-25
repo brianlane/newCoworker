@@ -177,6 +177,25 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     expect(rowboat.calls.length).toBe(callsBefore + 1);
     const system = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "system");
     expect(system?.content).toContain(SMS_STAFF_NOTIFICATION_SETTINGS_LINE);
+
+    // This turn IS a fallback: the local stack sets no ROWBOAT_GATEWAY_TOKEN,
+    // so the platform operator engine is skipped and Rowboat answers instead
+    // (that is what the assertion above proves). The fallback used to be
+    // silent, which made "how often does this happen?" a subtraction over
+    // owner-kind jobs that anything unrelated could throw off. It is now one
+    // countable row per give-up, carrying the reason.
+    const { data: fallbacks, error: fbErr } = await db
+      .from("telemetry_events")
+      .select("payload")
+      .eq("event_type", "sms_owner_operator_fallback")
+      .order("id", { ascending: false })
+      .limit(20);
+    if (fbErr) throw new Error(fbErr.message);
+    const mine = (fallbacks ?? []).filter(
+      (r) => (r.payload as { business_id?: string })?.business_id === biz
+    );
+    expect(mine).toHaveLength(1);
+    expect((mine[0].payload as { reason?: string }).reason).toBe("not_configured");
   });
 
   it("default (no prefs row) and explicit false: silent", async () => {
