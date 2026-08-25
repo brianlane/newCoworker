@@ -23,6 +23,10 @@ import {
   type HttpFailureRow,
   type SweepRunRow
 } from "@/lib/cron/sweep-watchdog";
+import {
+  OWNER_FALLBACK_ROW_CAP,
+  type OwnerFallbackRow
+} from "@/lib/cron/owner-operator-fallback";
 
 // A couple of indexed reads and one email. Set to exactly the Edge ceiling
 // so this route never joins KNOWN_ABOVE_EDGE_CEILING.
@@ -39,6 +43,15 @@ const LOOKBACK_MINUTES = 11_520; // 8 days
 
 /** net._http_response only retains ~6h, so asking for more is pointless. */
 const HTTP_LOOKBACK_MINUTES = 360;
+
+/**
+ * Owner-operator fallback window: one day, matching this watchdog's own
+ * cadence, so consecutive runs neither double-report the same rows nor leave
+ * a gap. Deliberately narrower than the 8-day run ledger: the fallback bar is
+ * about a rate right now, and an 8-day window would keep paging for a week
+ * about an incident already fixed on day one.
+ */
+const OWNER_FALLBACK_LOOKBACK_MINUTES = 1_440;
 
 async function runSweep(request: Request): Promise<Response> {
   if (!assertCronAuth(request)) {
@@ -63,7 +76,7 @@ async function runSweep(request: Request): Promise<Response> {
     // seven healthy dailies reported STOPPED. The RPC aggregates
     // server-side (latest row per sweep, plus every failing row, both
     // bounded) so its result cannot grow with fleet chatter.
-    const [runsResult, oldestResult, httpResult, prevResult] = await Promise.all([
+    const [runsResult, oldestResult, httpResult, prevResult, fallbackResult] = await Promise.all([
       supabase.rpc("cron_sweep_run_evidence", { since_minutes: LOOKBACK_MINUTES }),
       // The ledger's own age. Without it, every sweep looks "missing" on the
       // day this ships, and again any time a prune empties the table.
@@ -85,7 +98,18 @@ async function runSweep(request: Request): Promise<Response> {
         .eq("sweep", WATCHDOG_SWEEP)
         .neq("source", DIRECT_SOURCE)
         .order("finished_at", { ascending: false })
-        .limit(1)
+        .limit(1),
+      // Owner turns that fell off the platform engine onto the box worker.
+      // Explicitly capped: an un-limited PostgREST select truncates at 1000
+      // silently, which would report a catastrophe as a smaller number than
+      // it is. Hitting the cap is said out loud in the finding instead.
+      supabase
+        .from("telemetry_events")
+        .select("payload, created_at")
+        .eq("event_type", "sms_owner_operator_fallback")
+        .gte("created_at", new Date(Date.now() - OWNER_FALLBACK_LOOKBACK_MINUTES * 60_000).toISOString())
+        .order("created_at", { ascending: false })
+        .limit(OWNER_FALLBACK_ROW_CAP)
     ]);
 
     if (runsResult.error) {
@@ -102,8 +126,31 @@ async function runSweep(request: Request): Promise<Response> {
       });
     }
 
+    if (fallbackResult.error) {
+      // Same posture as the HTTP half: a bonus signal whose loss must not
+      // cost the "a sweep has stopped" alert, which is the important one.
+      logger.warn("cron-sweep-watchdog: could not read owner-operator fallbacks", {
+        error: fallbackResult.error.message
+      });
+    }
+    // The reason lives inside the telemetry payload; flatten it here so the
+    // decision function never has to know the envelope shape.
+    const ownerFallbacks: OwnerFallbackRow[] = fallbackResult.error
+      ? []
+      : ((fallbackResult.data ?? []) as Array<{
+          payload?: { reason?: string; business_id?: string };
+          created_at: string;
+        }>).map((row) => ({
+          reason: typeof row.payload?.reason === "string" ? row.payload.reason : "unknown",
+          created_at: row.created_at,
+          business_id: row.payload?.business_id ?? null
+        }));
+
     const result = evaluateSweepHealth({
       runs: (runsResult.data ?? []) as SweepRunRow[],
+      ownerFallbacks,
+      ownerFallbacksTruncated: ownerFallbacks.length >= OWNER_FALLBACK_ROW_CAP,
+      ownerFallbackWindowMinutes: OWNER_FALLBACK_LOOKBACK_MINUTES,
       httpFailures: httpResult.error ? [] : ((httpResult.data ?? []) as HttpFailureRow[]),
       // Reported as its own "degraded" finding, NOT folded into this run's
       // errors[]: the recorder reads errors[] as per-tenant work failures,

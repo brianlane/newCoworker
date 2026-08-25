@@ -28,6 +28,13 @@
  * only what survives. The script says so rather than pretending.
  */
 import { loadEnv } from "./_shared.ts";
+import {
+  formatOwnerFallbackReasons,
+  OWNER_FALLBACK_KIND_LABEL,
+  ownerFallbackKind,
+  tallyOwnerFallbacks,
+  type OwnerFallbackRow
+} from "../src/lib/cron/owner-operator-fallback.ts";
 
 loadEnv();
 
@@ -49,18 +56,6 @@ const db = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
   { auth: { persistSession: false } }
 );
-
-/**
- * Which of the three groups a fallback reason belongs to. Only
- * "attempted and failed" is an alarm: a config reason means the path was
- * never tried on this deployment, and `over_cap` is the spend cap doing its
- * job, which must not read as an outage.
- */
-function fallbackKind(reason: string): string {
-  if (reason === "disabled" || reason === "not_configured") return "config";
-  if (reason === "over_cap") return "deliberate degrade";
-  return "attempted and failed";
-}
 
 /** Every row of one telemetry event type in the window (paged past the 1000 cap). */
 async function readEvents(eventType: string): Promise<Array<Record<string, unknown>>> {
@@ -107,19 +102,25 @@ console.log(
 );
 
 if (fb > 0) {
-  const byReason = new Map<string, number>();
-  const byBiz = new Map<string, number>();
-  for (const r of fbRows) {
-    const p = (r.payload ?? {}) as { reason?: string; business_id?: string; detail?: string };
-    const reason = p.reason ?? "unknown";
-    byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
-    const b = p.business_id ?? "unknown";
-    byBiz.set(b, (byBiz.get(b) ?? 0) + 1);
-  }
+  // Same tally the watchdog pages from, so the report and the 03:30 email can
+  // never disagree about what a reason means.
+  const rows: OwnerFallbackRow[] = fbRows.map((r) => {
+    const p = (r.payload ?? {}) as { reason?: string; business_id?: string };
+    return {
+      reason: p.reason ?? "unknown",
+      created_at: String(r.created_at ?? ""),
+      business_id: p.business_id ?? null
+    };
+  });
+  const tally = tallyOwnerFallbacks(rows);
   console.log("\nby reason:");
-  for (const [reason, n] of [...byReason.entries()].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${reason.padEnd(16)} ${String(n).padStart(5)}   (${fallbackKind(reason)})`);
+  for (const [reason, n] of Object.entries(tally.byReason).sort((a, b) => b[1] - a[1])) {
+    const label = OWNER_FALLBACK_KIND_LABEL[ownerFallbackKind(reason)];
+    console.log(`  ${reason.padEnd(16)} ${String(n).padStart(5)}   (${label})`);
   }
+  console.log(`\n  one line: ${formatOwnerFallbackReasons(tally)}`);
+  const byBiz = new Map<string, number>();
+  for (const row of rows) byBiz.set(row.business_id ?? "unknown", (byBiz.get(row.business_id ?? "unknown") ?? 0) + 1);
   console.log("\nby business:");
   for (const [biz, n] of [...byBiz.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
     console.log(`  ${biz}  ${n}`);

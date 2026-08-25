@@ -11,6 +11,11 @@ import {
   type HttpFailureRow,
   type SweepRunRow
 } from "@/lib/cron/sweep-watchdog";
+import {
+  OWNER_FALLBACK_PAGE_AT,
+  OWNER_FALLBACK_ROW_CAP,
+  type OwnerFallbackRow
+} from "@/lib/cron/owner-operator-fallback";
 
 const NOW = Date.parse("2026-08-08T03:30:00.000Z");
 
@@ -43,7 +48,11 @@ function evaluate(
   httpFailures: HttpFailureRow[] = [],
   ledgerOldestAt: string | null = minutesBefore(60 * 24 * 30),
   httpReadError: string | null = null,
-  previouslyMissing: string[] | null = null
+  previouslyMissing: string[] | null = null,
+  // Default: no owner fallbacks, the measured production baseline, so every
+  // existing sweep assertion keeps reading exactly what it read before.
+  ownerFallbacks: OwnerFallbackRow[] = [],
+  ownerFallbacksTruncated = false
 ) {
   return evaluateSweepHealth({
     runs,
@@ -51,6 +60,9 @@ function evaluate(
     ledgerOldestAt,
     httpReadError,
     previouslyMissing,
+    ownerFallbacks,
+    ownerFallbacksTruncated,
+    ownerFallbackWindowMinutes: 1_440,
     now: NOW
   });
 }
@@ -443,5 +455,122 @@ describe("new-sweep first-night grace", () => {
     const result = evaluate(runs, [], minutesBefore(60 * 24 * 30), null, []);
     expect(result.findings.some((f) => f.kind === "missing" && f.sweep === sweep)).toBe(true);
     expect(result.graced).toEqual([]);
+  });
+});
+
+/**
+ * Owner turns that fell off the platform engine onto the box worker.
+ *
+ * Not a sweep, and checked here because this watchdog is the one job that
+ * already runs daily, reads a ledger and mails an operator. The pager rule is
+ * the same one the HTTP layer follows: a lone anomaly is counted and stays
+ * quiet, a pattern pages. The measured production baseline on 2026-08-24 was
+ * ZERO fallbacks across 30 days and 30 owner turns, so this is tuned against
+ * silence rather than against noise.
+ */
+describe("owner-operator fallbacks", () => {
+  const fb = (reason: string, businessId = "biz-1"): OwnerFallbackRow => ({
+    reason,
+    created_at: minutesBefore(30),
+    business_id: businessId
+  });
+
+  it("says nothing when there are none, which is the normal night", () => {
+    const result = evaluate(healthyFleet());
+    expect(result.findings.filter((f) => f.kind === "fallback")).toEqual([]);
+  });
+
+  it("stays quiet below the bar: one bad turn self-heals on the next text", () => {
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, [
+      fb("http_error")
+    ]);
+    expect(result.findings.filter((f) => f.kind === "fallback")).toEqual([]);
+  });
+
+  it("pages at the bar, naming the reasons and the affected businesses", () => {
+    const rows = [fb("http_error"), fb("request_failed", "biz-2")];
+    expect(rows.length).toBe(OWNER_FALLBACK_PAGE_AT);
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, rows);
+    const finding = result.findings.find((f) => f.kind === "fallback");
+    expect(finding).toBeDefined();
+    expect(finding!.detail).toContain("2 owner turn(s) fell back");
+    expect(finding!.detail).toContain("http_error x1");
+    expect(finding!.detail).toContain("request_failed x1");
+    expect(finding!.detail).toContain("biz-1");
+    expect(finding!.detail).toContain("biz-2");
+    // The action has to be actionable, not just descriptive.
+    expect(finding!.action).toContain("owner-operator-fallback-report");
+  });
+
+  // The whole point of the reason vocabulary: a spend cap doing its job and a
+  // deployment missing its token must not read as the platform breaking.
+  it("never pages on deliberate or config reasons, however many", () => {
+    const rows = [
+      fb("over_cap"),
+      fb("over_cap"),
+      fb("over_cap"),
+      fb("not_configured"),
+      fb("disabled")
+    ];
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, rows);
+    expect(result.findings.filter((f) => f.kind === "fallback")).toEqual([]);
+  });
+
+  it("still counts the quiet reasons into the detail when something else pages", () => {
+    const rows = [fb("http_error"), fb("request_failed"), fb("over_cap"), fb("not_configured")];
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, rows);
+    const finding = result.findings.find((f) => f.kind === "fallback");
+    // Pages on the 2 failed, but "3 more were the cap and the config" is
+    // context the operator wants in the same sentence.
+    expect(finding!.detail).toContain("2 owner turn(s) fell back");
+    expect(finding!.detail).toContain("over_cap x1 (deliberate degrade)");
+    expect(finding!.detail).toContain("not_configured x1 (config)");
+  });
+
+  // An unrecognized reason is either a worker ahead of this reader or a
+  // corrupted payload. Both deserve a look, so it counts toward the alarm.
+  it("treats an unknown reason as a failure rather than dropping it", () => {
+    const rows = [fb("teleported_sideways"), fb("also_new")];
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, rows);
+    expect(result.findings.some((f) => f.kind === "fallback")).toBe(true);
+  });
+
+  it("omits the affected line when no row carried a business", () => {
+    // A telemetry payload without business_id is possible, and the finding
+    // must still read as a sentence rather than trailing an empty label.
+    const rows: OwnerFallbackRow[] = [
+      { reason: "http_error", created_at: minutesBefore(10), business_id: null },
+      { reason: "bad_payload", created_at: minutesBefore(10), business_id: null }
+    ];
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, rows);
+    const finding = result.findings.find((f) => f.kind === "fallback");
+    expect(finding).toBeDefined();
+    expect(finding!.detail).toContain("2 owner turn(s) fell back");
+    expect(finding!.detail).not.toContain("affected:");
+  });
+
+  it("says so when the read was capped, so the count reads as a floor", () => {
+    const rows = Array.from({ length: OWNER_FALLBACK_ROW_CAP }, () => fb("http_error"));
+    const result = evaluate(
+      healthyFleet(),
+      [],
+      minutesBefore(60 * 24 * 30),
+      null,
+      null,
+      rows,
+      true
+    );
+    const finding = result.findings.find((f) => f.kind === "fallback");
+    expect(finding!.detail).toContain(`read capped at ${OWNER_FALLBACK_ROW_CAP} rows`);
+    expect(finding!.detail).toContain("floor");
+  });
+
+  it("does not disturb the sweep verdict: a healthy fleet stays healthy", () => {
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), null, null, [
+      fb("http_error"),
+      fb("request_failed")
+    ]);
+    expect(result.findings.filter((f) => f.kind !== "fallback")).toEqual([]);
+    expect(result.healthy.length).toBe(Object.keys(SWEEP_EXPECTATIONS).length);
   });
 });
