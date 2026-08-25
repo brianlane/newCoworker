@@ -731,8 +731,10 @@ describe("listCustomTableRows", () => {
       asClient(db)
     );
     expect(db.chains[0].eq).toHaveBeenCalledWith("contact_id", "c-1");
+    // Quoted: `.` and `:` are reserved inside an or() filter and a
+    // timestamp is full of both.
     expect(db.chains[0].or).toHaveBeenCalledWith(
-      "created_at.lt.2026-08-05T00:00:00.000Z,and(created_at.eq.2026-08-05T00:00:00.000Z,id.lt.row-1)"
+      'created_at.lt."2026-08-05T00:00:00.000Z",and(created_at.eq."2026-08-05T00:00:00.000Z",id.lt."row-1")'
     );
   });
 
@@ -943,6 +945,30 @@ describe("updateCustomTableRow", () => {
     expect(db.chains[1].update).toHaveBeenCalledWith(
       expect.objectContaining({ field_values: { address: "12 Maple St" } })
     );
+  });
+
+  it("clears a cell even when no other cell is being set", async () => {
+    // A clear-only patch is a real change. Gating `clear` behind `values`
+    // would make it a silent no-op.
+    const two = [FIELD, { ...FIELD, id: "city", label: "City" }];
+    const table = { ...TABLE, fields: two };
+    const db = mockDb([
+      { data: { ...ROW_ROW, field_values: { address: "12 Maple St", city: "Phoenix" } }, error: null },
+      { data: ROW_ROW, error: null }
+    ]);
+    await updateCustomTableRow(table, "row-1", { clear: ["city"] }, undefined, asClient(db));
+    expect(db.chains[1].update).toHaveBeenCalledWith(
+      expect.objectContaining({ field_values: { address: "12 Maple St" } })
+    );
+  });
+
+  it("leaves the bag alone when neither values nor clear is sent", async () => {
+    const db = mockDb([
+      { data: ROW_ROW, error: null },
+      { data: ROW_ROW, error: null }
+    ]);
+    await updateCustomTableRow(TABLE, "row-1", { clear: [] }, undefined, asClient(db));
+    expect(db.chains[1].update.mock.calls[0][0]).not.toHaveProperty("field_values");
   });
 
   it("replaces the whole bag when asked, which is what an undo needs", async () => {

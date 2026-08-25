@@ -535,9 +535,16 @@ export async function listCustomTableRows(
   if (after) {
     // Strictly after the cursor in (created_at desc, id desc) order: an
     // older timestamp, or the same timestamp with a lower id.
-    query = query.or(
-      `created_at.lt.${after.createdAt},and(created_at.eq.${after.createdAt},id.lt.${after.id})`
-    );
+    //
+    // Values are double-quoted because `.` and `:` are reserved inside an
+    // `or()` filter string and a timestamp is full of both. Unquoted parses
+    // correctly on the PostgREST we run today (checked against the real
+    // stack, both forms return the same rows), so quoting is belt and
+    // braces against a future version tightening the grammar rather than a
+    // fix for something observed. Neither a timestamp nor a uuid can contain
+    // a quote or a comma, so there is nothing here to escape.
+    const ts = `"${after.createdAt}"`;
+    query = query.or(`created_at.lt.${ts},and(created_at.eq.${ts},id.lt."${after.id}")`);
   }
   const { data, error } = await query;
   if (error) throw new Error(`listCustomTableRows: ${error.message}`);
@@ -699,8 +706,12 @@ export async function updateCustomTableRow(
     ...editColumns(edit),
     updated_at: new Date().toISOString()
   };
-  if (patch.values) {
-    const next = patch.replace ? { ...patch.values } : { ...current.values, ...patch.values };
+  // `clear` stands on its own: emptying a cell is a change even when no
+  // other cell is being set, and gating it behind `values` would make a
+  // clear-only patch a silent no-op.
+  if (patch.values || patch.clear?.length) {
+    const supplied = patch.values ?? {};
+    const next = patch.replace ? { ...supplied } : { ...current.values, ...supplied };
     for (const id of patch.clear ?? []) delete next[id];
     update.field_values = next;
   }
