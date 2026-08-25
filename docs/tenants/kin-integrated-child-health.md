@@ -61,8 +61,9 @@ One flow: **"Lead follow-up (white-glove build)"**, installed by the
 white-glove apply on 2026-08-24, **disabled**. It stays disabled until BOTH:
 
 1. Kingsley approves the wording, and
-2. his real JaneApp booking link lands in `kin-lead-definition.ts`
-   (the applier refuses while the link is the placeholder).
+2. the JaneApp links are in place. Done 2026-08-25: the applier's
+   placeholder refusal no longer trips, so only the wording approval
+   remains.
 
 Shape after `patch-kin-lead-flow.ts`: extract -> upsert customer -> greeting
 SMS naming the clinic with the JaneApp link -> instant owner alert -> nudge
@@ -78,6 +79,62 @@ before Calendly allowed two app integrations: the coworker hands out the
 booking link, booking itself happens in JaneApp. JaneApp has no integration
 today (Zapier-only, revisited on the Aug 20 call as a possible future
 first-class integration).
+
+### The four links, and how a lead reaches the right one
+
+Kingsley sent three service pages plus one general page on 2026-08-25. The
+table lives in `scripts/oneshot/kin-booking-links.ts`, imported by BOTH
+halves of the routing so they cannot drift:
+
+| Service | Page |
+| --- | --- |
+| Teen / youth counselling, ages 14-17 | `.../#/teen-youth-counselling-ages-14-17` |
+| Psychological assessment | `.../#/psychological-assessment` |
+| Occupational therapy | `.../#/occupational-therapy` |
+| Anything else, or unknown | `https://kinintegrated.janeapp.com/` |
+
+Routing happens twice, because a lead can tell us what they need at two
+different moments:
+
+1. **Proactive, in the flow.** `s_route_booking` branches on `lead_notes`
+   (whatever the Meta form captured) and sends that discipline's page.
+   Deterministic, no model call. Each arm matches ONE token, `teen`,
+   `occupational`, `psycholog`, because `MAX_BRANCH_ARMS` is 4 (three
+   services plus the fallback fills it) and a `when` condition takes exactly
+   one comparator, so an arm cannot OR several phrasings. `resolveKinService`
+   considers only those same tokens, and a test asserts the live arm
+   conditions equal them, so the two halves cannot drift. Anything phrased
+   differently falls to the general page and the copy asks which service,
+   which is what makes the reply path work.
+2. **Reactive, in the coworker.** The moment a lead replies, the SMS
+   coworker owns the conversation (Kingsley's own plan: "if they reply the
+   ai worker will nurture"). It reads the same table out of `identity.md`
+   under Booking Links, written by `patch-kin-knowledge.ts`. Before that
+   patch the coworker had NO links at all, so a lead answering "it's for OT"
+   dead-ended.
+
+**The age trap.** The teen page is scoped to ages 14-17 inside JaneApp, and
+this is a paediatric clinic, so most counselling enquiries are about younger
+children. The teen arm therefore requires an explicit teen/youth/adolescent
+or 14-17 signal, and bare "counselling" routes to the GENERAL page instead.
+The coworker's rules go further and tell it to ask the child's age when it
+is unclear. Sending a 7-year-old's parent the 14-17 page is a wrong booking,
+not a near miss.
+
+**"Assessment" alone decides nothing.** OT, speech and psychology all run
+assessments, so the word is not any service's token; an unqualified
+"assessment" reaches the general page and the coworker asks what kind. The
+psych token is `psycholog` precisely so an OT assessment stays OT.
+
+**Services with no dedicated page** (speech/SLP, behaviour consulting,
+nurse practitioner, counselling outside 14-17) route to the general page,
+which lists every discipline.
+
+**Link fragments are load-bearing.** All three specific pages are `#`
+fragment URLs. The SMS shortener matches `https?://[^\s<>"']+`, so the
+fragment survives shortening and the 302, but a period placed directly after
+a link gets swallowed into the URL and JaneApp 404s on it. Every link in the
+flow copy and in the knowledge therefore ends its own line.
 
 Consequences, accepted knowingly:
 
@@ -122,11 +179,16 @@ they are a distinct human.
 
 ## One-shots
 
+- `kin-booking-links.ts`: the four JaneApp links and `resolveKinService`,
+  the single source of truth both routing halves import.
 - `kin-lead-definition.ts` (pure builder, pinned by
   `tests/oneshot-kin-definitions.test.ts`)
 - `patch-kin-lead-flow.ts`: canonical flow copy (typo fixes, clinic name,
   JaneApp link, quiet hours). Refuses to apply while the link is a
   placeholder. Leaves `enabled` untouched.
+- `kin-knowledge-content.ts` + `patch-kin-knowledge.ts`: writes the booking
+  links into `identity.md` (so the coworker can hand out the right page on a
+  reply) and repairs the typo'd white-glove greeting block in `soul.md`.
 - `mint-kin-zapier-key.ts`: mints the Zapier bridge API key for James.
 - `swap-kin-did-alberta.ts`: 519 -> Alberta DID swap + old-number release.
 
@@ -137,6 +199,10 @@ they are a distinct human.
   intake sent same day.
 - 2026-08-21: intake completed 06:41; self-serve signup abandoned at Stripe
   21:35 UTC.
+- 2026-08-25: Kingsley sent three service booking links plus a general one;
+  routing built in both the flow and the coworker knowledge. He also stated
+  the operating model: text leads the links, follow up only on no reply, and
+  let the coworker nurture anyone who replies.
 - 2026-08-24: asked for a payment link by SMS, the HQ coworker sent the
   questionnaire instead (root cause of PRs #1589/#1591/#1593); paid via
   re-issued link 15:20 UTC; provisioned onto srv1864812; white-glove build
