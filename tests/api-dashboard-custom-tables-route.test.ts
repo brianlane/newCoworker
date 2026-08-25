@@ -561,20 +561,14 @@ describe("one row", () => {
     );
   });
 
-  it("answers with the joined row, so the client never has to reload the grid", async () => {
-    // Reloading would race a cell save still in flight: blur fires just
-    // before the contact picker click, which is the normal way to fill a
-    // row in.
+  it("does not join the contact back on after the write has committed", async () => {
+    // Joining after the commit means a failed join turns a landed write into
+    // a 500, and the grid reverts the cell while the database keeps the new
+    // value. The picker already has the name, so nothing needs the join.
     vi.mocked(getCustomTable).mockResolvedValue({ ...TABLE, rowLink: "contact" } as never);
-    vi.mocked(attachContacts).mockResolvedValue([
-      { ...ROW, contactName: "Maria", contactE164: "+15551230000" }
-    ] as never);
     const res = await ROW_PATCH(patch(rowUrl(), { contactId: BIZ }), rowParams());
     expect(res.status).toBe(200);
-    expect((await res.json()).data.row).toMatchObject({
-      contactName: "Maria",
-      contactE164: "+15551230000"
-    });
+    expect(attachContacts).not.toHaveBeenCalled();
   });
 
   it("can change the contact without touching the cells", async () => {

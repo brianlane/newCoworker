@@ -29,7 +29,10 @@ type Props = {
   row: CustomTableRowWithContact;
   onClose: () => void;
   onSaveCell: (rowId: string, fieldId: string, raw: CustomTableFieldValue | null) => Promise<void>;
-  onSetContact: (rowId: string, contactId: string | null) => Promise<void>;
+  onSetContact: (
+    rowId: string,
+    contact: { id: string; name: string | null; e164: string } | null
+  ) => Promise<void>;
   onDelete: () => void;
 };
 
@@ -51,7 +54,9 @@ function ContactPicker({
 }: {
   businessId: string;
   row: CustomTableRowWithContact;
-  onPick: (contactId: string) => void;
+  /** The name and number ride along: the picker already has them, so the
+   * write never has to join a contact back on and cannot fail doing it. */
+  onPick: (contactId: string, name: string | null, e164: string) => void;
   onClear: () => void;
 }) {
   const t = useTranslations("dashboard.tables");
@@ -117,7 +122,7 @@ function ContactPicker({
               key={hit.id}
               type="button"
               onClick={() => {
-                onPick(hit.id);
+                onPick(hit.id, hit.displayName, hit.customerE164);
                 setSearch("");
                 setHits([]);
               }}
@@ -256,7 +261,7 @@ export function TableRowDrawer({
           <ContactPicker
             businessId={businessId}
             row={row}
-            onPick={(contactId) => void onSetContact(row.id, contactId)}
+            onPick={(id, name, e164) => void onSetContact(row.id, { id, name, e164 })}
             onClear={() => void onSetContact(row.id, null)}
           />
         </div>

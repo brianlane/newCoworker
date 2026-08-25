@@ -182,22 +182,30 @@ export function CustomTableWorkspace({
   };
 
   /** Attach or detach the person a contact-linked row is about. */
-  const setRowContact = async (rowId: string, contactId: string | null) => {
+  const setRowContact = async (
+    rowId: string,
+    contact: { id: string; name: string | null; e164: string } | null
+  ) => {
     setError(null);
     try {
-      const data = await fetch(`${base}/rows/${encodeURIComponent(rowId)}?${suffix}`, {
+      await fetch(`${base}/rows/${encodeURIComponent(rowId)}?${suffix}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contactId })
-      }).then((r) => readEnvelope<{ row: CustomTableRowWithContact }>(r));
-      // Patch THIS row only, from what the write returned. Reloading the
-      // grid would race a cell save that is still in flight (blur fires
-      // just before the picker click, which is the normal way to fill a row
-      // in), and could paint a stale cell over a write that succeeded.
+        body: JSON.stringify({ contactId: contact?.id ?? null })
+      }).then((r) => readEnvelope<unknown>(r));
+      // Patch THIS row only, from what the picker already knew. Reloading
+      // the grid would race a cell save still in flight (blur fires just
+      // before the picker click, which is the normal way to fill a row in)
+      // and could paint a stale cell over a write that succeeded.
       setRows((prev) =>
         (prev ?? []).map((row) =>
           row.id === rowId
-            ? { ...row, contactId: data.row.contactId, contactName: data.row.contactName, contactE164: data.row.contactE164 }
+            ? {
+                ...row,
+                contactId: contact?.id ?? null,
+                contactName: contact?.name ?? null,
+                contactE164: contact?.e164 ?? null
+              }
             : row
         )
       );
