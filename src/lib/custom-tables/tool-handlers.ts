@@ -286,9 +286,15 @@ function renderRow(
  * a silent drop: silently dropping is how an AI reports saving something
  * that is not there.
  */
+/**
+ * @param partial true for an UPDATE, where the model is changing some cells
+ * and the ones it did not mention are simply not being touched. False for a
+ * CREATE, which is a whole row and so has to satisfy the required columns.
+ */
 function buildValues(
   table: CustomTable,
-  pairs: { field: string; value: string }[]
+  pairs: { field: string; value: string }[],
+  partial: boolean
 ):
   | { ok: true; values: Record<string, CustomTableFieldValue>; cleared: string[] }
   | { ok: false; result: CustomTableToolResult } {
@@ -305,6 +311,14 @@ function buildValues(
         )
       };
     }
+    // Empty means CLEAR, and it has to short-circuit before coercion.
+    // Coercing "" for a number or a date or a choice column fails, so
+    // running it first meant the coworker could only ever empty a text
+    // cell: every other kind came back "is the wrong kind of value".
+    if (pair.value.trim() === "") {
+      raw[found.field.id] = "";
+      continue;
+    }
     const coerced = coerceFieldValue(found.field, pair.value);
     if (!coerced.ok) {
       return {
@@ -317,11 +331,8 @@ function buildValues(
       };
     }
     raw[found.field.id] = coerced.value;
-    // An empty string is a request to clear, which validateRowValues reports
-    // separately; coerce already turned it into whatever the type wants.
-    if (pair.value.trim() === "") raw[found.field.id] = "";
   }
-  const checked = validateRowValues(columns, raw);
+  const checked = validateRowValues(columns, raw, { partial });
   if (!checked.ok) {
     return { ok: false, result: failure(`bad_value: ${describeRowErrors(columns, checked.errors)}`) };
   }
@@ -464,7 +475,8 @@ export async function customTableAddRowTool(
       `not_contact_linked: rows in "${table.name}" do not belong to a contact, so a phone number cannot be attached to one.`
     );
   }
-  const built = buildValues(table, args.values);
+  // Not partial: adding a row is a whole row, so the required columns hold.
+  const built = buildValues(table, args.values, false);
   if (!built.ok) return built.result;
 
   // A contact-linked table wants a person, and pointing at the wrong one is
@@ -512,7 +524,11 @@ export async function customTableUpdateRowTool(
         : `row_not_found: no row in "${table.name}" matches "${args.row}". Find it first with custom_table_find_rows.`
     );
   }
-  const built = buildValues(table, args.values);
+  // Partial: the model is changing SOME cells, and a required column it did
+  // not mention is one nobody is touching. Without this, marking any column
+  // required would make every other cell uneditable by the coworker, which
+  // is the same bug the dashboard grid had.
+  const built = buildValues(table, args.values, true);
   if (!built.ok) return built.result;
 
   try {

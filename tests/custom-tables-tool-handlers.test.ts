@@ -390,6 +390,49 @@ describe("customTableUpdateRowTool", () => {
     );
   });
 
+  it.each([
+    ["number", "price", "Price", "number" as const],
+    ["date", "renews", "Renews", "date" as const],
+    ["choice", "status", "Status", "select" as const]
+  ])("can clear a %s cell, not just a text one", async (_label, id, label, type) => {
+    // Coercion runs on a real value, so running it BEFORE the empty check
+    // meant "" failed for every kind except text, and the coworker could
+    // never empty a price or a date.
+    const t = table({
+      fields: [
+        field({ id, label, type, ...(type === "select" ? { options: ["New", "Won"] } : {}) })
+      ]
+    });
+    const updateRow = vi.fn(async () => row());
+    const out = await customTableUpdateRowTool(
+      "biz-1",
+      { table: "Properties", row: "row-1", values: [{ field: label, value: "" }] },
+      deps({ listTables: vi.fn(async () => [t]) as never, updateRow: updateRow as never })
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(updateRow).toHaveBeenCalledWith(
+      expect.anything(),
+      "row-1",
+      { values: {}, clear: [id] },
+      expect.anything()
+    );
+  });
+
+  it("changes one cell on a table that has a required column", async () => {
+    // A required column the model did not mention is one nobody is
+    // touching. Without partial mode, marking any column required would
+    // make every other cell uneditable by the coworker.
+    const t = table({
+      fields: [field({ required: true }), field({ id: "city", label: "City" })]
+    });
+    const out = await customTableUpdateRowTool(
+      "biz-1",
+      { table: "Properties", row: "row-1", values: [{ field: "City", value: "Tempe" }] },
+      deps({ listTables: vi.fn(async () => [t]) as never })
+    );
+    expect(out).toMatchObject({ ok: true });
+  });
+
   it("refuses when no row matches, pointing at the find tool", async () => {
     const out = await customTableUpdateRowTool(
       "biz-1",
