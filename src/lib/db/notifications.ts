@@ -168,25 +168,25 @@ export async function hasRecentNotificationForContact(
  * not the recipient: the same runaway source pages the owner however the
  * alert gets routed.
  */
-export async function countRecentNotificationsAbout(
+export async function listRecentAlertsAbout(
   businessId: string,
   kind: string,
   aboutE164: string,
   windowMs: number,
   client?: SupabaseClient
-): Promise<number> {
+): Promise<{ events: number; summaries: string[] }> {
   const db = client ?? (await createSupabaseServiceClient());
   const sinceIso = new Date(Date.now() - windowMs).toISOString();
   const { data, error } = await db
     .from("notifications")
-    .select("payload->dispatch_id")
+    .select("payload->dispatch_id, payload->suppressed, summary")
     .eq("business_id", businessId)
     .eq("kind", kind)
     .eq("status", "sent")
     .eq("payload->>about_e164", aboutE164)
     .gte("created_at", sinceIso)
     .limit(100);
-  if (error) throw new Error(`countRecentNotificationsAbout: ${error.message}`);
+  if (error) throw new Error(`listRecentAlertsAbout: ${error.message}`);
   // One dispatch writes one row PER CHANNEL (dashboard, email, sms, ...), so
   // counting rows would treat a single three-channel alert as three alerts
   // and trip any small cap immediately. Distinct dispatch_id counts alert
@@ -194,15 +194,30 @@ export async function countRecentNotificationsAbout(
   // count as one event, which over-counts toward the cap rather than under:
   // the safe direction for a flood limiter.
   const seen = new Set<string>();
+  const summaries = new Map<string, string>();
   let unstamped = 0;
-  for (const row of (data ?? []) as { dispatch_id?: unknown }[]) {
+  for (const row of (data ?? []) as {
+    dispatch_id?: unknown;
+    suppressed?: unknown;
+    summary?: unknown;
+  }[]) {
+    // A dispatch the gate already suppressed still writes a dashboard row,
+    // which is genuinely sent and genuinely shown. It is NOT a delivered
+    // alert, so counting it would let squashed repeats eat the backstop
+    // budget meant to stop a runaway loop.
+    if (row.suppressed) continue;
+    const text = typeof row.summary === "string" ? row.summary : "";
     if (typeof row.dispatch_id === "string" && row.dispatch_id.length > 0) {
       seen.add(row.dispatch_id);
+      // One summary per dispatch: the per-channel fan-out repeats it, and the
+      // duplicate check compares ALERTS, not rows.
+      if (text && !summaries.has(row.dispatch_id)) summaries.set(row.dispatch_id, text);
     } else {
       unstamped += 1;
+      if (text) summaries.set(`unstamped:${unstamped}`, text);
     }
   }
-  return seen.size + unstamped;
+  return { events: seen.size + unstamped, summaries: [...summaries.values()] };
 }
 
 export async function markNotificationRead(

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  countRecentNotificationsAbout,
+  listRecentAlertsAbout,
   insertNotification,
   getNotifications,
   getUnreadNotificationCount,
@@ -362,16 +362,23 @@ describe("db/notifications", () => {
     );
   });
 
-  it("countRecentNotificationsAbout counts distinct dispatch events, not channel rows", async () => {
+  it("listRecentAlertsAbout counts distinct dispatch events, not channel rows", async () => {
     // One dispatch writes a row per channel. Three rows sharing a
     // dispatch_id are ONE alert event; a pre-stamp row with none counts as
     // its own event (over-counting is the safe direction for a flood cap).
     const rows = [
-      { dispatch_id: "d1" },
-      { dispatch_id: "d1" },
-      { dispatch_id: "d1" },
-      { dispatch_id: "d2" },
-      { dispatch_id: null }
+      { dispatch_id: "d1", summary: "Joy is waiting on the Zoom" },
+      { dispatch_id: "d1", summary: "Joy is waiting on the Zoom" },
+      { dispatch_id: "d1", summary: "Joy is waiting on the Zoom" },
+      { dispatch_id: "d2", summary: "Joy needs a call before noon" },
+      { dispatch_id: null, summary: "pre-stamp row" },
+      // Rows can carry no usable summary; they still COUNT as events but
+      // contribute nothing for the duplicate check to compare against.
+      { dispatch_id: "d3" },
+      { dispatch_id: null, summary: 42 },
+      // A dispatch the gate suppressed: its dashboard row is genuinely sent,
+      // but it is not a delivered alert and must not eat the backstop budget.
+      { dispatch_id: "d4", suppressed: "contact_alert_duplicate", summary: "a repeat" }
     ];
     const db = mockDb({
       limit: vi.fn().mockReturnThis(),
@@ -380,18 +387,33 @@ describe("db/notifications", () => {
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    const count = await countRecentNotificationsAbout("biz-uuid-1", "sms_team_notify", "+16025550000", 1800000);
-    expect(count).toBe(3);
+    const recent = await listRecentAlertsAbout(
+      "biz-uuid-1",
+      "sms_team_notify",
+      "+16025550000",
+      1800000
+    );
+    expect(recent.events).toBe(5);
+    // One summary per dispatch: the per-channel fan-out repeats it, and the
+    // duplicate check compares ALERTS, not rows.
+    expect(recent.summaries).toEqual([
+      "Joy is waiting on the Zoom",
+      "Joy needs a call before noon",
+      "pre-stamp row"
+    ]);
   });
 
-  it("countRecentNotificationsAbout returns 0 on empty and throws on error", async () => {
+  it("listRecentAlertsAbout returns no events on empty and throws on error", async () => {
     const empty = mockDb({
       gte: vi.fn().mockImplementation(function (this: unknown) {
         return { limit: vi.fn().mockResolvedValue({ data: [], error: null }) };
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(empty as never);
-    expect(await countRecentNotificationsAbout("b", "k", "+1", 1000)).toBe(0);
+    expect(await listRecentAlertsAbout("b", "k", "+1", 1000)).toEqual({
+      events: 0,
+      summaries: []
+    });
 
     // PostgREST can return null data with no error; that is zero events.
     const nullData = mockDb({
@@ -400,7 +422,7 @@ describe("db/notifications", () => {
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(nullData as never);
-    expect(await countRecentNotificationsAbout("b", "k", "+1", 1000)).toBe(0);
+    expect(await listRecentAlertsAbout("b", "k", "+1", 1000)).toEqual({ events: 0, summaries: [] });
 
     const failing = mockDb({
       gte: vi.fn().mockImplementation(function (this: unknown) {
@@ -408,8 +430,8 @@ describe("db/notifications", () => {
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(failing as never);
-    await expect(countRecentNotificationsAbout("b", "k", "+1", 1000)).rejects.toThrow(
-      "countRecentNotificationsAbout: boom"
+    await expect(listRecentAlertsAbout("b", "k", "+1", 1000)).rejects.toThrow(
+      "listRecentAlertsAbout: boom"
     );
   });
 });

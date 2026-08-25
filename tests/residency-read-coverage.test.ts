@@ -195,8 +195,8 @@ const PURGED_READ_DEBT: Record<SiteKey, string> = {
     "reads flags then writes them back; read-modify-write, so the read and the write must move together",
   "src/lib/db/email-log.ts::threadsAnsweredByFlow::email_log":
     "uses .not(col, 'is', null), which the box grammar cannot express at all today",
-  "src/lib/db/notifications.ts::countRecentNotificationsAbout::notifications":
-    "dedupe count, left central while getNotifications in this same file was routed",
+  "src/lib/db/notifications.ts::listRecentAlertsAbout::notifications":
+    "flood-gate read, left central while getNotifications in this same file was routed; on a vps tenant the purged rows read as zero recent alerts, so the gate fails OPEN and sends, which is the safe direction",
   "src/lib/db/notifications.ts::hasRecentNotificationForContact::notifications":
     "dedupe check, left central while getNotifications in this same file was routed",
   "src/lib/email/replay.ts::replayInboundEmails::email_log":

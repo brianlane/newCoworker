@@ -26,7 +26,7 @@ import { randomUUID } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import {
-  countRecentNotificationsAbout,
+  listRecentAlertsAbout,
   insertNotification,
   type NotificationDeliveryChannel,
   type NotificationRow,
@@ -57,6 +57,7 @@ import {
 } from "../../../supabase/functions/_shared/contact_owner_target";
 import { recordUnownedLeadAlert } from "../../../supabase/functions/_shared/unowned_lead_alerts";
 import { logger } from "@/lib/logger";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import {
   notificationMustBePhiFree,
@@ -442,7 +443,53 @@ async function recordRow(
  * policy numbers rather than restating them.
  */
 export const URGENT_ALERT_COOLDOWN_WINDOW_MS = 30 * 60 * 1000;
-export const URGENT_ALERT_COOLDOWN_MAX = 2;
+
+/**
+ * Backstop only. It was 2, which is what silently ate the THIRD alert about
+ * a lead sitting on a Zoom waiting for an owner who never joined (KYP Ads,
+ * 2026-08-24): three alerts in twelve minutes, each saying something new and
+ * more urgent than the last, and the one that finally said "urgently" and
+ * "ASAP" reached nobody on any channel.
+ *
+ * A count cannot tell a flood from an escalation, so the duplicate check
+ * below does that job and this is only the last line of defence against a
+ * runaway loop. Six still cuts the incident it was built for (seventeen
+ * identical alerts in ten minutes) well before it becomes seventeen.
+ */
+export const URGENT_ALERT_COOLDOWN_MAX = 6;
+
+/**
+ * How alike two alerts must be before the newer one is treated as a repeat.
+ * High on purpose: a bot loop restates itself almost verbatim, while a real
+ * escalation changes its words as the situation changes.
+ */
+export const URGENT_ALERT_DUPLICATE_SIMILARITY = 0.9;
+
+/**
+ * Jaccard overlap of two alert summaries' word sets, 0 to 1.
+ *
+ * Word-set rather than string equality because a looping alert often carries
+ * one varying fragment (a timestamp, a quoted reply) inside otherwise
+ * identical copy, and exact matching would let all seventeen through.
+ * Punctuation and case are stripped so "James has NOT joined!" and "james
+ * has not joined" are the same alert.
+ */
+export function alertSummarySimilarity(a: string, b: string): number {
+  const words = (text: string) =>
+    new Set(
+      text
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+  const left = words(a);
+  const right = words(b);
+  if (left.size === 0 || right.size === 0) return left.size === right.size ? 1 : 0;
+  let shared = 0;
+  for (const w of left) if (right.has(w)) shared += 1;
+  return shared / (left.size + right.size - shared);
+}
 
 export async function dispatchUrgentNotification(
   input: DispatchInput
@@ -511,37 +558,69 @@ export async function dispatchUrgentNotification(
   // has no about_e164 to key on), and a failed count fails open to sending:
   // this gate must never be the reason an owner missed a real emergency.
   if (input.contactE164) {
-    let recentCount = 0;
+    let recent: { events: number; summaries: string[] } = { events: 0, summaries: [] };
     try {
-      recentCount = await countRecentNotificationsAbout(
+      recent = await listRecentAlertsAbout(
         input.businessId,
         kind,
         input.contactE164,
         URGENT_ALERT_COOLDOWN_WINDOW_MS
       );
     } catch (err) {
-      logger.warn("notifications.dispatch: cooldown count failed, sending anyway", {
+      logger.warn("notifications.dispatch: cooldown read failed, sending anyway", {
         businessId: input.businessId,
         error: err instanceof Error ? err.message : String(err)
       });
     }
-    if (recentCount >= URGENT_ALERT_COOLDOWN_MAX) {
-      const reason = "contact_alert_cooldown";
-      const gatedChannels = (["dashboard", "email", "sms", "whatsapp", "slack"] as const).filter(
+    // A repeat is the actual flood signal. A loop restates itself; a real
+    // escalation says something new each time, so it is never squashed here
+    // however fast it arrives.
+    const duplicateOf = recent.summaries.find(
+      (previous) =>
+        alertSummarySimilarity(previous, summary) >= URGENT_ALERT_DUPLICATE_SIMILARITY
+    );
+    const reason = duplicateOf
+      ? "contact_alert_duplicate"
+      : recent.events >= URGENT_ALERT_COOLDOWN_MAX
+        ? "contact_alert_cooldown"
+        : null;
+    if (reason) {
+      // The dashboard is NEVER gated: it makes no noise, it is the record of
+      // what happened, and suppressing it is what made the eaten alert
+      // invisible after the fact as well as at the time.
+      const gatedChannels = (["email", "sms", "whatsapp", "slack"] as const).filter(
         (channel) =>
           (channel !== "whatsapp" || targets.whatsappConnected) &&
           (channel !== "slack" || targets.slackConnected)
       );
+      // Every row of a suppressed dispatch is stamped so the backstop count
+      // cannot see it. Without this the dashboard row, which IS genuinely
+      // sent, counts as an alert event, and a burst of squashed repeats
+      // would burn the budget and mute the next real escalation: exactly
+      // the failure this gate was rewritten to prevent. Bugbot, PR #1617.
+      const suppressedPayload = { ...payload, suppressed: reason };
+      results.push(
+        await recordRow(input.businessId, "dashboard", "sent", summary, kind, suppressedPayload)
+      );
       for (const channel of gatedChannels) {
         results.push(
-          await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
+          await recordRow(
+            input.businessId,
+            channel,
+            "skipped",
+            summary,
+            kind,
+            suppressedPayload,
+            reason
+          )
         );
       }
-      logger.warn("notifications.dispatch: contact alert cooldown engaged", {
+      logger.warn("notifications.dispatch: contact alert suppressed", {
         businessId: input.businessId,
         kind,
         aboutE164: input.contactE164,
-        recentCount
+        reason,
+        recentEvents: recent.events
       });
       return { results };
     }
@@ -1046,7 +1125,55 @@ export async function dispatchUrgentNotification(
     }
   }
 
+  await reportFailedChannels(input.businessId, kind, summary, results);
   return { results };
+}
+
+/**
+ * Raise a failed alert delivery onto the admin dashboard's System Errors
+ * card (any `system_logs` row at level "error" lands there).
+ *
+ * Why this exists. Alert-send failures were already RECORDED on the
+ * notification row and nothing ever read them, so a tenant whose owner
+ * alerts had been failing for weeks looked identical to a healthy one. KYP
+ * Ads' team texts had been failing to an unreachable number since late July
+ * and surfaced only when a lead sat waiting on a Zoom. Recorded is not the
+ * same as noticed.
+ *
+ * One row per dispatch, not per channel, and only when something actually
+ * failed: a `skipped` channel is a decision, not a fault. The message
+ * distinguishes a partial failure from an alert that reached NOBODY, which
+ * is the one worth waking up for.
+ */
+export async function reportFailedChannels(
+  businessId: string,
+  kind: NotificationKind,
+  summary: string,
+  results: DispatchChannelResult[]
+): Promise<void> {
+  const failed = results.filter((r) => r.status === "failed");
+  if (failed.length === 0) return;
+  const delivered = results.filter((r) => r.status === "sent");
+  await recordSystemLog({
+    businessId,
+    level: "error",
+    source: "notifications",
+    event: "alert_delivery_failed",
+    message:
+      (delivered.length === 0
+        ? "An urgent alert reached NOBODY: "
+        : "An urgent alert failed on some channels: ") +
+      failed.map((f) => `${f.channel} (${f.reason ?? "no reason given"})`).join(", ") +
+      (delivered.length > 0
+        ? `. Delivered on ${delivered.map((d) => d.channel).join(", ")}.`
+        : "."),
+    payload: {
+      kind,
+      summary,
+      failedChannels: failed.map((f) => ({ channel: f.channel, reason: f.reason ?? null })),
+      deliveredChannels: delivered.map((d) => d.channel)
+    }
+  });
 }
 
 export type { NotificationRow };

@@ -10,7 +10,7 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 
 vi.mock("@/lib/db/notifications", () => ({
   insertNotification: vi.fn(async () => ({ id: "x" })),
-  countRecentNotificationsAbout: vi.fn(async () => 0)
+  listRecentAlertsAbout: vi.fn(async () => ({ events: 0, summaries: [] }))
 }));
 
 vi.mock("@/lib/email/client", () => ({
@@ -73,15 +73,22 @@ vi.mock("../supabase/functions/_shared/contact_owner_target.ts", async (importOr
   };
 });
 
+vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+
+import { recordSystemLog } from "@/lib/db/system-logs";
 import {
+  alertSummarySimilarity,
   dispatchUrgentNotification,
-  resolveNotificationTargets
+  reportFailedChannels,
+  resolveNotificationTargets,
+  URGENT_ALERT_COOLDOWN_MAX,
+  URGENT_ALERT_DUPLICATE_SIMILARITY
 } from "@/lib/notifications/dispatch";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-alert";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
-import { countRecentNotificationsAbout, insertNotification } from "@/lib/db/notifications";
+import { listRecentAlertsAbout, insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
@@ -163,7 +170,7 @@ describe("notifications/dispatch", () => {
     // Re-pin the cooldown counter default: clearAllMocks keeps implementations,
     // so a suite that raised it (the cooldown tests) must not leak into the
     // next one now that suites run in more than one order-sensitive spot.
-    vi.mocked(countRecentNotificationsAbout).mockResolvedValue(0 as never);
+    vi.mocked(listRecentAlertsAbout).mockResolvedValue({ events: 0, summaries: [] } as never);
     vi.mocked(deliverWhatsApp).mockResolvedValue({
       ok: true,
       via: "text",
@@ -395,7 +402,7 @@ describe("notifications/dispatch", () => {
 
   it("skips SMS when sms_urgent toggle is off", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
-      ...PREFS_ON,
+      ...REACHABLE_PREFS,
       sms_urgent: false
     } as never);
     await dispatchUrgentNotification({
@@ -413,7 +420,7 @@ describe("notifications/dispatch", () => {
 
   it("skips dashboard channel when dashboard_alerts is off", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
-      ...PREFS_ON,
+      ...REACHABLE_PREFS,
       dashboard_alerts: false
     } as never);
     await dispatchUrgentNotification({
@@ -1426,7 +1433,10 @@ describe("notifications/dispatch", () => {
       vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
       vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
       connected();
-      vi.mocked(countRecentNotificationsAbout).mockResolvedValue(5 as never);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValue({
+        events: URGENT_ALERT_COOLDOWN_MAX,
+        summaries: []
+      } as never);
       await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "A",
@@ -1855,9 +1865,12 @@ describe("notifications/dispatch", () => {
      * ten minutes, each by SMS and email. The cooldown caps alert EVENTS
      * about one contact per window.
      */
-    it("skips every channel once the cap is reached, with the reason stamped", async () => {
+    it("mutes the PUSH channels once the backstop cap is reached, never the dashboard", async () => {
       resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
-      vi.mocked(countRecentNotificationsAbout).mockResolvedValueOnce(2);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({
+        events: URGENT_ALERT_COOLDOWN_MAX,
+        summaries: []
+      });
       const { results } = await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "Follow up with Aaron",
@@ -1866,18 +1879,88 @@ describe("notifications/dispatch", () => {
       });
       expect(vi.mocked(sendTelnyxSms)).not.toHaveBeenCalled();
       expect(vi.mocked(sendOwnerEmail)).not.toHaveBeenCalled();
-      expect(results.every((r) => r.status === "skipped")).toBe(true);
-      for (const row of vi.mocked(insertNotification).mock.calls.map((c) => c[0])) {
-        expect((row as { payload: Record<string, unknown> }).payload).toMatchObject({
+      // The dashboard is the record of what happened. Suppressing it is what
+      // made an eaten alert invisible after the fact as well as at the time.
+      const dashboard = results.find((r) => r.channel === "dashboard");
+      expect(dashboard?.status).toBe("sent");
+      expect(results.filter((r) => r.channel !== "dashboard").every((r) => r.status === "skipped")).toBe(
+        true
+      );
+      for (const row of vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as { delivery_channel: string; payload: Record<string, unknown> })
+        .filter((r) => r.delivery_channel !== "dashboard")) {
+        expect(row.payload).toMatchObject({
           reason: "contact_alert_cooldown",
           about_e164: LEAD_PHONE
         });
       }
     });
 
+    it("squashes a REPEAT of an alert already sent about this contact", async () => {
+      // The flood this gate exists for restates itself; that is the signal,
+      // not the rate.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({
+        events: 1,
+        summaries: ["Texter follow-up needed: Follow up with Aaron"]
+      });
+      const { results } = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Texter follow-up needed: Follow up with Aaron!",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).not.toHaveBeenCalled();
+      expect(results.find((r) => r.channel === "sms")?.reason).toBe("contact_alert_duplicate");
+    });
+
+    it("does not let squashed repeats eat the backstop budget", async () => {
+      // The dashboard row of a suppressed dispatch is written as sent, so
+      // without the marker a burst of repeats would count as real alerts and
+      // mute the next genuine escalation.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({
+        events: 1,
+        summaries: ["Texter follow-up needed: Follow up with Aaron"]
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Texter follow-up needed: Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      for (const row of vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as { payload: Record<string, unknown> })) {
+        expect(row.payload.suppressed).toBe("contact_alert_duplicate");
+      }
+    });
+
+    it("lets an ESCALATION through however fast it arrives", async () => {
+      // The exact shape that was lost: three alerts in twelve minutes, each
+      // saying something new, the last one the most urgent.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({
+        events: 2,
+        summaries: [
+          "Joy is waiting on the Zoom and says James has not joined yet (waited 5+ minutes)",
+          "Joy is on the Zoom and needs James to call her before noon today regarding a final decision"
+        ]
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary:
+          "Joy is waiting and urgently needs James to call her ASAP before noon today to finalize",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
+    });
+
     it("still delivers below the cap and stamps about_e164 plus a dispatch id", async () => {
       resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
-      vi.mocked(countRecentNotificationsAbout).mockResolvedValueOnce(1);
+      vi.mocked(listRecentAlertsAbout).mockResolvedValueOnce({ events: 1, summaries: [] });
       await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "Follow up with Aaron",
@@ -1896,7 +1979,7 @@ describe("notifications/dispatch", () => {
     it("fails OPEN when the count read throws: the alert still goes out", async () => {
       // This gate must never be the reason an owner missed a real emergency.
       resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
-      vi.mocked(countRecentNotificationsAbout).mockRejectedValueOnce(new Error("db down"));
+      vi.mocked(listRecentAlertsAbout).mockRejectedValueOnce(new Error("db down"));
       await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "Follow up with Aaron",
@@ -1908,7 +1991,7 @@ describe("notifications/dispatch", () => {
 
     it("fails OPEN on a non-Error rejection too (String(err) branch)", async () => {
       resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
-      vi.mocked(countRecentNotificationsAbout).mockRejectedValueOnce("plain string failure");
+      vi.mocked(listRecentAlertsAbout).mockRejectedValueOnce("plain string failure");
       await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "Follow up with Aaron",
@@ -1924,7 +2007,7 @@ describe("notifications/dispatch", () => {
         summary: "SMS cap reached",
         kind: "sms_cap_reached"
       });
-      expect(vi.mocked(countRecentNotificationsAbout)).not.toHaveBeenCalled();
+      expect(vi.mocked(listRecentAlertsAbout)).not.toHaveBeenCalled();
       expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
     });
   });
@@ -2214,5 +2297,139 @@ describe("notifications/dispatch", () => {
       const t2 = await resolveNotificationTargets(BIZ);
       expect(t2.whatsappReplacesSms).toBe(true);
     });
+  });
+});
+
+describe("alertSummarySimilarity", () => {
+  it("scores a restated alert as a repeat and an escalation as new", () => {
+    // The flood this gate exists for: seventeen near-identical alerts in ten
+    // minutes, varying only by a quoted fragment.
+    const loopA = "Texter follow-up needed: Follow up with Aaron";
+    const loopB = "Texter follow-up needed: Follow up with Aaron!";
+    expect(alertSummarySimilarity(loopA, loopB)).toBeGreaterThanOrEqual(
+      URGENT_ALERT_DUPLICATE_SIMILARITY
+    );
+
+    // The escalation that was lost: three alerts in twelve minutes, each
+    // saying something new. None may read as a repeat of another.
+    const joy = [
+      "Joy is waiting on the Zoom and says James has not joined yet (waited 5+ minutes)",
+      "Joy is on the Zoom and needs James to call her before noon today regarding a final decision",
+      "Joy is waiting and urgently needs James to call her ASAP before noon today to finalize"
+    ];
+    for (let i = 0; i < joy.length; i += 1) {
+      for (let j = i + 1; j < joy.length; j += 1) {
+        expect(alertSummarySimilarity(joy[i], joy[j])).toBeLessThan(
+          URGENT_ALERT_DUPLICATE_SIMILARITY
+        );
+      }
+    }
+  });
+
+  it("ignores case and punctuation, and handles empty text", () => {
+    expect(alertSummarySimilarity("James has NOT joined!", "james has not joined")).toBe(1);
+    // Two empty summaries are the same alert; one empty against real text is
+    // not, and must never squash a real one.
+    expect(alertSummarySimilarity("", "")).toBe(1);
+    expect(alertSummarySimilarity("", "something")).toBe(0);
+    expect(alertSummarySimilarity("something", "")).toBe(0);
+  });
+});
+
+const REACHABLE_PREFS = {
+  ...PREFS_ON,
+  phone_number: "+15555550100",
+  alert_email: "owner@example.com"
+};
+
+describe("failed alert delivery reaches the admin System Errors card", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks clears CALLS, not implementations, so a rejection set by
+    // one test would leak into the next and fire the reporter there.
+    vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "tx", channel: "sms" } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue(undefined as never);
+    vi.mocked(insertNotification).mockResolvedValue(undefined as never);
+    vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+    // Contact details supplied directly rather than via the env vars the
+    // outer suite sets, so this block does not depend on where it sits.
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(REACHABLE_PREFS as never);
+    vi.mocked(listRecentAlertsAbout).mockResolvedValue({ events: 0, summaries: [] } as never);
+  });
+
+  it("records an error naming the failed channels and what still got through", async () => {
+    // Alert failures were already recorded on the notification row and
+    // nothing ever read them, which is how a tenant's team texts failed for
+    // weeks unnoticed. A system_logs row at level error lands on the admin
+    // dashboard's System Errors card.
+    vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({
+      apiKey: "k",
+      messagingProfileId: "mp",
+      fromE164: "+15555550111"
+    } as never);
+    vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("Alpha sender not configured"));
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "Take over with the lead",
+      kind: "sms_team_notify"
+    });
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.level).toBe("error");
+    expect(logged.event).toBe("alert_delivery_failed");
+    expect(logged.message).toContain("sms");
+    expect(logged.message).toContain("Alpha sender not configured");
+  });
+
+  it("says plainly when an alert reached NOBODY", async () => {
+    vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({
+      apiKey: "k",
+      messagingProfileId: "mp",
+      fromE164: "+15555550111"
+    } as never);
+    vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("telnyx down"));
+    vi.mocked(sendOwnerEmail).mockRejectedValue(new Error("smtp down"));
+    // The dashboard row is recorded even when its insert throws, so the only
+    // way nothing is DELIVERED is for the owner to have it switched off.
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      dashboard_alerts: false
+    } as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "Take over with the lead",
+      kind: "sms_team_notify"
+    });
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.message).toContain("reached NOBODY");
+  });
+
+  it("reads sensibly when a failure carries no reason", async () => {
+    // reason is optional on the result type, so the message must not render
+    // an empty parenthesis or "undefined" on the card.
+    await reportFailedChannels(BIZ, "sms_team_notify", "Take over", [
+      { channel: "sms", status: "failed" },
+      { channel: "dashboard", status: "sent" }
+    ] as never);
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.message).toContain("sms (no reason given)");
+    expect(
+      (logged.payload as { failedChannels: Array<{ reason: string | null }> }).failedChannels[0]
+        .reason
+    ).toBeNull();
+  });
+
+  it("stays silent when every channel behaved", async () => {
+    // A skipped channel is a decision, not a fault, and must not raise an
+    // error that would train us to ignore the card.
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      sms_urgent: false
+    } as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "All fine",
+      kind: "sms_team_notify"
+    });
+    expect(recordSystemLog).not.toHaveBeenCalled();
   });
 });
