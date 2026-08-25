@@ -202,6 +202,18 @@ export function buyerCallStep(
     when: rung.mode === "fill-arm" ? (seller.when as Record<string, unknown>) : { ...BUYER_WHEN },
     ...(seller.callWindow ? { callWindow: seller.callWindow } : {}),
     ...(seller.waitMinutes !== undefined ? { waitMinutes: seller.waitMinutes } : {}),
+    // What the referral's own buyer call captures, so "record it" in the
+    // persona has somewhere to land and the summary carries a structured
+    // callback time rather than burying it in prose.
+    captureFields: ["what they want", "timeline", "best time to call back", "notes"],
+    // A buyer who does not pick up should still hear something. The Clever
+    // SELLER rungs leave no voicemail at all, which is a real gap of its own
+    // but a pre-existing one; the copy source Amy pointed at (ReferralExchange
+    // ai_call_buyer) does leave one, and this follows the source.
+    voicemailTemplate:
+      "Hi {{vars.lead_name.first}}, this is the Amy Laidlaw Team with HomeSmart, calling about " +
+      "your home search through Clever. We would love to help you find the right place. Call us " +
+      "back at 602-695-1142.",
     // Where the call summary goes. The seller rungs send it to whoever the AI
     // rang first, which is the promise the team offer makes ("Whoever the AI
     // rang first has the full call summary"), and the schema refuses a call
@@ -360,6 +372,126 @@ export function revertBuyerCalls(def: AnyDef): string[] {
 }
 
 /**
+ * Part 3: the buyer OFFER copy, which this change makes untrue.
+ *
+ * `route_buyer` was written yesterday, when a Clever buyer got no call at all,
+ * and every one of its team-facing templates says so outright: "The AI has NOT
+ * called or texted this lead and will not". The moment the buyer ladder goes
+ * in, that is a lie in four places, and an actively harmful one: a teammate
+ * who claims believes they are the only contact while the retry ladder is
+ * still dialling underneath them.
+ *
+ * The replacement mirrors ReferralExchange's `route_buyer`, which describes
+ * the same arrangement honestly: the AI already called, and whoever it rang
+ * first is holding the summary.
+ */
+export const OLD_NO_FOLLOW_UP_FRAGMENTS = [
+  "The AI has NOT called or texted this lead and will not: it only works Clever seller " +
+    "referrals, so this buyer is not on AI follow-up. Nothing reaches them unless you take it.",
+  "The AI never called this one: buyers are not on AI follow-up, so {{agent.name}} is their " +
+    "only contact.",
+  "The AI has not contacted them and will not: buyers are not on AI follow-up, so nobody " +
+    "has spoken to this lead.",
+  "The AI is not following this one up: buyers are not on AI follow-up."
+] as const;
+
+export const NEW_FOLLOW_UP_LINES = [
+  "The AI already called them: {{vars.call_outcome_label}}.\nWhoever the AI rang first has the " +
+    "full call summary with what they want, their timeline, and when they asked to be called " +
+    "back.\nUnless you take it, the AI tries twice more and stops the moment they reply or book.",
+  "The AI called this one first: {{agent.name}} has the summary, and the AI has stopped calling.",
+  "The AI called them: {{vars.call_outcome_label}}. It has stopped now that nobody took the lead.",
+  "The AI is not calling this one: a $1M+ buyer is yours before the team ever sees them."
+] as const;
+
+/** Retune the buyer offer so it describes what the AI now actually does. */
+export function retuneBuyerOfferCopy(def: AnyDef, reverse = false): string[] {
+  const found = locate(def.steps, "route_buyer");
+  if (!found) return [];
+  const step = found.list[found.index];
+  const from = reverse ? NEW_FOLLOW_UP_LINES : OLD_NO_FOLLOW_UP_FRAGMENTS;
+  const to = reverse ? OLD_NO_FOLLOW_UP_FRAGMENTS : NEW_FOLLOW_UP_LINES;
+  const keys = [
+    "offerTemplate",
+    "claimedNotifyTemplate",
+    "ownerFallbackTemplate",
+    "ownerDirectTemplate"
+  ];
+  const changed: string[] = [];
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const current = typeof step[key] === "string" ? (step[key] as string) : "";
+    if (!current.includes(from[i])) continue;
+    step[key] = current.replace(from[i], to[i]);
+    changed.push(`route_buyer.${key}: ${reverse ? "restored" : "now says the AI IS calling"}`);
+  }
+  return changed;
+}
+
+/**
+ * Part 4: the promote-on-transfer offer.
+ *
+ * `clever_route_promote` fires when a call ends in `transferred`, which only a
+ * seller could reach before this change. Its copy opens "AI HANDOFF, serious
+ * Clever seller" and it pins the seller trio, so a live-transferred BUYER
+ * would be handed on as a seller to a list that excludes Jason, the very
+ * teammate the transfer ladder may have just connected them to. He could take
+ * the call and then be unable to claim it.
+ *
+ * Split as gated siblings again, for the same reason as the retry rungs: the
+ * promote step already sits inside a branch arm, and a wrapper would add depth
+ * the schema will not take. The buyer variant is unpinned, so the rotation
+ * includes Jason.
+ */
+export const PROMOTE_STEP_ID = "clever_route_promote";
+export const BUYER_PROMOTE_STEP_ID = "clever_route_promote_buyer";
+
+export function patchPromote(def: AnyDef): { changed: string[]; problems: string[] } {
+  const changed: string[] = [];
+  const problems: string[] = [];
+  if (walkSteps(def.steps).some((s) => s.id === BUYER_PROMOTE_STEP_ID)) return { changed, problems };
+  const found = locate(def.steps, PROMOTE_STEP_ID);
+  if (!found) {
+    problems.push(`"${PROMOTE_STEP_ID}" is missing from the flow`);
+    return { changed, problems };
+  }
+  const seller = found.list[found.index];
+  if (seller.when !== undefined) {
+    problems.push(`"${PROMOTE_STEP_ID}" already carries a \`when\`; splitting it would displace that guard`);
+    return { changed, problems };
+  }
+  const buyer = JSON.parse(JSON.stringify(seller)) as AnyStep;
+  buyer.id = BUYER_PROMOTE_STEP_ID;
+  buyer.when = { ...BUYER_WHEN };
+  // Unpinned: the buyer rotation, which includes Jason. The seller list is a
+  // pinned broadcast and would exclude him.
+  delete buyer.agentNames;
+  for (const key of ["offerTemplate", "claimedNotifyTemplate", "ownerFallbackTemplate"]) {
+    const t = typeof buyer[key] === "string" ? (buyer[key] as string) : "";
+    if (!t) continue;
+    buyer[key] = t
+      .replace(/serious Clever seller/g, "serious Clever BUYER")
+      .replace(/Address: /g, "Looking in: ")
+      .replace(/First to reply 1 gets it\./g, "Reply 1 to claim, or it goes to the next agent.");
+  }
+  seller.when = { ...NOT_BUYER_WHEN };
+  found.list.splice(found.index + 1, 0, buyer);
+  changed.push(`${PROMOTE_STEP_ID}: now seller-only, with ${BUYER_PROMOTE_STEP_ID} beside it`);
+  return { changed, problems };
+}
+
+export function revertPromote(def: AnyDef): string[] {
+  const buyerAt = locate(def.steps, BUYER_PROMOTE_STEP_ID);
+  if (buyerAt) buyerAt.list.splice(buyerAt.index, 1);
+  const sellerAt = locate(def.steps, PROMOTE_STEP_ID);
+  if (sellerAt) {
+    const seller = sellerAt.list[sellerAt.index];
+    if (JSON.stringify(seller.when) === JSON.stringify(NOT_BUYER_WHEN)) delete seller.when;
+  }
+  return buyerAt ? [`${BUYER_PROMOTE_STEP_ID}: removed`] : [];
+}
+
+/**
  * Part 2: set a buyer call's live-transfer ladder outright.
  *
  * A SET rather than an append, forced by the cap: the ReferralExchange buyer
@@ -486,9 +618,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const next = JSON.parse(JSON.stringify(clever.definition)) as AnyDef;
     let changed: string[];
     if (REVERT) {
-      changed = revertBuyerCalls(next);
+      changed = [
+        ...revertBuyerCalls(next),
+        ...revertPromote(next),
+        ...retuneBuyerOfferCopy(next, true)
+      ];
     } else {
       const out = patchBuyerCalls(next, buyerRefs);
+      const promote = patchPromote(next);
+      out.changed.push(...promote.changed, ...retuneBuyerOfferCopy(next));
+      out.problems.push(...promote.problems);
       if (out.problems.length > 0) {
         console.error(`\n"${CLEVER_FLOW_NAME}" is not the shape this expects, so nothing was written:`);
         for (const p of out.problems) console.error(`  - ${p}`);

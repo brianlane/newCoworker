@@ -23,8 +23,15 @@ import {
   NOT_BUYER_WHEN,
   REFERRAL_BUYER_CALL_ID,
   REFERRAL_BUYER_REACH_PREVIOUS,
+  BUYER_PROMOTE_STEP_ID,
+  NEW_FOLLOW_UP_LINES,
+  OLD_NO_FOLLOW_UP_FRAGMENTS,
+  PROMOTE_STEP_ID,
   alreadyPatched,
   buyerCallStep,
+  patchPromote,
+  retuneBuyerOfferCopy,
+  revertPromote,
   patchBuyerCalls,
   revertBuyerCalls,
   setReach
@@ -174,6 +181,16 @@ describe("buyerCallStep", () => {
     expect(withWindow.callWindow).toEqual({ start: "08:30", end: "21:00", outside: "skip", timezone: "America/Phoenix" });
   });
 
+  it("leaves a voicemail and captures the callback time it promises to record", () => {
+    // The persona says "record it"; without captureFields there is nowhere
+    // for that time to land, so the summary buries it in prose. And a buyer
+    // who does not pick up should still hear something, as the copy source
+    // (ReferralExchange ai_call_buyer) does.
+    expect(step().captureFields).toContain("best time to call back");
+    expect(String(step().voicemailTemplate)).toContain("your home search through Clever");
+    expect(String(step().voicemailTemplate)).not.toMatch(/sell/i);
+  });
+
   it("carries a call-summary target, which the schema requires", () => {
     // The seller rungs send it to whoever the AI rang first, which is what
     // the team offer promises. A call with no target is rejected outright.
@@ -290,6 +307,114 @@ describe("patchBuyerCalls", () => {
       "Gabrielle Mota",
       "Amy Laidlaw"
     ]);
+  });
+});
+
+describe("the copy this change makes untrue", () => {
+  /** route_buyer as the previous one-shot left it, when no buyer was called. */
+  const routeBuyer = (): Def => ({
+    steps: [
+      {
+        id: "route_buyer",
+        type: "route_to_team",
+        offerTemplate: `New Clever BUYER lead\n${OLD_NO_FOLLOW_UP_FRAGMENTS[0]}\nReply 1.`,
+        claimedNotifyTemplate: `claimed\n${OLD_NO_FOLLOW_UP_FRAGMENTS[1]}`,
+        ownerFallbackTemplate: `nobody took it\n${OLD_NO_FOLLOW_UP_FRAGMENTS[2]}`,
+        ownerDirectTemplate: `$1M+\n${OLD_NO_FOLLOW_UP_FRAGMENTS[3]}`
+      } as Step
+    ]
+  });
+
+  it("stops the offer claiming the AI will never call, now that it does", () => {
+    // The harmful half: a teammate who claims believes they are the only
+    // contact while the retry ladder is still dialling underneath them.
+    const def = routeBuyer();
+    expect(retuneBuyerOfferCopy(def)).toHaveLength(4);
+    const all = JSON.stringify(def);
+    for (const stale of OLD_NO_FOLLOW_UP_FRAGMENTS) expect(all).not.toContain(stale);
+    expect(String(stepById(def, "route_buyer")!.offerTemplate)).toContain("The AI already called");
+  });
+
+  it("keeps the rest of each template intact", () => {
+    const def = routeBuyer();
+    retuneBuyerOfferCopy(def);
+    expect(String(stepById(def, "route_buyer")!.offerTemplate)).toContain("New Clever BUYER lead");
+    expect(String(stepById(def, "route_buyer")!.offerTemplate)).toContain("Reply 1.");
+  });
+
+  it("is idempotent and round-trips", () => {
+    const def = routeBuyer();
+    const before = JSON.parse(JSON.stringify(def));
+    retuneBuyerOfferCopy(def);
+    expect(retuneBuyerOfferCopy(def)).toEqual([]);
+    expect(retuneBuyerOfferCopy(def, true)).toHaveLength(4);
+    expect(def).toEqual(before);
+    expect(retuneBuyerOfferCopy({ steps: [] })).toEqual([]);
+  });
+
+  it("carries no em dash in the replacement copy", () => {
+    for (const line of NEW_FOLLOW_UP_LINES) expect(line).not.toContain("—");
+  });
+});
+
+describe("patchPromote", () => {
+  const promote = (): Def => ({
+    steps: [
+      {
+        id: PROMOTE_STEP_ID,
+        type: "route_to_team",
+        agentNames: ["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"],
+        offerTemplate: "AI HANDOFF, serious Clever seller: x\nAddress: y\nFirst to reply 1 gets it.",
+        ownerFallbackTemplate: "AI HANDOFF, serious Clever seller: x",
+        responseMinutes: 10
+      } as Step
+    ]
+  });
+
+  it("gives a live-transferred BUYER an offer that is not addressed to sellers", () => {
+    // A buyer could not reach `transferred` before the buyer call existed.
+    const def = promote();
+    expect(patchPromote(def).problems).toEqual([]);
+    const buyer = stepById(def, BUYER_PROMOTE_STEP_ID)!;
+    expect(String(buyer.offerTemplate)).toContain("serious Clever BUYER");
+    expect(String(buyer.offerTemplate)).toContain("Looking in:");
+    expect(String(buyer.offerTemplate)).not.toContain("Address:");
+  });
+
+  it("unpins the buyer promote, so Jason can claim the call he just took", () => {
+    // The seller list is a pinned broadcast that excludes him, which would
+    // let him take the transfer and then be unable to claim the lead.
+    const def = promote();
+    patchPromote(def);
+    expect(stepById(def, BUYER_PROMOTE_STEP_ID)!.agentNames).toBeUndefined();
+    expect(String(stepById(def, BUYER_PROMOTE_STEP_ID)!.offerTemplate)).toContain(
+      "it goes to the next agent"
+    );
+    // The seller offer keeps its pinned trio and its broadcast wording.
+    expect(stepById(def, PROMOTE_STEP_ID)!.agentNames).toEqual([
+      "Gabrielle Mota",
+      "Amy Laidlaw",
+      "Dave Lane"
+    ]);
+  });
+
+  it("splits as siblings and round-trips", () => {
+    const def = promote();
+    const before = JSON.parse(JSON.stringify(def));
+    patchPromote(def);
+    expect(stepById(def, PROMOTE_STEP_ID)!.when).toEqual(NOT_BUYER_WHEN);
+    expect(stepById(def, BUYER_PROMOTE_STEP_ID)!.when).toEqual(BUYER_WHEN);
+    expect(patchPromote(def).changed).toEqual([]);
+    expect(revertPromote(def)).toHaveLength(1);
+    expect(def).toEqual(before);
+    expect(revertPromote(def)).toEqual([]);
+  });
+
+  it("REFUSES a missing step or one that already has a guard", () => {
+    expect(patchPromote({ steps: [] }).problems[0]).toContain("is missing");
+    const guarded = promote();
+    stepById(guarded, PROMOTE_STEP_ID)!.when = { var: "x", equals: "y" };
+    expect(patchPromote(guarded).problems[0]).toContain("already carries a");
   });
 });
 
