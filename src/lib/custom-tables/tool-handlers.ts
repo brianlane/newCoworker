@@ -58,6 +58,7 @@ import {
   restoreCustomTableVersion
 } from "@/lib/custom-tables/versions";
 import { buildCustomTableHistory } from "@/lib/custom-tables/version-history";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 import {
   CUSTOM_TABLE_FIELD_TYPES,
   CUSTOM_TABLE_TRASH_RETENTION_DAYS,
@@ -91,6 +92,7 @@ export type CustomTableToolDeps = {
   deleteRow?: typeof deleteCustomTableRow;
   listVersions?: typeof listCustomTableVersions;
   restoreVersion?: typeof restoreCustomTableVersion;
+  lookupContact?: typeof getCustomerMemory;
   /** Who to record on the history row. */
   edit?: { source?: string; actor?: string | null };
 };
@@ -209,6 +211,7 @@ function resolved(deps: CustomTableToolDeps) {
     deleteRow: deps.deleteRow ?? deleteCustomTableRow,
     listVersions: deps.listVersions ?? listCustomTableVersions,
     restoreVersion: deps.restoreVersion ?? restoreCustomTableVersion,
+    lookupContact: deps.lookupContact ?? getCustomerMemory,
     edit: deps.edit ?? { source: "ai" },
     // A restore is attributed as a restore, so the history reads "Restored
     // from history" rather than "Changed by your coworker". A caller that
@@ -269,6 +272,32 @@ async function resolveTable(
       }. The tables are: ${names}.`
     )
   };
+}
+
+/**
+ * Turn the phone the model supplied into a contact id.
+ *
+ * The contact must ALREADY exist, which is the same rule the CSV importer
+ * draws: a record without its person is meaningless, and inventing a bare
+ * contact here would bypass the contacts path that owns dedupe and merge.
+ * A miss refuses honestly rather than filing the row under nobody.
+ */
+async function resolveContact(
+  businessId: string,
+  table: CustomTable,
+  phone: string,
+  lookup: typeof getCustomerMemory
+): Promise<{ ok: true; contactId: string } | { ok: false; result: CustomTableToolResult }> {
+  const contact = await lookup(businessId, phone.trim());
+  if (!contact) {
+    return {
+      ok: false,
+      result: failure(
+        `contact_not_found: there is no contact with the number ${phone.trim()}, so the row cannot be attached to them. Add the contact first, or add the row without a number and let the owner attach it.`
+      )
+    };
+  }
+  return { ok: true, contactId: contact.id };
 }
 
 /** One row rendered for the model: an addressable id plus a readable line. */
@@ -406,7 +435,16 @@ export async function customTableFindRowsTool(
     );
   }
 
-  const page = await d.listRows(table.id, table.fields, { limit: SCAN_LIMIT });
+  let contactId: string | undefined;
+  if (args.contactPhone) {
+    const contact = await resolveContact(businessId, table, args.contactPhone, d.lookupContact);
+    if (!contact.ok) return contact.result;
+    contactId = contact.contactId;
+  }
+  const page = await d.listRows(table.id, table.fields, {
+    limit: SCAN_LIMIT,
+    ...(contactId ? { contactId } : {})
+  });
   const matched = args.query ? matchRowsByQuery(table.fields, page.rows, args.query) : page.rows;
   const limit = args.limit ?? CUSTOM_TABLE_TOOL_ROW_LIMIT;
   const rows = matched.slice(0, limit).map((row) => renderRow(table, row));
@@ -479,15 +517,18 @@ export async function customTableAddRowTool(
   const built = buildValues(table, args.values, false);
   if (!built.ok) return built.result;
 
-  // A contact-linked table wants a person, and pointing at the wrong one is
-  // worse than pointing at none, so the row is created unlinked and the
-  // model is told to have the owner attach it. Resolving a phone to a
-  // contact here would need the create path to invent contacts.
+  let contactId: string | null = null;
+  if (args.contactPhone) {
+    const contact = await resolveContact(businessId, table, args.contactPhone, d.lookupContact);
+    if (!contact.ok) return contact.result;
+    contactId = contact.contactId;
+  }
+
   try {
     const row = await d.createRow(
       businessId,
       table,
-      { values: built.values },
+      { values: built.values, contactId },
       d.edit
     );
     return {
@@ -496,8 +537,8 @@ export async function customTableAddRowTool(
       rowId: row.id,
       summary: formatRowSummary(table.fields, row),
       note:
-        table.rowLink === "contact"
-          ? `Added to "${table.name}". It is not attached to a contact yet; the owner can pick one at /dashboard/tables.`
+        table.rowLink === "contact" && !contactId
+          ? `Added to "${table.name}". It is not attached to a contact yet; give a contactPhone next time, or tell the owner they can pick one at /dashboard/tables.`
           : `Added to "${table.name}".`
     };
   } catch (err) {

@@ -65,6 +65,7 @@ function deps(over: Partial<CustomTableToolDeps> = {}): CustomTableToolDeps {
     deleteRow: vi.fn(async () => undefined) as never,
     listVersions: vi.fn(async () => []) as never,
     restoreVersion: vi.fn(async () => ({ kind: "schema" })) as never,
+    lookupContact: vi.fn(async () => ({ id: "c-1" })) as never,
     ...over
   };
 }
@@ -227,14 +228,33 @@ describe("customTableFindRowsTool", () => {
     expect((out as unknown as { message: string }).message).toMatch(/not_contact_linked/);
   });
 
-  it("allows a phone lookup on a contact-linked table", async () => {
+  it("actually filters by the contact behind the phone, rather than ignoring it", async () => {
+    const linked = table({ rowLink: "contact" });
+    const listRows = vi.fn(async () => ({ rows: [row()], nextCursor: null }));
+    const out = await customTableFindRowsTool(
+      "biz-1",
+      { table: "Properties", contactPhone: " +15550001111 " },
+      deps({ listTables: vi.fn(async () => [linked]) as never, listRows: listRows as never })
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(listRows).toHaveBeenCalledWith(
+      "tbl-1",
+      expect.anything(),
+      expect.objectContaining({ contactId: "c-1" })
+    );
+  });
+
+  it("refuses a phone with no contact behind it, rather than filing under nobody", async () => {
     const linked = table({ rowLink: "contact" });
     const out = await customTableFindRowsTool(
       "biz-1",
-      { table: "Properties", contactPhone: "+15550001111" },
-      deps({ listTables: vi.fn(async () => [linked]) as never })
+      { table: "Properties", contactPhone: "+15559999999" },
+      deps({
+        listTables: vi.fn(async () => [linked]) as never,
+        lookupContact: vi.fn(async () => null) as never
+      })
     );
-    expect(out).toMatchObject({ ok: true });
+    expect((out as unknown as { message: string }).message).toMatch(/contact_not_found/);
   });
 });
 
@@ -249,7 +269,7 @@ describe("customTableAddRowTool", () => {
     expect(createRow).toHaveBeenCalledWith(
       "biz-1",
       expect.anything(),
-      { values: { address: "12 Maple St" } },
+      { values: { address: "12 Maple St" }, contactId: null },
       { source: "ai" }
     );
   });
@@ -288,7 +308,7 @@ describe("customTableAddRowTool", () => {
     expect(createRow).toHaveBeenCalledWith(
       "biz-1",
       expect.anything(),
-      { values: { price: 1240 } },
+      { values: { price: 1240 }, contactId: null },
       expect.anything()
     );
   });
@@ -312,7 +332,37 @@ describe("customTableAddRowTool", () => {
     expect((out as unknown as { message: string }).message).toMatch(/not_contact_linked/);
   });
 
-  it("tells the owner the row is not attached to anyone yet", async () => {
+  it("attaches the row to the contact behind the phone", async () => {
+    const linked = table({ rowLink: "contact" });
+    const createRow = vi.fn(async () => row());
+    const out = await customTableAddRowTool(
+      "biz-1",
+      { table: "Properties", values: [], contactPhone: "+15550001111" },
+      deps({ listTables: vi.fn(async () => [linked]) as never, createRow: createRow as never })
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(createRow).toHaveBeenCalledWith(
+      "biz-1",
+      expect.anything(),
+      { values: {}, contactId: "c-1" },
+      expect.anything()
+    );
+  });
+
+  it("refuses a phone with no contact behind it", async () => {
+    const linked = table({ rowLink: "contact" });
+    const out = await customTableAddRowTool(
+      "biz-1",
+      { table: "Properties", values: [], contactPhone: "+15559999999" },
+      deps({
+        listTables: vi.fn(async () => [linked]) as never,
+        lookupContact: vi.fn(async () => null) as never
+      })
+    );
+    expect((out as unknown as { message: string }).message).toMatch(/contact_not_found/);
+  });
+
+  it("tells the owner the row is not attached to anyone when no phone was given", async () => {
     const linked = table({ rowLink: "contact" });
     const out = await customTableAddRowTool(
       "biz-1",
