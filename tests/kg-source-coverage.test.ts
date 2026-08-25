@@ -49,7 +49,8 @@ const CONTENT_SURFACE_INVENTORY: Record<string, (keyof typeof KG_SOURCES)[]> = {
   "assistant replies (all channels)": ["assistant_replies"],
   "marketing social posts": ["social_posts"],
   "platform blog": ["platform_blog"],
-  "authored contact notes (team log)": ["contact_notes"]
+  "authored contact notes (team log)": ["contact_notes"],
+  "owner-defined custom tables (Tables)": ["custom_tables"]
 };
 
 /**
