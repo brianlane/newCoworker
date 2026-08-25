@@ -800,6 +800,79 @@ describe("WHATSAPP_TEMPLATE_LANGUAGE_ES", () => {
   });
 });
 
+describe("templateShapeIsRegistrable", () => {
+  // Meta refuses some template bodies at CREATE time, before any human
+  // review. A refused POST is recorded as "FAILED" by
+  // registerWhatsAppTemplates, which is indistinguishable from a genuine
+  // rejection, and deliverWhatsApp then declines every out-of-window send
+  // using that template. On 2026-08-25 `nc_owner_alert` was found to have
+  // never registered on ANY WABA since the channel shipped: owner alerts
+  // could not go out over WhatsApp at all, and nothing surfaced it.
+  //
+  // Both rules below come from the errors Meta returned for that body.
+  const VARIABLE = /\{\{\d+\}\}/g;
+
+  /** Rule 1, subcode 2388299: no leading or trailing variable. */
+  function hasEdgeVariable(body: string): boolean {
+    const trimmed = body.trim();
+    return /^\{\{\d+\}\}/.test(trimmed) || /\{\{\d+\}\}$/.test(trimmed);
+  }
+
+  /**
+   * Rule 2, subcode 2388293: a body needs enough fixed words for the
+   * variables it carries. Meta does not publish the formula, so this is a
+   * conservative floor of our own, calibrated on observed outcomes:
+   * `nc_owner_alert` was REFUSED at 2 fixed words per variable, while
+   * `nc_contact_followup` (6) and the corrected `nc_owner_alert` (5) were
+   * both accepted. Four sits between them, so this fails a body that is
+   * heading for a refusal without pinning a number Meta never promised.
+   */
+  const MIN_FIXED_WORDS_PER_VARIABLE = 4;
+
+  function fixedWordsPerVariable(body: string): number {
+    const variables = body.match(VARIABLE)?.length ?? 0;
+    const fixedWords = body
+      .replace(VARIABLE, " ")
+      .split(/\s+/)
+      .filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+    return variables === 0 ? Number.POSITIVE_INFINITY : fixedWords / variables;
+  }
+
+  it("every stock template body can actually be registered", () => {
+    expect(WHATSAPP_STOCK_TEMPLATES.length).toBeGreaterThan(0);
+    for (const template of WHATSAPP_STOCK_TEMPLATES) {
+      const label = `${template.name} [${template.language}]`;
+      expect(hasEdgeVariable(template.bodyText), `${label} starts or ends on a variable`).toBe(
+        false
+      );
+      expect(
+        fixedWordsPerVariable(template.bodyText),
+        `${label} has too few fixed words for its variables`
+      ).toBeGreaterThanOrEqual(MIN_FIXED_WORDS_PER_VARIABLE);
+    }
+  });
+
+  it("rejects the two shapes Meta refused", () => {
+    // The exact bodies Meta turned down, kept as the regression fixture.
+    expect(hasEdgeVariable("Actualización de tu asistente de {{1}}: {{2}}")).toBe(true);
+    expect(fixedWordsPerVariable("Update from your {{1}} assistant: {{2}}")).toBeLessThan(
+      MIN_FIXED_WORDS_PER_VARIABLE
+    );
+    // A body with no variables at all is never ratio-limited.
+    expect(fixedWordsPerVariable("No variables here")).toBe(Number.POSITIVE_INFINITY);
+    expect(hasEdgeVariable("{{1}} leads the body")).toBe(true);
+  });
+
+  it("keeps every example param aligned with its body", () => {
+    for (const template of WHATSAPP_STOCK_TEMPLATES) {
+      const variables = template.bodyText.match(VARIABLE)?.length ?? 0;
+      expect(template.exampleParams.length, `${template.name} [${template.language}]`).toBe(
+        variables
+      );
+    }
+  });
+});
+
 describe("fetchWhatsAppTemplateStatuses", () => {
   it("returns only the stock templates with defensive field handling", async () => {
     fetchMock.mockResolvedValueOnce(

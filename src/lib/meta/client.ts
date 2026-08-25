@@ -850,6 +850,24 @@ export const WHATSAPP_MAX_TEXT_LENGTH = 4096;
  * out-of-window fallback can follow the recipient's language; Meta treats
  * language variants of the same name as one template with per-language
  * review status.
+ *
+ * Two body-shape rules Meta enforces at CREATE time, both learned the hard
+ * way from `nc_owner_alert` (2026-08-25). Neither is a review decision: the
+ * POST is refused outright, so a retry can never help.
+ *
+ * 1. A body may not start or end with a variable (subcode 2388299, "Leading
+ *    or Trailing Params Not Allowed"). The old Spanish body ended on
+ *    `{{2}}`.
+ * 2. A body needs enough fixed words for the variables it carries (subcode
+ *    2388293, "Params Words Ratio Exceeds Limit"). The old English body
+ *    spent two variables on four fixed words.
+ *
+ * Because registerWhatsAppTemplates records EVERY creation failure as
+ * "FAILED", exactly like a genuine rejection, this looked like Meta saying
+ * no for five days while the template had in fact never been created at
+ * all. deliverWhatsApp then refused every out-of-window owner alert on
+ * every WABA. `templateShapeIsRegistrable` in tests/meta-client.test.ts
+ * pins both rules so a new template cannot reintroduce either.
  */
 
 /**
@@ -876,14 +894,15 @@ export const WHATSAPP_STOCK_TEMPLATES = [
     name: "nc_owner_alert",
     language: "en_US",
     category: "UTILITY" as const,
-    bodyText: "Update from your {{1}} assistant: {{2}}",
+    bodyText: "Update from your {{1}} assistant: {{2}} Open your dashboard for the details.",
     exampleParams: ["Acme Plumbing", "You have a new lead waiting."]
   },
   {
     name: "nc_owner_alert",
     language: WHATSAPP_TEMPLATE_LANGUAGE_ES,
     category: "UTILITY" as const,
-    bodyText: "Actualización de tu asistente de {{1}}: {{2}}",
+    bodyText:
+      "Actualización de tu asistente de {{1}}: {{2}} Abre tu panel para ver los detalles.",
     exampleParams: ["Acme Plumbing", "Tienes un lead nuevo esperando."]
   },
   {
