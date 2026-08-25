@@ -42,7 +42,8 @@ vi.mock("@/lib/meta/client", async (importOriginal) => ({
 vi.mock("@/lib/meta/webhook-extras", () => ({
   processMetaEchoEvent: vi.fn(async () => false),
   processMetaReferralEvent: vi.fn(async () => false),
-  processMetaTemplateStatusEvent: vi.fn(async () => false)
+  processMetaTemplateStatusEvent: vi.fn(async () => false),
+  processMetaMessageStatusEvent: vi.fn(async () => false)
 }));
 vi.mock("@/lib/meta/token-health", () => ({
   reportMetaCallFailure: vi.fn(async () => false),
@@ -117,7 +118,8 @@ describe("parseMetaWebhookBody", () => {
       comments: [],
       echoes: [],
       referrals: [],
-      templateStatuses: []
+      templateStatuses: [],
+      messageStatuses: []
     };
     expect(parseMetaWebhookBody({ object: "permissions", entry: [] })).toEqual(empty);
     // A feed change with an empty value is not a comment: no item, no verb.
@@ -237,7 +239,7 @@ describe("parseMetaWebhookBody", () => {
                 ]
               }
             },
-            // Receipts-only change (statuses) and non-messages fields: ignored.
+            // A receipt with neither id nor status carries nothing to apply.
             { field: "messages", value: { metadata: { phone_number_id: "pn-9" }, statuses: [{}] } },
             { field: "message_template_status_update", value: {} },
             // Missing phone_number_id: unroutable, skipped.
@@ -762,6 +764,7 @@ describe("processMetaWebhookEvents", () => {
     insertMessengerJobMock.mockResolvedValue({ id: "job-9" });
 
     const result = await processMetaWebhookEvents({
+      messageStatuses: [],
       echoes: [],
       referrals: [],
       templateStatuses: [],
@@ -800,6 +803,7 @@ describe("processMetaWebhookEvents", () => {
   it("counts rate-limited message events separately (route flips to 429)", async () => {
     rateLimitMock.mockReturnValue({ success: false });
     const result = await processMetaWebhookEvents({
+      messageStatuses: [],
       echoes: [],
       referrals: [],
       templateStatuses: [],
@@ -1410,6 +1414,7 @@ describe("processMetaWebhookEvents: the new families are dispatched", () => {
     vi.mocked(extras.processMetaTemplateStatusEvent).mockResolvedValue(true);
 
     const result = await processMetaWebhookEvents({
+      messageStatuses: [],
       leadgen: [],
       messages: [],
       comments: [],
@@ -1452,6 +1457,7 @@ describe("processMetaWebhookEvents: the new families are dispatched", () => {
     vi.mocked(extras.processMetaTemplateStatusEvent).mockResolvedValue(false);
 
     const result = await processMetaWebhookEvents({
+      messageStatuses: [],
       leadgen: [],
       messages: [],
       comments: [],
@@ -1482,5 +1488,134 @@ describe("processMetaWebhookEvents: the new families are dispatched", () => {
       ]
     });
     expect(result.handled).toBe(0);
+  });
+});
+
+describe("parseMetaWebhookBody: WhatsApp delivery receipts", () => {
+  it("extracts receipts, error details, and Meta's second-precision timestamp", () => {
+    const parsed = parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-9",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "pn-9" },
+                statuses: [
+                  { id: "wamid.A", status: "delivered", timestamp: "1787640419" },
+                  {
+                    id: "wamid.B",
+                    status: "failed",
+                    timestamp: 1787640419,
+                    errors: [{ code: 131049, title: "Undeliverable", message: "dropped" }]
+                  },
+                  // Title missing: the longer `message` stands in.
+                  {
+                    id: "wamid.C",
+                    status: "failed",
+                    errors: [{ code: "131047", message: "Re-engagement required" }]
+                  },
+                  // Unusable rows: no id, no status.
+                  { status: "read" },
+                  { id: "wamid.D" }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(parsed?.messageStatuses).toEqual([
+      {
+        accountId: "pn-9",
+        mid: "wamid.A",
+        status: "delivered",
+        errorCode: null,
+        errorTitle: null,
+        // Meta sends unix SECONDS. Treating them as milliseconds would date
+        // every receipt to 1970 and make the column useless for ordering.
+        occurredAt: "2026-08-25T06:46:59.000Z"
+      },
+      {
+        accountId: "pn-9",
+        mid: "wamid.B",
+        status: "failed",
+        errorCode: "131049",
+        errorTitle: "Undeliverable",
+        occurredAt: "2026-08-25T06:46:59.000Z"
+      },
+      {
+        accountId: "pn-9",
+        mid: "wamid.C",
+        status: "failed",
+        errorCode: "131047",
+        errorTitle: "Re-engagement required",
+        occurredAt: null
+      }
+    ]);
+  });
+
+  it("leaves the receipt list empty for a payload that carries none", () => {
+    const parsed = parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-9",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "pn-9" },
+                messages: [{ id: "m1", from: "1555", type: "text", text: { body: "hi" } }]
+              }
+            }
+          ]
+        }
+      ]
+    });
+    expect(parsed?.messageStatuses).toEqual([]);
+  });
+});
+
+describe("processMetaWebhookEvents: delivery receipts reach their handler", () => {
+  it("routes messageStatuses and counts each handled one", async () => {
+    // The loop is the only thing between a parsed receipt and the writer.
+    // Without it the parser fills an array nobody reads, which is the exact
+    // shape of the bug this feature fixes.
+    const extras = await import("@/lib/meta/webhook-extras");
+    vi.mocked(extras.processMetaEchoEvent).mockResolvedValue(false);
+    vi.mocked(extras.processMetaReferralEvent).mockResolvedValue(false);
+    vi.mocked(extras.processMetaTemplateStatusEvent).mockResolvedValue(false);
+    vi.mocked(extras.processMetaMessageStatusEvent).mockReset();
+    vi.mocked(extras.processMetaMessageStatusEvent)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const receipt = (mid: string) => ({
+      accountId: "pn-9",
+      mid,
+      status: "delivered",
+      errorCode: null,
+      errorTitle: null,
+      occurredAt: null
+    });
+
+    const result = await processMetaWebhookEvents({
+      leadgen: [],
+      messages: [],
+      comments: [],
+      echoes: [],
+      referrals: [],
+      templateStatuses: [],
+      messageStatuses: [receipt("wamid.A"), receipt("wamid.B")]
+    });
+
+    expect(extras.processMetaMessageStatusEvent).toHaveBeenCalledTimes(2);
+    // Only the receipt the handler acted on counts, so a no-op receipt
+    // cannot inflate the handled total.
+    expect(result.handled).toBe(1);
   });
 });

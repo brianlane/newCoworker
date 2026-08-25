@@ -16,12 +16,15 @@ vi.mock("@/lib/db/meta-connections", () => ({
   getActiveMetaConnectionByPageId: vi.fn(),
   getActiveMetaConnectionByInstagramId: vi.fn()
 }));
-vi.mock("@/lib/messenger/db", () => ({
+vi.mock("@/lib/messenger/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/messenger/db")>()),
   appendMessengerMessage: vi.fn(),
+  applyMessengerDeliveryStatus: vi.fn(),
   findMessengerConversation: vi.fn(),
   setMessengerConversationReferral: vi.fn()
 }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({
+  getActiveWhatsAppConnectionByPhoneNumberId: vi.fn(),
   listActiveWhatsAppConnectionsByWabaId: vi.fn(),
   updateWhatsAppTemplates: vi.fn()
 }));
@@ -29,6 +32,7 @@ vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 
 import {
   processMetaEchoEvent,
+  processMetaMessageStatusEvent,
   processMetaReferralEvent,
   processMetaTemplateStatusEvent
 } from "@/lib/meta/webhook-extras";
@@ -38,10 +42,12 @@ import {
 } from "@/lib/db/meta-connections";
 import {
   appendMessengerMessage,
+  applyMessengerDeliveryStatus,
   findMessengerConversation,
   setMessengerConversationReferral
 } from "@/lib/messenger/db";
 import {
+  getActiveWhatsAppConnectionByPhoneNumberId,
   listActiveWhatsAppConnectionsByWabaId,
   updateWhatsAppTemplates
 } from "@/lib/db/whatsapp-connections";
@@ -433,5 +439,110 @@ describe("processMetaTemplateStatusEvent", () => {
 
     wabaConns.mockResolvedValue([{ business_id: BIZ, templates: null }] as never);
     expect(await processMetaTemplateStatusEvent(STATUS)).toBe(false);
+  });
+});
+
+describe("processMetaMessageStatusEvent", () => {
+  const byNumber = vi.mocked(getActiveWhatsAppConnectionByPhoneNumberId);
+  const apply = vi.mocked(applyMessengerDeliveryStatus);
+  const event = (over: Partial<Parameters<typeof processMetaMessageStatusEvent>[0]> = {}) => ({
+    accountId: "pn-1",
+    mid: "wamid.ABC",
+    status: "delivered",
+    errorCode: null,
+    errorTitle: null,
+    occurredAt: "2026-08-25T06:46:59.000Z",
+    ...over
+  });
+
+  beforeEach(() => {
+    byNumber.mockReset();
+    apply.mockReset();
+    vi.mocked(recordSystemLog).mockReset();
+    byNumber.mockResolvedValue({ business_id: BIZ } as never);
+    apply.mockResolvedValue("applied");
+  });
+
+  it("records a receipt against the message the wamid names", async () => {
+    expect(await processMetaMessageStatusEvent(event())).toBe(true);
+    expect(apply).toHaveBeenCalledWith({
+      businessId: BIZ,
+      mid: "wamid.ABC",
+      status: "delivered",
+      errorCode: null,
+      errorTitle: null,
+      timestamp: "2026-08-25T06:46:59.000Z"
+    });
+    // Routine receipts stay quiet: only a failure is owner-visible.
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
+  it("escalates a FAILED receipt to an owner-visible system log", async () => {
+    const ok = await processMetaMessageStatusEvent(
+      event({ status: "failed", errorCode: "131049", errorTitle: "Not delivered" })
+    );
+    expect(ok).toBe(true);
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.level).toBe("error");
+    expect(logged.event).toBe("whatsapp_message_failed");
+    // The error code is the only thing that explains a silent drop, so it
+    // has to survive into the message a human reads.
+    expect(logged.message).toContain("131049");
+    expect(logged.message).toContain("Not delivered");
+  });
+
+  it("normalizes case and ignores a status the column cannot hold", async () => {
+    expect(await processMetaMessageStatusEvent(event({ status: "READ" }))).toBe(true);
+    expect(apply.mock.calls[0][0].status).toBe("read");
+    // Meta adds states over time; an unmodelled one is not an error, and it
+    // must not reach the DB where a check constraint would reject it.
+    apply.mockClear();
+    expect(await processMetaMessageStatusEvent(event({ status: "deleted" }))).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing for a stale, unknown, or unconnected receipt", async () => {
+    // A receipt for a message we never wrote (a human replying from the Meta
+    // inbox) and an out-of-order one are both routine, not failures.
+    apply.mockResolvedValue("not_found");
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+    apply.mockResolvedValue("stale");
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+    expect(recordSystemLog).not.toHaveBeenCalled();
+
+    byNumber.mockResolvedValue(null);
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+  });
+
+  it("survives a connection lookup or write that throws", async () => {
+    byNumber.mockRejectedValue(new Error("db down"));
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+
+    byNumber.mockResolvedValue({ business_id: BIZ } as never);
+    apply.mockRejectedValue(new Error("update failed"));
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+
+    // A non-Error rejection must not itself throw while being logged.
+    apply.mockRejectedValue("plain string");
+    expect(await processMetaMessageStatusEvent(event())).toBe(false);
+  });
+
+  it("still reports a failure Meta declined to explain", async () => {
+    // Meta does not always attach errors[]. The alert has to stand on its
+    // own rather than rendering a dangling colon or an empty code.
+    const ok = await processMetaMessageStatusEvent(
+      event({ status: "failed", errorCode: null, errorTitle: null })
+    );
+    expect(ok).toBe(true);
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.message).toBe("WhatsApp did not deliver a message");
+  });
+
+  it("never masks a failure with a receipt that was already in flight", async () => {
+    // A `failed` send can still have a `sent` receipt behind it. The column
+    // keeps the failure, so the failure must outrank it.
+    apply.mockResolvedValue("stale");
+    expect(await processMetaMessageStatusEvent(event({ status: "sent" }))).toBe(false);
+    expect(recordSystemLog).not.toHaveBeenCalled();
   });
 });

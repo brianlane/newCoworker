@@ -189,7 +189,8 @@ describe("deliverWhatsApp", () => {
       conversationId: CONV_ID,
       businessId: BIZ,
       role: "owner",
-      content: "Following up on your quote."
+      content: "Following up on your quote.",
+      mid: "wamid-text"
     });
   });
 
@@ -522,5 +523,20 @@ describe("deliverWhatsApp", () => {
     const result = await deliverWhatsApp(INPUT, createNull);
     expect(result).toMatchObject({ ok: true });
     expect(createNull.appendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverWhatsApp: the wamid is what makes a receipt attachable", () => {
+  it("stores the provider message id on the transcript row for both send kinds", async () => {
+    // Meta's delivery receipts name a message by wamid. Not storing it is
+    // why an accepted-then-dropped message was indistinguishable from a
+    // delivered one: there was nothing for the receipt to join to.
+    const inWindow = makeDeps();
+    await deliverWhatsApp(INPUT, inWindow);
+    expect(vi.mocked(inWindow.appendMessage).mock.calls[0][0].mid).toBe("wamid-text");
+
+    const outOfWindow = makeDeps({ getConversation: vi.fn(async () => null) });
+    await deliverWhatsApp({ ...INPUT, audience: "owner" }, outOfWindow);
+    expect(vi.mocked(outOfWindow.appendMessage).mock.calls[0][0].mid).toBe("wamid-tmpl");
   });
 });

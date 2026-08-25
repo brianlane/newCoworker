@@ -51,7 +51,45 @@ export type MessengerMessageRow = {
   content: string;
   mid: string | null;
   created_at: string;
+  delivery_status?: MessengerDeliveryStatus | null;
+  delivery_error_code?: string | null;
+  delivery_error_title?: string | null;
+  delivery_updated_at?: string | null;
 };
+
+/**
+ * Meta's receipt states for an outbound message. `failed` is terminal and
+ * carries an error code; the other three are a strict progression.
+ */
+export type MessengerDeliveryStatus = "sent" | "delivered" | "read" | "failed";
+
+/**
+ * Receipts arrive out of order (a `delivered` webhook can land before the
+ * `sent` one for the same message), so a raw last-write-wins update would
+ * report a delivered message as merely sent. Rank orders the progression
+ * and the writer refuses to move backwards.
+ *
+ * `failed` sits at the top because it is terminal and is the state the
+ * whole feature exists to surface: it must never be masked by a `sent`
+ * receipt that was already in flight when the send failed.
+ */
+const DELIVERY_STATUS_RANK: Record<MessengerDeliveryStatus, number> = {
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 4
+};
+
+/** The same states as a list, for building the update's rank predicate. */
+const DELIVERY_STATUS_ORDER = Object.keys(DELIVERY_STATUS_RANK) as MessengerDeliveryStatus[];
+
+export function deliveryStatusOutranks(
+  next: MessengerDeliveryStatus,
+  current: MessengerDeliveryStatus | null | undefined
+): boolean {
+  if (!current) return true;
+  return DELIVERY_STATUS_RANK[next] > DELIVERY_STATUS_RANK[current];
+}
 
 export type MessengerJobRow = {
   id: string;
@@ -376,6 +414,75 @@ export async function appendMessengerMessage(
     throw new Error(`appendMessengerMessage: ${error.message}`);
   }
   return data as MessengerMessageRow;
+}
+
+/**
+ * Apply a Meta delivery receipt to the outbound row it belongs to, keyed by
+ * the wamid the send stored. Returns what happened so the caller can log a
+ * failed delivery loudly and stay quiet about the routine ones.
+ *
+ * `not_found` is expected and benign: Meta also sends receipts for messages
+ * this system did not write (a human replying from the Meta inbox), and for
+ * anything sent before the wamid was persisted.
+ */
+export async function applyMessengerDeliveryStatus(
+  input: {
+    businessId: string;
+    mid: string;
+    status: MessengerDeliveryStatus;
+    errorCode?: string | null;
+    errorTitle?: string | null;
+    timestamp?: string | null;
+  },
+  client?: SupabaseClient
+): Promise<"applied" | "stale" | "not_found"> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data: existing, error: readError } = await db
+    .from("messenger_messages")
+    .select("id, delivery_status")
+    .eq("business_id", input.businessId)
+    .eq("mid", input.mid)
+    .maybeSingle();
+  if (readError) throw new Error(`applyMessengerDeliveryStatus: ${readError.message}`);
+  if (!existing) return "not_found";
+  const row = existing as { id: number; delivery_status: MessengerDeliveryStatus | null };
+  // Fast path only: skips a pointless write. It is NOT what makes the
+  // ordering safe, because the row can change between this read and the
+  // update below. The predicate on the update is what actually enforces it.
+  if (!deliveryStatusOutranks(input.status, row.delivery_status)) return "stale";
+
+  // Meta fires sent/delivered/read within milliseconds of each other, and
+  // separate webhook POSTs run as separate concurrent invocations. Two of
+  // them reading the same snapshot would both pass the check above, and
+  // last-write-wins could then drop a `delivered` back to `sent`, or worse
+  // bury a `failed`. Re-checking the rank in the UPDATE's own WHERE clause
+  // closes that: Postgres evaluates it under the row lock, so the loser of
+  // a race matches zero rows instead of overwriting the winner.
+  const outranked = DELIVERY_STATUS_ORDER.filter(
+    (candidate) => DELIVERY_STATUS_RANK[candidate] < DELIVERY_STATUS_RANK[input.status]
+  );
+  const rankGuard =
+    outranked.length > 0
+      ? `delivery_status.is.null,delivery_status.in.(${outranked.join(",")})`
+      : "delivery_status.is.null";
+
+  const { data: updated, error } = await db
+    .from("messenger_messages")
+    .update({
+      delivery_status: input.status,
+      // Only a failure carries these, and a later failure must be able to
+      // replace an earlier one's code rather than append to it.
+      delivery_error_code: input.status === "failed" ? (input.errorCode ?? null) : null,
+      delivery_error_title: input.status === "failed" ? (input.errorTitle ?? null) : null,
+      delivery_updated_at: input.timestamp ?? new Date().toISOString()
+    })
+    .eq("id", row.id)
+    .or(rankGuard)
+    // A PostgREST update matching zero rows is NOT an error, so the returned
+    // rows are the only way to tell "written" from "lost the race".
+    .select("id");
+  if (error) throw new Error(`applyMessengerDeliveryStatus: ${error.message}`);
+  return (updated ?? []).length > 0 ? "applied" : "stale";
 }
 
 /**
