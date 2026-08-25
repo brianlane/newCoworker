@@ -493,12 +493,25 @@ describe("rows", () => {
     );
   });
 
-  it("names the failing column in plain English", async () => {
+  it("lets a BLANK row be created even when a column is required", async () => {
+    // The grid's Add row makes an empty starter row, which a spreadsheet has
+    // to allow. Refusing it would mean a table with one required column can
+    // never gain a row from the UI at all.
     vi.mocked(getCustomTable).mockResolvedValue({
       ...TABLE,
       fields: [{ ...FIELD, required: true }]
     } as never);
     const res = await ROWS_POST(post(rowsUrl(), { values: {} }), tableParams());
+    expect(res.status).toBe(200);
+  });
+
+  it("names the failing column in plain English", async () => {
+    // A row sent WITH cells is a real submission, so required still holds.
+    vi.mocked(getCustomTable).mockResolvedValue({
+      ...TABLE,
+      fields: [{ ...FIELD, required: true }, { ...FIELD, id: "city", label: "City" }]
+    } as never);
+    const res = await ROWS_POST(post(rowsUrl(), { values: { city: "Phoenix" } }), tableParams());
     expect(res.status).toBe(400);
     expect((await res.json()).error.message).toBe("Address is required.");
   });
@@ -539,6 +552,16 @@ describe("one row", () => {
     await ROW_PATCH(patch(rowUrl(), { contactId: null }), rowParams());
     const arg = vi.mocked(updateCustomTableRow).mock.calls[0][2];
     expect(arg).toEqual({ values: undefined, clear: undefined, contactId: null });
+  });
+
+  it("saves ONE cell on a table that has a required column", async () => {
+    // Partial: a column nobody mentioned is a column nobody is touching.
+    vi.mocked(getCustomTable).mockResolvedValue({
+      ...TABLE,
+      fields: [{ ...FIELD, required: true }, { ...FIELD, id: "city", label: "City" }]
+    } as never);
+    const res = await ROW_PATCH(patch(rowUrl(), { values: { city: "Tempe" } }), rowParams());
+    expect(res.status).toBe(200);
   });
 
   it("names the failing column on a bad cell", async () => {

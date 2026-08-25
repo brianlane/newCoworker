@@ -112,7 +112,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ tableId: s
     const body = rowCreateSchema.parse(await request.json());
     try {
       const table = await getCustomTable(businessId, tableId);
-      const checked = validateRowValues(table.fields, body.values);
+      // A row sent with NO cells is a blank starter row, which is what the
+      // grid's Add row button creates: a spreadsheet lets you make the row
+      // and then fill it in. A row sent WITH cells is a real submission and
+      // has to satisfy the table's required columns, which is the path the
+      // coworker uses.
+      const blank = Object.keys(body.values).length === 0;
+      const checked = validateRowValues(table.fields, body.values, { partial: blank });
       if (!checked.ok) {
         return errorResponse("VALIDATION_ERROR", describeRowErrors(table.fields, checked.errors));
       }

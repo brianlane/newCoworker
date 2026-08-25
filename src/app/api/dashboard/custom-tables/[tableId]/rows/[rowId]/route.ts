@@ -71,7 +71,11 @@ export async function PATCH(
       let values: Record<string, never> | undefined;
       let clear: string[] | undefined;
       if (body.values) {
-        const checked = validateRowValues(table.fields, body.values);
+        // PARTIAL: a one-cell save sends only that cell, and a column
+        // nobody mentioned is a column nobody is touching. Validating the
+        // whole row here would report every other required column as
+        // missing, so marking one column required would freeze the grid.
+        const checked = validateRowValues(table.fields, body.values, { partial: true });
         if (!checked.ok) {
           return errorResponse("VALIDATION_ERROR", describeRowErrors(table.fields, checked.errors));
         }

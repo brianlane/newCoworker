@@ -12,8 +12,9 @@
  * grid's scroll position, but the page does read `?row=<id>` on mount, which
  * costs nothing and lets the coworker link straight to a row it just made.
  */
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Trash2, X } from "lucide-react";
+import { Trash2, User, X } from "lucide-react";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { formatFieldValue } from "@/lib/custom-tables/core";
 import type {
@@ -23,14 +24,123 @@ import type {
 } from "@/lib/custom-tables/types";
 
 type Props = {
+  businessId: string;
   table: CustomTable;
   row: CustomTableRowWithContact;
   onClose: () => void;
   onSaveCell: (rowId: string, fieldId: string, raw: CustomTableFieldValue | null) => Promise<void>;
+  onSetContact: (rowId: string, contactId: string | null) => Promise<void>;
   onDelete: () => void;
 };
 
-export function TableRowDrawer({ table, row, onClose, onSaveCell, onDelete }: Props) {
+type ContactHit = { id: string; displayName: string | null; customerE164: string };
+
+/**
+ * Type-ahead over the business's contacts, for a table whose rows each
+ * belong to one person.
+ *
+ * The creation wizard promises "you pick the person when you add a row", so
+ * this has to exist or that sentence is a lie: a Policies table would fill
+ * up with rows attached to nobody.
+ */
+function ContactPicker({
+  businessId,
+  row,
+  onPick,
+  onClear
+}: {
+  businessId: string;
+  row: CustomTableRowWithContact;
+  onPick: (contactId: string) => void;
+  onClear: () => void;
+}) {
+  const t = useTranslations("dashboard.tables");
+  const [search, setSearch] = useState("");
+  const [hits, setHits] = useState<ContactHit[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    const q = search.trim();
+    // Everything runs inside the debounce callback, never synchronously in
+    // the effect body, so the set-state-in-effect rule does not apply.
+    timer.current = setTimeout(() => {
+      if (!q) {
+        setHits([]);
+        return;
+      }
+      void fetch(
+        `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&search=${encodeURIComponent(q)}&limit=8`,
+        { cache: "no-store" }
+      )
+        .then((r) => r.json())
+        .then((json) => setHits(json?.data?.customers ?? []))
+        .catch(() => setHits([]));
+    }, 250);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [search, businessId]);
+
+  if (row.contactId) {
+    return (
+      <div className="mt-1 flex items-center gap-2">
+        <span className="inline-flex items-center gap-1 rounded-full bg-parchment/10 px-2 py-1 text-xs text-parchment/80">
+          <User className="h-3 w-3" />
+          {row.contactName ?? row.contactE164}
+        </span>
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-parchment/40 hover:text-parchment"
+          aria-label={t("clearContact")}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative mt-1">
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t("contactSearchPlaceholder")}
+        aria-label={t("pickContact")}
+        className="block w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-sm text-parchment placeholder:text-parchment/30"
+      />
+      {hits.length > 0 && (
+        <div className="absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-md border border-parchment/15 bg-deep-ink">
+          {hits.map((hit) => (
+            <button
+              key={hit.id}
+              type="button"
+              onClick={() => {
+                onPick(hit.id);
+                setSearch("");
+                setHits([]);
+              }}
+              className="block w-full px-2 py-1.5 text-left text-xs text-parchment/80 hover:bg-parchment/10"
+            >
+              {hit.displayName ?? hit.customerE164}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TableRowDrawer({
+  businessId,
+  table,
+  row,
+  onClose,
+  onSaveCell,
+  onSetContact,
+  onDelete
+}: Props) {
   const t = useTranslations("dashboard.tables");
 
   const commit = (fieldId: string, raw: string) => {
@@ -141,12 +251,15 @@ export function TableRowDrawer({ table, row, onClose, onSaveCell, onDelete }: Pr
       </div>
 
       {table.rowLink === "contact" && (
-        <p className="mt-4 text-xs text-parchment/50">
-          {t("contactColumn")}:{" "}
-          {row.contactName ?? row.contactE164 ?? (
-            <span className="text-parchment/30">{t("noContact")}</span>
-          )}
-        </p>
+        <div className="mt-4">
+          <span className="text-xs text-parchment/50">{t("contactColumn")}</span>
+          <ContactPicker
+            businessId={businessId}
+            row={row}
+            onPick={(contactId) => void onSetContact(row.id, contactId)}
+            onClear={() => void onSetContact(row.id, null)}
+          />
+        </div>
       )}
 
       <div className="mt-5 space-y-1 border-t border-parchment/10 pt-3 text-[11px] text-parchment/35">

@@ -127,7 +127,10 @@ export function CustomTableWorkspace({
   const saveCell = async (rowId: string, fieldId: string, raw: CustomTableFieldValue | null) => {
     const field = table.fields.find((f) => f.id === fieldId);
     if (!field || !rows) return;
-    const before = rows;
+    // Just this cell's old value, never a snapshot of the whole grid: two
+    // overlapping saves would otherwise share a stale array, and one
+    // failing would roll back the other cell's edit on screen.
+    const previous = rows.find((row) => row.id === rowId)?.values[fieldId];
 
     let next: CustomTableFieldValue | null = raw;
     if (typeof raw === "string") {
@@ -165,7 +168,32 @@ export function CustomTableWorkspace({
         body: JSON.stringify({ values: { [fieldId]: next === null ? "" : next } })
       }).then((r) => readEnvelope<unknown>(r));
     } catch (e) {
-      setRows(before);
+      setRows((prev) =>
+        (prev ?? []).map((row) => {
+          if (row.id !== rowId) return row;
+          const values = { ...row.values };
+          if (previous === undefined) delete values[fieldId];
+          else values[fieldId] = previous;
+          return { ...row, values };
+        })
+      );
+      setError(e instanceof Error ? e.message : t("saveFailed"));
+    }
+  };
+
+  /** Attach or detach the person a contact-linked row is about. */
+  const setRowContact = async (rowId: string, contactId: string | null) => {
+    setError(null);
+    try {
+      await fetch(`${base}/rows/${encodeURIComponent(rowId)}?${suffix}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactId })
+      }).then((r) => readEnvelope<unknown>(r));
+      // Reload rather than patching state: the contact's NAME comes from the
+      // join, which this component does not have.
+      await load(query);
+    } catch (e) {
       setError(e instanceof Error ? e.message : t("saveFailed"));
     }
   };
@@ -174,14 +202,11 @@ export function CustomTableWorkspace({
     setBusy(true);
     setError(null);
     try {
-      // Required columns cannot be filled in from a blank row, so the drawer
-      // is where a table with them gets its first values. An empty create
-      // would just 400.
-      const checked = validateRowValues(table.fields, {});
-      if (!checked.ok) {
-        setError(describeRowErrors(table.fields, checked.errors));
-        return;
-      }
+      // A blank starter row, on purpose: a spreadsheet lets you make the row
+      // and then fill it in. The server treats an empty bag as blank and
+      // skips the required check for it; required columns still hold for a
+      // real submission, including everything the coworker writes. The
+      // drawer opens straight after so the owner can fill them in.
       const data = await fetch(`${base}/rows?${suffix}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -419,10 +444,12 @@ export function CustomTableWorkspace({
 
       {drawerRow && (
         <TableRowDrawer
+          businessId={businessId}
           table={table}
           row={drawerRow}
           onClose={() => setDrawerRowId(null)}
           onSaveCell={saveCell}
+          onSetContact={setRowContact}
           onDelete={() => void deleteRow(drawerRow.id)}
         />
       )}

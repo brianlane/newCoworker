@@ -260,6 +260,32 @@ describe("validateRowValues", () => {
     });
   });
 
+  it("in partial mode, a required column nobody mentioned is not missing", () => {
+    // A one-cell save sends only that cell. Validating the whole row would
+    // report every OTHER required column as missing, so marking one column
+    // required would freeze the entire grid.
+    const two = [
+      field({ id: "name", required: true }),
+      field({ id: "notes", required: false })
+    ];
+    expect(validateRowValues(two, { notes: "just this cell" }, { partial: true })).toEqual({
+      ok: true,
+      values: { notes: "just this cell" },
+      cleared: []
+    });
+    // The same input WITHOUT partial is a full submission, so it still fails.
+    expect(validateRowValues(two, { notes: "just this cell" })).toEqual({
+      ok: false,
+      errors: [{ fieldId: "name", code: "required" }]
+    });
+  });
+
+  it("still refuses to blank a required cell, even in partial mode", () => {
+    expect(
+      validateRowValues([field({ id: "name", required: true })], { name: "" }, { partial: true })
+    ).toEqual({ ok: false, errors: [{ fieldId: "name", code: "required" }] });
+  });
+
   it("tells a cell that was never mentioned apart from one sent blank", () => {
     // Both store nothing. Only the second is a request to CLEAR, and a
     // merge that could not tell them apart would make emptying a cell
