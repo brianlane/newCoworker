@@ -829,20 +829,40 @@ describe("intakeSystemInstruction: reporting a recording", () => {
  */
 describe("voice personas never invent a contact detail", () => {
   it("the rule states the mechanism and the consequence, not just a ban", () => {
-    expect(NO_INVENTED_CONTACT_LINE).toContain("NEVER say a phone number");
+    expect(NO_INVENTED_CONTACT_LINE).toContain("NEVER invent a contact detail");
     expect(NO_INVENTED_CONTACT_LINE).toContain("character for character");
-    // The "why" is what makes it stick: the number is DIALLED by a real lead.
+    // The "why" is what makes it stick: a real person ACTS on the detail.
     expect(NO_INVENTED_CONTACT_LINE).toContain("reaches a stranger");
-    expect(NO_INVENTED_CONTACT_LINE).toContain("will dial it");
+    expect(NO_INVENTED_CONTACT_LINE).toContain("will dial it or write to it");
     // And it must say what to do INSTEAD, or the model is left with a
     // forbidden action and no alternative.
     expect(NO_INVENTED_CONTACT_LINE).toContain("give none");
   });
 
-  it("does not ban repeating digits a caller just gave, which is real work", () => {
-    // The inbound intake persona is told to read a callback number back to
-    // confirm it. A blanket digit ban would fight that.
-    expect(NO_INVENTED_CONTACT_LINE).toContain("Repeating digits a caller just gave you");
+  // Framed as SOURCE rather than silence. A first draft carved out only
+  // "repeating digits back", which broke two jobs the personas are given
+  // (Bugbot, PR #1612): intake confirms an ADDRESS and an EMAIL, neither of
+  // which is digits.
+  it("permits any detail the caller themselves just gave, not only digits", () => {
+    expect(NO_INVENTED_CONTACT_LINE).toContain(
+      "the person on this call just told it to you and you are repeating it back"
+    );
+    expect(NO_INVENTED_CONTACT_LINE).toContain("Those are the only two sources");
+    // Named so the ban cannot be read as digits-only.
+    for (const kind of ["email address", "website", "street address"]) {
+      expect(NO_INVENTED_CONTACT_LINE).toContain(kind);
+    }
+  });
+
+  // A persistent NEVER outranks a mid-call coordinator cue, so without this
+  // the rule would silently gut translator calls, where relaying a real
+  // person's address or number between two humans IS the job. ONE_VOICE_LINE
+  // carries the same carve-out for the same reason.
+  it("carves out interpreter mode, like ONE_VOICE_LINE does", () => {
+    expect(NO_INVENTED_CONTACT_LINE).toContain("In interpreter mode");
+    expect(NO_INVENTED_CONTACT_LINE).toContain("pass on exactly the details a real person actually said");
+    // The carve-out must not swallow the rule it is carved out of.
+    expect(NO_INVENTED_CONTACT_LINE).toContain("never fill in one they did not");
   });
 
   it("rides EVERY persona the bridge can build", () => {

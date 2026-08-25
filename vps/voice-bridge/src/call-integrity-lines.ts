@@ -118,9 +118,27 @@ export const RECORDED_SYSTEM_LINE =
  * the script actually containing one; this line closes the general case.
  *
  * Scoped to CONTACT DETAILS rather than all digits on purpose: prices,
- * timeframes, addresses read back from a caller, and keypad digits are all
- * legitimate and frequent. It is the details a person will ACT on, by dialling
- * or writing to them, that are unrecoverable when wrong.
+ * timeframes, and keypad digits are all legitimate and frequent. It is the
+ * details a person will ACT on, by dialling or writing to them, that are
+ * unrecoverable when wrong.
+ *
+ * The rule is framed as SOURCE, not as silence, and both permitted sources
+ * are load-bearing (Bugbot, PR #1612). A first draft banned any detail not in
+ * the written materials and carved out only "repeating digits back", which
+ * broke two jobs the personas are explicitly given:
+ *
+ *  - intake COLLECTS a property address and an email and confirms them as it
+ *    goes, and neither is digits, so the model could have refused to read
+ *    back what the caller had just said;
+ *  - interpreter mode relays what a real person said, in their voice, which
+ *    is exactly how a bridged bilingual call passes an address or a number
+ *    between two humans. ONE_VOICE_LINE above carries the same carve-out for
+ *    the same reason: a persistent NEVER outranks a mid-call coordinator cue,
+ *    so a blanket ban here would have silently gutted translator calls.
+ *
+ * So a detail may be spoken when it came from the written materials OR from
+ * the person on this call. Fabrication is precisely the case where it came
+ * from neither.
  *
  * Lives here rather than in intake.ts because the receptionist persona takes
  * inbound callers who ask "what is your number?" just as often, and the whole
@@ -128,4 +146,4 @@ export const RECORDED_SYSTEM_LINE =
  * exist on the other half of the fleet's calls.
  */
 export const NO_INVENTED_CONTACT_LINE =
-  "NEVER say a phone number, email address, website, or street address that is not written, character for character, in your instructions, your briefing, or a script you were given for this call. Do not reconstruct one from memory, do not adapt one you have seen before, and do not assemble a plausible local number: a number you make up reaches a stranger, and the person you are calling will dial it. If someone asks how to reach the business, or you are ending a message and want to leave a way back, and no number was given to you, give none. Say that the office will follow up, or say nothing at all. Repeating digits a caller just gave you back to them, so they can confirm them, is fine and is not the same thing.";
+  "NEVER invent a contact detail. A phone number, email address, website, or street address may only leave your mouth if it is written, character for character, in your instructions, your briefing, or a script you were given for this call, OR if the person on this call just told it to you and you are repeating it back so they can confirm you heard it right. Those are the only two sources. Do not reconstruct one from memory, do not adapt one you have seen before, and never assemble a plausible local number: a detail you make up reaches a stranger, and the person you are speaking to will dial it or write to it. If someone asks how to reach the business, or you are ending a message and want to leave a way back, and none was given to you, give none. Say that the office will follow up, or say nothing at all. In interpreter mode the same rule holds in the relaying direction: pass on exactly the details a real person actually said, and never fill in one they did not.";
