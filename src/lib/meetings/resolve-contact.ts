@@ -102,14 +102,6 @@ export function contactKeyFromAttendeeKey(attendeeKey: string): string | null {
   return null;
 }
 
-/**
- * How many same-prefix contacts a given-name lookup will consider.
- *
- * Any name shared by this many people is ambiguous whatever the true count
- * is, so a low cap costs nothing and keeps the query bounded.
- */
-export const GIVEN_NAME_CANDIDATE_LIMIT = 10;
-
 /** Addresses spoken or pasted into a meeting, lowercased and de-duped. */
 const EMAIL_IN_TEXT_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 
@@ -177,24 +169,28 @@ export async function findContactIdByUniqueName(
 }
 
 /**
- * The single contact whose display name IS this name or BEGINS with it, or
- * null.
+ * The single contact whose display name IS this name, or begins with it as a
+ * whole word, or null.
  *
  * Source 4 reads vocatives, and a vocative is a first name: the host says
  * "Hey, Bobby", never "Hey, Bobby Smith". Contacts are stored under full
  * names, so the exact-equality rule source 3 uses finds nobody and the whole
- * wrong-Zoom-account fallback never fires (Bugbot, PR #1618).
+ * wrong-Zoom-account fallback never fires.
  *
  * Widening the match does NOT widen the guarantee: the answer is still the
- * SINGLE contact who qualifies, counted across the exact form and the
- * "given name plus surname" form together. A "Bobby" and a "Bobby Smith" on
- * the same roster is ambiguous and resolves to nobody, exactly as two
- * Bobby Smiths would.
+ * SINGLE contact who qualifies, counted across both shapes together. A
+ * "Bobby" and a "Bobby Smith" on the same roster is ambiguous and resolves to
+ * nobody, exactly as two Bobby Smiths would.
  *
- * A prefix is deliberately not enough on its own: "Bobby" must not match
- * "Bobbyson", so the candidates come back on a prefix query and are then
- * re-checked in JS for equality or a word boundary. Same belt-and-braces
- * re-verify `findContactIdByUniqueName` applies.
+ * TWO queries rather than one prefix query with a JS filter. A `Bobby%`
+ * prefix also returns "Bobbyson", so the page can fill up with rows that fail
+ * the word-boundary check and hide a second real "Bobby ..." behind the row
+ * limit, at which point one surviving hit looks unique when it is not
+ * (Bugbot, PR #1618). Asking for the two qualifying shapes SEPARATELY means
+ * every returned row already counts, so a limit of 2 per query is enough to
+ * detect ambiguity, the same way `findContactIdByUniqueName` uses it. Each
+ * query is also the single-pattern `ilike` that function already proves out,
+ * rather than a hand-built `or()` string a display name could break.
  */
 export async function findContactIdByUniqueGivenName(
   businessId: string,
@@ -204,25 +200,42 @@ export async function findContactIdByUniqueGivenName(
   if (!trimmed) return null;
   try {
     const db = await createSupabaseServiceClient();
-    // Escaped, so a name containing `_` or `%` cannot widen the query into a
-    // wildcard, the same escape every other lookup here uses.
-    const pattern = `${trimmed.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
-    const { data, error } = await db
-      .from("contacts")
-      .select("id, display_name")
-      .eq("business_id", businessId)
-      .ilike("display_name", pattern)
-      // A handful is plenty: past this the name is ambiguous either way, and
-      // an un-limited select would silently truncate at PostgREST's own cap.
-      .limit(GIVEN_NAME_CANDIDATE_LIMIT);
-    if (error) return null;
-    const rows = (data ?? []) as Array<{ id: string; display_name: string | null }>;
+    // Escaped, so a name containing `_` or `%` cannot widen either query into
+    // a wildcard, the same escape every other lookup here uses.
+    const escaped = trimmed.replace(/[%_\\]/g, (m) => `\\${m}`);
     const needle = trimmed.toLowerCase();
-    const hits = rows.filter((row) => {
+
+    /** Rows for one pattern, or null when the query itself failed. */
+    const rowsFor = async (
+      pattern: string
+    ): Promise<Array<{ id: string; display_name: string | null }> | null> => {
+      const { data, error } = await db
+        .from("contacts")
+        .select("id, display_name")
+        .eq("business_id", businessId)
+        .ilike("display_name", pattern)
+        // Two rows are enough to know the shape is ambiguous.
+        .limit(2);
+      if (error) return null;
+      return (data ?? []) as Array<{ id: string; display_name: string | null }>;
+    };
+
+    const [exact, prefixed] = await Promise.all([
+      rowsFor(escaped),
+      // The trailing space is the word boundary, in SQL rather than after the
+      // fact: "Bobby %" matches "Bobby Smith" and never "Bobbyson Clarke".
+      rowsFor(`${escaped} %`)
+    ]);
+    if (exact === null || prefixed === null) return null;
+
+    // Re-verify in JS so neither result can be a wildcard false positive, the
+    // same belt-and-braces the other lookups apply, then count across both.
+    const ids = new Set<string>();
+    for (const row of [...exact, ...prefixed]) {
       const display = (row.display_name ?? "").trim().toLowerCase();
-      return display === needle || display.startsWith(`${needle} `);
-    });
-    return hits.length === 1 ? (hits[0] as { id: string }).id : null;
+      if (display === needle || display.startsWith(`${needle} `)) ids.add(row.id);
+    }
+    return ids.size === 1 ? (ids.values().next().value as string) : null;
   } catch (err) {
     logger.warn("meeting contact: given-name lookup threw", {
       businessId,
