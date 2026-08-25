@@ -1152,6 +1152,16 @@ applied: that ladder is already full, so seating Jason there unseats Amy on a
 live path with 119 runs behind it, which should be a decision somebody typed
 rather than a side effect.
 
+**Clever seller calls leave NO voicemail (open, Aug 24 2026).** `ai_call_1`,
+`ai_call_2` and `ai_call_3` on "Clever Lead - Accept" carry no
+`voicemailTemplate`, and never have across the flow's 119 runs. Only
+ReferralExchange's `ai_call_buyer` / `ai_call_seller` do. Found while adding
+the buyer ladder, whose rungs DO leave one because their copy source is the
+ReferralExchange buyer call. So a Clever seller who does not pick up currently
+hears nothing at all. Left alone deliberately: it is pre-existing, it affects
+the seller path rather than anything the buyer change introduced, and whether
+those calls should start leaving voicemails is Amy's call.
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
