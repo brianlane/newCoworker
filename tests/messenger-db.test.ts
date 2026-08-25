@@ -41,6 +41,7 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
@@ -54,6 +55,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     eq: vi.fn(() => c),
     is: vi.fn(() => c),
+    or: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
     single: vi.fn(),
@@ -693,7 +695,7 @@ describe("applyMessengerDeliveryStatus", () => {
   const base = { businessId: BIZ, mid: "wamid.ABC", status: "delivered" as const };
 
   it("writes the receipt onto the row the wamid names", async () => {
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: 7 }], error: null });
     c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: "sent" }, error: null });
     const db = makeDb(c);
     expect(await applyMessengerDeliveryStatus({ ...base, timestamp: "2026-08-25T06:00:00Z" }, db)).toBe(
@@ -709,7 +711,7 @@ describe("applyMessengerDeliveryStatus", () => {
   });
 
   it("keeps the error code only on a failure", async () => {
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: 7 }], error: null });
     c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
     await applyMessengerDeliveryStatus(
       { ...base, status: "failed", errorCode: "131049", errorTitle: "Undeliverable" },
@@ -723,7 +725,7 @@ describe("applyMessengerDeliveryStatus", () => {
 
     // A later non-failure must CLEAR the code rather than leave a stale one
     // attached to a row that is no longer failed.
-    const c2 = chain({ error: null });
+    const c2 = chain({ data: [{ id: 8 }], error: null });
     c2.maybeSingle.mockResolvedValue({ data: { id: 8, delivery_status: null }, error: null });
     await applyMessengerDeliveryStatus({ ...base, errorCode: "131049" }, makeDb(c2));
     expect(c2.update.mock.calls[0][0]).toMatchObject({
@@ -735,7 +737,7 @@ describe("applyMessengerDeliveryStatus", () => {
   it("stores nulls for a failure Meta did not explain", async () => {
     // errorCode/errorTitle are optional on the input, and a failed receipt
     // with neither must still write a clean row rather than undefined.
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: 7 }], error: null });
     c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
     await applyMessengerDeliveryStatus({ ...base, status: "failed" }, makeDb(c));
     expect(c.update.mock.calls[0][0]).toMatchObject({
@@ -746,7 +748,7 @@ describe("applyMessengerDeliveryStatus", () => {
   });
 
   it("stamps its own time when Meta sends none", async () => {
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: 7 }], error: null });
     c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
     await applyMessengerDeliveryStatus({ ...base, timestamp: null }, makeDb(c));
     expect(
@@ -775,7 +777,7 @@ describe("applyMessengerDeliveryStatus", () => {
     c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
     await expect(applyMessengerDeliveryStatus(base, makeDb(c))).rejects.toThrow("boom");
 
-    const c2 = chain({ error: { message: "write boom" } });
+    const c2 = chain({ data: null, error: { message: "write boom" } });
     c2.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
     await expect(applyMessengerDeliveryStatus(base, makeDb(c2))).rejects.toThrow("write boom");
   });
@@ -785,5 +787,55 @@ describe("applyMessengerDeliveryStatus", () => {
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     expect(await applyMessengerDeliveryStatus(base)).toBe("not_found");
+  });
+});
+
+describe("applyMessengerDeliveryStatus: the rank is enforced by the database", () => {
+  const base = { businessId: BIZ, mid: "wamid.ABC" };
+
+  it("guards the update so a concurrent receipt cannot invert the order", async () => {
+    // The pre-read is a fast path only. Two webhook invocations can both
+    // read the same snapshot and both pass it, so the UPDATE carries the
+    // rank check in its own WHERE clause, evaluated under the row lock.
+    const c = chain({ data: [{ id: 7 }], error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: "sent" }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, status: "read" }, makeDb(c));
+    expect(c.or).toHaveBeenCalledWith("delivery_status.is.null,delivery_status.in.(sent,delivered)");
+  });
+
+  it("lets a failure overwrite every non-terminal state", async () => {
+    const c = chain({ data: [{ id: 7 }], error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, status: "failed" }, makeDb(c));
+    expect(c.or).toHaveBeenCalledWith(
+      "delivery_status.is.null,delivery_status.in.(sent,delivered,read)"
+    );
+  });
+
+  it("guards the lowest state against null only, never an empty IN list", async () => {
+    // `sent` outranks nothing, so an `in.()` here would be invalid syntax
+    // and would fail every first receipt.
+    const c = chain({ data: [{ id: 7 }], error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    await applyMessengerDeliveryStatus({ ...base, status: "sent" }, makeDb(c));
+    expect(c.or).toHaveBeenCalledWith("delivery_status.is.null");
+  });
+
+  it("reports stale when the guard matches zero rows", async () => {
+    // Losing the race is not an error in PostgREST: it returns no rows and
+    // no error, so the row count is the only signal that the write missed.
+    const c = chain({ data: [], error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: "sent" }, error: null });
+    expect(
+      await applyMessengerDeliveryStatus({ ...base, status: "delivered" }, makeDb(c))
+    ).toBe("stale");
+  });
+
+  it("treats a null payload from the update as a miss, not a success", async () => {
+    const c = chain({ data: null, error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: 7, delivery_status: null }, error: null });
+    expect(await applyMessengerDeliveryStatus({ ...base, status: "sent" }, makeDb(c))).toBe(
+      "stale"
+    );
   });
 });

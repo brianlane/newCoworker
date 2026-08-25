@@ -80,6 +80,9 @@ const DELIVERY_STATUS_RANK: Record<MessengerDeliveryStatus, number> = {
   failed: 4
 };
 
+/** The same states as a list, for building the update's rank predicate. */
+const DELIVERY_STATUS_ORDER = Object.keys(DELIVERY_STATUS_RANK) as MessengerDeliveryStatus[];
+
 export function deliveryStatusOutranks(
   next: MessengerDeliveryStatus,
   current: MessengerDeliveryStatus | null | undefined
@@ -443,9 +446,27 @@ export async function applyMessengerDeliveryStatus(
   if (readError) throw new Error(`applyMessengerDeliveryStatus: ${readError.message}`);
   if (!existing) return "not_found";
   const row = existing as { id: number; delivery_status: MessengerDeliveryStatus | null };
+  // Fast path only: skips a pointless write. It is NOT what makes the
+  // ordering safe, because the row can change between this read and the
+  // update below. The predicate on the update is what actually enforces it.
   if (!deliveryStatusOutranks(input.status, row.delivery_status)) return "stale";
 
-  const { error } = await db
+  // Meta fires sent/delivered/read within milliseconds of each other, and
+  // separate webhook POSTs run as separate concurrent invocations. Two of
+  // them reading the same snapshot would both pass the check above, and
+  // last-write-wins could then drop a `delivered` back to `sent`, or worse
+  // bury a `failed`. Re-checking the rank in the UPDATE's own WHERE clause
+  // closes that: Postgres evaluates it under the row lock, so the loser of
+  // a race matches zero rows instead of overwriting the winner.
+  const outranked = DELIVERY_STATUS_ORDER.filter(
+    (candidate) => DELIVERY_STATUS_RANK[candidate] < DELIVERY_STATUS_RANK[input.status]
+  );
+  const rankGuard =
+    outranked.length > 0
+      ? `delivery_status.is.null,delivery_status.in.(${outranked.join(",")})`
+      : "delivery_status.is.null";
+
+  const { data: updated, error } = await db
     .from("messenger_messages")
     .update({
       delivery_status: input.status,
@@ -455,9 +476,13 @@ export async function applyMessengerDeliveryStatus(
       delivery_error_title: input.status === "failed" ? (input.errorTitle ?? null) : null,
       delivery_updated_at: input.timestamp ?? new Date().toISOString()
     })
-    .eq("id", row.id);
+    .eq("id", row.id)
+    .or(rankGuard)
+    // A PostgREST update matching zero rows is NOT an error, so the returned
+    // rows are the only way to tell "written" from "lost the race".
+    .select("id");
   if (error) throw new Error(`applyMessengerDeliveryStatus: ${error.message}`);
-  return "applied";
+  return (updated ?? []).length > 0 ? "applied" : "stale";
 }
 
 /**
