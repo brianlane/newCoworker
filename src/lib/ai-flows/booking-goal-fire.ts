@@ -22,7 +22,10 @@ import { findContactsByEmails } from "@/lib/db/contact-emails";
 import { ingestBooking } from "@/lib/memory/graph-deterministic";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
-import { applyGoalEvent } from "../../../supabase/functions/_shared/ai_flows/goal_events";
+import {
+  applyGoalEvent,
+  JUMPABLE_STATUSES
+} from "../../../supabase/functions/_shared/ai_flows/goal_events";
 import {
   isE164,
   normalizeNanpToE164
@@ -56,12 +59,6 @@ export type BookingIdentity = {
   name?: string | null;
 };
 
-/**
- * Statuses whose runs are still able to send. The name fallback is scoped to
- * these on purpose: see {@link activeRunNumbersByLeadName}.
- */
-const LIVE_RUN_STATUSES = ["awaiting_reply", "queued", "running"] as const;
-
 /** Bound on the live-run scan; a business has a handful of parked runs. */
 const LIVE_RUN_SCAN_LIMIT = 500;
 
@@ -88,11 +85,11 @@ export function normalizeLeadName(raw: string | null | undefined): string | null
  * form captured, with no phone on the booking, is invisible to both
  * identification paths: the precheck narrows Calendly by the contact's
  * email and falls back to the invitee's SMS-reminder number, and the seeding
- * above resolves the booking's email through contacts. Patricia Jones
- * (2026-08-19) booked as kissmediagroup@gmail.com with no phone while her
- * lead record said paojones@hotmail.com, and the nudge ladder sold to her
- * for three days after she had already booked. Four of KYP Ads' 37 August
- * bookings had that same mismatch.
+ * above resolves the booking's email through contacts. On 2026-08-19 a KYP
+ * Ads lead booked under a different address than her lead record, giving
+ * Calendly no phone, and the nudge ladder sold to her for three days after
+ * she had already booked. Four of that tenant's 37 August bookings had the
+ * same mismatch.
  *
  * Why scoping to LIVE runs is what makes it safe. This can only ever reach
  * someone who has a run that is still able to message them, so a wrong match
@@ -117,7 +114,11 @@ export async function activeRunNumbersByLeadName(
       .from("ai_flow_runs")
       .select("context")
       .eq("business_id", businessId)
-      .in("status", [...LIVE_RUN_STATUSES])
+      // EXACTLY the statuses a goal jump can touch, imported rather than
+      // restated: scanning a status applyGoalEvent cannot jump wastes a
+      // lookup, and missing one it CAN jump (awaiting_call, a lead who books
+      // mid AI-call) silently leaves that ladder running. Bugbot, PR #1611.
+      .in("status", [...JUMPABLE_STATUSES])
       .limit(LIVE_RUN_SCAN_LIMIT);
     if (error) {
       logger.warn("booking goal fire: live-run name scan failed", {
@@ -256,7 +257,7 @@ export async function fireBookingGoalsForIdentities(
     await recordAudit({
       businessId,
       level: "warn",
-      source: "ai_flows",
+      source: "aiflow",
       event: "ai_flow_booking_goal_name_match",
       message:
         `Matched ${nameMatched.length} booking(s) to a lead by NAME because the ` +

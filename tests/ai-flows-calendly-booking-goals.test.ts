@@ -932,8 +932,11 @@ describe("activeRunNumbersByLeadName", () => {
     ]);
     // Loose NANP formatting normalizes onto the same number, so the second
     // run does not produce a duplicate goal.
+    // Exactly the statuses applyGoalEvent can jump, imported not restated:
+    // awaiting_call belongs here (a lead who books mid AI-call), and a
+    // status it cannot jump would be a wasted scan.
     const statuses = chains[0].calls.find((c) => c.name === "in");
-    expect(statuses?.args[1]).toEqual(["awaiting_reply", "queued", "running"]);
+    expect(statuses?.args[1]).toEqual(["queued", "awaiting_reply", "awaiting_call"]);
   });
 
   it("never scans for a name it would not be safe to match on", async () => {

@@ -55,7 +55,7 @@ export const GOAL_JUMP_SKIP = "goal_jump";
  * nurturing a lead who just converted, e.g. an appointment booked DURING
  * the call window must not be lost to a one-shot event.
  */
-const JUMPABLE_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
+export const JUMPABLE_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
 
 /** Most runs one event will jump per lead (same bound as the wait resumes). */
 const MAX_RUNS_PER_EVENT = 25;

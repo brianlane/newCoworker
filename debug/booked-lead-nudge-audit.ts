@@ -30,10 +30,12 @@ import { createClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
 import { decryptIntegrationSecret } from "../src/lib/integrations/secrets.ts";
 import { normalizeLeadName } from "../src/lib/ai-flows/booking-goal-fire.ts";
+import { JUMPABLE_STATUSES } from "../supabase/functions/_shared/ai_flows/goal_events.ts";
 
 loadEnv();
 
-const LIVE_STATUSES = ["awaiting_reply", "queued", "running"];
+// Same set the fallback scans, so a miss here means a real miss there.
+const LIVE_STATUSES = [...JUMPABLE_STATUSES];
 
 type Finding = {
   business: string;
