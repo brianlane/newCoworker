@@ -87,6 +87,16 @@ async function ownNumbers(): Promise<Set<string>> {
     if (/e164|phone|number/i.test(k)) add(v);
   }
 
+  // The line inbound calls actually arrive on. Distinct from the SMS-from
+  // number in general (and a tenant can keep extra DIDs after a port), even
+  // though the two happen to match on Amy's account. Missing it would flag a
+  // correctly spoken AI line as invented on any tenant where they differ.
+  const { data: routes } = await db
+    .from("telnyx_voice_routes")
+    .select("to_e164")
+    .eq("business_id", businessId);
+  for (const r of routes ?? []) add((r as { to_e164?: string }).to_e164);
+
   // Teammates, whose numbers a routing script may legitimately read out.
   const { data: roster } = await db
     .from("ai_flow_team_members")
