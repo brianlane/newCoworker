@@ -87,6 +87,61 @@ export function outcomeTouchesContact(outcome: MeetingOutcome): boolean {
 }
 
 /**
+ * How the contact was identified, mirrored from `resolve-contact.ts`.
+ *
+ * Declared here rather than imported so this module stays pure: it is the
+ * gate that decides what an ambiguous meeting is allowed to write, and it
+ * must not pull the DB-touching resolver in behind it.
+ */
+export type MeetingMatchSource =
+  | "owner"
+  | "booking_ledger"
+  | "transcript_email"
+  | "speaker_name"
+  | "addressed_name";
+
+/**
+ * Match sources that are an IDENTITY rather than a name.
+ *
+ * A booking's attendee and an address spoken on the call both name exactly
+ * one person; a display name names everyone who shares it. The distinction
+ * only matters for `unclear` (see {@link unclearMayLinkDocument}), where it
+ * decides whether a meeting we could not categorize may still be filed on
+ * somebody's record.
+ */
+export function isIdentityMatch(matchedOn: MeetingMatchSource): boolean {
+  return (
+    matchedOn === "owner" ||
+    matchedOn === "booking_ledger" ||
+    matchedOn === "transcript_email"
+  );
+}
+
+/**
+ * May an `unclear` meeting be FILED on the matched contact's record?
+ *
+ * Yes on identity evidence, no on a name. Filing the document is the mildest
+ * of the four writes (it appears under the person's documents and is
+ * reversible with one click) and it is the write owners actually miss when a
+ * classifier hedges. Attaching it to a stranger because two people share a
+ * first name is not worth that, so a name-only match still writes nothing.
+ */
+export function unclearMayLinkDocument(matchedOn: MeetingMatchSource): boolean {
+  return isIdentityMatch(matchedOn);
+}
+
+/**
+ * May an `unclear` meeting write to the contact's RECORD (note, to-dos)?
+ *
+ * Only when the owner named the contact themselves. "I do not know what this
+ * call was" plus "a person told me who it was with" is enough to file the
+ * meeting on them; the platform never reaches that conclusion alone.
+ */
+export function unclearMayWriteRecord(matchedOn: MeetingMatchSource): boolean {
+  return matchedOn === "owner";
+}
+
+/**
  * Is it worth extracting action items for this outcome?
  *
  * Only when they will actually be filed. The applier discards them for any

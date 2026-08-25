@@ -61,9 +61,19 @@ function resolveModel(): string {
 
 type GeminiCall = (params: GeminiGenerateTextParams) => Promise<GeminiGenerateTextResult>;
 
-export type ClassifyMeetingDeps = {
+export type ClassifyMeetingOptions = {
   /** Injectable Gemini call (tests). */
   generate?: GeminiCall;
+  /**
+   * Extract action items even for an outcome that normally skips them.
+   *
+   * The skip exists because the applier DISCARDS the list for those
+   * outcomes, so paying for it is waste. The owner-forced reassign path is
+   * the one caller that does file them from an `unclear` meeting, so it
+   * turns the second call back on rather than the gate being loosened for
+   * everybody.
+   */
+  alwaysExtractActionItems?: boolean;
 };
 
 export type ClassifiedMeeting = {
@@ -141,10 +151,10 @@ async function runMeetingCall(
 export async function classifyMeeting(
   businessId: string,
   minutes: string,
-  deps: ClassifyMeetingDeps = {}
+  options: ClassifyMeetingOptions = {}
 ): Promise<ClassifiedMeeting> {
   /* c8 ignore next -- production default; tests inject */
-  const generate = deps.generate ?? geminiGenerateTextDetailed;
+  const generate = options.generate ?? geminiGenerateTextDetailed;
   const text = minutes.trim();
   if (!text) return { outcome: MEETING_OUTCOME_UNCLEAR, actionItems: [] };
 
@@ -167,8 +177,10 @@ export async function classifyMeeting(
   // action items to hang off, so skip the second call rather than pay for a
   // list the applier will discard. That is `unclear` AND `internal`: every
   // team sync and vendor call used to buy a metered extraction it could
-  // never apply.
-  if (!outcomeWantsActionItems(outcome)) {
+  // never apply. `alwaysExtractActionItems` is the one caller that DOES
+  // file them from such an outcome (an owner-forced reassign), so the skip
+  // yields to it instead of being weakened for every meeting.
+  if (!outcomeWantsActionItems(outcome) && !options.alwaysExtractActionItems) {
     return { outcome, actionItems: [] };
   }
 

@@ -21,6 +21,8 @@ import {
   getZoomTranscriptImport,
   claimZoomTranscriptClassification,
   getZoomTranscriptClassification,
+  getZoomTranscriptImportByDocument,
+  reopenZoomTranscriptClassification,
   reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport,
   stampZoomTranscriptClassification,
@@ -424,5 +426,75 @@ describe("stampZoomTranscriptClassification", () => {
     await expect(
       stampZoomTranscriptClassification(BIZ, UUID, { contactId: null, outcome: "unclear" })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("getZoomTranscriptImportByDocument", () => {
+  it("recovers the meeting key from the document the import produced", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({
+      data: { meeting_uuid: UUID, contact_id: null, outcome: "unclear" },
+      error: null
+    });
+    await expect(getZoomTranscriptImportByDocument(BIZ, DOC, makeDb(c))).resolves.toEqual({
+      meeting_uuid: UUID,
+      contact_id: null,
+      outcome: "unclear"
+    });
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, document_id: DOC });
+  });
+
+  it("answers null for a document that is not a Zoom import", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(getZoomTranscriptImportByDocument(BIZ, DOC, makeDb(c))).resolves.toBeNull();
+  });
+
+  it("answers null and warns on a read error rather than throwing", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getZoomTranscriptImportByDocument(BIZ, DOC, makeDb(c))).resolves.toBeNull();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("answers null when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    await expect(getZoomTranscriptImportByDocument(BIZ, DOC)).resolves.toBeNull();
+  });
+});
+
+describe("reopenZoomTranscriptClassification", () => {
+  it("clears a stamp that is now provably about the wrong person", async () => {
+    const c = chain({ data: [{ id: "row-1" }], error: null });
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(true);
+    expect(c.update).toHaveBeenCalledWith({ classified_at: null, outcome: null });
+    // Conditional on the stamp being SET: that is what makes the answer mean
+    // "there was something to clear" rather than "I cleared it".
+    expect(c.not).toHaveBeenCalledWith("classified_at", "is", null);
+  });
+
+  it("answers false when there was no stamp to clear", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+  });
+
+  it("treats a null payload as nothing cleared", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+  });
+
+  it("answers false and warns on an update error", async () => {
+    const c = chain({ data: null, error: { message: "boom" } });
+    expect(await reopenZoomTranscriptClassification(BIZ, UUID, makeDb(c))).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("answers false when the service client cannot be built", async () => {
+    defaultClientSpy.mockImplementation(() => {
+      throw new Error("no env");
+    });
+    await expect(reopenZoomTranscriptClassification(BIZ, UUID)).resolves.toBe(false);
   });
 });

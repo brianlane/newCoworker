@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRight, ExternalLink, Download, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
+import { DOCUMENT_SUMMARY_MAX_CHARS } from "@/lib/documents/core";
 import { Button } from "@/components/ui/Button";
 import {
   AUDIENCE_LABELS,
@@ -41,6 +42,62 @@ type ShareItem = {
   access_count: number;
   created_at: string;
 };
+
+/**
+ * Is this a recorded meeting, and therefore correctable?
+ *
+ * The Zoom import files everything it produces in the `meeting` folder, so
+ * that is the test. An owner who has since moved the document elsewhere has
+ * told us it is not a meeting record any more, and the control goes away
+ * with it.
+ */
+function isMeetingDocument(doc: DocumentItem): boolean {
+  return doc.category.trim().toLowerCase() === "meeting";
+}
+
+/** What POST …/reassign reports back, for the confirmation line. */
+type ReassignResult = {
+  renamedFrom: string | null;
+  renamedTo: string;
+  rewrote: Array<"title" | "summary" | "content">;
+  reclassified: boolean;
+  outcome: string | null;
+  wroteNote: boolean;
+  todosCreated: number;
+  graphEntitiesRenamed: number;
+  graphFactsRewritten: number;
+};
+
+/**
+ * Plain-English receipt for a reassign.
+ *
+ * The repair touches four places an owner cannot see, so the confirmation
+ * names each one it actually changed rather than saying "done": a rename
+ * that quietly matched nothing must not read the same as one that worked.
+ */
+function describeReassign(result: ReassignResult): string {
+  const parts: string[] = [];
+  if (result.renamedFrom && result.rewrote.length > 0) {
+    parts.push(`renamed ${result.renamedFrom} to ${result.renamedTo} in the ${listWords(result.rewrote)}`);
+  } else {
+    parts.push(`linked to ${result.renamedTo}`);
+  }
+  if (result.wroteNote) parts.push("filed a note on their record");
+  if (result.todosCreated > 0) {
+    parts.push(`created ${result.todosCreated} to-do${result.todosCreated === 1 ? "" : "s"}`);
+  }
+  if (result.graphEntitiesRenamed > 0) parts.push("renamed what your coworker remembers");
+  if (result.reclassified && !result.wroteNote && result.todosCreated === 0) {
+    parts.push(`re-read the meeting (${result.outcome ?? "unclear"}), nothing else to file`);
+  }
+  return `Done: ${parts.join(", ")}.`;
+}
+
+/** "title and summary", "title, summary and content". */
+function listWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
 
 type SignatureRequestItem = {
   id: string;
@@ -78,6 +135,10 @@ export function DocumentDetail({
   const [draftTitle, setDraftTitle] = useState(initialDocument.title);
   const [draftCategory, setDraftCategory] = useState(initialDocument.category);
   const [draftContent, setDraftContent] = useState(initialDocument.content_md);
+  const [draftSummary, setDraftSummary] = useState(initialDocument.summary ?? "");
+  const [reassignContactId, setReassignContactId] = useState("");
+  const [reassigning, setReassigning] = useState(false);
+  const [reassignNotice, setReassignNotice] = useState<string | null>(null);
   const [draftExpires, setDraftExpires] = useState(
     initialDocument.expires_at ? initialDocument.expires_at.slice(0, 10) : ""
   );
@@ -101,7 +162,16 @@ export function DocumentDetail({
         { cache: "no-store" }
       );
       const json = (await res.json()) as { ok: boolean; data?: { document?: DocumentItem } };
-      if (json.ok && json.data?.document) setDoc(json.data.document);
+      if (json.ok && json.data?.document) {
+        const fresh = json.data.document;
+        setDoc(fresh);
+        // A reassign rewrites all three of these server-side. Leaving the
+        // drafts alone would show the old name in the editors and let the
+        // next save put it straight back.
+        setDraftTitle(fresh.title);
+        setDraftSummary(fresh.summary ?? "");
+        setDraftContent(fresh.content_md);
+      }
     } catch {
       /* keep the current view */
     }
@@ -187,6 +257,45 @@ export function DocumentDetail({
       setError("Save failed, try again.");
     } finally {
       setSavingDoc(false);
+    }
+  }
+
+  /**
+   * "This meeting was with somebody else."
+   *
+   * Rewrites the guest's name through the document, links the contact,
+   * re-runs the meeting classification against the corrected minutes and
+   * renames the matching knowledge-graph node. Every draft is re-seeded from
+   * the server afterwards, because all three of them just changed underneath
+   * the editor.
+   */
+  async function reassignMeeting() {
+    if (!reassignContactId) return;
+    setReassigning(true);
+    setError(null);
+    setReassignNotice(null);
+    try {
+      const res = await fetch(`/api/dashboard/documents/${doc.id}/reassign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, contactId: reassignContactId })
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        error?: { message?: string };
+        data?: { reassign?: ReassignResult };
+      };
+      if (!json.ok || !json.data?.reassign) {
+        setError(json.error?.message ?? "Could not reassign this meeting");
+        return;
+      }
+      setReassignNotice(describeReassign(json.data.reassign));
+      setReassignContactId("");
+      await refreshDoc();
+    } catch {
+      setError("Could not reassign this meeting, try again.");
+    } finally {
+      setReassigning(false);
     }
   }
 
@@ -553,6 +662,31 @@ export function DocumentDetail({
         </div>
 
         <div className="mt-4">
+          <label className={labelClass}>
+            One-line summary (what your coworker quotes when it cites this document)
+          </label>
+          <div className="flex gap-2">
+            <input
+              className={inputClass}
+              value={draftSummary}
+              onChange={(e) => setDraftSummary(e.target.value)}
+              maxLength={DOCUMENT_SUMMARY_MAX_CHARS}
+              placeholder="A sentence saying what this document is."
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={savingDoc}
+              disabled={draftSummary === (doc.summary ?? "")}
+              onClick={() => void patchDocument({ summary: draftSummary })}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4">
           <label className={labelClass}>What the coworker knows from this document (editable)</label>
           <textarea
             className={`${inputClass} min-h-40 font-mono text-xs`}
@@ -593,6 +727,47 @@ export function DocumentDetail({
           </div>
         </div>
       </Card>
+
+      {isMeetingDocument(doc) && contacts.length > 0 && (
+        <Card>
+          <label className={labelClass}>Was this meeting with someone else?</label>
+          <p className="mt-1 text-xs text-parchment/50">
+            Zoom labels a recording with the account name, so a guest who joined from someone
+            else&apos;s account is filed under the wrong name. Pick who was actually on the call and
+            your coworker fixes the name everywhere it landed: the title, the summary, the minutes,
+            the transcript, and what it remembers about them.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <select
+              className={`${inputClass} sm:max-w-xs`}
+              value={reassignContactId}
+              onChange={(e) => setReassignContactId(e.target.value)}
+            >
+              <option value="">pick the contact</option>
+              {contacts.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {contactLabel(c)}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={reassigning}
+              disabled={!reassignContactId}
+              onClick={() => void reassignMeeting()}
+            >
+              Reassign meeting
+            </Button>
+          </div>
+          {reassignNotice ? (
+            <p className="mt-2 text-xs text-claw-green" role="status">
+              {reassignNotice}
+            </p>
+          ) : null}
+        </Card>
+      )}
 
       <Card>
         <label className={labelClass}>Signatures</label>

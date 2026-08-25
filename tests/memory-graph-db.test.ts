@@ -27,7 +27,8 @@ import {
   resetMemoryGraphDefaultCache,
   resolveMemoryGraphMode,
   supersedeMemoryFacts,
-  updateMemoryEntity
+  updateMemoryEntity,
+  updateMemoryFactSourceText
 } from "@/lib/memory/graph-db";
 import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 
@@ -105,7 +106,36 @@ describe("insertMemoryEntity", () => {
   });
 });
 
+describe("updateMemoryFactSourceText", () => {
+  it("rewrites only the quoted provenance, never the fact itself", async () => {
+    const c = chain({ error: null }, "eq");
+    await updateMemoryFactSourceText("f1", "Bobby operates as a rental locator.", c as never);
+    expect(c.update).toHaveBeenCalledWith({
+      source_text: "Bobby operates as a rental locator."
+    });
+    expect(c.eq).toHaveBeenCalledWith("id", "f1");
+  });
+
+  it("throws on error and supports the default client", async () => {
+    const failing = chain({ error: { message: "nope" } }, "eq");
+    await expect(updateMemoryFactSourceText("f1", "x", failing as never)).rejects.toThrow(
+      "updateMemoryFactSourceText: nope"
+    );
+    defaultClientSpy.mockReturnValue(chain({ error: null }, "eq"));
+    await updateMemoryFactSourceText("f1", "x");
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
 describe("updateMemoryEntity", () => {
+  it("renames a node when the owner says it is somebody else", async () => {
+    const c = chain({ error: null }, "eq");
+    await updateMemoryEntity("e1", { canonical_name: "Bobby", aliases: ["alexander"] }, c as never);
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({ canonical_name: "Bobby", aliases: ["alexander"] })
+    );
+  });
+
   it("patches by id with a fresh updated_at", async () => {
     const c = chain({ error: null }, "eq");
     await updateMemoryEntity("e1", { aliases: ["a"] }, c as never);

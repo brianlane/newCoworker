@@ -4,7 +4,7 @@
  * Everything the classifier decides is applied to a PERSON, so this answer
  * has to be right or absent. A wrong match staples a note, a stage move and
  * a set of to-dos onto a stranger's record, which is worse than doing
- * nothing at all. Three sources, strongest first, and each one either
+ * nothing at all. Four sources, strongest first, and each one either
  * produces a confident answer or hands over to the next:
  *
  *   1. THE BOOKING LEDGER. The booking that created the Zoom meeting already
@@ -14,9 +14,14 @@
  *   2. AN EMAIL IN THE TRANSCRIPT. People read addresses out loud and Zoom
  *      transcribes them. An address is an identity, so a linked contact is a
  *      confident match.
- *   3. A SPEAKER NAME. The weakest source, and the only one that can be
- *      ambiguous, so it is the only one with an extra rule: a name resolves
- *      ONLY when exactly one contact carries it. Two Daves means nobody.
+ *   3. A SPEAKER NAME. Ambiguous in a way the first two are not, so it
+ *      carries an extra rule: a name resolves ONLY when exactly one contact
+ *      carries it. Two Daves means nobody.
+ *   4. A NAME THE HOST USED. Zoom labels every line with the ACCOUNT's
+ *      display name, so a guest on a shared or stale account speaks under
+ *      somebody else's name and source 3 finds nobody. Our own side still
+ *      addressed them correctly on the call ("Hey, Bobby"), so host-spoken
+ *      vocatives are read last, under the same unique-contact rule.
  *
  * Never throws: a lookup blip means "unattributed", and an unattributed
  * meeting still becomes a document in the library.
@@ -25,12 +30,21 @@ import { findBookingByZoomMeetingId } from "@/lib/calendar-tools/booking-dedupe"
 import { getCustomerMemory, findCustomerByEmail } from "@/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { extractVttSpeakers, pickZoomGuestSpeaker } from "@/lib/zoom/document-title";
+import { extractHostAddressedNames } from "./rename-guest";
+import type { MeetingMatchSource } from "./outcome-core";
 import { vttToPlainText } from "@/lib/transcripts/vtt";
 import { emailContactKey } from "../../../supabase/functions/_shared/contact_key";
 import { logger } from "@/lib/logger";
 
-/** How the contact was identified, carried into the logs for traceability. */
-export type MeetingContactMatch = "booking_ledger" | "transcript_email" | "speaker_name";
+/**
+ * How the contact was identified, carried into the logs for traceability.
+ *
+ * Derived from the applier's own union rather than restated, so the two can
+ * never drift into disagreeing about what a match source is. `owner` is
+ * excluded here on purpose: it means a person answered the question, which
+ * is not something this resolver can ever conclude.
+ */
+export type MeetingContactMatch = Exclude<MeetingMatchSource, "owner">;
 
 export type ResolvedMeetingContact = {
   /** `contacts.id`, the FK every write here needs. */
@@ -44,7 +58,7 @@ export type ResolveMeetingContactInput = {
   businessId: string;
   /** Zoom's numeric meeting id, when the import knew it. */
   zoomMeetingId: string | null;
-  /** The raw WebVTT, for the two fallbacks. */
+  /** The raw WebVTT, for the three fallbacks. */
   vtt: string;
   /** Names that count as "us", so a fallback never matches our own side. */
   hostNames: string[];
@@ -235,6 +249,21 @@ export async function resolveMeetingContact(
     if (contactId) {
       const key = await contactKeyForId(businessId, contactId);
       if (key) return { contactId, contactKey: key, matchedOn: "speaker_name" };
+    }
+  }
+
+  // 4. A name the HOST addressed the guest by. Last, because it is a
+  //    reading of speech rather than a label, but it is the source that
+  //    survives a wrong Zoom display name: someone joining from an account
+  //    named for somebody else is still called by their own name on the
+  //    call ("Hey, Bobby"). Same unique-contact rule as the speaker label,
+  //    and `extractHostAddressedNames` only reads OUR side's lines, so a
+  //    guest naming a third party never lands here.
+  for (const addressed of extractHostAddressedNames(input.vtt, input.hostNames)) {
+    const contactId = await findByName(businessId, addressed);
+    if (contactId) {
+      const key = await contactKeyForId(businessId, contactId);
+      if (key) return { contactId, contactKey: key, matchedOn: "addressed_name" };
     }
   }
 

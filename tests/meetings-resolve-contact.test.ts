@@ -496,3 +496,77 @@ describe("resolveMeetingContact: the remaining refusals", () => {
     expect(out).toBeNull();
   });
 });
+
+describe("resolveMeetingContact: a name the HOST used", () => {
+  /**
+   * The wrong-Zoom-account case. The guest speaks under somebody else's
+   * display name, so the speaker-label source finds nobody, but our own
+   * side called them by their real name on the call.
+   */
+  const WRONG_ACCOUNT_VTT = [
+    "WEBVTT",
+    "",
+    "1",
+    "00:00:01.000 --> 00:00:04.000",
+    "Brian Lane: Hey, Bobby.",
+    "",
+    "2",
+    "00:00:05.000 --> 00:00:09.000",
+    "Alexander: Oh, good. Hi, morning.",
+    ""
+  ].join("\n");
+
+  const wrongAccountInput = {
+    businessId: BIZ,
+    zoomMeetingId: null,
+    vtt: WRONG_ACCOUNT_VTT,
+    hostNames: ["New Coworker", "Brian Lane"]
+  };
+
+  /** The key lookup behind a name match reads `contacts` directly. */
+  function keyClient(customerE164: string | null) {
+    const builder: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) builder[m] = () => builder;
+    builder.maybeSingle = async () => ({
+      data: customerE164 === null ? null : { customer_e164: customerE164 },
+      error: null
+    });
+    createSupabaseServiceClient.mockResolvedValue({ from: () => builder } as never);
+  }
+
+  it("finds the contact the host addressed when the speaker label matches nobody", async () => {
+    keyClient("+17208438676");
+    const d = deps({
+      findByName: vi.fn(async (_biz: string, name: string) =>
+        name === "Bobby" ? "c-bobby" : null
+      )
+    });
+    expect(await resolveMeetingContact(wrongAccountInput, d)).toEqual({
+      contactId: "c-bobby",
+      contactKey: "+17208438676",
+      matchedOn: "addressed_name"
+    });
+  });
+
+  it("tries the speaker label FIRST, so a correct label is never second-guessed", async () => {
+    keyClient(KINGSLEY_KEY);
+    const d = deps({ findByName: vi.fn(async () => KINGSLEY_ID) });
+    const result = await resolveMeetingContact(wrongAccountInput, d);
+    expect(result?.matchedOn).toBe("speaker_name");
+  });
+
+  it("answers nobody when the addressed name matches no contact", async () => {
+    const d = deps({ findByName: vi.fn(async () => null) });
+    expect(await resolveMeetingContact(wrongAccountInput, d)).toBeNull();
+  });
+
+  it("answers nobody when the addressed contact has no usable key", async () => {
+    keyClient(null);
+    const d = deps({
+      findByName: vi.fn(async (_biz: string, name: string) =>
+        name === "Bobby" ? "c-bobby" : null
+      )
+    });
+    expect(await resolveMeetingContact(wrongAccountInput, d)).toBeNull();
+  });
+});

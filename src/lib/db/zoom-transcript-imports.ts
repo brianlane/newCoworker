@@ -161,6 +161,82 @@ export async function finalizeZoomTranscriptImport(
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
+/**
+ * The ledger row behind a produced DOCUMENT, or null.
+ *
+ * Every other read here keys on (business, meeting UUID) because that is
+ * what the import knows. The correction path starts from the other end: an
+ * owner is looking at a document and says it was filed under the wrong
+ * person, and the meeting key is what has to be recovered. Never throws; a
+ * missing row means "not a Zoom import", which is a supported answer.
+ */
+export async function getZoomTranscriptImportByDocument(
+  businessId: string,
+  documentId: string,
+  client?: SupabaseClient
+): Promise<{ meeting_uuid: string; contact_id: string | null; outcome: string | null } | null> {
+  const db = await ledgerClientOrNull(client, "document lookup");
+  if (!db) return null;
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .select("meeting_uuid,contact_id,outcome")
+    .match({ business_id: businessId, document_id: documentId })
+    .maybeSingle();
+  if (error) {
+    logger.warn("zoom transcript ledger: document lookup failed", {
+      businessId,
+      error: error.message
+    });
+    return null;
+  }
+  return (
+    (data as {
+      meeting_uuid: string;
+      contact_id: string | null;
+      outcome: string | null;
+    } | null) ?? null
+  );
+}
+
+/**
+ * Hand a classified meeting back to be classified again, atomically.
+ *
+ * The classification stamp is deliberately permanent: it is what stops a
+ * re-import writing a second note and a second set of to-dos. An owner
+ * saying "this meeting was with somebody else" is the one event that
+ * genuinely invalidates a past decision, so it clears the stamp, and the
+ * normal claim/stamp cycle runs again on top.
+ *
+ * The clear is conditional on the stamp being SET so that it reports
+ * honestly (false means "there was nothing to clear"), but the caller does
+ * NOT gate on that: a null stamp means either "never classified" or "a pass
+ * is running right now", and these columns cannot tell those apart.
+ * `claimZoomTranscriptClassification` is the arbiter for both. Never
+ * throws; a ledger blip answers false and the claim decides.
+ */
+export async function reopenZoomTranscriptClassification(
+  businessId: string,
+  meetingUuid: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = await ledgerClientOrNull(client, "classification reopen");
+  if (!db) return false;
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .update({ classified_at: null, outcome: null })
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .not("classified_at", "is", null)
+    .select("id");
+  if (error) {
+    logger.warn("zoom transcript ledger: classification reopen failed", {
+      businessId,
+      error: error.message
+    });
+    return false;
+  }
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
+}
+
 /** A classification that has already been applied to this meeting. */
 export type ZoomTranscriptClassification = {
   contactId: string | null;

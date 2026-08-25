@@ -194,16 +194,45 @@ describe("applyMeetingClassification: the happy path", () => {
 });
 
 describe("applyMeetingClassification: what it refuses to write", () => {
-  it("writes nothing for an unclear meeting, but still stamps", async () => {
+  it("files an unclear meeting on an IDENTITY match, but writes nothing to the record", async () => {
+    // The booking that created this Zoom meeting names its attendee, so who
+    // the call was with is not in doubt even when what it WAS is. The
+    // document goes on their record; the note, the card and the to-dos do
+    // not, because none of those can be written from "unclear".
     const d = deps({ classify: vi.fn(async () => ({ outcome: "unclear", actionItems: [] })) });
     const out = await applyMeetingClassification(input, d);
     const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
-    expect(out.contactId).toBeNull();
-    expect(m.resolveContact).not.toHaveBeenCalled();
+    expect(out.linkedDocument).toBe(true);
+    expect(m.patchDocument).toHaveBeenCalledWith(BIZ, "doc-1", { contact_id: CONTACT_ID });
     expect(m.createNote).not.toHaveBeenCalled();
     expect(m.fireStage).not.toHaveBeenCalled();
+    expect(m.createTodoFn).not.toHaveBeenCalled();
     // Stamped anyway: "we have decided about this meeting" is the fact.
     expect(m.stampLedger).toHaveBeenCalled();
+  });
+
+  it("writes nothing at all for an unclear meeting matched only by NAME", async () => {
+    // Two people sharing a first name is exactly the case where an
+    // uncategorizable meeting must not land on anybody: a document filed on
+    // a stranger is still a stranger reading someone else's minutes.
+    const d = deps({
+      classify: vi.fn(async () => ({ outcome: "unclear", actionItems: [] })),
+      resolveContact: vi.fn(async () => ({
+        contactId: CONTACT_ID,
+        contactKey: CONTACT_KEY,
+        matchedOn: "speaker_name"
+      }))
+    });
+    const out = await applyMeetingClassification(input, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(out.contactId).toBeNull();
+    expect(out.matchedOn).toBeNull();
+    expect(m.patchDocument).not.toHaveBeenCalled();
+    expect(m.createNote).not.toHaveBeenCalled();
+    expect(m.stampLedger).toHaveBeenCalledWith(BIZ, MEETING_UUID, {
+      contactId: null,
+      outcome: "unclear"
+    });
   });
 
   it("keeps an internal meeting off everyone's record", async () => {
@@ -460,5 +489,80 @@ describe("applyMeetingClassification: things that throw something other than an 
       })
     });
     expect((await applyMeetingClassification(input, d)).todosCreated).toBe(1);
+  });
+});
+
+describe("applyMeetingClassification: an owner-forced contact", () => {
+  const forced = {
+    ...input,
+    forcedContact: { contactId: CONTACT_ID, contactKey: CONTACT_KEY }
+  };
+
+  it("skips attribution entirely and records that a person answered", async () => {
+    const d = deps();
+    const out = await applyMeetingClassification(forced, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(m.resolveContact).not.toHaveBeenCalled();
+    expect(out.matchedOn).toBe("owner");
+    expect(out.contactId).toBe(CONTACT_ID);
+  });
+
+  it("files the note and the to-dos even when the model cannot categorize the call", async () => {
+    // The whole point of the reassign: "I do not know what this was" plus
+    // "a person told me who it was with" is enough to file the meeting.
+    const d = deps({
+      classify: vi.fn(async () => ({
+        outcome: "unclear",
+        actionItems: [{ title: "Send the proposal", owner: "Brian" }]
+      }))
+    });
+    const out = await applyMeetingClassification(forced, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(out.linkedDocument).toBe(true);
+    expect(out.wroteNote).toBe(true);
+    expect(out.todosCreated).toBe(1);
+    // No stage move: `unclear` maps to no lifecycle event, and a human
+    // saying who was on the call is not a claim about what it meant.
+    expect(m.fireStage).not.toHaveBeenCalled();
+    expect(out.stageOutcome).toBeNull();
+  });
+
+  it("asks for action items on an outcome that would normally skip them", async () => {
+    const classify = vi.fn(async () => ({ outcome: "unclear", actionItems: [] }));
+    await applyMeetingClassification(forced, deps({ classify }));
+    expect(classify).toHaveBeenCalledWith(BIZ, input.minutes, {
+      alwaysExtractActionItems: true
+    });
+  });
+
+  it("does not ask for them on an ordinary automatic pass", async () => {
+    const classify = vi.fn(async () => ({ outcome: "signed", actionItems: [] }));
+    await applyMeetingClassification(input, deps({ classify }));
+    expect(classify).toHaveBeenCalledWith(BIZ, input.minutes, {
+      alwaysExtractActionItems: false
+    });
+  });
+
+  it("still keeps an internal meeting off the record, forced or not", async () => {
+    // A team sync is a team sync even if somebody reassigns it: the guard
+    // that stops a colleague's name collecting a note is not overridable.
+    const d = deps({ classify: vi.fn(async () => ({ outcome: "internal", actionItems: [] })) });
+    const out = await applyMeetingClassification(forced, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(m.patchDocument).not.toHaveBeenCalled();
+    expect(m.createNote).not.toHaveBeenCalled();
+    expect(out.contactId).toBeNull();
+  });
+
+  it("moves the card when the model DOES categorize the reassigned call", async () => {
+    const d = deps({
+      classify: vi.fn(async () => ({ outcome: "follow_up", actionItems: [] }))
+    });
+    const out = await applyMeetingClassification(forced, d);
+    const m = d as never as Record<string, ReturnType<typeof vi.fn>>;
+    expect(m.fireStage).toHaveBeenCalledWith(BIZ, CONTACT_KEY, "met", {
+      dedupeSuffix: `zoom:${MEETING_UUID}`
+    });
+    expect(out.stageOutcome).toBe("written");
   });
 });

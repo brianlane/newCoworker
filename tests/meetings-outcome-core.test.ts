@@ -13,7 +13,10 @@ import {
   outcomeTouchesContact,
   outcomeWantsActionItems,
   parseMeetingActionItems,
-  type MeetingOutcome
+  type MeetingOutcome,
+  isIdentityMatch,
+  unclearMayLinkDocument,
+  unclearMayWriteRecord
 } from "@/lib/meetings/outcome-core";
 import { MAX_TODO_TITLE_LENGTH } from "@/lib/todos/core";
 import { NOTE_BODY_MAX } from "@/lib/notes/core";
@@ -216,5 +219,33 @@ describe("buildMeetingTodoDetails", () => {
     // roster match; this line is the evidence behind that.
     const details = buildMeetingTodoDetails({ documentTitle: "Discovery Call", owner: "Brian" });
     expect(details).toContain("The minutes name Brian as the owner of this task.");
+  });
+});
+
+describe("what an unclear meeting is allowed to write", () => {
+  it("counts a booking attendee, a spoken address and the owner as identities", () => {
+    expect(isIdentityMatch("booking_ledger")).toBe(true);
+    expect(isIdentityMatch("transcript_email")).toBe(true);
+    expect(isIdentityMatch("owner")).toBe(true);
+  });
+
+  it("does not count a name as an identity", () => {
+    expect(isIdentityMatch("speaker_name")).toBe(false);
+    expect(isIdentityMatch("addressed_name")).toBe(false);
+  });
+
+  it("files an unclear meeting on the record only when the match is an identity", () => {
+    expect(unclearMayLinkDocument("booking_ledger")).toBe(true);
+    // Two people sharing a first name must not collect each other's minutes.
+    expect(unclearMayLinkDocument("speaker_name")).toBe(false);
+    expect(unclearMayLinkDocument("addressed_name")).toBe(false);
+  });
+
+  it("writes a note for an unclear meeting only when a person said who it was with", () => {
+    expect(unclearMayWriteRecord("owner")).toBe(true);
+    // Deterministic is still not the same as somebody deciding.
+    expect(unclearMayWriteRecord("booking_ledger")).toBe(false);
+    expect(unclearMayWriteRecord("transcript_email")).toBe(false);
+    expect(unclearMayWriteRecord("speaker_name")).toBe(false);
   });
 });
