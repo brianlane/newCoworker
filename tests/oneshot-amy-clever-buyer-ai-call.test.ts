@@ -25,7 +25,10 @@ import {
   REFERRAL_BUYER_REACH_PREVIOUS,
   BUYER_PROMOTE_STEP_ID,
   NEW_FOLLOW_UP_LINES,
+  NEW_REMINDER_DETAILS,
   OLD_NO_FOLLOW_UP_FRAGMENTS,
+  OLD_REMINDER_DETAILS,
+  SUPERSEDED_CLAIMED_LINE,
   PROMOTE_STEP_ID,
   alreadyPatched,
   buyerCallStep,
@@ -320,7 +323,8 @@ describe("the copy this change makes untrue", () => {
         offerTemplate: `New Clever BUYER lead\n${OLD_NO_FOLLOW_UP_FRAGMENTS[0]}\nReply 1.`,
         claimedNotifyTemplate: `claimed\n${OLD_NO_FOLLOW_UP_FRAGMENTS[1]}`,
         ownerFallbackTemplate: `nobody took it\n${OLD_NO_FOLLOW_UP_FRAGMENTS[2]}`,
-        ownerDirectTemplate: `$1M+\n${OLD_NO_FOLLOW_UP_FRAGMENTS[3]}`
+        ownerDirectTemplate: `$1M+\n${OLD_NO_FOLLOW_UP_FRAGMENTS[3]}`,
+        unclaimedReminders: { rounds: 3, intervalMinutes: 20, detailsTemplate: OLD_REMINDER_DETAILS }
       } as Step
     ]
   });
@@ -329,7 +333,7 @@ describe("the copy this change makes untrue", () => {
     // The harmful half: a teammate who claims believes they are the only
     // contact while the retry ladder is still dialling underneath them.
     const def = routeBuyer();
-    expect(retuneBuyerOfferCopy(def)).toHaveLength(4);
+    expect(retuneBuyerOfferCopy(def)).toHaveLength(5);
     const all = JSON.stringify(def);
     for (const stale of OLD_NO_FOLLOW_UP_FRAGMENTS) expect(all).not.toContain(stale);
     expect(String(stepById(def, "route_buyer")!.offerTemplate)).toContain("The AI already called");
@@ -347,9 +351,41 @@ describe("the copy this change makes untrue", () => {
     const before = JSON.parse(JSON.stringify(def));
     retuneBuyerOfferCopy(def);
     expect(retuneBuyerOfferCopy(def)).toEqual([]);
-    expect(retuneBuyerOfferCopy(def, true)).toHaveLength(4);
+    expect(retuneBuyerOfferCopy(def, true)).toHaveLength(5);
     expect(def).toEqual(before);
     expect(retuneBuyerOfferCopy({ steps: [] })).toEqual([]);
+  });
+
+  it("also retunes the REMINDER rounds, which carry their own copy", () => {
+    // They go out during the claim window, after the first call, so leaving
+    // them behind keeps delivering the very line this removes.
+    const def = routeBuyer();
+    retuneBuyerOfferCopy(def);
+    const reminders = stepById(def, "route_buyer")!.unclaimedReminders as {
+      detailsTemplate: string;
+    };
+    expect(reminders.detailsTemplate).toBe(NEW_REMINDER_DETAILS);
+    expect(reminders.detailsTemplate).not.toContain("not following up");
+  });
+
+  it("never tells the CLAIMER they hold the call summary", () => {
+    // In a claimedNotifyTemplate {{agent.name}} is whoever claimed, while the
+    // summary goes to whoever the reach ladder rang FIRST. Naming the claimer
+    // tells the wrong person they have the details.
+    expect(NEW_FOLLOW_UP_LINES[1]).not.toContain("{{agent.name}}");
+    expect(NEW_FOLLOW_UP_LINES[1]).toContain("whoever it rang");
+  });
+
+  it("recognises the wording this script itself shipped and then corrected", () => {
+    // That line reached the live flow before the fix, so a retune that only
+    // knew the ORIGINAL text would strand it there forever.
+    const def = routeBuyer();
+    stepById(def, "route_buyer")!.claimedNotifyTemplate = `claimed\n${SUPERSEDED_CLAIMED_LINE}`;
+    const changed = retuneBuyerOfferCopy(def);
+    expect(changed.join(" ")).toContain("claimedNotifyTemplate");
+    expect(String(stepById(def, "route_buyer")!.claimedNotifyTemplate)).toBe(
+      `claimed\n${NEW_FOLLOW_UP_LINES[1]}`
+    );
   });
 
   it("carries no em dash in the replacement copy", () => {

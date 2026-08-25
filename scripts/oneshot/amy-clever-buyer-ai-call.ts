@@ -399,10 +399,39 @@ export const NEW_FOLLOW_UP_LINES = [
   "The AI already called them: {{vars.call_outcome_label}}.\nWhoever the AI rang first has the " +
     "full call summary with what they want, their timeline, and when they asked to be called " +
     "back.\nUnless you take it, the AI tries twice more and stops the moment they reply or book.",
-  "The AI called this one first: {{agent.name}} has the summary, and the AI has stopped calling.",
+  // Deliberately does NOT name the claimer. In a claimedNotifyTemplate
+  // {{agent.name}} is whoever claimed, while the summary goes to whoever the
+  // reach ladder rang FIRST (notifyFirstReachTarget), and those are often
+  // different people. Telling a claimer they hold details they may not have is
+  // worse than telling them where to look.
+  "The AI called this one first, and whoever it rang holds the call summary. The AI has " +
+    "stopped calling now.",
   "The AI called them: {{vars.call_outcome_label}}. It has stopped now that nobody took the lead.",
   "The AI is not calling this one: a $1M+ buyer is yours before the team ever sees them."
 ] as const;
+
+/**
+ * The reminder rounds carry their own copy, and it said the same stale thing.
+ * They go out DURING the claim window, after the first call has happened, so
+ * leaving them behind would keep delivering the line this retune removes.
+ */
+export const OLD_REMINDER_DETAILS =
+  "Looking in: {{vars.lead_address}}\nBuyer lead, so the AI is not following up.";
+export const NEW_REMINDER_DETAILS =
+  "Looking in: {{vars.lead_address}}\nThe AI already called; it stops when they reply or book.";
+
+/**
+ * A wording this script itself shipped and then corrected.
+ *
+ * The first pass replaced the claimed notice with a line naming
+ * {{agent.name}} as the holder of the call summary. In a claimedNotifyTemplate
+ * that variable is the CLAIMER, while the summary goes to whoever the reach
+ * ladder rang first, so it told the wrong person they had the details. It is
+ * listed here because it reached the live flow before the correction, and a
+ * retune that only recognises the ORIGINAL text would leave it stranded.
+ */
+export const SUPERSEDED_CLAIMED_LINE =
+  "The AI called this one first: {{agent.name}} has the summary, and the AI has stopped calling.";
 
 /** Retune the buyer offer so it describes what the AI now actually does. */
 export function retuneBuyerOfferCopy(def: AnyDef, reverse = false): string[] {
@@ -421,9 +450,26 @@ export function retuneBuyerOfferCopy(def: AnyDef, reverse = false): string[] {
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const current = typeof step[key] === "string" ? (step[key] as string) : "";
-    if (!current.includes(from[i])) continue;
-    step[key] = current.replace(from[i], to[i]);
+    // The claimed notice has a third possible source: the wording this script
+    // shipped before the {{agent.name}} correction.
+    const sources =
+      key === "claimedNotifyTemplate" && !reverse ? [from[i], SUPERSEDED_CLAIMED_LINE] : [from[i]];
+    const match = sources.find((f) => current.includes(f));
+    if (!match) continue;
+    step[key] = current.replace(match, to[i]);
     changed.push(`route_buyer.${key}: ${reverse ? "restored" : "now says the AI IS calling"}`);
+  }
+  // The reminder ladder's own copy, one level down.
+  const reminders = step.unclaimedReminders as Record<string, unknown> | undefined;
+  if (reminders && typeof reminders.detailsTemplate === "string") {
+    const wantFrom = reverse ? NEW_REMINDER_DETAILS : OLD_REMINDER_DETAILS;
+    const wantTo = reverse ? OLD_REMINDER_DETAILS : NEW_REMINDER_DETAILS;
+    if (reminders.detailsTemplate === wantFrom) {
+      reminders.detailsTemplate = wantTo;
+      changed.push(
+        `route_buyer.unclaimedReminders: ${reverse ? "restored" : "reminders no longer deny the call"}`
+      );
+    }
   }
   return changed;
 }
