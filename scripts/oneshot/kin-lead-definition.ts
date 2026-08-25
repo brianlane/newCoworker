@@ -19,11 +19,17 @@
  *                                       the run at the first gated step; put
  *                                       the greeting first and an overnight
  *                                       lead delays the owner alert too.
- *   s_greet                             Names the clinic, thanks them for the
- *                                       consult request, hands them the
- *                                       JaneApp link. Speed-to-lead: the SMS
- *                                       IS the delivery of the link, so there
- *                                       is no self-book sleep window here.
+ *   s_route_booking                     Names the clinic, thanks them for the
+ *                                       consult request, and hands them the
+ *                                       booking page for the discipline the
+ *                                       lead form named (teen counselling,
+ *                                       psychological assessment, or OT),
+ *                                       falling back to the general page with
+ *                                       a "tell me which" prompt. Routing
+ *                                       table: kin-booking-links.ts.
+ *                                       Speed-to-lead: the SMS IS the
+ *                                       delivery of the link, so there is no
+ *                                       self-book sleep window here.
  *   nudges at 2h and next-day           The cadence Kingsley chose on the
  *                                       intake (first_follow_up 2h,
  *                                       second_follow_up next_day, handoff
@@ -40,18 +46,29 @@
  * as polite rather than broken.
  */
 
+import {
+  KIN_BOOKING_SERVICES,
+  KIN_GENERAL_BOOKING_LINK,
+  type KinBookingService
+} from "./kin-booking-links.ts";
+
 export const KIN_FLOW_NAME = "Lead follow-up (white-glove build)";
 
 /**
- * Sentinel standing in for Kingsley's real JaneApp booking link, still
- * outstanding (Brian is collecting it). patch-kin-lead-flow.ts REFUSES to
- * --apply while this constant still reads the placeholder, so it can never
- * reach a lead's phone. Landing the real link is a one-line diff + a re-run.
+ * Sentinel that stood in for the booking link while it was outstanding.
+ * Kept because patch-kin-lead-flow.ts still refuses to --apply whenever the
+ * link reads as pending; the guard costs nothing and protects the next
+ * person who copies this file for another tenant.
  */
 export const KIN_JANEAPP_LINK_PENDING = "<JANEAPP_BOOKING_LINK_PENDING>";
 
-/** Kingsley's JaneApp booking link for the free 15 minute consult. */
-export const KIN_JANEAPP_BOOKING_LINK: string = KIN_JANEAPP_LINK_PENDING;
+/**
+ * The GENERAL JaneApp page, used when the lead form did not tell us which
+ * discipline they need. Service-specific links live in kin-booking-links.ts
+ * and are chosen by the s_route_booking branch. Received from Kingsley
+ * 2026-08-25.
+ */
+export const KIN_JANEAPP_BOOKING_LINK: string = KIN_GENERAL_BOOKING_LINK;
 
 /** True while the booking link is still the placeholder. */
 export function bookingLinkIsPending(link: string = KIN_JANEAPP_BOOKING_LINK): boolean {
@@ -83,16 +100,34 @@ type FlowStepJson = Record<string, unknown>;
 export function buildKinLeadDefinition(
   bookingLink: string = KIN_JANEAPP_BOOKING_LINK
 ): { version: number; trigger: Record<string, unknown>; steps: FlowStepJson[] } {
-  const greet =
-    "Hi {{vars.lead_name}}, this is the assistant for KIN Integrated Child Health. " +
-    "Thanks for requesting your free 15 minute consult. We want to get you started " +
-    "on your healing journey soon. Pick a time for your consultation call here: " +
-    `${bookingLink} . Or reply here with any questions and I will help.`;
+  // A link followed immediately by a period gets swallowed into the URL by
+  // the shortener's matcher (https?://[^\s<>"']+), and JaneApp 404s on the
+  // trailing dot. Every link here therefore ends its line.
+  const greetFor = (service: KinBookingService | null): string => {
+    const opening =
+      "Hi {{vars.lead_name}}, this is the assistant for KIN Integrated Child Health. " +
+      "Thanks for requesting your free 15 minute consult.";
+    if (service) {
+      return (
+        `${opening} You can book your ${service.serviceName} consult right here:\n` +
+        `${service.link}\n` +
+        "Or reply here with any questions and I will help."
+      );
+    }
+    return (
+      `${opening} You can pick a time here:\n` +
+      `${bookingLink}\n` +
+      "If you tell me what you are looking for, occupational therapy, a psychological " +
+      "assessment, counselling, speech, or behaviour consulting, I will send you the " +
+      "right booking page and answer any questions."
+    );
+  };
 
   const nudge1 =
     "Hi {{vars.lead_name}}, just floating this back up. Whenever you are ready, " +
-    `the booking link for your free consult is ${bookingLink} , and I am happy ` +
-    "to answer any questions here.";
+    "you can book your free consult here:\n" +
+    `${bookingLink}\n` +
+    "and I am happy to answer any questions here.";
 
   const nudge2 =
     "Hi {{vars.lead_name}}, I do not want you to slip through the cracks. Want " +
@@ -140,11 +175,44 @@ export function buildKinLeadDefinition(
           "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I'm sending them the consult booking link (overnight leads get their text from 9am) and I'm on follow-up duty."
       },
       {
-        id: "s_greet",
-        type: "send_sms",
-        to: "{{vars.lead_phone}}",
-        body: greet,
-        quietHours: { ...KIN_QUIET_HOURS }
+        // Deterministic service routing on whatever the Meta lead form
+        // captured (extract_text puts the custom-question answers in
+        // lead_notes). No model call: the repo prefers an explicit branch
+        // when the rule is knowable, same posture as Scar Fairy routing on
+        // the lead-form name. Arm order mirrors resolveKinService, and the
+        // teen arm is first on purpose (its link is age-scoped 14-17).
+        id: "s_route_booking",
+        type: "branch",
+        question: "Which booking page does this lead need",
+        branches: KIN_BOOKING_SERVICES.map((service) => ({
+          id: `arm_${service.key}`,
+          label: service.label,
+          condition: {
+            var: "lead_notes",
+            contains: service.matches[0],
+            caseInsensitive: true
+          },
+          steps: [
+            {
+              id: `s_greet_${service.key}`,
+              type: "send_sms",
+              to: "{{vars.lead_phone}}",
+              body: greetFor(service),
+              quietHours: { ...KIN_QUIET_HOURS }
+            }
+          ]
+        })),
+        // Cannot tell: the general page lists every discipline, and the copy
+        // asks which one so the coworker can send the specific link on reply.
+        else: [
+          {
+            id: "s_greet_general",
+            type: "send_sms",
+            to: "{{vars.lead_phone}}",
+            body: greetFor(null),
+            quietHours: { ...KIN_QUIET_HOURS }
+          }
+        ]
       },
       {
         id: "s_wait_1",
