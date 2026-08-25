@@ -1,3 +1,11 @@
+import {
+  formatOwnerFallbackReasons,
+  OWNER_FALLBACK_PAGE_AT,
+  OWNER_FALLBACK_ROW_CAP,
+  tallyOwnerFallbacks,
+  type OwnerFallbackRow
+} from "@/lib/cron/owner-operator-fallback";
+
 /**
  * The cron sweep watchdog: decides whether the fleet is healthy, and says
  * what to do about it when it is not.
@@ -108,7 +116,15 @@ export type HttpFailureRow = {
   created: string;
 };
 
-export type FindingKind = "missing" | "failed" | "errors" | "degraded" | "slow" | "burst" | "http";
+export type FindingKind =
+  | "missing"
+  | "failed"
+  | "errors"
+  | "degraded"
+  | "slow"
+  | "burst"
+  | "http"
+  | "fallback";
 
 /**
  * The pager contract for the HTTP layer. Six solo anomalies between Aug 6
@@ -164,6 +180,25 @@ export type WatchdogInput = {
    * grace": muting a sweep whose recording never worked is the worse error.
    */
   previouslyMissing: string[] | null;
+  /**
+   * `sms_owner_operator_fallback` telemetry in the window, or [] when the
+   * read failed or returned nothing.
+   *
+   * Not a sweep, and deliberately checked here anyway: this watchdog is the
+   * one thing that already runs daily, reads a ledger and mails an operator,
+   * so a second scheduled job to ask one question would be a second thing to
+   * keep alive. The signal is the same shape as the rest of this file, a
+   * count that should be zero and is worth a sentence when it is not.
+   */
+  ownerFallbacks: OwnerFallbackRow[];
+  /**
+   * True when the fallback read hit OWNER_FALLBACK_ROW_CAP, so the counts
+   * are a floor rather than a total. Said out loud in the finding instead of
+   * quietly under-reporting.
+   */
+  ownerFallbacksTruncated: boolean;
+  /** Window the fallback rows were read over, for the finding's wording. */
+  ownerFallbackWindowMinutes: number;
   /** Evaluation time, injected so the decision stays pure. */
   now: number;
 };
@@ -361,8 +396,42 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
     : [];
   const suppressedHttp = isBurst ? 0 : input.httpFailures.length;
 
+  // Owner turns that fell off the platform engine onto the box. Only the
+  // `failed` group pages: a config reason means the path was never attempted
+  // on this deployment, and `over_cap` is the spend cap working. Both still
+  // get counted into the detail line, because "10 over_cap" is worth reading
+  // even though it is not an alarm.
+  const tally = tallyOwnerFallbacks(input.ownerFallbacks);
+  const failedFallbacks = tally.byKind.failed;
+  const fallbackHours = Math.round(input.ownerFallbackWindowMinutes / 60);
+  const fallback: Finding[] =
+    failedFallbacks >= OWNER_FALLBACK_PAGE_AT
+      ? [
+          {
+            kind: "fallback" as const,
+            sweep: "(owner sms)",
+            detail:
+              `${failedFallbacks} owner turn(s) fell back off the platform engine in the last ` +
+              `${fallbackHours}h, past the ${OWNER_FALLBACK_PAGE_AT} bar` +
+              `${input.ownerFallbacksTruncated ? ` (read capped at ${OWNER_FALLBACK_ROW_CAP} rows, so this is a floor)` : ""}: ` +
+              formatOwnerFallbackReasons(tally) +
+              (tally.failedBusinesses.length > 0
+                ? `\n      affected: ${tally.failedBusinesses.join(", ")}`
+                : ""),
+            action:
+              `Those owners were answered by the Rowboat staff persona on their box, which has ` +
+              `neither the operator tools nor the ask classifier, so a request to change an ` +
+              `automation could not be acted on and nothing in the reply said so. Read ` +
+              `\`npx tsx debug/owner-operator-fallback-report.ts --days 7\` for the breakdown. ` +
+              `http_error and request_failed point at /api/internal/owner-sms-turn or the 75s ` +
+              `worker abort; bad_payload means it answered 200 with no usable reply. A sustained ` +
+              `rate here is the trigger to revisit giving the box worker its own flow-edit path.`
+          }
+        ]
+      : [];
+
   return {
-    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...burst],
+    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...burst, ...fallback],
     healthy: healthy.sort(),
     checked: Object.keys(SWEEP_EXPECTATIONS).length,
     graced: graced.sort(),

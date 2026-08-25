@@ -40,6 +40,10 @@ const HEADINGS: Record<FindingKind, string> = {
   degraded: "INCOMPLETE: the watchdog could not read one of its two sources",
   slow: "SLOW: approaching the 150s ceiling",
   burst: "HTTP BURST: anomalies clustering past the pager bar",
+  // Not a sweep. Owner texts that fell off the platform engine onto the box
+  // worker, which answers with neither the operator tools nor the ask
+  // classifier: the owner is served, quietly worse, and never told.
+  fallback: "OWNER FALLBACK: owner turns answered by the box, not the platform",
   // Retired as an emailed kind: solo HTTP anomalies are suppressed and
   // counted (the evaluator pages a "burst" instead), but the kind stays in
   // the union for the summary's byKind history.
@@ -47,7 +51,18 @@ const HEADINGS: Record<FindingKind, string> = {
 };
 
 /** Worst first: a sweep that stopped outranks one that merely got slow. */
-const ORDER: FindingKind[] = ["missing", "failed", "errors", "degraded", "slow", "burst", "http"];
+const ORDER: FindingKind[] = [
+  "missing",
+  "failed",
+  "errors",
+  "degraded",
+  // Above `slow`: a degraded owner answer already reached a customer, while a
+  // slow sweep is still only approaching a limit.
+  "fallback",
+  "slow",
+  "burst",
+  "http"
+];
 
 /** Only called for a kind the caller already found findings for. */
 function section(kind: FindingKind, findings: Finding[]): string {
@@ -72,7 +87,9 @@ export function buildOpsCronSweepHealthEmail(
   const textLines = [
     `The cron sweep watchdog checked ${input.checked} scheduled sweeps and found ${input.findings.length} problem(s). ` +
       `It reads two sources: public.cron_sweep_runs, where each sweep records its own completion, and ` +
-      `net._http_response, which holds the HTTP-layer outcome a dead sweep could not report itself.`,
+      `net._http_response, which holds the HTTP-layer outcome a dead sweep could not report itself.` +
+      ` It also counts owner turns that fell off the platform engine, which is not a sweep but is the ` +
+      `one daily job already positioned to notice.`,
     ...kinds.map((kind) => section(kind, input.findings)),
     input.healthy.length > 0
       ? `Reported in clean (${input.healthy.length}): ${input.healthy.join(", ")}.`

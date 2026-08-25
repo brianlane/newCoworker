@@ -18,6 +18,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOpsCronSweepHealthEmail } from "@/lib/email/ops-notify";
 import { SWEEP_EXPECTATIONS } from "@/lib/cron/sweep-watchdog";
+import { OWNER_FALLBACK_ROW_CAP } from "@/lib/cron/owner-operator-fallback";
 
 type QueryResult = { data: unknown; error: { message: string } | null };
 
@@ -31,26 +32,34 @@ function mockSupabase(opts: {
   runs?: QueryResult;
   oldest?: QueryResult;
   prevSummary?: QueryResult;
+  fallbacks?: QueryResult;
   rpc?: QueryResult;
   insert?: { error: { message: string } | null };
 }) {
   const neq = vi.fn();
   const gte = vi.fn();
-  // Chained table reads in route order: the oldest-row probe, then
-  // yesterday's watchdog summary (the grace memory).
+  /** Every (table, method) pair the route touched, so guards can be precise. */
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
+  // Chained table reads in route order: the oldest-row probe, yesterday's
+  // watchdog summary (the grace memory), then the owner-fallback telemetry.
   const results = [
     opts.oldest ?? { data: [], error: null },
-    opts.prevSummary ?? { data: [], error: null }
+    opts.prevSummary ?? { data: [], error: null },
+    opts.fallbacks ?? { data: [], error: null }
   ];
   let call = 0;
 
-  function chain(): Record<string, unknown> {
+  function chain(table: string): Record<string, unknown> {
     const result = results[Math.min(call++, results.length - 1)];
     const self: Record<string, unknown> = {};
     for (const m of ["select", "order", "limit", "eq"]) {
-      self[m] = vi.fn().mockReturnValue(self);
+      self[m] = vi.fn((...args: unknown[]) => {
+        calls.push({ table, method: m, args });
+        return self;
+      });
     }
     self.gte = vi.fn((...args: unknown[]) => {
+      calls.push({ table, method: "gte", args });
       gte(...args);
       return self;
     });
@@ -78,10 +87,10 @@ function mockSupabase(opts: {
     return Promise.resolve(opts.rpc ?? { data: [], error: null });
   });
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({
-    from: vi.fn(() => chain()),
+    from: vi.fn((table: string) => chain(table)),
     rpc
   } as unknown as Awaited<ReturnType<typeof createSupabaseServiceClient>>);
-  return { neq, gte, insert, rpc };
+  return { neq, gte, insert, rpc, calls };
 }
 
 function makeRequest(): Request {
@@ -152,11 +161,75 @@ describe("api/internal/cron-sweep-watchdog route", () => {
   });
 
   it("reads the run window through the bounded evidence RPC, never a raw select", async () => {
-    const { gte, rpc } = mockSupabase({ runs: { data: healthyRows(), error: null } });
+    const { rpc, calls } = mockSupabase({ runs: { data: healthyRows(), error: null } });
     await POST(makeRequest());
     expect(rpc).toHaveBeenCalledWith("cron_sweep_run_evidence", { since_minutes: 11_520 });
-    // No windowed table read: gte() was the old unbounded select's filter.
-    expect(gte).not.toHaveBeenCalled();
+    // The ledger must never be read with a windowed select again: PostgREST
+    // caps an un-limited select at 1,000 rows and the fleet writes ~8,800 a
+    // day, which is the 2026-08-10 nine-problem false alarm. The guard is on
+    // THIS table specifically; it used to be "no gte anywhere", which was a
+    // proxy that also forbade bounded windowed reads of other tables.
+    const ledgerWindowed = calls.filter(
+      (c) => c.table === "cron_sweep_runs" && c.method === "gte"
+    );
+    expect(ledgerWindowed).toEqual([]);
+  });
+
+  it("pages on owner fallbacks even when every sweep is healthy", async () => {
+    // The signal has to survive a night where nothing else is wrong, which is
+    // exactly the night it matters: the fleet is fine and owners are quietly
+    // getting the smaller assistant.
+    mockSupabase({
+      runs: { data: healthyRows(), error: null },
+      oldest: {
+        data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }],
+        error: null
+      },
+      fallbacks: {
+        data: [
+          { payload: { reason: "http_error", business_id: "biz-1" }, created_at: new Date().toISOString() },
+          { payload: { reason: "request_failed", business_id: "biz-1" }, created_at: new Date().toISOString() }
+        ],
+        error: null
+      }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.byKind.fallback).toBe(1);
+    expect(body.data.emailed).toBe(true);
+  });
+
+  it("a fallback read failure never costs the sweep verdict", async () => {
+    // Same posture as the HTTP half: the bonus signal degrades, the important
+    // alert survives.
+    mockSupabase({
+      runs: { data: healthyRows().filter((r) => r.sweep !== "subscription-grace-sweep"), error: null },
+      oldest: {
+        data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }],
+        error: null
+      },
+      fallbacks: { data: null, error: { message: "telemetry down" } }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.data.byKind.missing).toBe(1);
+    expect(body.data.byKind.fallback ?? 0).toBe(0);
+  });
+
+  it("reads owner fallbacks windowed AND row-capped, never unbounded", async () => {
+    const { calls } = mockSupabase({ runs: { data: healthyRows(), error: null } });
+    await POST(makeRequest());
+    const telemetry = calls.filter((c) => c.table === "telemetry_events");
+    expect(telemetry.some((c) => c.method === "gte")).toBe(true);
+    // The cap is what stops a catastrophe reading as a smaller number than
+    // it is, so it is asserted by value rather than merely being present.
+    expect(
+      telemetry.some((c) => c.method === "limit" && c.args[0] === OWNER_FALLBACK_ROW_CAP)
+    ).toBe(true);
+    expect(
+      telemetry.some((c) => c.method === "eq" && c.args[1] === "sms_owner_operator_fallback")
+    ).toBe(true);
   });
 
   it("does not email for a lone HTTP anomaly, but records it as suppressed", async () => {
