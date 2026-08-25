@@ -86,6 +86,13 @@ export async function insertMemoryEntity(
 export async function updateMemoryEntity(
   id: string,
   patch: {
+    /**
+     * Renaming a node, which the extractor itself never does: it resolves a
+     * mention to an existing entity or creates a new one. Set only by the
+     * owner-driven meeting reassign, where a person has said this node is
+     * somebody else (src/lib/meetings/reassign.ts).
+     */
+    canonical_name?: string;
     aliases?: string[];
     phones?: string[];
     emails?: string[];
@@ -100,6 +107,29 @@ export async function updateMemoryEntity(
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) throw new Error(`updateMemoryEntity: ${error.message}`);
+}
+
+/**
+ * Rewrite one fact's quoted source text.
+ *
+ * `source_text` is the excerpt a fact was extracted from, and it ships to
+ * every box inside graph.jsonl, so a wrong name in it survives correcting
+ * the document it was quoted from. The only caller is the meeting reassign,
+ * which rewrites the guest's name across the same fact set it renames the
+ * entity in. The fact itself (subject, predicate, object) is untouched: what
+ * was said is still true, it was said about somebody else.
+ */
+export async function updateMemoryFactSourceText(
+  id: string,
+  sourceText: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("memory_facts")
+    .update({ source_text: sourceText })
+    .eq("id", id);
+  if (error) throw new Error(`updateMemoryFactSourceText: ${error.message}`);
 }
 
 /** Every active fact for a business, the retrieval working set. */

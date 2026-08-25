@@ -41,7 +41,10 @@ import {
   MEETING_OUTCOME_EVENT,
   MEETING_OUTCOME_UNCLEAR,
   outcomeTouchesContact,
+  unclearMayLinkDocument,
+  unclearMayWriteRecord,
   type MeetingActionItem,
+  type MeetingMatchSource,
   type MeetingOutcome
 } from "./outcome-core";
 
@@ -68,6 +71,18 @@ export type MeetingClassificationInput = {
   zoomMeetingId: string | null;
   /** Names that count as "us" when picking the guest. */
   hostNames: string[];
+  /**
+   * The contact the OWNER says this meeting was with, bypassing
+   * `resolveMeetingContact` entirely.
+   *
+   * Set only by the reassign path (src/lib/meetings/reassign.ts), where a
+   * person has looked at the document and answered the question the
+   * resolver could not. A human answer outranks every automatic source, and
+   * it is the one case where an `unclear` outcome still files the meeting on
+   * a record: we no longer need to know what the call WAS to know who it was
+   * WITH.
+   */
+  forcedContact?: { contactId: string; contactKey: string } | null;
 };
 
 export type ApplyMeetingOutcomeDeps = {
@@ -88,7 +103,7 @@ export type ApplyMeetingOutcomeDeps = {
 export type MeetingClassificationResult = {
   outcome: MeetingOutcome;
   contactId: string | null;
-  matchedOn: string | null;
+  matchedOn: MeetingMatchSource | null;
   linkedDocument: boolean;
   wroteNote: boolean;
   stageOutcome: string | null;
@@ -245,23 +260,37 @@ export async function applyMeetingClassification(
     return result;
   }
 
-  const { outcome, actionItems } = await classify(input.businessId, input.minutes);
+  const { outcome, actionItems } = await classify(input.businessId, input.minutes, {
+    // An owner-forced contact wants its to-dos even when the model cannot
+    // categorize the call: the reason the extraction is normally skipped
+    // for `unclear` is that the applier would discard the list, and this
+    // path does not.
+    alwaysExtractActionItems: !!input.forcedContact
+  });
   result.outcome = outcome;
 
-  // An unclear or internal meeting writes nothing to anybody's record. The
-  // document already exists either way, which is the honest outcome when we
-  // do not know what the call was.
-  if (!outcomeTouchesContact(outcome) || outcome === MEETING_OUTCOME_UNCLEAR) {
+  // An INTERNAL meeting writes nothing to anybody's record, and is not even
+  // asked who it was with: a team sync that happens to match a contact by
+  // name must not staple a note onto that person.
+  if (!outcomeTouchesContact(outcome)) {
     await stampResult(input, result, stampLedger, logSystem);
     return result;
   }
 
-  const contact = await resolveContact({
-    businessId: input.businessId,
-    zoomMeetingId: input.zoomMeetingId,
-    vtt: input.vtt,
-    hostNames: input.hostNames
-  });
+  // The owner's answer, when there is one, outranks every automatic source
+  // and costs no lookups.
+  const contact: {
+    contactId: string;
+    contactKey: string;
+    matchedOn: MeetingMatchSource;
+  } | null = input.forcedContact
+      ? { ...input.forcedContact, matchedOn: "owner" }
+      : await resolveContact({
+          businessId: input.businessId,
+          zoomMeetingId: input.zoomMeetingId,
+          vtt: input.vtt,
+          hostNames: input.hostNames
+        });
   if (!contact) {
     await stampResult(input, result, stampLedger, logSystem);
     return result;
@@ -269,12 +298,30 @@ export async function applyMeetingClassification(
   result.contactId = contact.contactId;
   result.matchedOn = contact.matchedOn;
 
+  // An unclear meeting is held to a stricter standard than a classified
+  // one, because "we do not know what this call was" is a weak basis for
+  // writing on somebody's record. Identity evidence buys the document link;
+  // only a person's own answer buys the note and the to-dos. A name-only
+  // match buys nothing, and the meeting stays a library document.
+  const unclear = outcome === MEETING_OUTCOME_UNCLEAR;
+  if (unclear && !unclearMayLinkDocument(contact.matchedOn)) {
+    result.contactId = null;
+    result.matchedOn = null;
+    await stampResult(input, result, stampLedger, logSystem);
+    return result;
+  }
+
   // 1. Link the document to the person it is about.
   result.linkedDocument = await attempt("document link", input.businessId, async () => {
     await patchDocument(input.businessId, input.documentId, {
       contact_id: contact.contactId
     });
   });
+
+  if (unclear && !unclearMayWriteRecord(contact.matchedOn)) {
+    await stampResult(input, result, stampLedger, logSystem);
+    return result;
+  }
 
   // 2. The note.
   result.wroteNote = await attempt("note", input.businessId, async () => {

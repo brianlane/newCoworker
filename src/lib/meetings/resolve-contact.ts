@@ -4,7 +4,7 @@
  * Everything the classifier decides is applied to a PERSON, so this answer
  * has to be right or absent. A wrong match staples a note, a stage move and
  * a set of to-dos onto a stranger's record, which is worse than doing
- * nothing at all. Three sources, strongest first, and each one either
+ * nothing at all. Four sources, strongest first, and each one either
  * produces a confident answer or hands over to the next:
  *
  *   1. THE BOOKING LEDGER. The booking that created the Zoom meeting already
@@ -14,9 +14,15 @@
  *   2. AN EMAIL IN THE TRANSCRIPT. People read addresses out loud and Zoom
  *      transcribes them. An address is an identity, so a linked contact is a
  *      confident match.
- *   3. A SPEAKER NAME. The weakest source, and the only one that can be
- *      ambiguous, so it is the only one with an extra rule: a name resolves
- *      ONLY when exactly one contact carries it. Two Daves means nobody.
+ *   3. A SPEAKER NAME. Ambiguous in a way the first two are not, so it
+ *      carries an extra rule: a name resolves ONLY when exactly one contact
+ *      carries it. Two Daves means nobody.
+ *   4. A NAME THE HOST USED. Zoom labels every line with the ACCOUNT's
+ *      display name, so a guest on a shared or stale account speaks under
+ *      somebody else's name and source 3 finds nobody. Our own side still
+ *      addressed them correctly on the call ("Hey, Bobby"), so host-spoken
+ *      vocatives are read last. Matched on the GIVEN name, since that is
+ *      what people say out loud, and still under a unique-contact rule.
  *
  * Never throws: a lookup blip means "unattributed", and an unattributed
  * meeting still becomes a document in the library.
@@ -25,12 +31,21 @@ import { findBookingByZoomMeetingId } from "@/lib/calendar-tools/booking-dedupe"
 import { getCustomerMemory, findCustomerByEmail } from "@/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { extractVttSpeakers, pickZoomGuestSpeaker } from "@/lib/zoom/document-title";
+import { extractHostAddressedNames } from "./rename-guest";
+import type { MeetingMatchSource } from "./outcome-core";
 import { vttToPlainText } from "@/lib/transcripts/vtt";
 import { emailContactKey } from "../../../supabase/functions/_shared/contact_key";
 import { logger } from "@/lib/logger";
 
-/** How the contact was identified, carried into the logs for traceability. */
-export type MeetingContactMatch = "booking_ledger" | "transcript_email" | "speaker_name";
+/**
+ * How the contact was identified, carried into the logs for traceability.
+ *
+ * Derived from the applier's own union rather than restated, so the two can
+ * never drift into disagreeing about what a match source is. `owner` is
+ * excluded here on purpose: it means a person answered the question, which
+ * is not something this resolver can ever conclude.
+ */
+export type MeetingContactMatch = Exclude<MeetingMatchSource, "owner">;
 
 export type ResolvedMeetingContact = {
   /** `contacts.id`, the FK every write here needs. */
@@ -44,7 +59,7 @@ export type ResolveMeetingContactInput = {
   businessId: string;
   /** Zoom's numeric meeting id, when the import knew it. */
   zoomMeetingId: string | null;
-  /** The raw WebVTT, for the two fallbacks. */
+  /** The raw WebVTT, for the three fallbacks. */
   vtt: string;
   /** Names that count as "us", so a fallback never matches our own side. */
   hostNames: string[];
@@ -56,6 +71,8 @@ export type ResolveMeetingContactDeps = {
   findByEmail?: typeof findCustomerByEmail;
   /** Unique display-name lookup; injected in tests. */
   findByName?: (businessId: string, name: string) => Promise<string | null>;
+  /** Unique given-name lookup, for the vocative source; injected in tests. */
+  findByGivenName?: (businessId: string, name: string) => Promise<string | null>;
 };
 
 /**
@@ -151,6 +168,83 @@ export async function findContactIdByUniqueName(
   }
 }
 
+/**
+ * The single contact whose display name IS this name, or begins with it as a
+ * whole word, or null.
+ *
+ * Source 4 reads vocatives, and a vocative is a first name: the host says
+ * "Hey, Bobby", never "Hey, Bobby Smith". Contacts are stored under full
+ * names, so the exact-equality rule source 3 uses finds nobody and the whole
+ * wrong-Zoom-account fallback never fires.
+ *
+ * Widening the match does NOT widen the guarantee: the answer is still the
+ * SINGLE contact who qualifies, counted across both shapes together. A
+ * "Bobby" and a "Bobby Smith" on the same roster is ambiguous and resolves to
+ * nobody, exactly as two Bobby Smiths would.
+ *
+ * TWO queries rather than one prefix query with a JS filter. A `Bobby%`
+ * prefix also returns "Bobbyson", so the page can fill up with rows that fail
+ * the word-boundary check and hide a second real "Bobby ..." behind the row
+ * limit, at which point one surviving hit looks unique when it is not
+ * (Bugbot, PR #1618). Asking for the two qualifying shapes SEPARATELY means
+ * every returned row already counts, so a limit of 2 per query is enough to
+ * detect ambiguity, the same way `findContactIdByUniqueName` uses it. Each
+ * query is also the single-pattern `ilike` that function already proves out,
+ * rather than a hand-built `or()` string a display name could break.
+ */
+export async function findContactIdByUniqueGivenName(
+  businessId: string,
+  name: string
+): Promise<string | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  try {
+    const db = await createSupabaseServiceClient();
+    // Escaped, so a name containing `_` or `%` cannot widen either query into
+    // a wildcard, the same escape every other lookup here uses.
+    const escaped = trimmed.replace(/[%_\\]/g, (m) => `\\${m}`);
+    const needle = trimmed.toLowerCase();
+
+    /** Rows for one pattern, or null when the query itself failed. */
+    const rowsFor = async (
+      pattern: string
+    ): Promise<Array<{ id: string; display_name: string | null }> | null> => {
+      const { data, error } = await db
+        .from("contacts")
+        .select("id, display_name")
+        .eq("business_id", businessId)
+        .ilike("display_name", pattern)
+        // Two rows are enough to know the shape is ambiguous.
+        .limit(2);
+      if (error) return null;
+      return (data ?? []) as Array<{ id: string; display_name: string | null }>;
+    };
+
+    const [exact, prefixed] = await Promise.all([
+      rowsFor(escaped),
+      // The trailing space is the word boundary, in SQL rather than after the
+      // fact: "Bobby %" matches "Bobby Smith" and never "Bobbyson Clarke".
+      rowsFor(`${escaped} %`)
+    ]);
+    if (exact === null || prefixed === null) return null;
+
+    // Re-verify in JS so neither result can be a wildcard false positive, the
+    // same belt-and-braces the other lookups apply, then count across both.
+    const ids = new Set<string>();
+    for (const row of [...exact, ...prefixed]) {
+      const display = (row.display_name ?? "").trim().toLowerCase();
+      if (display === needle || display.startsWith(`${needle} `)) ids.add(row.id);
+    }
+    return ids.size === 1 ? (ids.values().next().value as string) : null;
+  } catch (err) {
+    logger.warn("meeting contact: given-name lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
 /** Load a contact row by key and shape it as a resolution, or null. */
 async function resolveByKey(
   businessId: string,
@@ -180,6 +274,7 @@ export async function resolveMeetingContact(
   const getContact = deps.getContact ?? getCustomerMemory;
   const findByEmail = deps.findByEmail ?? findCustomerByEmail;
   const findByName = deps.findByName ?? findContactIdByUniqueName;
+  const findByGivenName = deps.findByGivenName ?? findContactIdByUniqueGivenName;
   /* c8 ignore stop */
   const { businessId } = input;
 
@@ -235,6 +330,21 @@ export async function resolveMeetingContact(
     if (contactId) {
       const key = await contactKeyForId(businessId, contactId);
       if (key) return { contactId, contactKey: key, matchedOn: "speaker_name" };
+    }
+  }
+
+  // 4. A name the HOST addressed the guest by. Last, because it is a
+  //    reading of speech rather than a label, but it is the source that
+  //    survives a wrong Zoom display name: someone joining from an account
+  //    named for somebody else is still called by their own name on the
+  //    call ("Hey, Bobby"). Same unique-contact rule as the speaker label,
+  //    and `extractHostAddressedNames` only reads OUR side's lines, so a
+  //    guest naming a third party never lands here.
+  for (const addressed of extractHostAddressedNames(input.vtt, input.hostNames)) {
+    const contactId = await findByGivenName(businessId, addressed);
+    if (contactId) {
+      const key = await contactKeyForId(businessId, contactId);
+      if (key) return { contactId, contactKey: key, matchedOn: "addressed_name" };
     }
   }
 

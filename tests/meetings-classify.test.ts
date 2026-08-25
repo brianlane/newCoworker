@@ -183,3 +183,33 @@ describe("classifyMeeting: a non-Error failure", () => {
     });
   });
 });
+
+describe("classifyMeeting: alwaysExtractActionItems", () => {
+  it("skips the second call for an unclear meeting by default", async () => {
+    const { generate, calls } = generator(['{"category":"unclear"}', "{}"]);
+    const out = await classifyMeeting(BIZ, MINUTES, { generate: generate as never });
+    expect(out.actionItems).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("extracts them anyway when the caller will actually file them", async () => {
+    // The owner-forced reassign path: it files to-dos from an unclear
+    // meeting, so the cost-saving skip must yield to it.
+    const { generate, calls } = generator([
+      '{"category":"unclear"}',
+      '{"action_1":"Send the proposal","action_1_owner":"Brian"}'
+    ]);
+    const out = await classifyMeeting(BIZ, MINUTES, {
+      generate: generate as never,
+      alwaysExtractActionItems: true
+    });
+    expect(calls).toHaveLength(2);
+    expect(out.actionItems).toEqual([{ title: "Send the proposal", owner: "Brian" }]);
+  });
+
+  it("still skips an internal meeting when the flag is off", async () => {
+    const { generate, calls } = generator(['{"category":"internal"}', "{}"]);
+    await classifyMeeting(BIZ, MINUTES, { generate: generate as never });
+    expect(calls).toHaveLength(1);
+  });
+});
