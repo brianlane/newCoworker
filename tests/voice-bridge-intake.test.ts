@@ -10,6 +10,10 @@ import {
   OUTBOUND_VOICEMAIL_TOOL_LINE,
   STAR_ROW
 } from "../vps/voice-bridge/src/intake";
+import {
+  NO_INVENTED_CONTACT_LINE,
+  RECORDED_SYSTEM_LINE
+} from "../vps/voice-bridge/src/call-integrity-lines";
 
 describe("intakeSystemInstruction", () => {
   it("leads with the configured persona and lists the capture fields", () => {
@@ -796,5 +800,78 @@ describe("intakeSystemInstruction: reporting a recording", () => {
   it("carries no em dash and never says receptionist", () => {
     expect(OUTBOUND_VOICEMAIL_TOOL_LINE).not.toMatch(/—/);
     expect(OUTBOUND_VOICEMAIL_TOOL_LINE.toLowerCase()).not.toContain("receptionist");
+  });
+});
+
+/**
+ * Amy Laidlaw, 2026-08-25, about her own AI: "whose phone number is this? I
+ * thought they usually put the AI phone number in there."
+ *
+ * Her coworker had told lead Tami Nelson to call back on 480-256-2580. That
+ * is not her line (602-695-1142), not her AI line, not a teammate's, and
+ * appears in no flow, config or contact row. Across the previous 45 days it
+ * invented THIRTEEN distinct numbers, one per voicemail, all plausible live
+ * Phoenix numbers, so strangers were fielding her leads' callbacks. On Tami's
+ * call it then read the real script too, leaving a mailbox with the wrong
+ * number first and the right one second; on Isiah Perez's (2026-08-23) the
+ * ad-lib was the only message left.
+ *
+ * The scripts were never wrong. Two instruction defects combined: the model
+ * speaks before calling `voicemail_reached`, and RECORDED_SYSTEM_LINE told it
+ * the message should say "how to reach you" without handing it a number,
+ * which made inventing one feel required.
+ *
+ * These assertions are on the DEPLOYED strings, which is the honest limit of
+ * what a test can pin here: production voice runs
+ * `gemini-3.1-flash-live-preview` over the realtime audio API, and the text
+ * e2e tier drives a different model that already behaves correctly, so a
+ * green text test would have proved nothing about the live one.
+ */
+describe("voice personas never invent a contact detail", () => {
+  it("the rule states the mechanism and the consequence, not just a ban", () => {
+    expect(NO_INVENTED_CONTACT_LINE).toContain("NEVER say a phone number");
+    expect(NO_INVENTED_CONTACT_LINE).toContain("character for character");
+    // The "why" is what makes it stick: the number is DIALLED by a real lead.
+    expect(NO_INVENTED_CONTACT_LINE).toContain("reaches a stranger");
+    expect(NO_INVENTED_CONTACT_LINE).toContain("will dial it");
+    // And it must say what to do INSTEAD, or the model is left with a
+    // forbidden action and no alternative.
+    expect(NO_INVENTED_CONTACT_LINE).toContain("give none");
+  });
+
+  it("does not ban repeating digits a caller just gave, which is real work", () => {
+    // The inbound intake persona is told to read a callback number back to
+    // confirm it. A blanket digit ban would fight that.
+    expect(NO_INVENTED_CONTACT_LINE).toContain("Repeating digits a caller just gave you");
+  });
+
+  it("rides EVERY persona the bridge can build", () => {
+    const variants = [
+      intakeSystemInstruction("Acme", undefined, null, []),
+      intakeSystemInstruction("Acme", undefined, null, [], true, undefined, true),
+      intakeSystemInstruction("Acme", undefined, null, [], true, { agentName: "Dave" }),
+      intakeSystemInstruction("Acme", undefined, null, [], true, undefined, true, "note"),
+      intakeSystemInstruction("Acme", undefined, null, [], true, undefined, true, undefined, undefined, true)
+    ];
+    for (const instr of variants) {
+      expect(instr).toContain(NO_INVENTED_CONTACT_LINE);
+    }
+  });
+
+  // The clause that made fabrication feel mandatory: the model was told the
+  // message should say "how to reach you", and was given no number to say.
+  it("no longer asks for a callback number the script may not contain", () => {
+    expect(RECORDED_SYSTEM_LINE).not.toContain("and how to reach you");
+    expect(RECORDED_SYSTEM_LINE).toContain(
+      "Give a callback number ONLY if one is written in the message you were given"
+    );
+    // The rest of the voicemail contract is unchanged.
+    expect(RECORDED_SYSTEM_LINE).toContain("do not improvise one");
+    expect(RECORDED_SYSTEM_LINE).toContain("Never read out lead details");
+  });
+
+  it("carries no em dash and never says receptionist", () => {
+    expect(NO_INVENTED_CONTACT_LINE).not.toMatch(/—/);
+    expect(NO_INVENTED_CONTACT_LINE.toLowerCase()).not.toContain("receptionist");
   });
 });

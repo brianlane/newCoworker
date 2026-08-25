@@ -13,7 +13,11 @@
  */
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
-import { ONE_VOICE_LINE, RECORDED_SYSTEM_LINE } from "./call-integrity-lines.js";
+import {
+  NO_INVENTED_CONTACT_LINE,
+  ONE_VOICE_LINE,
+  RECORDED_SYSTEM_LINE
+} from "./call-integrity-lines.js";
 import {
   customerLanguageLine,
   type VoiceCustomerLanguage
@@ -151,6 +155,7 @@ export function systemInstructionForBusiness(
       groundedActionsLine,
       ONE_VOICE_LINE,
       RECORDED_SYSTEM_LINE,
+      NO_INVENTED_CONTACT_LINE,
       noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
@@ -185,6 +190,7 @@ export function systemInstructionForBusiness(
       "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared), reuse it, including when booking an appointment. Address the caller by their FIRST name only, and use it sparingly, most replies need no name at all; never say their full name in normal conversation. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
       ONE_VOICE_LINE,
       RECORDED_SYSTEM_LINE,
+      NO_INVENTED_CONTACT_LINE,
       noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );

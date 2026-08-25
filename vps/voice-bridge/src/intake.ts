@@ -4,7 +4,11 @@
  * without pulling the @google/genai-coupled bridge module.
  */
 import { currentDateTimeLine } from "./datetime-line.js";
-import { ONE_VOICE_LINE, RECORDED_SYSTEM_LINE } from "./call-integrity-lines.js";
+import {
+  NO_INVENTED_CONTACT_LINE,
+  ONE_VOICE_LINE,
+  RECORDED_SYSTEM_LINE
+} from "./call-integrity-lines.js";
 import {
   customerLanguageLine,
   type VoiceCustomerLanguage
@@ -287,7 +291,7 @@ export function intakeSystemInstruction(
   // voicemail system and then supplied the seller's replies itself
   // (call 28f9c228, 2026-08-14). Shared with the receptionist and staff
   // personas via call-integrity-lines.ts so the two builders cannot drift.
-  lines.push(ONE_VOICE_LINE, RECORDED_SYSTEM_LINE);
+  lines.push(ONE_VOICE_LINE, RECORDED_SYSTEM_LINE, NO_INVENTED_CONTACT_LINE);
   lines.push(currentDateTimeLine(new Date(), businessTimezone));
   return lines.join(" ");
 }

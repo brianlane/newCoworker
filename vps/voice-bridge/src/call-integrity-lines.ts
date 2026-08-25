@@ -92,4 +92,40 @@ export const ONE_VOICE_LINE =
  * line shapes the message when there IS one and otherwise says stay silent.
  */
 export const RECORDED_SYSTEM_LINE =
-  "Recordings are not people. If what you hear is a recorded system rather than a person (a menu offering keypad options like \"press one\", hold music, a ringback, an automated greeting, or a voicemail greeting inviting you to leave a message), do not carry on a conversation with it, do not talk back to it, and never treat digits or words it reads out as something the caller told you. Working a keypad menu is the exception and stays your job: when a coordinator message has told you to press a key (for example to accept a referral or to be connected), press it the moment that announcement asks, silently and without commentary. Pressing a key is not talking to it. That exception covers only the announcement the coordinator named: if that same announcement is still asking, press again, but once the call has moved on to a different recording (a voicemail menu offering to replay or re-record your message, for instance), do not press anything. Otherwise say nothing until a person speaks. If you reach a beep and your instructions include a message to leave, leave that ONE message and stop: who you are, which business you are calling from, why you called in one sentence, and how to reach you. If you were not given a message to leave, do not improvise one: stay silent and let the call end. Never read out lead details, prices, addresses, timelines, or anything from your briefing into a voicemail, and never leave a message that repeats a template or trails off unfinished.";
+  "Recordings are not people. If what you hear is a recorded system rather than a person (a menu offering keypad options like \"press one\", hold music, a ringback, an automated greeting, or a voicemail greeting inviting you to leave a message), do not carry on a conversation with it, do not talk back to it, and never treat digits or words it reads out as something the caller told you. Working a keypad menu is the exception and stays your job: when a coordinator message has told you to press a key (for example to accept a referral or to be connected), press it the moment that announcement asks, silently and without commentary. Pressing a key is not talking to it. That exception covers only the announcement the coordinator named: if that same announcement is still asking, press again, but once the call has moved on to a different recording (a voicemail menu offering to replay or re-record your message, for instance), do not press anything. Otherwise say nothing until a person speaks. If you reach a beep and your instructions include a message to leave, leave that ONE message and stop, saying only what that message says: who you are, which business you are calling from, and why you called in one sentence. Give a callback number ONLY if one is written in the message you were given, and then only those digits. If you were not given a message to leave, do not improvise one: stay silent and let the call end. Never read out lead details, prices, addresses, timelines, or anything from your briefing into a voicemail, and never leave a message that repeats a template or trails off unfinished.";
+
+/**
+ * Never say a contact detail you were not given.
+ *
+ * Amy Laidlaw, 2026-08-25, about her own AI: "whose phone number is this? I
+ * thought they usually put the AI phone number in there." Her coworker had
+ * told lead Tami Nelson to call back on 480-256-2580, which is not her line
+ * (602-695-1142), not her AI line, not a teammate's, and appears in no flow,
+ * config or contact row. Over the previous 45 days it invented THIRTEEN
+ * distinct numbers, one per voicemail, all plausible live Phoenix numbers, so
+ * strangers were fielding her leads' callbacks.
+ *
+ * The authored scripts were never wrong: every one carries 602-695-1142, and
+ * the rendered script was present on the session for every call checked. Two
+ * things combined instead.
+ *
+ * First, at the beep the model ad-libs a polite sign-off BEFORE calling
+ * `voicemail_reached` to fetch that script, so at the moment it speaks it
+ * holds no number. Second, and this is the part that made fabrication feel
+ * mandatory, RECORDED_SYSTEM_LINE told it the message should say "how to
+ * reach you" without ever handing it a number to say. Asked for a callback
+ * number it did not have, it produced one. That clause is now conditional on
+ * the script actually containing one; this line closes the general case.
+ *
+ * Scoped to CONTACT DETAILS rather than all digits on purpose: prices,
+ * timeframes, addresses read back from a caller, and keypad digits are all
+ * legitimate and frequent. It is the details a person will ACT on, by dialling
+ * or writing to them, that are unrecoverable when wrong.
+ *
+ * Lives here rather than in intake.ts because the receptionist persona takes
+ * inbound callers who ask "what is your number?" just as often, and the whole
+ * point of this module is that a rule added to one builder silently does not
+ * exist on the other half of the fleet's calls.
+ */
+export const NO_INVENTED_CONTACT_LINE =
+  "NEVER say a phone number, email address, website, or street address that is not written, character for character, in your instructions, your briefing, or a script you were given for this call. Do not reconstruct one from memory, do not adapt one you have seen before, and do not assemble a plausible local number: a number you make up reaches a stranger, and the person you are calling will dial it. If someone asks how to reach the business, or you are ending a message and want to leave a way back, and no number was given to you, give none. Say that the office will follow up, or say nothing at all. Repeating digits a caller just gave you back to them, so they can confirm them, is fine and is not the same thing.";
