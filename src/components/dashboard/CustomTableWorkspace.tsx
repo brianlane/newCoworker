@@ -185,14 +185,22 @@ export function CustomTableWorkspace({
   const setRowContact = async (rowId: string, contactId: string | null) => {
     setError(null);
     try {
-      await fetch(`${base}/rows/${encodeURIComponent(rowId)}?${suffix}`, {
+      const data = await fetch(`${base}/rows/${encodeURIComponent(rowId)}?${suffix}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contactId })
-      }).then((r) => readEnvelope<unknown>(r));
-      // Reload rather than patching state: the contact's NAME comes from the
-      // join, which this component does not have.
-      await load(query);
+      }).then((r) => readEnvelope<{ row: CustomTableRowWithContact }>(r));
+      // Patch THIS row only, from what the write returned. Reloading the
+      // grid would race a cell save that is still in flight (blur fires
+      // just before the picker click, which is the normal way to fill a row
+      // in), and could paint a stale cell over a write that succeeded.
+      setRows((prev) =>
+        (prev ?? []).map((row) =>
+          row.id === rowId
+            ? { ...row, contactId: data.row.contactId, contactName: data.row.contactName, contactE164: data.row.contactE164 }
+            : row
+        )
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : t("saveFailed"));
     }

@@ -16,6 +16,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import {
   CustomTableError,
+  attachContacts,
   deleteCustomTableRow,
   getCustomTable,
   updateCustomTableRow
@@ -100,7 +101,12 @@ export async function PATCH(
         },
         { source: "dashboard", actor }
       );
-      return successResponse({ row });
+      // Answer with the SAME shape the list returns, contact name included.
+      // That lets the client update this one row in place; reloading the
+      // grid instead would race an in-flight cell save and could paint a
+      // stale value over a write that already succeeded.
+      const [joined] = await attachContacts(businessId, [row]);
+      return successResponse({ row: joined });
     } catch (err) {
       if (err instanceof CustomTableError) return customTableErrorResponse(err);
       throw err;

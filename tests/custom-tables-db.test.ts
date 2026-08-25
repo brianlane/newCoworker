@@ -798,7 +798,7 @@ describe("listCustomTableRowsWithContacts", () => {
     ]);
     await expect(
       listCustomTableRowsWithContacts("biz-1", "tbl-1", [FIELD], {}, asClient(db))
-    ).rejects.toThrow("listCustomTableRowsWithContacts: boom");
+    ).rejects.toThrow("attachContacts: boom");
   });
 
   it("treats a null contact payload as no names", async () => {

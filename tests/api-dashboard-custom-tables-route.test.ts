@@ -22,6 +22,7 @@ vi.mock("@/lib/custom-tables/db", async (importOriginal) => {
     updateCustomTableRow: vi.fn(),
     deleteCustomTableRow: vi.fn(),
     listCustomTableRowsWithContacts: vi.fn(),
+    attachContacts: vi.fn(),
     listCustomTableRows: vi.fn()
   };
 });
@@ -53,6 +54,7 @@ import {
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   CustomTableError,
+  attachContacts,
   countRowsByTable,
   createCustomTable,
   createCustomTableRow,
@@ -150,6 +152,10 @@ beforeEach(() => {
   vi.mocked(updateCustomTableDetails).mockResolvedValue(TABLE as never);
   vi.mocked(patchCustomTableFields).mockResolvedValue({ table: TABLE, sweptRows: 0 } as never);
   vi.mocked(restoreCustomTable).mockResolvedValue(TABLE as never);
+  vi.mocked(attachContacts).mockImplementation(
+    (async (_b: string, rows: unknown[]) =>
+      rows.map((r) => ({ ...(r as object), contactName: null, contactE164: null }))) as never
+  );
   vi.mocked(listCustomTableRowsWithContacts).mockResolvedValue({
     rows: [ROW],
     nextCursor: null
@@ -201,7 +207,11 @@ describe("the authorization bar, which a refactor must not quietly move", () => 
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(USER as never);
     vi.mocked(getCustomTable).mockResolvedValue(TABLE as never);
-    vi.mocked(listCustomTableRowsWithContacts).mockResolvedValue({
+    vi.mocked(attachContacts).mockImplementation(
+    (async (_b: string, rows: unknown[]) =>
+      rows.map((r) => ({ ...(r as object), contactName: null, contactE164: null }))) as never
+  );
+  vi.mocked(listCustomTableRowsWithContacts).mockResolvedValue({
       rows: [],
       nextCursor: null
     } as never);
@@ -451,7 +461,11 @@ describe("rows", () => {
   });
 
   it("filters the page by the search text", async () => {
-    vi.mocked(listCustomTableRowsWithContacts).mockResolvedValue({
+    vi.mocked(attachContacts).mockImplementation(
+    (async (_b: string, rows: unknown[]) =>
+      rows.map((r) => ({ ...(r as object), contactName: null, contactE164: null }))) as never
+  );
+  vi.mocked(listCustomTableRowsWithContacts).mockResolvedValue({
       rows: [ROW, { ...ROW, id: "other", values: { address: "9 Oak" } }],
       nextCursor: null
     } as never);
@@ -545,6 +559,22 @@ describe("one row", () => {
       expect.objectContaining({ values: {}, clear: ["address"] }),
       { source: "dashboard", actor: "owner@example.com" }
     );
+  });
+
+  it("answers with the joined row, so the client never has to reload the grid", async () => {
+    // Reloading would race a cell save still in flight: blur fires just
+    // before the contact picker click, which is the normal way to fill a
+    // row in.
+    vi.mocked(getCustomTable).mockResolvedValue({ ...TABLE, rowLink: "contact" } as never);
+    vi.mocked(attachContacts).mockResolvedValue([
+      { ...ROW, contactName: "Maria", contactE164: "+15551230000" }
+    ] as never);
+    const res = await ROW_PATCH(patch(rowUrl(), { contactId: BIZ }), rowParams());
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.row).toMatchObject({
+      contactName: "Maria",
+      contactE164: "+15551230000"
+    });
   });
 
   it("can change the contact without touching the cells", async () => {

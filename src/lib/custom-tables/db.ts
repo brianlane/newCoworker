@@ -558,6 +558,44 @@ export async function listCustomTableRows(
   };
 }
 
+/**
+ * Attach the contact each row points at.
+ *
+ * Shared by the grid's page read and by a single-row write, so a PATCH can
+ * answer with the SAME shape the list returns. That is what lets the client
+ * update one row in place instead of reloading the whole grid, which would
+ * otherwise race an in-flight cell save and show a stale value.
+ */
+export async function attachContacts(
+  businessId: string,
+  rows: readonly CustomTableRow[],
+  client?: SupabaseClient
+): Promise<CustomTableRowWithContact[]> {
+  const db = await resolveClient(client);
+  const contactIds = [...new Set(rows.map((r) => r.contactId).filter((id): id is string => !!id))];
+  const names = new Map<string, { name: string | null; e164: string | null }>();
+  if (contactIds.length > 0) {
+    const { data, error } = await db
+      .from("contacts")
+      .select("id, display_name, customer_e164")
+      .eq("business_id", businessId)
+      .in("id", contactIds);
+    if (error) throw new Error(`attachContacts: ${error.message}`);
+    for (const row of (data ?? []) as Array<{
+      id: string;
+      display_name: string | null;
+      customer_e164: string | null;
+    }>) {
+      names.set(row.id, { name: row.display_name, e164: row.customer_e164 });
+    }
+  }
+  return rows.map((row) => ({
+    ...row,
+    contactName: row.contactId ? (names.get(row.contactId)?.name ?? null) : null,
+    contactE164: row.contactId ? (names.get(row.contactId)?.e164 ?? null) : null
+  }));
+}
+
 /** Rows joined to the contact they point at, for the grid's Contact column. */
 export async function listCustomTableRowsWithContacts(
   businessId: string,
@@ -568,29 +606,8 @@ export async function listCustomTableRowsWithContacts(
 ): Promise<{ rows: CustomTableRowWithContact[]; nextCursor: string | null }> {
   const db = await resolveClient(client);
   const page = await listCustomTableRows(tableId, fields, options, db);
-  const contactIds = [...new Set(page.rows.map((r) => r.contactId).filter((id): id is string => !!id))];
-  const names = new Map<string, { name: string | null; e164: string | null }>();
-  if (contactIds.length > 0) {
-    const { data, error } = await db
-      .from("contacts")
-      .select("id, display_name, customer_e164")
-      .eq("business_id", businessId)
-      .in("id", contactIds);
-    if (error) throw new Error(`listCustomTableRowsWithContacts: ${error.message}`);
-    for (const row of (data ?? []) as Array<{
-      id: string;
-      display_name: string | null;
-      customer_e164: string | null;
-    }>) {
-      names.set(row.id, { name: row.display_name, e164: row.customer_e164 });
-    }
-  }
   return {
-    rows: page.rows.map((row) => ({
-      ...row,
-      contactName: row.contactId ? (names.get(row.contactId)?.name ?? null) : null,
-      contactE164: row.contactId ? (names.get(row.contactId)?.e164 ?? null) : null
-    })),
+    rows: await attachContacts(businessId, page.rows, db),
     nextCursor: page.nextCursor
   };
 }
