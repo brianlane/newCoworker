@@ -1152,19 +1152,21 @@ applied: that ladder is already full, so seating Jason there unseats Amy on a
 live path with 119 runs behind it, which should be a decision somebody typed
 rather than a side effect.
 
-**`amy-clever-seller-voicemail.ts` (Aug 24 2026):** closes the gap below, on
-Amy's "yes add voicemails". `ai_call_1`, `ai_call_2` and `ai_call_3` on "Clever
-Lead - Accept" now leave one, escalating with the ladder rather than repeating
-a single message: who we are and call us back; then the licensed appraiser, the
-one concrete reason the seller persona leads on, so the second message earns
-its place; then a plain last message saying we will leave them be, which is
-what the round 3 persona already tells the AI to say out loud. Each names
-Clever and NOT `{{vars.lead_address}}`, because that var can come back empty
-and "selling your home on ." is worse than never mentioning the property;
-ReferralExchange's voicemails skip the address for the same reason. Refuses to
-overwrite a voicemail it did not write (`--force` overrides). The BUYER rungs
-already had one and are untouched, though theirs does not escalate across the
-three rungs, a small inconsistency left alone rather than costing a live write.
+**Voicemails: `amy-voicemail-scripts.ts` was finally RUN (Aug 24 2026).** Amy
+asked for voicemails on the Clever seller calls. The script that does it had
+existed since Aug 19 and had simply never been applied: no ledger row, and
+every `place_ai_call` on the account still silent. It covers all thirteen in
+one pass, Clever Accept's three rungs, Spoke Check's eight weekly rungs, and
+New Lead Intake's English AND Spanish calls. After running it: 22 AI calls
+carry a voicemail, 0 do not.
+
+Recorded because it cost a wrong turn: a duplicate one-shot covering only the
+three Clever rungs was written and applied before the existing script was
+found, then reverted and deleted (it never reached main). The live flow was
+checked for voicemails; the REPO was not checked for a script that adds them. The existing copy is also the better copy, being built on rules this
+account already holds (never ask when to call back, never quote the network's
+price estimate back at a seller) and leading on the cash offer, which is what a
+Clever seller actually filled in.
 
 **Jason is on every buyer live transfer (Aug 24 2026).** Amy: "Jason should be
 on all buyer aiflows. Amy should be last."
@@ -1185,16 +1187,6 @@ The SELLER ladders keep Dave / Gabrielle / Amy: Jason's only roster tag is
 `buyer`. "Both" leads are treated as sellers everywhere on this account
 (`route_both` pins the trio in all four flows that have one), so
 `ai_call_both` was left alone too.
-
-**Ten lead-facing AI calls still leave no voicemail (open, Aug 24 2026).**
-Found by sweeping every `place_ai_call` after the above landed. All dial the
-LEAD (`toVar: lead_phone`) and none sets `voicemailTemplate`: the eight weekly
-rungs of "Clever - Spoke Check & Weekly Call Follow-Up" (`week_1_call` through
-`week_8_call`, a Clever seller cadence about cash offers) and both of "New Lead
-Intake"'s calls (`call_lead_en` and `call_lead_es`). Amy's instruction was
-about the Clever seller ladder specifically, and the copy for a weekly
-spoke-check rung and for a Spanish-language call are decisions of their own, so
-these are recorded rather than written blind.
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
