@@ -1152,15 +1152,41 @@ applied: that ladder is already full, so seating Jason there unseats Amy on a
 live path with 119 runs behind it, which should be a decision somebody typed
 rather than a side effect.
 
-**Clever seller calls leave NO voicemail (open, Aug 24 2026).** `ai_call_1`,
-`ai_call_2` and `ai_call_3` on "Clever Lead - Accept" carry no
-`voicemailTemplate`, and never have across the flow's 119 runs. Only
-ReferralExchange's `ai_call_buyer` / `ai_call_seller` do. Found while adding
-the buyer ladder, whose rungs DO leave one because their copy source is the
-ReferralExchange buyer call. So a Clever seller who does not pick up currently
-hears nothing at all. Left alone deliberately: it is pre-existing, it affects
-the seller path rather than anything the buyer change introduced, and whether
-those calls should start leaving voicemails is Amy's call.
+**Voicemails: `amy-voicemail-scripts.ts` was finally RUN (Aug 24 2026).** Amy
+asked for voicemails on the Clever seller calls. The script that does it had
+existed since Aug 19 and had simply never been applied: no ledger row, and
+every `place_ai_call` on the account still silent. It covers all thirteen in
+one pass, Clever Accept's three rungs, Spoke Check's eight weekly rungs, and
+New Lead Intake's English AND Spanish calls. After running it: 22 AI calls
+carry a voicemail, 0 do not.
+
+Recorded because it cost a wrong turn: a duplicate one-shot covering only the
+three Clever rungs was written and applied before the existing script was
+found, then reverted and deleted (it never reached main). The live flow was
+checked for voicemails; the REPO was not checked for a script that adds them. The existing copy is also the better copy, being built on rules this
+account already holds (never ask when to call back, never quote the network's
+price estimate back at a seller) and leading on the cash offer, which is what a
+Clever seller actually filled in.
+
+**Jason is on every buyer live transfer (Aug 24 2026).** Amy: "Jason should be
+on all buyer aiflows. Amy should be last."
+`amy-clever-buyer-ai-call.ts --with-referral` was run, so
+ReferralExchange's `ai_call_buyer` ladder moved from Dave / Gabrielle / Amy to
+Dave / Gabrielle / Jason, matching the three Clever buyer rungs. All FOUR
+buyer-facing AI calls on the account now reach him.
+
+"Amy should be last" is implemented as the OWNER FALLBACK rather than a ladder
+seat, because the two instructions do not both fit: `reachTeammate.refs` caps
+at three and she named four people. Dropping Dave or Gabrielle to seat her
+would remove an active buyer agent, while Amy already receives any buyer no
+rung answers, through the fallback, and a $1M+ buyer never reaches the ladder
+at all. So she is last in the order that actually runs. If she meant a literal
+third seat instead, that is a one-line change to `BUYER_REACH_NAMES`.
+
+The SELLER ladders keep Dave / Gabrielle / Amy: Jason's only roster tag is
+`buyer`. "Both" leads are treated as sellers everywhere on this account
+(`route_both` pins the trio in all four flows that have one), so
+`ai_call_both` was left alone too.
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
