@@ -25,6 +25,28 @@
  */
 
 import { z } from "zod";
+import {
+  customTableAddRowArgsSchema,
+  customTableAddRowTool,
+  customTableCreateArgsSchema,
+  customTableCreateTool,
+  customTableDeleteArgsSchema,
+  customTableDeleteRowArgsSchema,
+  customTableDeleteRowTool,
+  customTableDeleteTool,
+  customTableFindRowsArgsSchema,
+  customTableFindRowsTool,
+  customTableHistoryArgsSchema,
+  customTableHistoryTool,
+  customTableListTool,
+  customTableRestoreArgsSchema,
+  customTableRestoreTool,
+  customTableUndoTool,
+  customTableUpdateRowArgsSchema,
+  customTableUpdateRowTool,
+  customTableUpdateSchemaArgsSchema,
+  customTableUpdateSchemaTool
+} from "@/lib/custom-tables/tool-handlers";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
@@ -82,7 +104,18 @@ export const ACTION_TOOL_NAMES = [
   "update_notification_preferences",
   "flag_contact_spam",
   "set_contact_reply_mode",
-  "manage_employee"
+  "manage_employee",
+  "custom_table_list",
+  "custom_table_find_rows",
+  "custom_table_history",
+  "custom_table_add_row",
+  "custom_table_update_row",
+  "custom_table_delete_row",
+  "custom_table_undo",
+  "custom_table_create",
+  "custom_table_update_schema",
+  "custom_table_delete",
+  "custom_table_restore"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -174,6 +207,22 @@ export type ActionToolGates = {
    * the same bar the Employees page itself enforces.
    */
   manage_employee: boolean;
+  /**
+   * Custom tables. Ten names over three toggles, matching the Settings
+   * page and the Rowboat gates: reads, row writes, and schema work are the
+   * three questions an owner has an opinion about.
+   */
+  custom_table_list: boolean;
+  custom_table_find_rows: boolean;
+  custom_table_history: boolean;
+  custom_table_add_row: boolean;
+  custom_table_update_row: boolean;
+  custom_table_delete_row: boolean;
+  custom_table_undo: boolean;
+  custom_table_create: boolean;
+  custom_table_update_schema: boolean;
+  custom_table_delete: boolean;
+  custom_table_restore: boolean;
 };
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
@@ -573,6 +622,225 @@ const MANAGE_EMPLOYEE_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+
+// ---------------------------------------------------------------------
+// Custom tables (the owner's own Tables page). Kept in lockstep with the
+// dashboard_custom_table_* declarations in vps/scripts/deploy-client.sh,
+// so both turn paths offer the model the same shapes and the same steering.
+// ---------------------------------------------------------------------
+
+const CT_VALUES_PARAM = {
+  type: "array",
+  description: "Cells to fill in.",
+  items: {
+    type: "object",
+    properties: {
+      field: { type: "string", description: "Column name, exactly as listed." },
+      value: { type: "string", description: "The value, as text." }
+    },
+    required: ["field", "value"]
+  }
+} as const;
+
+const CT_LIST_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_list",
+  description:
+    "List the tables the owner built themselves (the Tables page), with each table's columns, what kind of value each column holds, its choices when it is a choice column, and how many rows it has. Call this FIRST, before any other custom_table tool, so you use real table and column names instead of guessing at them.",
+  parameters: { type: "object", properties: {}, required: [] }
+};
+
+const CT_FIND_ROWS_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_find_rows",
+  description:
+    "Find rows in one of the owner's own tables. `query` is optional free text matched against every cell; `contactPhone` is only allowed on a table whose rows each belong to a contact. Returns each row's id plus a one-line summary, and the id is what you pass when changing or deleting that row.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Table name, as returned by custom_table_list." },
+      query: { type: "string", description: "Optional text to match against the rows." },
+      contactPhone: {
+        type: "string",
+        description: "Optional E.164 number, only for a table whose rows belong to contacts."
+      },
+      limit: { type: "number", description: "Optional cap on rows returned, at most 25." }
+    },
+    required: ["table"]
+  }
+};
+
+const CT_HISTORY_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_history",
+  description:
+    "List the recent changes to one of the owner's own tables in plain English, each with an id you can pass to custom_table_undo. Use it when the owner asks what changed, or wants something put back.",
+  parameters: {
+    type: "object",
+    properties: { table: { type: "string", description: "Table name." } },
+    required: ["table"]
+  }
+};
+
+const CT_ADD_ROW_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_add_row",
+  description:
+    "Add one row to a table the owner built. `table` must be the EXACT table name, never a partial one: a read that lands on the wrong table is visible, a write that does is not. `values` pairs each column name (exactly as custom_table_list gave it) with its value as text; the platform converts it to the column's kind and refuses with a clear reason when it does not fit.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Exact table name." },
+      values: CT_VALUES_PARAM,
+      contactPhone: {
+        type: "string",
+        description: "Only for a table whose rows belong to contacts."
+      }
+    },
+    required: ["table", "values"]
+  }
+};
+
+const CT_UPDATE_ROW_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_update_row",
+  description:
+    "Change cells on one existing row. Find the row first with custom_table_find_rows and pass the id it returned as `row`. Only the cells you send change, and sending a value of empty text clears one. `table` must be the EXACT table name.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Exact table name." },
+      row: { type: "string", description: "Row id from custom_table_find_rows." },
+      values: CT_VALUES_PARAM
+    },
+    required: ["table", "row", "values"]
+  }
+};
+
+const CT_DELETE_ROW_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_delete_row",
+  description:
+    "Delete one row. THIS TAKES TWO CALLS. Call it FIRST without confirm: nothing is deleted and you get back what the row says. Read that back to the owner, wait for a clear yes, then call again with confirm true. Never guess which row: find it with custom_table_find_rows and pass the id.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Exact table name." },
+      row: { type: "string", description: "Row id from custom_table_find_rows." },
+      confirm: {
+        type: "boolean",
+        description: "Only true on the second call, after the owner said yes."
+      }
+    },
+    required: ["table", "row"]
+  }
+};
+
+const CT_UNDO_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_undo",
+  description:
+    "Put back one change from custom_table_history, using the id it returned. Works for a changed row, a deleted row, and a deleted table. The undo is itself recorded, so it can be undone too.",
+  parameters: {
+    type: "object",
+    properties: {
+      changeId: { type: "number", description: "The change id from custom_table_history." }
+    },
+    required: ["changeId"]
+  }
+};
+
+const CT_CREATE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_create",
+  description:
+    "Make a new table for the owner. `name` is the plural of what they are tracking (Properties, Vehicles). `columns` is the list of columns; each has a label and a kind (text, long_text, number, date, checkbox, select, multi_select), and a select or multi_select needs at least two options. Set linkToContacts true ONLY when every row is about one person in the Contacts list.",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Table name, plural." },
+      description: { type: "string", description: "Optional one-line description." },
+      linkToContacts: {
+        type: "boolean",
+        description: "True when each row belongs to one contact."
+      },
+      columns: {
+        type: "array",
+        description: "The columns to create.",
+        items: {
+          type: "object",
+          properties: {
+            label: { type: "string", description: "Column name." },
+            type: {
+              type: "string",
+              description: "text, long_text, number, date, checkbox, select, or multi_select."
+            },
+            options: {
+              type: "array",
+              description: "Choices, for select and multi_select only.",
+              items: { type: "string" }
+            }
+          },
+          required: ["label"]
+        }
+      }
+    },
+    required: ["name", "columns"]
+  }
+};
+
+const CT_UPDATE_SCHEMA_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_update_schema",
+  description:
+    "Add, rename, or delete a COLUMN on a table the owner built. Deleting a column also deletes what is written in it on every row, so it takes two calls: once without confirm to hear the warning, then again with confirm true after the owner says yes. A column's kind cannot be changed; delete it and add a new one.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Exact table name." },
+      action: {
+        type: "string",
+        description: "add_column, rename_column, or delete_column."
+      },
+      column: {
+        type: "string",
+        description: "The column name. For add_column, the name to give it."
+      },
+      newName: { type: "string", description: "For rename_column: the new name." },
+      type: { type: "string", description: "For add_column: the kind of value it holds." },
+      options: {
+        type: "array",
+        description: "For add_column on a choice column: the choices.",
+        items: { type: "string" }
+      },
+      confirm: {
+        type: "boolean",
+        description: "Only true on the second call of a delete_column, after the owner said yes."
+      }
+    },
+    required: ["table", "action", "column"]
+  }
+};
+
+const CT_DELETE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_delete",
+  description:
+    "Delete a WHOLE table the owner built. THIS TAKES TWO CALLS. Call it FIRST without confirm: nothing is deleted and you get back how many rows it holds. Tell the owner that number, wait for a clear yes, then call again with confirm true. The table can be brought back for 30 days with custom_table_restore, so say so.",
+  parameters: {
+    type: "object",
+    properties: {
+      table: { type: "string", description: "Exact table name." },
+      confirm: {
+        type: "boolean",
+        description: "Only true on the second call, after the owner said yes."
+      }
+    },
+    required: ["table"]
+  }
+};
+
+const CT_RESTORE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "custom_table_restore",
+  description:
+    "Bring back a table that was deleted, with everything that was in it. Use it when the owner changes their mind about a deletion.",
+  parameters: {
+    type: "object",
+    properties: { table: { type: "string", description: "Name of the deleted table." } },
+    required: ["table"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -581,6 +849,17 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
   calendar_cancel_appointment: CANCEL_DECLARATION,
   calendar_join_waitlist: JOIN_WAITLIST_DECLARATION,
+  custom_table_list: CT_LIST_DECLARATION,
+  custom_table_find_rows: CT_FIND_ROWS_DECLARATION,
+  custom_table_history: CT_HISTORY_DECLARATION,
+  custom_table_add_row: CT_ADD_ROW_DECLARATION,
+  custom_table_update_row: CT_UPDATE_ROW_DECLARATION,
+  custom_table_delete_row: CT_DELETE_ROW_DECLARATION,
+  custom_table_undo: CT_UNDO_DECLARATION,
+  custom_table_create: CT_CREATE_DECLARATION,
+  custom_table_update_schema: CT_UPDATE_SCHEMA_DECLARATION,
+  custom_table_delete: CT_DELETE_DECLARATION,
+  custom_table_restore: CT_RESTORE_DECLARATION,
   list_aiflows: LIST_AIFLOWS_DECLARATION,
   run_aiflow: RUN_AIFLOW_DECLARATION,
   edit_aiflow: EDIT_AIFLOW_DECLARATION,
@@ -830,6 +1109,17 @@ export async function executeActionTool(
     deps.applyNotificationToggles ?? applyNotificationPreferenceToggles;
   const flagSpam = deps.flagSpam ?? flagContactSpam;
   const setReplyMode = deps.setReplyMode ?? setContactTextingMode;
+  /* c8 ignore stop */
+  // Attribution for the custom-table history rows, so "Changed by your
+  // coworker, in dashboard chat" is what the owner reads back later. The
+  // surface kind rides the same deps the flow-edit tools already use.
+  const ctDeps = {
+    edit: {
+      source: deps.flowEditSource === "ai_edit_sms" ? "ai_sms" : "ai_dashboard",
+      actor: deps.flowEditActor ?? null
+    }
+  };
+  /* c8 ignore start */
   const manageRoster = deps.manageRoster ?? manageEmployee;
   const undoAiFlowEdit = deps.undoFlowEdit ?? undoAiFlowEditTool;
   /* c8 ignore stop */
@@ -1070,6 +1360,84 @@ export async function executeActionTool(
         }
         // The core carries its own model-facing guidance on failures.
         return await joinWaitlist(businessId, parsed.data, null);
+      }
+      // Custom tables. Every case hands straight to the shared core in
+      // src/lib/custom-tables/tool-handlers.ts, which the Rowboat
+      // dashboard_custom_table_* dispatch calls too, so the two paths cannot
+      // drift on resolution, refusals, or steering copy.
+      case "custom_table_list":
+        return await customTableListTool(businessId, ctDeps);
+      case "custom_table_find_rows": {
+        const parsed = customTableFindRowsArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableFindRowsTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_history": {
+        const parsed = customTableHistoryArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableHistoryTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_add_row": {
+        const parsed = customTableAddRowArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableAddRowTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_update_row": {
+        const parsed = customTableUpdateRowArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableUpdateRowTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_delete_row": {
+        const parsed = customTableDeleteRowArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableDeleteRowTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_undo": {
+        const parsed = z
+          .object({ changeId: z.number().int().positive() })
+          .safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableUndoTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_create": {
+        const parsed = customTableCreateArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableCreateTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_update_schema": {
+        const parsed = customTableUpdateSchemaArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableUpdateSchemaTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_delete": {
+        const parsed = customTableDeleteArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableDeleteTool(businessId, parsed.data, ctDeps);
+      }
+      case "custom_table_restore": {
+        const parsed = customTableRestoreArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return await customTableRestoreTool(businessId, parsed.data, ctDeps);
       }
       case "list_aiflows": {
         // Shared core with the Rowboat dispatcher's dashboard_list_aiflows.

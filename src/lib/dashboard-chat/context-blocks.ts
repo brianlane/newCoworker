@@ -18,6 +18,8 @@
  * failed turn.
  */
 
+import { buildCustomTablesDigestMd } from "@/lib/custom-tables/core";
+import { countRowsByTable, listCustomTables } from "@/lib/custom-tables/db";
 import { getBusinessConfig } from "@/lib/db/configs";
 import {
   resolveCalendarConnection,
@@ -41,6 +43,9 @@ const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
 };
 
 export type ContextBlockDeps = {
+  /** Injectable for tests; production reads the owner's own tables. */
+  fetchTables?: typeof listCustomTables;
+  countRows?: typeof countRowsByTable;
   /** Injectable resolvers/reads (tests). */
   resolveCalendar?: typeof resolveCalendarConnection;
   resolveEmail?: typeof resolveEmailConnection;
@@ -91,13 +96,32 @@ export async function buildIntegrationsStatusLine(
  */
 export const BUSINESS_CONTEXT_MAX_CHARS = 12_000;
 
-/** Business identity + memory system block. Null when empty or on failure. */
+/**
+ * Business identity + memory, plus a one-line-per-table digest of the
+ * owner's own Tables. Null when everything is empty or the read failed.
+ *
+ * The tables digest lives HERE and deliberately nowhere else. It is names
+ * and column labels only, never row contents: the coworker reads rows live
+ * through the custom_table_ tools, so a prompt copy would be both enormous
+ * and stale. Without it the coworker cannot volunteer "you have an Equipment
+ * table" until it has spent a tool call finding out.
+ *
+ * Why not in buildAgentInstructions (the vault sync): that string is written
+ * to EVERY agent in Mongo, including the customer-facing texting coworker,
+ * so folding the digest in there would print the owner's table names and
+ * column labels into the prompt of the agent that answers customers. The
+ * same reasoning rules out the messenger and webchat engines. This function
+ * is the inline OWNER path, which is exactly the audience the tools are
+ * gated to: dashboard chat, owner-over-SMS, email, and Slack.
+ */
 export async function buildBusinessContextBlock(
   businessId: string,
   deps: ContextBlockDeps = {}
 ): Promise<string | null> {
-  /* c8 ignore next -- production default; tests inject */
+  /* c8 ignore next 2 -- production defaults; tests inject */
   const fetchConfig = deps.fetchConfig ?? getBusinessConfig;
+  const fetchTables = deps.fetchTables ?? listCustomTables;
+  const countRows = deps.countRows ?? countRowsByTable;
   try {
     const config = await fetchConfig(businessId);
     if (!config) return null;
@@ -111,12 +135,35 @@ export async function buildBusinessContextBlock(
         : s;
     const identity = (config.identity_md ?? "").trim();
     const memory = (config.memory_md ?? "").trim();
-    if (!identity && !memory) return null;
+    // Best-effort: a tables read that fails must not cost the owner their
+    // identity and memory context, which is the load-bearing half.
+    let tablesMd = "";
+    try {
+      const tables = await fetchTables(businessId);
+      if (tables.length > 0) {
+        const counts = await countRows(businessId);
+        tablesMd = buildCustomTablesDigestMd(
+          tables.map((t) => ({
+            name: t.name,
+            rowLink: t.rowLink,
+            fields: t.fields,
+            rowCount: counts.get(t.id) ?? 0
+          }))
+        );
+      }
+    } catch (err) {
+      logger.warn("owner chat: custom tables digest read failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    if (!identity && !memory && !tablesMd) return null;
     const parts = [
       "YOUR BUSINESS CONFIGURATION (identity + memory, the owner's own data; quote from it freely):"
     ];
     if (identity) parts.push(`# identity.md\n${clipHead(identity)}`);
     if (memory) parts.push(`# memory.md\n${clipTail(memory)}`);
+    if (tablesMd) parts.push(tablesMd);
     return parts.join("\n\n");
   } catch (err) {
     logger.warn("owner chat: business context block read failed", {

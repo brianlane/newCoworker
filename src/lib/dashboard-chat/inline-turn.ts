@@ -298,6 +298,22 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // The reply-mode write + run cancels persist the moment the core returns
   // ok; same fallback-denial hazard as the spam flag.
   "set_contact_reply_mode",
+  // Every custom-table WRITE is committed the moment the core returns ok.
+  // Unpinned, a post-write model failure would bounce the turn to the worker
+  // fallback, which re-answers the SAME owner message and would add the row
+  // twice, or delete a second one, or undo one change too many. That is the
+  // exact shape of the double-send Bugbot caught on PR #668.
+  //
+  // Reads are deliberately absent: re-running a list or a search costs
+  // nothing and changes nothing.
+  "custom_table_add_row",
+  "custom_table_update_row",
+  "custom_table_delete_row",
+  "custom_table_undo",
+  "custom_table_create",
+  "custom_table_update_schema",
+  "custom_table_delete",
+  "custom_table_restore",
   // The roster write persists the moment the core returns ok, and the worker
   // fallback never declares this tool, so falling back would tell the owner
   // their teammate was not added after the row already exists.
@@ -458,6 +474,41 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
         ? note.replace(/^Tell the owner exactly what changed for [^.]*\. /, "")
         : "";
     return `${who}${phone} was updated on the employee roster. ${outcome}`.trim();
+  }
+  // Custom tables. Without these the fallthrough below would tell the owner
+  // "The appointment was canceled." after a table write, which is worse than
+  // saying nothing: it is a confident, wrong account of what just happened.
+  if (name.startsWith("custom_table_")) {
+    const table = typeof (r as { table?: unknown }).table === "string"
+      ? ` in "${(r as { table: string }).table}"`
+      : "";
+    if (name === "custom_table_add_row") {
+      const summary = (r as { summary?: unknown }).summary;
+      return `A row was added${table}${typeof summary === "string" && summary ? `: ${summary}` : ""}.`;
+    }
+    if (name === "custom_table_update_row") {
+      const summary = (r as { summary?: unknown }).summary;
+      return `A row was changed${table}${typeof summary === "string" && summary ? `, it now reads: ${summary}` : ""}.`;
+    }
+    if (name === "custom_table_delete_row") {
+      const deleted = (r as { deleted?: unknown }).deleted;
+      return `A row was deleted${table}${typeof deleted === "string" && deleted ? ` (it read: ${deleted})` : ""}. It can be put back from Recent changes.`;
+    }
+    if (name === "custom_table_undo") return "A change to one of your tables was put back.";
+    if (name === "custom_table_create") {
+      const created = (r as { table?: unknown }).table;
+      return `A new table${typeof created === "string" ? ` "${created}"` : ""} was created, it is at /dashboard/tables.`;
+    }
+    if (name === "custom_table_update_schema") {
+      const note = (r as { note?: unknown }).note;
+      return typeof note === "string" ? note : `A column was changed${table}.`;
+    }
+    if (name === "custom_table_delete") {
+      const deletedTable = (r as { table?: unknown }).table;
+      return `The table${typeof deletedTable === "string" ? ` "${deletedTable}"` : ""} was deleted. It can be brought back for 30 days from /dashboard/tables.`;
+    }
+    const restored = (r as { table?: unknown }).table;
+    return `The table${typeof restored === "string" ? ` "${restored}"` : ""} was brought back, with everything that was in it.`;
   }
   return "The appointment was canceled.";
 }

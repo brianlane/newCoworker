@@ -253,6 +253,30 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "custom_table_read",
+        label: "Read your own tables",
+        description:
+          "Let your coworker look inside the tables you built yourself (the Tables page): what columns they have, what is in them, and what changed recently. Read-only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "custom_table_write",
+        label: "Fill in your own tables",
+        description:
+          "Add, change, and delete ROWS in the tables you built yourself when you ask in chat, and undo any of it. Deleting a row asks you first, and every change can be put back from Recent changes.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "custom_table_manage",
+        label: "Build and change your own tables",
+        description:
+          "Create a new table, add or rename a column, and delete a whole table when you ask in chat. Deleting asks you first and the table comes back for 30 days. Managers and owners only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "read_business_data",
         label: "Business data reads",
         description:
@@ -780,6 +804,30 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "manage_employee",
         label: "Manage the roster (owner only)",
         description: "Add or update team members when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "custom_table_read",
+        label: "Read your own tables",
+        description:
+          "Let your coworker look inside the tables you built yourself (the Tables page): what columns they have, what is in them, and what changed recently. Read-only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "custom_table_write",
+        label: "Fill in your own tables",
+        description:
+          "Add, change, and delete ROWS in the tables you built yourself when you ask in chat, and undo any of it. Deleting a row asks you first, and every change can be put back from Recent changes.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "custom_table_manage",
+        label: "Build and change your own tables",
+        description:
+          "Create a new table, add or rename a column, and delete a whole table when you ask in chat. Deleting asks you first and the table comes back for 30 days. Managers and owners only.",
         defaultEnabled: true,
         configurable: true
       },

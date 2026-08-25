@@ -17,6 +17,40 @@ import {
   toolSurface
 } from "@/lib/agent-tools/rowboat-gates";
 import {
+  customTableAddRowArgsSchema,
+  customTableAddRowTool,
+  customTableCreateArgsSchema,
+  customTableCreateTool,
+  customTableDeleteArgsSchema,
+  customTableDeleteRowArgsSchema,
+  customTableDeleteRowTool,
+  customTableDeleteTool,
+  customTableFindRowsArgsSchema,
+  customTableFindRowsTool,
+  customTableHistoryArgsSchema,
+  customTableHistoryTool,
+  customTableListTool,
+  customTableRestoreArgsSchema,
+  customTableRestoreTool,
+  customTableUndoTool,
+  customTableUpdateRowArgsSchema,
+  customTableUpdateRowTool,
+  customTableUpdateSchemaArgsSchema,
+  customTableUpdateSchemaTool
+} from "@/lib/custom-tables/tool-handlers";
+
+/**
+ * Attribution for anything the Rowboat fallback writes to a custom table.
+ *
+ * This path runs when the inline turn could not (over budget, or no
+ * platform key), so "your coworker" is still the honest answer, and there is
+ * no caller identity on it to name an actor with.
+ */
+const ROWBOAT_CT_DEPS = { edit: { source: "ai_dashboard", actor: null } } as const;
+
+/** The one custom-table arg shape the shared core has no schema for. */
+const customTableUndoArgsSchema = z.object({ changeId: z.number().int().positive() });
+import {
   appendCustomerPinnedNote,
   lookupCustomerByPhone,
   setCustomerDisplayName,
@@ -467,6 +501,82 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       return await runAiFlowTool(businessId, parsed.data);
+    }
+    // Custom tables (dashboard_ names only, see TOOL_GATES). Same cores as
+    // the inline dashboard path, so the fallback resolves tables, refuses,
+    // and steers the model byte-identically.
+    case "custom_table_list": {
+      return await customTableListTool(businessId, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_find_rows": {
+      const parsed = customTableFindRowsArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableFindRowsTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_history": {
+      const parsed = customTableHistoryArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableHistoryTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_add_row": {
+      const parsed = customTableAddRowArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableAddRowTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_update_row": {
+      const parsed = customTableUpdateRowArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableUpdateRowTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_delete_row": {
+      const parsed = customTableDeleteRowArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableDeleteRowTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_undo": {
+      const parsed = customTableUndoArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableUndoTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_create": {
+      const parsed = customTableCreateArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableCreateTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_update_schema": {
+      const parsed = customTableUpdateSchemaArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableUpdateSchemaTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_delete": {
+      const parsed = customTableDeleteArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableDeleteTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
+    }
+    case "custom_table_restore": {
+      const parsed = customTableRestoreArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await customTableRestoreTool(businessId, parsed.data, ROWBOAT_CT_DEPS);
     }
     // The texting coworker's ONLY automation tool (bare sms name, see the
     // TOOL_GATES comment): enrolls the CURRENT texter into a flow the owner

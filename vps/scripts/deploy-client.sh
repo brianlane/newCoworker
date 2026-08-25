@@ -835,7 +835,18 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_set_expiration",
         "dashboard_document_request_signature",
         "dashboard_list_aiflows",
-        "dashboard_run_aiflow"
+        "dashboard_run_aiflow",
+        "dashboard_custom_table_list",
+        "dashboard_custom_table_find_rows",
+        "dashboard_custom_table_history",
+        "dashboard_custom_table_add_row",
+        "dashboard_custom_table_update_row",
+        "dashboard_custom_table_delete_row",
+        "dashboard_custom_table_undo",
+        "dashboard_custom_table_create",
+        "dashboard_custom_table_update_schema",
+        "dashboard_custom_table_delete",
+        "dashboard_custom_table_restore"
       ]
     },
     {
@@ -875,7 +886,18 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_set_expiration",
         "dashboard_document_request_signature",
         "dashboard_list_aiflows",
-        "dashboard_run_aiflow"
+        "dashboard_run_aiflow",
+        "dashboard_custom_table_list",
+        "dashboard_custom_table_find_rows",
+        "dashboard_custom_table_history",
+        "dashboard_custom_table_add_row",
+        "dashboard_custom_table_update_row",
+        "dashboard_custom_table_delete_row",
+        "dashboard_custom_table_undo",
+        "dashboard_custom_table_create",
+        "dashboard_custom_table_update_schema",
+        "dashboard_custom_table_delete",
+        "dashboard_custom_table_restore"
       ]
     },
     {
@@ -1670,6 +1692,201 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["flow"]
+      }
+    },
+    # Custom tables: the tables the owner built themselves on the Tables
+    # page. Dashboard surface only, for the reason the run-automations block
+    # gives one better: a customer texting the business line must never be
+    # able to read a table called Vendor pricing, and this agent cannot tell
+    # a customer from staff. No bare names, no webchat twins.
+    #
+    # The table is a runtime PARAMETER rather than part of the tool name,
+    # because this seed is one program rendered for every tenant and the
+    # dispatcher allowlist is static, so per-tenant tool names cannot exist.
+    # Values are {field,value} string pairs, not an open object, because
+    # function-calling schemas handle open objects badly; the platform
+    # converts each string to the column type and refuses honestly.
+    {
+      name: "dashboard_custom_table_list",
+      description: "List the tables the owner built themselves, with each table columns, what kind of value each column holds, its choices when it is a choice column, and how many rows it has. Call this FIRST, before any other custom table tool, so you use real table and column names instead of guessing.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: "dashboard_custom_table_find_rows",
+      description: "Find rows in one of the owner own tables. table is the table name. query is optional free text matched against every cell. contactPhone is only allowed on a table whose rows each belong to a contact. Returns each row id plus a one-line summary; use the id when changing or deleting a row.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Table name, as returned by dashboard_custom_table_list." },
+          query: { type: "string", description: "Optional text to match against the rows." },
+          contactPhone: { type: "string", description: "Optional E.164 number, only for a table whose rows belong to contacts." },
+          limit: { type: "number", description: "Optional cap on rows returned, at most 25." }
+        },
+        required: ["table"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_history",
+      description: "List the recent changes to one of the owner own tables in plain English, each with an id you can pass to dashboard_custom_table_undo. Use it when the owner asks what changed, or wants something put back.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Table name." }
+        },
+        required: ["table"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_add_row",
+      description: "Add one row to a table the owner built. table must be the EXACT table name, never a partial one. values is a list of {field, value} pairs where field is the column name exactly as dashboard_custom_table_list gave it. Send every value as text; the platform converts it to the column kind and refuses with a clear reason if it does not fit.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Exact table name." },
+          values: {
+            type: "array",
+            description: "Cells to fill in.",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string", description: "Column name, exactly as listed." },
+                value: { type: "string", description: "The value, as text." }
+              },
+              required: ["field", "value"]
+            }
+          },
+          contactPhone: { type: "string", description: "Only for a table whose rows belong to contacts." }
+        },
+        required: ["table", "values"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_update_row",
+      description: "Change cells on one existing row. Find the row first with dashboard_custom_table_find_rows and pass the id it returned as row. Only the cells you send change; send a value of empty text to clear one. table must be the EXACT table name.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Exact table name." },
+          row: { type: "string", description: "Row id from dashboard_custom_table_find_rows." },
+          values: {
+            type: "array",
+            description: "Cells to change. Empty text clears a cell.",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string", description: "Column name, exactly as listed." },
+                value: { type: "string", description: "The new value, as text. Empty text clears it." }
+              },
+              required: ["field", "value"]
+            }
+          }
+        },
+        required: ["table", "row", "values"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_delete_row",
+      description: "Delete one row. THIS TAKES TWO CALLS. Call it first without confirm: nothing is deleted and you get back what the row says. Read that back to the owner, wait for a clear yes, then call again with confirm true. Never guess which row: find it first and pass the id.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Exact table name." },
+          row: { type: "string", description: "Row id from dashboard_custom_table_find_rows." },
+          confirm: { type: "boolean", description: "Only true on the second call, after the owner said yes." }
+        },
+        required: ["table", "row"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_undo",
+      description: "Put back one change from dashboard_custom_table_history, using the id it returned. Works for a changed row, a deleted row, and a deleted table. The undo is itself recorded, so it can be undone too.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          changeId: { type: "number", description: "The change id from dashboard_custom_table_history." }
+        },
+        required: ["changeId"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_create",
+      description: "Make a new table for the owner. name is the plural of what they are tracking (Properties, Vehicles). columns is the list of columns; each has a label and a kind (text, long_text, number, date, checkbox, select, multi_select), and a select or multi_select needs at least two options. Set linkToContacts true only when every row is about one person in the Contacts list.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Table name, plural." },
+          description: { type: "string", description: "Optional one-line description." },
+          linkToContacts: { type: "boolean", description: "True when each row belongs to one contact." },
+          columns: {
+            type: "array",
+            description: "The columns to create.",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string", description: "Column name." },
+                type: { type: "string", description: "text, long_text, number, date, checkbox, select, or multi_select." },
+                options: { type: "array", description: "Choices, for select and multi_select only.", items: { type: "string" } }
+              },
+              required: ["label"]
+            }
+          }
+        },
+        required: ["name", "columns"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_update_schema",
+      description: "Add, rename, or delete a COLUMN on a table the owner built. Deleting a column also deletes what is written in it on every row, so it takes two calls: once without confirm to hear the warning, then again with confirm true after the owner says yes. A column kind cannot be changed; delete it and add a new one.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Exact table name." },
+          action: { type: "string", description: "add_column, rename_column, or delete_column." },
+          column: { type: "string", description: "The column name. For add_column, the name to give it." },
+          newName: { type: "string", description: "For rename_column: the new name." },
+          type: { type: "string", description: "For add_column: the kind of value it holds." },
+          options: { type: "array", description: "For add_column on a choice column: the choices.", items: { type: "string" } },
+          confirm: { type: "boolean", description: "Only true on the second call of a delete_column, after the owner said yes." }
+        },
+        required: ["table", "action", "column"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_delete",
+      description: "Delete a WHOLE table the owner built. THIS TAKES TWO CALLS. Call it first without confirm: nothing is deleted and you get back how many rows it holds. Tell the owner that number, wait for a clear yes, then call again with confirm true. The table can be brought back for 30 days with dashboard_custom_table_restore, so say so.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Exact table name." },
+          confirm: { type: "boolean", description: "Only true on the second call, after the owner said yes." }
+        },
+        required: ["table"]
+      }
+    },
+    {
+      name: "dashboard_custom_table_restore",
+      description: "Bring back a table that was deleted, with everything that was in it. Use it when the owner changes their mind about a deletion.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Name of the deleted table." }
+        },
+        required: ["table"]
       }
     },
     # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher

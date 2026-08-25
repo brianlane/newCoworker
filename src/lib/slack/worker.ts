@@ -287,7 +287,10 @@ async function runOneSlackJob(
         "manage_agents",
         "update_business_profile",
         "update_business_knowledge",
-        "manage_coworker_tools"
+        "manage_coworker_tools",
+        "custom_table_read",
+        "custom_table_write",
+        "custom_table_manage"
       ] as const),
       buildIntegrationsStatusLine(businessId),
       buildBusinessContextBlock(businessId),
@@ -308,6 +311,9 @@ async function runOneSlackJob(
     flag_contact_spam: flagSpamToolEnabled,
     set_contact_reply_mode: replyModeToolEnabled,
     manage_employee: manageEmployeeToolEnabled,
+    custom_table_read: customTableReadEnabled,
+    custom_table_write: customTableWriteEnabled,
+    custom_table_manage: customTableManageEnabled,
     send_email: emailToolEnabled
   } = toolStates;
 
@@ -416,7 +422,22 @@ async function runOneSlackJob(
       update_notification_preferences: isOwner && notificationPrefsToolEnabled,
       flag_contact_spam: isOwner && flagSpamToolEnabled,
       set_contact_reply_mode: isOwner && replyModeToolEnabled,
-      manage_employee: isOwner && manageEmployeeToolEnabled
+      manage_employee: isOwner && manageEmployeeToolEnabled,
+      // Same line this surface already draws in words: a team member in the
+      // workspace can read and act, never reconfigure. So reading and
+      // filling in a table is open to the workspace, while BUILDING or
+      // deleting one is the owner's alone.
+      custom_table_list: customTableReadEnabled,
+      custom_table_find_rows: customTableReadEnabled,
+      custom_table_history: customTableReadEnabled,
+      custom_table_add_row: customTableWriteEnabled,
+      custom_table_update_row: customTableWriteEnabled,
+      custom_table_delete_row: customTableWriteEnabled,
+      custom_table_undo: customTableWriteEnabled,
+      custom_table_create: isOwner && customTableManageEnabled,
+      custom_table_update_schema: isOwner && customTableManageEnabled,
+      custom_table_delete: isOwner && customTableManageEnabled,
+      custom_table_restore: isOwner && customTableManageEnabled
     }
   });
 

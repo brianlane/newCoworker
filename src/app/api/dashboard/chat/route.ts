@@ -766,6 +766,9 @@ export async function POST(request: Request) {
       "flag_contact_spam",
       "set_contact_reply_mode",
       "manage_employee",
+      "custom_table_read",
+      "custom_table_write",
+      "custom_table_manage",
       "read_business_data",
       "manage_contacts",
       "manage_flows",
@@ -790,7 +793,10 @@ export async function POST(request: Request) {
       update_notification_preferences: notificationPrefsToolEnabled,
       flag_contact_spam: flagSpamToolEnabled,
       set_contact_reply_mode: replyModeToolEnabled,
-      manage_employee: manageEmployeeToolEnabled
+      manage_employee: manageEmployeeToolEnabled,
+      custom_table_read: customTableReadEnabled,
+      custom_table_write: customTableWriteEnabled,
+      custom_table_manage: customTableManageEnabled
     } = toolStates;
     // Settings mutation needs more than chat access: those tools are
     // declared only when THIS caller's role passes the matching bar (the
@@ -891,6 +897,23 @@ export async function POST(request: Request) {
       // manage_settings bar the Employees page enforces: a staff-role
       // teammate with chat access must not be able to reroute the team's
       // leads (or add themselves).
+      // Custom tables. Three toggles fan out to ten tool names, and the
+      // role bars mirror the API routes exactly: reading and filling in a
+      // table is operate_messages (chat access already clears that), while
+      // BUILDING one is manage_settings, because a table's shape is
+      // configuration the same way a pipeline's stages are. Fails closed:
+      // an unresolved role is null, which denies.
+      custom_table_list: customTableReadEnabled,
+      custom_table_find_rows: customTableReadEnabled,
+      custom_table_history: customTableReadEnabled,
+      custom_table_add_row: customTableWriteEnabled,
+      custom_table_update_row: customTableWriteEnabled,
+      custom_table_delete_row: customTableWriteEnabled,
+      custom_table_undo: customTableWriteEnabled,
+      custom_table_create: customTableManageEnabled && canManageSettings,
+      custom_table_update_schema: customTableManageEnabled && canManageSettings,
+      custom_table_delete: customTableManageEnabled && canManageSettings,
+      custom_table_restore: customTableManageEnabled && canManageSettings,
       manage_employee: manageEmployeeToolEnabled && canManageSettings
     };
 

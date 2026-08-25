@@ -137,6 +137,30 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // fail closed.
   dashboard_list_aiflows: { agentKey: "dashboard", toolKey: "run_aiflow" },
   dashboard_run_aiflow: { agentKey: "dashboard", toolKey: "run_aiflow" },
+  // Custom tables (the owner's own Tables). Dashboard-only by design: a
+  // customer texting the business line must never be able to read a table
+  // called "Vendor pricing" or "Staff wages", and the texting coworker
+  // serves customers and staff through one agent, so it cannot tell them
+  // apart. No bare names and no webchat twins, which means both fail closed.
+  //
+  // Ten names over three toggles: reads, row writes, and schema work are the
+  // three questions an owner actually has an opinion about, and ten switches
+  // would bury the Settings page (same reasoning as list_aiflows riding
+  // run_aiflow's toggle).
+  dashboard_custom_table_list: { agentKey: "dashboard", toolKey: "custom_table_read" },
+  dashboard_custom_table_find_rows: { agentKey: "dashboard", toolKey: "custom_table_read" },
+  dashboard_custom_table_history: { agentKey: "dashboard", toolKey: "custom_table_read" },
+  dashboard_custom_table_add_row: { agentKey: "dashboard", toolKey: "custom_table_write" },
+  dashboard_custom_table_update_row: { agentKey: "dashboard", toolKey: "custom_table_write" },
+  dashboard_custom_table_delete_row: { agentKey: "dashboard", toolKey: "custom_table_write" },
+  dashboard_custom_table_undo: { agentKey: "dashboard", toolKey: "custom_table_write" },
+  dashboard_custom_table_create: { agentKey: "dashboard", toolKey: "custom_table_manage" },
+  dashboard_custom_table_update_schema: {
+    agentKey: "dashboard",
+    toolKey: "custom_table_manage"
+  },
+  dashboard_custom_table_delete: { agentKey: "dashboard", toolKey: "custom_table_manage" },
+  dashboard_custom_table_restore: { agentKey: "dashboard", toolKey: "custom_table_manage" },
   // The ONE narrow exception to the rule above, double-gated: the texting
   // coworker may enroll the CURRENT texter into a flow the owner explicitly
   // flagged `options.agentInvocable` (per-flow opt-in, default off), it can

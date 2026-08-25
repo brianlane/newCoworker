@@ -125,6 +125,9 @@ export async function POST(request: Request) {
           "flag_contact_spam",
           "set_contact_reply_mode",
           "manage_employee",
+        "custom_table_read",
+        "custom_table_write",
+        "custom_table_manage",
           "send_email",
           "read_business_data",
           "manage_contacts",
@@ -155,7 +158,10 @@ export async function POST(request: Request) {
       flag_contact_spam: flagSpamToolEnabled,
       set_contact_reply_mode: replyModeToolEnabled,
       manage_employee: manageEmployeeToolEnabled,
-      send_email: emailToolEnabled
+      send_email: emailToolEnabled,
+      custom_table_read: customTableReadEnabled,
+      custom_table_write: customTableWriteEnabled,
+      custom_table_manage: customTableManageEnabled
     } = toolStates;
 
     // MCP-bridge tools: this surface IS the verified owner (the SMS
@@ -310,7 +316,20 @@ export async function POST(request: Request) {
         // Roster changes happen away from a laptop ("Sandy starts today,
         // her cell is..."), and the texter is the verified owner, who
         // always passes manage_settings.
-        manage_employee: manageEmployeeToolEnabled
+        manage_employee: manageEmployeeToolEnabled,
+        // This surface is the VERIFIED owner texting their own coworker, so
+        // it gets the same tables access as dashboard chat.
+        custom_table_list: customTableReadEnabled,
+        custom_table_find_rows: customTableReadEnabled,
+        custom_table_history: customTableReadEnabled,
+        custom_table_add_row: customTableWriteEnabled,
+        custom_table_update_row: customTableWriteEnabled,
+        custom_table_delete_row: customTableWriteEnabled,
+        custom_table_undo: customTableWriteEnabled,
+        custom_table_create: customTableManageEnabled,
+        custom_table_update_schema: customTableManageEnabled,
+        custom_table_delete: customTableManageEnabled,
+        custom_table_restore: customTableManageEnabled
       }
     });
 
