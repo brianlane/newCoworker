@@ -36,10 +36,24 @@ export type KinBookingService = {
   /** JaneApp booking URL for this service. */
   link: string;
   /**
-   * Lowercase substrings that identify this service in whatever the Meta lead
-   * form captured. Matched against the extracted lead notes.
+   * The ONE lowercase substring the flow branch matches on, and the only
+   * thing resolveKinService considers.
+   *
+   * Deliberately a single token rather than a list: MAX_BRANCH_ARMS is 4, so
+   * three services plus the fallback already fills the branch and there is no
+   * room for an arm per phrasing. A `when` condition also takes exactly one
+   * of equals/contains/notEquals, so one arm cannot OR several aliases. Both
+   * halves therefore agree by construction on this token, and anything
+   * fuzzier is the coworker's job (see `aliases`).
    */
-  matches: readonly string[];
+  flowMatch: string;
+  /**
+   * Other phrasings a parent might use. NOT matched by the flow: these feed
+   * the coworker's prose rules in identity.md, where reading meaning is the
+   * whole point. A lead form that says "youth counselling" therefore lands on
+   * the general page with a question, and the coworker routes the reply.
+   */
+  aliases: readonly string[];
 };
 
 /** Where a lead goes when we cannot tell which discipline they need. */
@@ -55,26 +69,33 @@ export const KIN_BOOKING_SERVICES: readonly KinBookingService[] = [
     label: "Teen / youth counselling (14-17)",
     serviceName: "teen and youth counselling",
     link: "https://kinintegrated.janeapp.com/#/teen-youth-counselling-ages-14-17",
-    // Every match here carries its own age signal. "counselling" alone is
-    // deliberately absent: see the age trap in the module header.
-    matches: ["teen", "youth", "adolescent", "14-17", "14 - 17"]
-  },
-  {
-    key: "psych",
-    label: "Psychological assessment",
-    serviceName: "psychological assessment",
-    link: "https://kinintegrated.janeapp.com/#/psychological-assessment",
-    matches: ["psychological assessment", "psych assessment", "psychoeducational", "assessment"]
+    // Carries its own age signal. "counselling" is deliberately NOT the
+    // token: see the age trap in the module header.
+    flowMatch: "teen",
+    aliases: ["youth", "adolescent", "14-17", "high school"]
   },
   {
     key: "ot",
     label: "Occupational therapy",
     serviceName: "occupational therapy",
     link: "https://kinintegrated.janeapp.com/#/occupational-therapy",
-    // " ot " with spaces would miss "OT" at the start or end of an answer,
-    // and bare "ot" would match "robot"; the branch condition is a substring
-    // test, so the abbreviation is handled by the coworker side instead.
-    matches: ["occupational therapy", "occupational-therapy"]
+    // Covers "occupational therapy", "Occupational-Therapy", "occupational
+    // therapy assessment". Ahead of psych so an OT assessment stays OT.
+    flowMatch: "occupational",
+    aliases: ["ot", "sensory", "motor skills", "handwriting", "feeding"]
+  },
+  {
+    key: "psych",
+    label: "Psychological assessment",
+    serviceName: "psychological assessment",
+    link: "https://kinintegrated.janeapp.com/#/psychological-assessment",
+    // "psycholog" covers psychological / psychology / psychologist. Bare
+    // "assessment" is deliberately NOT the token: OT, speech and psych all
+    // do assessments, so it would steal OT enquiries. An unqualified
+    // "assessment" is genuinely ambiguous and belongs on the general page
+    // with a question, which is the same principle as the age trap.
+    flowMatch: "psycholog",
+    aliases: ["psychoeducational", "psych-ed", "adhd", "autism", "testing", "school report"]
   }
 ] as const;
 
@@ -85,14 +106,18 @@ export function allKinBookingLinks(): string[] {
 
 /**
  * Which service a free-text answer points at, or null for "cannot tell".
- * Pure and deterministic, no model call: the flow branch mirrors this exact
- * ordering, and tests pin the two together.
+ *
+ * Considers ONLY `flowMatch`, because this is the reference implementation of
+ * what the live flow branch does; a test asserts each arm's condition is
+ * exactly this token. Aliases are intentionally excluded: matching them here
+ * would make this function claim a routing the flow cannot perform, which is
+ * the drift this module exists to prevent.
  */
 export function resolveKinService(text: string | null | undefined): KinBookingService | null {
   if (!text) return null;
   const hay = text.toLowerCase();
   for (const service of KIN_BOOKING_SERVICES) {
-    if (service.matches.some((m) => hay.includes(m))) return service;
+    if (hay.includes(service.flowMatch)) return service;
   }
   return null;
 }

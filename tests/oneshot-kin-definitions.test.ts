@@ -167,8 +167,8 @@ describe("kin booking-link routing", () => {
   it("carries exactly the four links Kingsley sent, general last", () => {
     expect(allKinBookingLinks()).toEqual([
       "https://kinintegrated.janeapp.com/#/teen-youth-counselling-ages-14-17",
-      "https://kinintegrated.janeapp.com/#/psychological-assessment",
       "https://kinintegrated.janeapp.com/#/occupational-therapy",
+      "https://kinintegrated.janeapp.com/#/psychological-assessment",
       "https://kinintegrated.janeapp.com/"
     ]);
   });
@@ -183,13 +183,51 @@ describe("kin booking-link routing", () => {
   it.each([
     ["occupational therapy for my son", "ot"],
     ["Occupational-Therapy", "ot"],
+    ["occupational therapy assessment", "ot"],
     ["psychological assessment", "psych"],
-    ["we need an ADHD assessment", "psych"],
+    ["we would like to see a psychologist", "psych"],
     ["teen counselling", "teen"],
-    ["youth counselling for my 15 year old", "teen"],
-    ["ages 14-17 counselling", "teen"]
+    ["counselling for my teenager", "teen"]
   ])("routes %j to the %s page", (text, key) => {
     expect(resolveKinService(text)?.key).toBe(key);
+  });
+
+  // Bugbot, PR #1619: bare "assessment" used to belong to psych and was
+  // checked before OT, so an OT eval landed on the psychological assessment
+  // page. OT is now ahead of psych AND the ambiguous word is nobody's token.
+  it("never lets the word assessment alone decide a discipline", () => {
+    expect(resolveKinService("assessment")).toBeNull();
+    expect(resolveKinService("we need an assessment booked")).toBeNull();
+    expect(resolveKinService("occupational therapy assessment")?.key).toBe("ot");
+  });
+
+  // Bugbot, PR #1619: the branch matched only matches[0] while this function
+  // matched every alias, so the two halves disagreed about "youth",
+  // "adolescent" and friends. There is now ONE token, and this pins that the
+  // live arm condition IS that token.
+  it("matches the flow arm conditions exactly, token for token", () => {
+    const branch = steps().find((s) => s.id === "s_route_booking") as never as {
+      branches: Array<{ id: string; condition: { var: string; contains: string } }>;
+    };
+    expect(branch.branches.map((a) => a.condition.contains)).toEqual(
+      KIN_BOOKING_SERVICES.map((s) => s.flowMatch)
+    );
+    for (const arm of branch.branches) expect(arm.condition.var).toBe("lead_notes");
+    // Every token routes to its own service through the shared resolver.
+    for (const svc of KIN_BOOKING_SERVICES) {
+      expect(resolveKinService(svc.flowMatch)?.key).toBe(svc.key);
+    }
+  });
+
+  it("keeps aliases out of the resolver, since the flow cannot match them", () => {
+    // They are coworker guidance only; claiming them here would promise a
+    // routing the branch cannot perform.
+    for (const svc of KIN_BOOKING_SERVICES) {
+      for (const alias of svc.aliases) {
+        if (alias.includes(svc.flowMatch)) continue;
+        expect(resolveKinService(alias)?.key ?? null).not.toBe(svc.key);
+      }
+    }
   });
 
   // The age trap: the teen page is scoped 14-17 in JaneApp, and this is a
@@ -198,6 +236,7 @@ describe("kin booking-link routing", () => {
   it.each([
     "counselling for my 7 year old",
     "counselling",
+    "youth counselling",
     "speech therapy",
     "SLP for my daughter",
     "behaviour consulting",
@@ -212,10 +251,10 @@ describe("kin booking-link routing", () => {
     expect(resolveKinService(undefined)).toBeNull();
   });
 
-  it("puts teen ahead of the other arms so an age signal wins", () => {
-    expect(KIN_BOOKING_SERVICES[0].key).toBe("teen");
-    // "teen assessment" carries both signals; teen must win.
-    expect(resolveKinService("teen assessment")?.key).toBe("teen");
+  it("puts teen first so an age signal wins, and OT ahead of psych", () => {
+    expect(KIN_BOOKING_SERVICES.map((s) => s.key)).toEqual(["teen", "ot", "psych"]);
+    // Both signals present: the age one must win.
+    expect(resolveKinService("psychologist for my teen")?.key).toBe("teen");
   });
 });
 
@@ -230,6 +269,10 @@ describe("kin coworker knowledge", () => {
     const section = buildKinBookingLinksSection();
     expect(section).toContain("UNDER 14");
     expect(section).toContain("ask how old the child is");
+  });
+
+  it("warns the coworker that a bare assessment request is ambiguous", () => {
+    expect(buildKinBookingLinksSection()).toContain("assessment ON ITS OWN");
   });
 
   it("adds Booking Links to identity.md once, and is idempotent", () => {

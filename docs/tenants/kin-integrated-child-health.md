@@ -98,9 +98,14 @@ different moments:
 
 1. **Proactive, in the flow.** `s_route_booking` branches on `lead_notes`
    (whatever the Meta form captured) and sends that discipline's page.
-   Deterministic substring matching, no model call. Unknown falls to the
-   general page and the copy asks which service, which is what makes the
-   reply path work.
+   Deterministic, no model call. Each arm matches ONE token, `teen`,
+   `occupational`, `psycholog`, because `MAX_BRANCH_ARMS` is 4 (three
+   services plus the fallback fills it) and a `when` condition takes exactly
+   one comparator, so an arm cannot OR several phrasings. `resolveKinService`
+   considers only those same tokens, and a test asserts the live arm
+   conditions equal them, so the two halves cannot drift. Anything phrased
+   differently falls to the general page and the copy asks which service,
+   which is what makes the reply path work.
 2. **Reactive, in the coworker.** The moment a lead replies, the SMS
    coworker owns the conversation (Kingsley's own plan: "if they reply the
    ai worker will nurture"). It reads the same table out of `identity.md`
@@ -115,6 +120,11 @@ or 14-17 signal, and bare "counselling" routes to the GENERAL page instead.
 The coworker's rules go further and tell it to ask the child's age when it
 is unclear. Sending a 7-year-old's parent the 14-17 page is a wrong booking,
 not a near miss.
+
+**"Assessment" alone decides nothing.** OT, speech and psychology all run
+assessments, so the word is not any service's token; an unqualified
+"assessment" reaches the general page and the coworker asks what kind. The
+psych token is `psycholog` precisely so an OT assessment stays OT.
 
 **Services with no dedicated page** (speech/SLP, behaviour consulting,
 nurse practitioner, counselling outside 14-17) route to the general page,

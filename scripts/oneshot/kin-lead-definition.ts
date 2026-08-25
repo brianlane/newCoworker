@@ -189,7 +189,7 @@ export function buildKinLeadDefinition(
           label: service.label,
           condition: {
             var: "lead_notes",
-            contains: service.matches[0],
+            contains: service.flowMatch,
             caseInsensitive: true
           },
           steps: [
