@@ -184,17 +184,61 @@ const OWNER_SMS_PLATFORM_URL = (
 const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
 
 /**
+ * Why an owner turn did not run on the platform engine. Recorded so the
+ * fallback is COUNTABLE: the success path has always emitted
+ * `sms_owner_operator_turn`, while giving up emitted nothing, so the only way
+ * to measure the fallback rate was to subtract successes from owner-kind jobs
+ * and then hand-audit the difference (which on 2026-08-24 was six draft
+ * approvals from another tenant that the webhook answers before this code is
+ * ever reached, not fallbacks at all). One event per give-up makes the
+ * question a single query.
+ *
+ * The distinction that matters when reading these: `not_configured` and
+ * `disabled` mean the platform path was never attempted on this deployment,
+ * so a steady stream of them is a config problem, not a health problem.
+ * Everything else means it WAS attempted and failed, which is the shape worth
+ * alerting on.
+ */
+type OwnerOperatorFallbackReason =
+  | "disabled"
+  | "not_configured"
+  | "http_error"
+  | "bad_payload"
+  | "request_failed";
+
+/**
  * Run one owner-operator turn on the platform engine. Null = unavailable /
- * failed / timed out, the caller falls back to the Rowboat staff path.
+ * failed / timed out, the caller falls back to the Rowboat staff path, which
+ * carries neither the operator tool surface nor the ask classifier, so a
+ * fallback is a materially smaller answer for the owner.
+ *
+ * Telemetry is best-effort and never changes the outcome: a recording failure
+ * must not turn a degraded-but-working reply into no reply at all.
  */
 async function callOwnerOperatorTurn(args: {
+  supabase: SupabaseClient;
   businessId: string;
+  jobId: string;
   ownerE164: string;
   ownerName: string | null;
   text: string;
 }): Promise<string | null> {
+  const fellBack = async (
+    reason: OwnerOperatorFallbackReason,
+    detail?: string
+  ): Promise<null> => {
+    await telemetryRecord(args.supabase, "sms_owner_operator_fallback", {
+      job_id: args.jobId,
+      business_id: args.businessId,
+      reason,
+      ...(detail ? { detail } : {})
+    }).catch(() => {});
+    return null;
+  };
+
   const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
-  if (!OWNER_SMS_OPERATOR_ENABLED || !OWNER_SMS_PLATFORM_URL || !token) return null;
+  if (!OWNER_SMS_OPERATOR_ENABLED) return await fellBack("disabled");
+  if (!OWNER_SMS_PLATFORM_URL || !token) return await fellBack("not_configured");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OWNER_SMS_TURN_TIMEOUT_MS);
   try {
@@ -211,18 +255,21 @@ async function callOwnerOperatorTurn(args: {
     });
     if (!res.ok) {
       console.error("owner operator turn HTTP", res.status);
-      return null;
+      return await fellBack("http_error", String(res.status));
     }
     const payload = (await res.json().catch(() => null)) as
       | { ok?: boolean; reply?: string }
       | null;
     if (!payload?.ok || typeof payload.reply !== "string" || !payload.reply.trim()) {
-      return null;
+      return await fellBack("bad_payload");
     }
     return payload.reply.trim();
   } catch (e) {
-    console.error("owner operator turn failed", e instanceof Error ? e.message : String(e));
-    return null;
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("owner operator turn failed", detail);
+    // The abort fires as an exception, so a timeout lands here too; the
+    // detail string is what separates it from a network error when reading.
+    return await fellBack("request_failed", detail.slice(0, 200));
   } finally {
     clearTimeout(timer);
   }
@@ -1809,7 +1856,9 @@ serve(async (req: Request) => {
       // platform hiccup never silences the owner.
       if (!reply && job.staff_kind === "owner") {
         const operatorReply = await callOwnerOperatorTurn({
+          supabase,
           businessId: job.business_id,
+          jobId: job.id,
           ownerE164: fromE164,
           ownerName: job.staff_name?.trim() || null,
           text: userText
