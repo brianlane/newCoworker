@@ -388,6 +388,20 @@ describe("the copy this change makes untrue", () => {
     );
   });
 
+  it("undoes the superseded wording on REVERT too, not just going forward", () => {
+    // A flow still carrying the shipped-then-corrected line would otherwise
+    // survive a --revert still saying the AI called and still naming the
+    // claimer as the summary holder: the worst of both states.
+    const def = routeBuyer();
+    stepById(def, "route_buyer")!.claimedNotifyTemplate = `claimed\n${SUPERSEDED_CLAIMED_LINE}`;
+    const changed = retuneBuyerOfferCopy(def, true);
+    expect(changed.join(" ")).toContain("claimedNotifyTemplate");
+    expect(String(stepById(def, "route_buyer")!.claimedNotifyTemplate)).toBe(
+      `claimed\n${OLD_NO_FOLLOW_UP_FRAGMENTS[1]}`
+    );
+    expect(JSON.stringify(def)).not.toContain("{{agent.name}} has the summary");
+  });
+
   it("carries no em dash in the replacement copy", () => {
     for (const line of NEW_FOLLOW_UP_LINES) expect(line).not.toContain("—");
   });

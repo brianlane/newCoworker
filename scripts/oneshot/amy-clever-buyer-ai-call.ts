@@ -450,10 +450,13 @@ export function retuneBuyerOfferCopy(def: AnyDef, reverse = false): string[] {
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const current = typeof step[key] === "string" ? (step[key] as string) : "";
-    // The claimed notice has a third possible source: the wording this script
-    // shipped before the {{agent.name}} correction.
+    // The claimed notice has a third possible source in BOTH directions: the
+    // wording this script shipped before the {{agent.name}} correction. Going
+    // forward it must be upgraded; going back it must be undone, or a
+    // --revert would leave the flow still claiming the AI called and still
+    // naming the claimer as the holder of a summary they may not have.
     const sources =
-      key === "claimedNotifyTemplate" && !reverse ? [from[i], SUPERSEDED_CLAIMED_LINE] : [from[i]];
+      key === "claimedNotifyTemplate" ? [from[i], SUPERSEDED_CLAIMED_LINE] : [from[i]];
     const match = sources.find((f) => current.includes(f));
     if (!match) continue;
     step[key] = current.replace(match, to[i]);
