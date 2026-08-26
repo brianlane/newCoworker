@@ -94,6 +94,7 @@ routing so they cannot drift:
 | Counselling, ages 13-17 | `.../#/teen-youth-counselling-ages-13-17` |
 | Counselling, adults | `.../#/adult-counselling` |
 | Couples counselling | `.../#/couples-counselling` (coworker only, the form cannot produce it) |
+| Speech / SLP | no page: waitlist, send no link |
 | Anything else, or unknown | `https://kinintegrated.janeapp.com/` |
 
 **Routing is SERVICE-first, with age nested inside counselling.** That shape
@@ -133,10 +134,28 @@ by James 2026-08-25). Kingsley extended the teen service down to 13, which
 also changed its slug from `...-ages-14-17` to `...-ages-13-17`. The old
 slug is retired and a test asserts it appears nowhere.
 
-**Speech / SLP has no booking page.** The v3 form offers it as an option, so
-those leads arrive with nowhere to book: they get the general page, and the
-coworker is told explicitly not to invent a link, to take details and alert
-the team instead. Raised with Kingsley 2026-08-26, unanswered.
+**Speech / SLP is a WAITLIST, by design** (Kingsley, 2026-08-26). There is no
+booking page and there will not be one until that changes, so a speech lead
+is sent NO link, not even the general page: offering one invites a booking
+they cannot make. The flow's speech arm says plainly that speech is on a
+waitlist and that the team has been told, and the owner alert every lead
+already fires is what gets them onto the list. The coworker carries the same
+rule and is told not to promise a date.
+
+A waitlist lead is also held OUT of the nudge cascade (`s_followups` gates
+it). Every nudge is booking copy carrying the general link, so nudging a
+speech lead two hours after telling them there is nothing to book would undo
+the rule. `contains` has no negation, so the waitlist arm holds the
+cascade's absence and the else holds the cascade. `s_goal` stays on the main
+path after the gate, because a goal may not sit inside a branch.
+
+The pre-branch owner alert deliberately does NOT say what the lead was sent:
+it fires before routing (so quiet hours cannot delay it) and therefore
+cannot know, and a speech lead receives no link. The Details line carries
+the service, which is what tells Kingsley to add them to the list.
+
+He also said the current ads are not running SLP yet, so that arm is dormant
+until James turns it on. Built now rather than left to be remembered.
 
 **Link fragments are load-bearing.** All three specific pages are `#`
 fragment URLs. The SMS shortener matches `https?://[^\s<>"']+`, so the

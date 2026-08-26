@@ -38,12 +38,20 @@
  * `teen-youth-counselling-ages-14-17` to `...-ages-13-17`; the old one is
  * stale and must not be handed out.
  *
- * ## Known gap
+ * ## Speech / SLP is a WAITLIST, not a missing page
  *
- * The v3 form offers Speech / SLP, but the booking site has no speech page,
- * so those enquiries route to the general page and need a human. Raised with
- * Kingsley 2026-08-26, unanswered. Couples counselling has a page but the
- * form cannot produce that answer, so it is coworker-only knowledge.
+ * Confirmed by Kingsley 2026-08-26: speech is run as a waitlist, so there is
+ * no booking page by design and there never will be one until that changes.
+ * Sending such a lead ANY booking link is wrong: the general page invites
+ * them to book a service they cannot book. The speech arm therefore sends no
+ * link at all, says plainly that it is a waitlist, and leans on the owner
+ * alert that every lead already triggers so the clinic can add them.
+ *
+ * He also said the current ads are not running SLP yet, so this arm is
+ * dormant until James turns that on. Built now rather than remembered later.
+ *
+ * Couples counselling has a page but the form cannot produce that answer, so
+ * it is coworker-only knowledge.
  */
 
 export type KinBookingService = {
@@ -66,6 +74,13 @@ export type KinBookingService = {
   flowMatch: string;
   /** Other phrasings, for the coworker's prose only. Never matched by the flow. */
   aliases: readonly string[];
+  /**
+   * True when the service cannot be booked online at all and the clinic runs
+   * a waitlist instead. `link` is then a placeholder and MUST NOT be sent:
+   * offering a booking page for a waitlist-only service is a promise the
+   * business has not authorized.
+   */
+  waitlist?: boolean;
 };
 
 /** Where a lead goes when we cannot tell what they need. */
@@ -96,6 +111,18 @@ export const KIN_BOOKING_SERVICES: readonly KinBookingService[] = [
     // all run assessments, so it would steal OT enquiries.
     flowMatch: "psycholog",
     aliases: ["psychoeducational", "psych-ed", "adhd", "autism", "testing", "school report"]
+  },
+  {
+    key: "speech",
+    label: "Speech / SLP (waitlist)",
+    serviceName: "speech and language therapy",
+    // Placeholder, never sent: see `waitlist`.
+    link: KIN_GENERAL_BOOKING_LINK,
+    // Covers "speech_slp", "Speech / SLP" and "speech therapy". No other
+    // form value or age key contains "speech".
+    flowMatch: "speech",
+    aliases: ["slp", "language", "stutter", "articulation", "myofascial", "tongue tie"],
+    waitlist: true
   },
   {
     key: "counselling",
@@ -203,13 +230,23 @@ export function resolveKinCounsellingAge(
 }
 
 /**
- * The page a lead should receive, given everything the form captured.
+ * What a lead should receive. Deliberately not a bare string: "book here" and
+ * "we will add you to the waitlist" are different outcomes, and collapsing
+ * them into a URL is how a waitlist-only service ends up with a booking link.
+ */
+export type KinBookingOutcome =
+  | { kind: "link"; url: string }
+  | { kind: "waitlist"; service: KinBookingService };
+
+/**
  * Reference implementation of the live branch: service first, then age
  * within counselling, then the general page.
  */
-export function resolveKinBookingLink(notes: string | null | undefined): string {
+export function resolveKinBooking(notes: string | null | undefined): KinBookingOutcome {
   const service = resolveKinService(notes);
-  if (!service) return KIN_GENERAL_BOOKING_LINK;
-  if (service.key !== "counselling") return service.link;
-  return resolveKinCounsellingAge(notes)?.link ?? KIN_GENERAL_BOOKING_LINK;
+  if (!service) return { kind: "link", url: KIN_GENERAL_BOOKING_LINK };
+  if (service.waitlist) return { kind: "waitlist", service };
+  if (service.key !== "counselling") return { kind: "link", url: service.link };
+  const age = resolveKinCounsellingAge(notes);
+  return { kind: "link", url: age?.link ?? KIN_GENERAL_BOOKING_LINK };
 }

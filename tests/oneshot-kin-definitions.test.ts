@@ -30,7 +30,7 @@ import {
   KIN_COUNSELLING_AGES,
   KIN_GENERAL_BOOKING_LINK,
   allKinBookingLinks,
-  resolveKinBookingLink,
+  resolveKinBooking,
   resolveKinCounsellingAge,
   resolveKinService
 } from "../scripts/oneshot/kin-booking-links";
@@ -58,6 +58,21 @@ function steps(def = buildKinLeadDefinition(LINK)): StepJson[] {
   return def.steps as StepJson[];
 }
 
+/** Every step including those nested in branch arms and else blocks. */
+function flatten(list: StepJson[] = steps()): StepJson[] {
+  const out: StepJson[] = [];
+  const walk = (l: StepJson[]) => {
+    for (const st of l) {
+      out.push(st);
+      const b = st as unknown as { branches?: Array<{ steps: StepJson[] }>; else?: StepJson[] };
+      for (const arm of b.branches ?? []) walk(arm.steps);
+      if (b.else) walk(b.else);
+    }
+  };
+  walk(list);
+  return out;
+}
+
 describe("kin lead definition", () => {
   it("passes the engine's schema validation", () => {
     expect(() => parseAiFlowDefinition(buildKinLeadDefinition(LINK))).not.toThrow();
@@ -72,7 +87,7 @@ describe("kin lead definition", () => {
       else: StepJson[];
     };
     expect(branch.else[0].body).toContain(LINK);
-    expect(steps().find((s) => s.id === "s_nudge_1")?.body).toContain(LINK);
+    expect(flatten().find((s) => s.id === "s_nudge_1")?.body).toContain(LINK);
   });
 
   it("names the clinic in every first text a lead can receive", () => {
@@ -137,7 +152,7 @@ describe("kin lead definition", () => {
   });
 
   it("keeps the cadence Kingsley chose at intake: 2 hours, then next day", () => {
-    const waits = steps().filter((s) => s.type === "wait_for_reply");
+    const waits = flatten().filter((s) => s.type === "wait_for_reply");
     expect(waits.map((w) => w.timeoutMinutes)).toEqual([
       KIN_FIRST_FOLLOW_UP_MINUTES,
       KIN_SECOND_FOLLOW_UP_MINUTES,
@@ -148,11 +163,12 @@ describe("kin lead definition", () => {
   });
 
   it("tells an already-booked lead they can ignore the last nudge (JaneApp bookings are invisible to us)", () => {
-    const nudge2 = steps().find((s) => s.id === "s_nudge_2");
+    const nudge2 = flatten().find((s) => s.id === "s_nudge_2");
     expect(nudge2?.body).toContain("If you already booked");
   });
 
-  it("keeps s_goal last, watching replied and appointment_booked", () => {
+  it("keeps s_goal last on the MAIN path, watching replied and appointment_booked", () => {
+    // Goals may not sit inside a branch, so it stays after the follow-up gate.
     const all = steps();
     const last = all[all.length - 1];
     expect(last.id).toBe("s_goal");
@@ -210,49 +226,109 @@ describe("kin booking-link routing", () => {
     ["occupational_therapy", "adult", "#/occupational-therapy"],
     ["psychological_assessment", "teen_13_to_17", "#/psychological-assessment"],
     ["psychological_assessment", "child_12_and_under", "#/psychological-assessment"],
-    ["speech_slp", "teen_13_to_17", "GENERAL"],
-    ["speech_slp", "child_12_and_under", "GENERAL"]
+    ["speech_slp", "teen_13_to_17", "WAITLIST"],
+    ["speech_slp", "child_12_and_under", "WAITLIST"]
   ])("v3 %s + %s books %s", (service, age, expected) => {
     const notes = `what_kind_of_support: ${service}, who_is_the_support_for: ${age}`;
-    const got = resolveKinBookingLink(notes);
-    if (expected === "GENERAL") expect(got).toBe(KIN_GENERAL_BOOKING_LINK);
-    else expect(got).toContain(expected);
+    const got = resolveKinBooking(notes);
+    if (expected === "WAITLIST") {
+      expect(got.kind).toBe("waitlist");
+      return;
+    }
+    expect(got.kind).toBe("link");
+    const url = (got as { url: string }).url;
+    if (expected === "GENERAL") expect(url).toBe(KIN_GENERAL_BOOKING_LINK);
+    else expect(url).toContain(expected);
   });
 
   // The ads switch over gradually, so v1 answers must keep working.
   it("still routes the old form's wording while the ads switch", () => {
-    expect(
-      resolveKinBookingLink(
-        "what_kind_of_support: Counselling or therapy, who_is_the_support_for: My child (12 and under)"
-      )
-    ).toContain("#/child-counselling-ages-3-12");
-    expect(
-      resolveKinBookingLink(
-        "What kind of support: Not sure yet, need guidance. Who is the support for: Our family."
-      )
-    ).toBe(KIN_GENERAL_BOOKING_LINK);
+    const a = resolveKinBooking(
+      "what_kind_of_support: Counselling or therapy, who_is_the_support_for: My child (12 and under)"
+    );
+    expect((a as { url: string }).url).toContain("#/child-counselling-ages-3-12");
+    const b = resolveKinBooking(
+      "What kind of support: Not sure yet, need guidance. Who is the support for: Our family."
+    );
+    expect((b as { url: string }).url).toBe(KIN_GENERAL_BOOKING_LINK);
+  });
+
+  // Kingsley 2026-08-26: speech runs as a waitlist, so ANY booking link is
+  // wrong, including the general page.
+  it("opens the waitlist sentence with a capital letter", () => {
+    const flat = JSON.stringify(buildKinLeadDefinition(LINK));
+    expect(flat).toContain("Speech and language therapy is running on a waitlist");
+  });
+
+  // Bugbot, PR #1630: the greeting arm sent no link, but the SHARED nudge
+  // cascade still ran and delivered the general booking link two hours later,
+  // undoing the waitlist rule entirely.
+  it("keeps waitlist leads out of the booking nudge cascade", () => {
+    const gate = steps().find((s) => s.id === "s_followups") as never as {
+      branches: Array<{ id: string; condition: { contains: string }; steps: StepJson[] }>;
+      else: StepJson[];
+    };
+    const waitlistArm = gate.branches.find((a) => a.id === "arm_no_nudges_waitlist")!;
+    // The waitlist arm must do nothing at all.
+    expect(waitlistArm.steps).toEqual([]);
+    // And it must key off the same token the greeting arm uses.
+    expect(waitlistArm.condition.contains).toBe(
+      KIN_BOOKING_SERVICES.find((s) => s.waitlist)!.flowMatch
+    );
+    // Every nudge lives behind the gate, not on the main path.
+    const nudgeIds = flatten(gate.else).map((s) => s.id);
+    expect(nudgeIds).toContain("s_nudge_1");
+    expect(nudgeIds).toContain("s_nudge_2");
+    expect(steps().map((s) => s.id)).not.toContain("s_nudge_1");
+  });
+
+  it("no longer claims in the owner alert that a link was sent", () => {
+    // It fires before the routing branch, so it cannot know, and a speech
+    // lead receives no link at all.
+    const notify = steps().find((s) => s.id === "s_notify_new");
+    expect(notify?.message).not.toContain("sending them the consult booking link");
+    expect(notify?.message).toContain("Details: {{vars.lead_notes}}");
+  });
+
+  it("never hands a speech lead a booking link", () => {
+    for (const notes of [
+      "what_kind_of_support: speech_slp, who_is_the_support_for: adult",
+      "Speech / SLP",
+      "speech therapy for my son"
+    ]) {
+      const got = resolveKinBooking(notes);
+      expect(got.kind).toBe("waitlist");
+      expect(JSON.stringify(got)).not.toContain("janeapp.com/#/");
+    }
+  });
+
+  it("keeps the waitlist service out of the handed-out link catalog", () => {
+    expect(allKinBookingLinks()).not.toContain(
+      KIN_BOOKING_SERVICES.find((s) => s.waitlist)!.link + "#speech"
+    );
+    expect(KIN_BOOKING_SERVICES.filter((s) => s.waitlist).map((s) => s.key)).toEqual(["speech"]);
   });
 
   it("never lets an age word decide a non-counselling discipline", () => {
     for (const age of KIN_COUNSELLING_AGES) {
       const notes = `what_kind_of_support: occupational_therapy, who_is_the_support_for: ${age.flowMatch}`;
-      expect(resolveKinBookingLink(notes)).toContain("#/occupational-therapy");
+      expect((resolveKinBooking(notes) as { url: string }).url).toContain("#/occupational-therapy");
     }
   });
 
   // Counselling pages turn away the wrong age group, so a missing age must
   // never be guessed into one.
   it("falls back to the general page when counselling has no age answer", () => {
-    expect(resolveKinBookingLink("what_kind_of_support: counselling")).toBe(
-      KIN_GENERAL_BOOKING_LINK
-    );
+    expect(
+      (resolveKinBooking("what_kind_of_support: counselling") as { url: string }).url
+    ).toBe(KIN_GENERAL_BOOKING_LINK);
     expect(resolveKinCounsellingAge("counselling please")).toBeNull();
   });
 
   it("routes an OT assessment to OT, not psychology", () => {
-    expect(resolveKinBookingLink("occupational therapy assessment")).toContain(
-      "#/occupational-therapy"
-    );
+    expect(
+      (resolveKinBooking("occupational therapy assessment") as { url: string }).url
+    ).toContain("#/occupational-therapy");
     expect(resolveKinService("assessment")).toBeNull();
   });
 
@@ -303,10 +379,11 @@ describe("kin booking-link routing", () => {
 });
 
 describe("kin coworker knowledge", () => {
-  it("tells the coworker speech has no booking page, rather than inventing one", () => {
+  it("tells the coworker speech is a waitlist and to send no link at all", () => {
     const section = buildKinBookingLinksSection();
-    expect(section).toContain("no online booking page for speech");
-    expect(section).toContain("Do not invent one");
+    expect(section).toContain("WAITLIST, not open booking");
+    expect(section).toContain("Send NO link, not even the");
+    expect(section).toContain("Do not promise a date");
   });
 
   it("tells the coworker to ask the age before sending a counselling link", () => {
