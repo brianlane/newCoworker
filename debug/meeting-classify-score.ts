@@ -53,8 +53,12 @@ if (!apiKey) throw new Error("GOOGLE_API_KEY missing from .env");
 const args = process.argv.slice(2);
 const runsFlag = args.indexOf("--runs");
 const runs = runsFlag >= 0 ? Number(args[runsFlag + 1]) : 3;
+// Skip the flag and its value by INDEX, and only when the flag is present:
+// `indexOf` answers -1 when it is not, and `i !== -1 + 1` quietly ate the
+// first document id on the documented default invocation (Bugbot, PR #1626).
+const flagIndexes = new Set(runsFlag >= 0 ? [runsFlag, runsFlag + 1] : []);
 const cases = args
-  .filter((a, i) => !a.startsWith("--") && i !== runsFlag + 1)
+  .filter((a, i) => !flagIndexes.has(i) && !a.startsWith("--"))
   .map((a) => {
     const [id, want] = a.split("=");
     return { id: id as string, want: want ?? null };
