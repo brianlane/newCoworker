@@ -25,7 +25,7 @@ export function PageHero({
       {eyebrow && (
         <p className="mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">{eyebrow}</p>
       )}
-      <h1 className="text-4xl font-bold leading-tight tracking-tight text-parchment sm:text-5xl">{title}</h1>
+      <h1 className="font-display text-4xl font-bold leading-tight tracking-tight text-parchment text-balance sm:text-5xl">{title}</h1>
       {subtitle && (
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-parchment/60">{subtitle}</p>
       )}
@@ -114,7 +114,7 @@ export function SectionHeading({
       {eyebrow && (
         <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">{eyebrow}</p>
       )}
-      <h2 className="text-2xl font-bold text-parchment sm:text-3xl">{title}</h2>
+      <h2 className="font-display text-2xl font-bold text-parchment text-balance sm:text-3xl">{title}</h2>
       {subtitle && (
         <p className="mx-auto mt-4 max-w-2xl text-parchment/55">{subtitle}</p>
       )}
@@ -136,7 +136,7 @@ export function CtaBanner({
   return (
     <section className="mx-auto max-w-3xl px-6 pb-24 text-center">
       <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
-        <h2 className="mb-3 text-2xl font-bold text-parchment">{title}</h2>
+        <h2 className="mb-3 font-display text-2xl font-bold text-parchment">{title}</h2>
         {subtitle && <p className="mb-8 text-parchment/50">{subtitle}</p>}
         <CtaLink href={ctaHref}>{ctaLabel}</CtaLink>
       </div>

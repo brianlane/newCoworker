@@ -48,7 +48,7 @@ export function LegalPage({
       <main className="mx-auto max-w-4xl px-6 pb-20 pt-8">
         <div className="rounded-3xl border border-parchment/10 bg-parchment/[0.03] p-8 sm:p-12">
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-signal-teal">{eyebrow}</p>
-          <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1>
+          <h1 className="mt-4 font-display text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1>
           <p className="mt-5 max-w-3xl text-base leading-7 text-parchment/70 sm:text-lg">
             {summary}
           </p>

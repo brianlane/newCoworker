@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Inter, Space_Grotesk } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { NextIntlClientProvider } from "next-intl";
@@ -10,6 +11,24 @@ import {
 import { JsonLd } from "@/components/marketing/JsonLd";
 import "./globals.css";
 import { SITE_URL } from "@/lib/marketing/site-url";
+
+/**
+ * Brand faces, self-hosted at build by next/font (zero runtime requests,
+ * metric-adjusted fallbacks so text does not shift when they load). Inter
+ * carries body text; Space Grotesk is the display face for headings via the
+ * `font-display` utility. globals.css maps both variables into the Tailwind
+ * theme, and the system stack stays as the fallback throughout.
+ */
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap"
+});
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+  display: "swap"
+});
 
 const ORGANIZATION_JSON_LD = {
   "@context": "https://schema.org",
@@ -38,7 +57,10 @@ const WEBSITE_JSON_LD = {
 
 export const viewport: Viewport = {
   width: "device-width",
-  initialScale: 1
+  initialScale: 1,
+  // Paints the browser UI (mobile address bar, installed-app title bar) in
+  // the site's own background instead of default white.
+  themeColor: "#0d2235"
 };
 
 export const metadata: Metadata = {
@@ -99,7 +121,7 @@ export default async function RootLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale}>
+    <html lang={locale} className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body>
         {/*
           Only the global client subset (~465 bytes) ships from here. Handing

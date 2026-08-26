@@ -18,6 +18,16 @@
   --color-soft-stone: #e8e3d8;
 }
 
+/* Brand faces. The variables come from next/font in the root layout, so this
+   block must be `inline` (the values reference runtime CSS variables, not
+   literals). `font-sans` restyles body text via the body rule below;
+   `font-display` is the heading utility. The system stack stays as the
+   fallback everywhere. */
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -26,7 +36,7 @@ body {
   margin: 0;
   background: var(--deep-ink);
   color: var(--parchment);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 button {
