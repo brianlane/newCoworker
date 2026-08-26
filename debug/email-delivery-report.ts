@@ -19,9 +19,15 @@
  *   bounced / complained / failed  did NOT reach the owner
  *   pending                      a receipt has not arrived yet (usually
  *                                seconds; a stuck one is worth a look)
- *   no-id (pre-2026-08-26)       sent before receipts existed, or by a
- *                                caller that logs no provider id. NOT a
- *                                failure, and never resolvable.
+ *   never-captured               sent before the webhook was live, so no
+ *                                receipt was ever going to arrive
+ *   no-id                        the caller logged no provider id, so no
+ *                                receipt can ever match the row
+ *
+ * The last two are NOT failures and are never resolvable. They are split
+ * from `pending` on purpose: a row that will never resolve and a row still
+ * waiting are the same thing to the database and completely different things
+ * to whoever is reading this.
  *
  * Strictly READ-ONLY. Safe on any tenant.
  *
@@ -38,6 +44,18 @@ loadEnv();
 
 /** The states that mean the owner did not read it and will not. */
 const FAILURE_STATES = ["bounced", "complained", "failed"];
+
+/**
+ * When the receipt webhook went live in production (the Vercel deploy of
+ * PR #1628 completed 2026-08-26T05:37:47Z).
+ *
+ * Anything sent before this has a provider id but will NEVER get a receipt:
+ * nothing was listening when Resend fired it. Without this cutoff those rows
+ * report as `pending`, which reads as "these are stuck" and is exactly the
+ * kind of misreading this whole feature exists to prevent. On the first run
+ * after deploy that was 109 rows.
+ */
+const RECEIPTS_LIVE_AT = Date.parse("2026-08-26T05:37:47Z");
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -88,9 +106,15 @@ async function main(): Promise<void> {
   for (const r of rows) {
     // No provider id at all means no receipt can ever match this row, which
     // is a different thing from a receipt that has not arrived yet.
-    const state = r.provider_message_id
-      ? (r.delivery_status ?? "pending")
-      : "no-id (pre-2026-08-26)";
+    let state: string;
+    if (!r.provider_message_id) {
+      state = "no-id";
+    } else if (r.delivery_status) {
+      state = r.delivery_status;
+    } else {
+      state =
+        Date.parse(String(r.created_at)) < RECEIPTS_LIVE_AT ? "never-captured" : "pending";
+    }
     tally[state] = (tally[state] ?? 0) + 1;
   }
 
