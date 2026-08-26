@@ -450,8 +450,9 @@ describe("privacy coverage guard", () => {
       "src/lib/privacy/deletion.ts or retention.ts still names these dropped tables. " +
         "PostgREST answers a query against a missing table with an error, and " +
         "deleteEndUserData turns any error into a throw, so ONE stale name aborts the " +
-        "whole erasure request. That is what the contact_overrides block did between " +
-        "contacts_unify and 2026-08-26, on BOTH identifier axes: a request carrying an " +
+        "whole erasure request. That is what the contact_overrides block did from " +
+        "2026-08-02 (when it was added, four weeks AFTER contacts_unify dropped the " +
+        "table) to 2026-08-26, on BOTH identifier axes: a request carrying an " +
         "e164 seeds linkedNumbers with it unconditionally, and an email-only request " +
         "cross-links through collectLinkedIdentifiers, which harvests the matched " +
         "contact row's customer_e164 (NOT NULL, and itself an 'email:<addr>' key for a " +

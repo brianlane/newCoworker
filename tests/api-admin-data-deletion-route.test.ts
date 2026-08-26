@@ -103,8 +103,9 @@ describe("api/admin/data-deletion route", () => {
   /**
    * An execution failure means the erasure stopped part way through with rows
    * already deleted. Reporting that as a 400 is what let a dropped-table
-   * reference abort every erasure for seven weeks while reading to the admin
-   * as "you typed a bad identifier", and it left no trace to remediate from.
+   * reference abort every erasure from 2026-08-02 to 2026-08-26 while reading
+   * to the admin as "you typed a bad identifier", and it left no trace to
+   * remediate from.
    */
   it("reports a part-way failure as a server error and records it for remediation", async () => {
     vi.mocked(deleteEndUserData).mockRejectedValue(
