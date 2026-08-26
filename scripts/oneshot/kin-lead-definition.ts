@@ -99,6 +99,12 @@ type FlowStepJson = Record<string, unknown>;
  * Build the full definition. `bookingLink` defaults to the module constant so
  * the applier and the tests exercise exactly what would ship.
  */
+/**
+ * The one waitlist-only service, resolved once so the greeting arm and the
+ * nudge gate cannot disagree about which lead skips the cascade.
+ */
+const WAITLIST_SERVICE = KIN_BOOKING_SERVICES.find((x) => x.waitlist)!;
+
 export function buildKinLeadDefinition(
   bookingLink: string = KIN_JANEAPP_BOOKING_LINK
 ): { version: number; trigger: Record<string, unknown>; steps: FlowStepJson[] } {
@@ -199,8 +205,13 @@ export function buildKinLeadDefinition(
         // lead-facing text waits for morning. Same ordering as Scar Fairy.
         id: "s_notify_new",
         type: "notify_owner",
+        // Deliberately does NOT say what the lead was sent: this fires BEFORE
+        // the routing branch (quiet hours would otherwise delay the alert
+        // too), so it cannot know, and speech leads receive no link at all.
+        // The Details line carries the service they asked for, which is what
+        // tells Kingsley a speech request needs adding to the waitlist.
         message:
-          "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I'm sending them the consult booking link (overnight leads get their text from 9am) and I'm on follow-up duty."
+          "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I'm replying now with their next step (overnight leads get their text from 9am) and I'm on follow-up duty."
       },
       {
         // SERVICE decides the discipline; age only sub-routes inside
@@ -278,57 +289,85 @@ export function buildKinLeadDefinition(
         ]
       },
       {
-        id: "s_wait_1",
-        type: "wait_for_reply",
-        saveAs: "reply_1",
-        phoneVar: "lead_phone",
-        timeoutMinutes: KIN_FIRST_FOLLOW_UP_MINUTES
-      },
+        // The nudge cascade is shared, and every step in it is booking copy
+        // carrying the general link. A waitlist lead must never reach it:
+        // sending "book your free consult here" two hours after telling them
+        // there is nothing to book would undo the whole waitlist rule.
+        //
+        // `contains` has no negation, so the waitlist arm holds the cascade's
+        // ABSENCE and the else holds the cascade itself.
+        id: "s_followups",
+        type: "branch",
+        question: "Should this lead get the booking nudge cascade",
+        branches: [
+          {
+            id: "arm_no_nudges_waitlist",
+            label: "Waitlist lead, no booking nudges",
+            condition: {
+              var: "lead_notes",
+              contains: WAITLIST_SERVICE.flowMatch,
+              caseInsensitive: true
+            },
+            // Intentionally empty: they have their answer and the team has
+            // been alerted. There is nothing to nudge them toward.
+            steps: []
+          }
+        ],
+        else: [
       {
-        id: "s_nudge_1",
-        type: "send_sms",
-        to: "{{vars.lead_phone}}",
-        body: nudge1,
-        when: { var: "reply_1", equals: "no_reply" },
-        quietHours: { ...KIN_QUIET_HOURS }
-      },
-      {
-        id: "s_wait_2",
-        type: "wait_for_reply",
-        when: { var: "reply_1", equals: "no_reply" },
-        saveAs: "reply_2",
-        phoneVar: "lead_phone",
-        timeoutMinutes: KIN_SECOND_FOLLOW_UP_MINUTES
-      },
-      {
-        id: "s_nudge_2",
-        type: "send_sms",
-        to: "{{vars.lead_phone}}",
-        body: nudge2,
-        when: { var: "reply_2", equals: "no_reply" },
-        quietHours: { ...KIN_QUIET_HOURS }
-      },
-      {
-        id: "s_wait_final",
-        type: "wait_for_reply",
-        when: { var: "reply_2", equals: "no_reply" },
-        saveAs: "reply_final",
-        phoneVar: "lead_phone",
-        timeoutMinutes: KIN_SECOND_FOLLOW_UP_MINUTES
-      },
-      {
-        id: "s_flag_owner",
-        type: "notify_owner",
-        when: { var: "reply_final", equals: "no_reply" },
-        message:
-          "Personal touch needed: {{vars.lead_name}} ({{vars.lead_phone}}) hasn't replied to 2 follow-ups. I've marked them Inactive, they're never deleted, and if they reply later the conversation picks right back up."
-      },
-      {
-        id: "s_mark_inactive",
-        type: "update_contact",
-        when: { var: "reply_final", equals: "no_reply" },
-        addTags: ["Inactive"],
-        phoneVar: "lead_phone"
+            id: "s_wait_1",
+            type: "wait_for_reply",
+            saveAs: "reply_1",
+            phoneVar: "lead_phone",
+            timeoutMinutes: KIN_FIRST_FOLLOW_UP_MINUTES
+          },
+          {
+            id: "s_nudge_1",
+            type: "send_sms",
+            to: "{{vars.lead_phone}}",
+            body: nudge1,
+            when: { var: "reply_1", equals: "no_reply" },
+            quietHours: { ...KIN_QUIET_HOURS }
+          },
+          {
+            id: "s_wait_2",
+            type: "wait_for_reply",
+            when: { var: "reply_1", equals: "no_reply" },
+            saveAs: "reply_2",
+            phoneVar: "lead_phone",
+            timeoutMinutes: KIN_SECOND_FOLLOW_UP_MINUTES
+          },
+          {
+            id: "s_nudge_2",
+            type: "send_sms",
+            to: "{{vars.lead_phone}}",
+            body: nudge2,
+            when: { var: "reply_2", equals: "no_reply" },
+            quietHours: { ...KIN_QUIET_HOURS }
+          },
+          {
+            id: "s_wait_final",
+            type: "wait_for_reply",
+            when: { var: "reply_2", equals: "no_reply" },
+            saveAs: "reply_final",
+            phoneVar: "lead_phone",
+            timeoutMinutes: KIN_SECOND_FOLLOW_UP_MINUTES
+          },
+          {
+            id: "s_flag_owner",
+            type: "notify_owner",
+            when: { var: "reply_final", equals: "no_reply" },
+            message:
+              "Personal touch needed: {{vars.lead_name}} ({{vars.lead_phone}}) hasn't replied to 2 follow-ups. I've marked them Inactive, they're never deleted, and if they reply later the conversation picks right back up."
+          },
+          {
+            id: "s_mark_inactive",
+            type: "update_contact",
+            when: { var: "reply_final", equals: "no_reply" },
+            addTags: ["Inactive"],
+            phoneVar: "lead_phone"
+          },
+        ]
       },
       {
         id: "s_goal",

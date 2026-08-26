@@ -142,6 +142,18 @@ waitlist and that the team has been told, and the owner alert every lead
 already fires is what gets them onto the list. The coworker carries the same
 rule and is told not to promise a date.
 
+A waitlist lead is also held OUT of the nudge cascade (`s_followups` gates
+it). Every nudge is booking copy carrying the general link, so nudging a
+speech lead two hours after telling them there is nothing to book would undo
+the rule. `contains` has no negation, so the waitlist arm holds the
+cascade's absence and the else holds the cascade. `s_goal` stays on the main
+path after the gate, because a goal may not sit inside a branch.
+
+The pre-branch owner alert deliberately does NOT say what the lead was sent:
+it fires before routing (so quiet hours cannot delay it) and therefore
+cannot know, and a speech lead receives no link. The Details line carries
+the service, which is what tells Kingsley to add them to the list.
+
 He also said the current ads are not running SLP yet, so that arm is dormant
 until James turns it on. Built now rather than left to be remembered.
 
