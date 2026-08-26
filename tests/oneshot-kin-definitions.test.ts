@@ -30,7 +30,7 @@ import {
   KIN_COUNSELLING_AGES,
   KIN_GENERAL_BOOKING_LINK,
   allKinBookingLinks,
-  resolveKinBookingLink,
+  resolveKinBooking,
   resolveKinCounsellingAge,
   resolveKinService
 } from "../scripts/oneshot/kin-booking-links";
@@ -210,49 +210,79 @@ describe("kin booking-link routing", () => {
     ["occupational_therapy", "adult", "#/occupational-therapy"],
     ["psychological_assessment", "teen_13_to_17", "#/psychological-assessment"],
     ["psychological_assessment", "child_12_and_under", "#/psychological-assessment"],
-    ["speech_slp", "teen_13_to_17", "GENERAL"],
-    ["speech_slp", "child_12_and_under", "GENERAL"]
+    ["speech_slp", "teen_13_to_17", "WAITLIST"],
+    ["speech_slp", "child_12_and_under", "WAITLIST"]
   ])("v3 %s + %s books %s", (service, age, expected) => {
     const notes = `what_kind_of_support: ${service}, who_is_the_support_for: ${age}`;
-    const got = resolveKinBookingLink(notes);
-    if (expected === "GENERAL") expect(got).toBe(KIN_GENERAL_BOOKING_LINK);
-    else expect(got).toContain(expected);
+    const got = resolveKinBooking(notes);
+    if (expected === "WAITLIST") {
+      expect(got.kind).toBe("waitlist");
+      return;
+    }
+    expect(got.kind).toBe("link");
+    const url = (got as { url: string }).url;
+    if (expected === "GENERAL") expect(url).toBe(KIN_GENERAL_BOOKING_LINK);
+    else expect(url).toContain(expected);
   });
 
   // The ads switch over gradually, so v1 answers must keep working.
   it("still routes the old form's wording while the ads switch", () => {
-    expect(
-      resolveKinBookingLink(
-        "what_kind_of_support: Counselling or therapy, who_is_the_support_for: My child (12 and under)"
-      )
-    ).toContain("#/child-counselling-ages-3-12");
-    expect(
-      resolveKinBookingLink(
-        "What kind of support: Not sure yet, need guidance. Who is the support for: Our family."
-      )
-    ).toBe(KIN_GENERAL_BOOKING_LINK);
+    const a = resolveKinBooking(
+      "what_kind_of_support: Counselling or therapy, who_is_the_support_for: My child (12 and under)"
+    );
+    expect((a as { url: string }).url).toContain("#/child-counselling-ages-3-12");
+    const b = resolveKinBooking(
+      "What kind of support: Not sure yet, need guidance. Who is the support for: Our family."
+    );
+    expect((b as { url: string }).url).toBe(KIN_GENERAL_BOOKING_LINK);
+  });
+
+  // Kingsley 2026-08-26: speech runs as a waitlist, so ANY booking link is
+  // wrong, including the general page.
+  it("opens the waitlist sentence with a capital letter", () => {
+    const flat = JSON.stringify(buildKinLeadDefinition(LINK));
+    expect(flat).toContain("Speech and language therapy is running on a waitlist");
+  });
+
+  it("never hands a speech lead a booking link", () => {
+    for (const notes of [
+      "what_kind_of_support: speech_slp, who_is_the_support_for: adult",
+      "Speech / SLP",
+      "speech therapy for my son"
+    ]) {
+      const got = resolveKinBooking(notes);
+      expect(got.kind).toBe("waitlist");
+      expect(JSON.stringify(got)).not.toContain("janeapp.com/#/");
+    }
+  });
+
+  it("keeps the waitlist service out of the handed-out link catalog", () => {
+    expect(allKinBookingLinks()).not.toContain(
+      KIN_BOOKING_SERVICES.find((s) => s.waitlist)!.link + "#speech"
+    );
+    expect(KIN_BOOKING_SERVICES.filter((s) => s.waitlist).map((s) => s.key)).toEqual(["speech"]);
   });
 
   it("never lets an age word decide a non-counselling discipline", () => {
     for (const age of KIN_COUNSELLING_AGES) {
       const notes = `what_kind_of_support: occupational_therapy, who_is_the_support_for: ${age.flowMatch}`;
-      expect(resolveKinBookingLink(notes)).toContain("#/occupational-therapy");
+      expect((resolveKinBooking(notes) as { url: string }).url).toContain("#/occupational-therapy");
     }
   });
 
   // Counselling pages turn away the wrong age group, so a missing age must
   // never be guessed into one.
   it("falls back to the general page when counselling has no age answer", () => {
-    expect(resolveKinBookingLink("what_kind_of_support: counselling")).toBe(
-      KIN_GENERAL_BOOKING_LINK
-    );
+    expect(
+      (resolveKinBooking("what_kind_of_support: counselling") as { url: string }).url
+    ).toBe(KIN_GENERAL_BOOKING_LINK);
     expect(resolveKinCounsellingAge("counselling please")).toBeNull();
   });
 
   it("routes an OT assessment to OT, not psychology", () => {
-    expect(resolveKinBookingLink("occupational therapy assessment")).toContain(
-      "#/occupational-therapy"
-    );
+    expect(
+      (resolveKinBooking("occupational therapy assessment") as { url: string }).url
+    ).toContain("#/occupational-therapy");
     expect(resolveKinService("assessment")).toBeNull();
   });
 
@@ -303,10 +333,11 @@ describe("kin booking-link routing", () => {
 });
 
 describe("kin coworker knowledge", () => {
-  it("tells the coworker speech has no booking page, rather than inventing one", () => {
+  it("tells the coworker speech is a waitlist and to send no link at all", () => {
     const section = buildKinBookingLinksSection();
-    expect(section).toContain("no online booking page for speech");
-    expect(section).toContain("Do not invent one");
+    expect(section).toContain("WAITLIST, not open booking");
+    expect(section).toContain("Send NO link, not even the");
+    expect(section).toContain("Do not promise a date");
   });
 
   it("tells the coworker to ask the age before sending a counselling link", () => {

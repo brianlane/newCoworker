@@ -112,6 +112,19 @@ export function buildKinLeadDefinition(
     const opening =
       "Hi {{vars.lead_name}}, this is the assistant for KIN Integrated Child Health. " +
       "Thanks for requesting your free 15 minute consult.";
+    // A waitlist-only service gets NO link: the general page would invite a
+    // booking that cannot be made. The owner alert every lead already fires
+    // is what gets them onto the list.
+    if (what && "waitlist" in what && what.waitlist) {
+      // serviceName is written for mid-sentence use ("book your occupational
+      // therapy consult"), so it needs a capital when it opens one.
+      const opener = what.serviceName.charAt(0).toUpperCase() + what.serviceName.slice(1);
+      return (
+        `${opening} ${opener} is running on a waitlist right now rather than ` +
+        "open booking, so I have let the team know and someone will be in touch about a spot. " +
+        "If you would like help with anything else in the meantime, just reply here."
+      );
+    }
     if (what) {
       return (
         `${opening} You can book your ${what.serviceName} consult right here:\n` +
