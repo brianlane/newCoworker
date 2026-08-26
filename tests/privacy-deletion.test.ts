@@ -204,7 +204,6 @@ describe("deleteEndUserData, central-only tenants", () => {
       "missed_call_autotexts",
       "meta_capi_events",
       "voice_handoff_sessions",
-      "contact_overrides",
       "webchat_sessions",
       "messenger_conversations",
       "memory_entities",
@@ -348,7 +347,6 @@ describe("deleteEndUserData, central-only tenants", () => {
     ["meta_capi_events", /meta_capi_events: boom/, { e164: E164 }],
     ["voice_handoff_sessions#1", /voice_handoff_sessions \(from\): boom/, { e164: E164 }],
     ["voice_handoff_sessions#2", /voice_handoff_sessions \(chain\): boom/, { e164: E164 }],
-    ["contact_overrides", /contact_overrides: boom/, { e164: E164 }],
     ["webchat_sessions#1", /webchat_sessions \(scan\): boom/, { e164: E164 }],
     ["messenger_conversations#1", /messenger_conversations \(scan\): boom/, { e164: E164 }],
     ["memory_entities#1", /memory_entities \(scan\): boom/, { e164: E164 }],
@@ -858,7 +856,6 @@ describe("deleteEndUserData, expanded coverage stores", () => {
       meta_capi_events: { data: [{ id: "c1" }], error: null },
       "voice_handoff_sessions#1": { data: [{ call_control_id: "v1" }], error: null },
       "voice_handoff_sessions#2": { data: [{ call_control_id: "v2" }], error: null },
-      contact_overrides: { data: [{ e164: E164 }], error: null },
       "booking_waitlist#1": { data: [{ id: "b1" }], error: null },
       "calendar_booking_dedupe#1": { data: [{ id: "d1" }], error: null }
     });
@@ -868,7 +865,6 @@ describe("deleteEndUserData, expanded coverage stores", () => {
     expect(byTable.missed_call_autotexts.central).toBe(1);
     expect(byTable.meta_capi_events.central).toBe(1);
     expect(byTable.voice_handoff_sessions.central).toBe(2);
-    expect(byTable.contact_overrides.central).toBe(1);
     expect(byTable.booking_waitlist.central).toBe(1);
     expect(byTable.calendar_booking_dedupe.central).toBe(1);
     expect(byTable.email_coworker_threads).toBeUndefined();
@@ -893,7 +889,6 @@ describe("deleteEndUserData, expanded coverage stores", () => {
     expect(byTable.missed_call_autotexts).toBeUndefined();
     expect(byTable.meta_capi_events).toBeUndefined();
     expect(byTable.voice_handoff_sessions).toBeUndefined();
-    expect(byTable.contact_overrides).toBeUndefined();
     expect(byTable.messenger_conversations).toBeUndefined();
   });
 

@@ -162,6 +162,9 @@ export async function deleteEndUserData(
   const count = (data: unknown): number => (Array.isArray(data) ? data.length : 0);
 
   // ── contacts (directory + AI memory) ───────────────────────────────────
+  // Also the owner-set display names and emails that used to live in
+  // contact_overrides: 20260704000000_contacts_unify.sql folded that table
+  // into this one and dropped it, so this block is their only erasure path.
   // Matches customer_e164, alias_e164s membership, or email. Contacts are
   // kept central in every residency mode, so the journaled central delete
   // reaches the box copy; a direct box delete on the primary identifiers
@@ -828,18 +831,6 @@ export async function deleteEndUserData(
       central += count(data);
     }
     results.push({ table: "voice_handoff_sessions", central, box: null });
-  }
-
-  // ── contact_overrides (owner-set display names keyed by number) ─────────
-  if (linkedNumbers.size > 0) {
-    const { data, error } = await db
-      .from("contact_overrides")
-      .delete()
-      .eq("business_id", businessId)
-      .in("e164", [...linkedNumbers])
-      .select("e164");
-    if (error) throw new EndUserDeletionError(`contact_overrides: ${error.message}`);
-    results.push({ table: "contact_overrides", central: count(data), box: null });
   }
 
   // ── webchat_sessions (cascades webchat_messages + webchat_jobs) ─────────

@@ -28,6 +28,15 @@ const CREATE_TABLE_RE = new RegExp(
   String.raw`\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}\s*\(([\s\S]*?)\n\);`,
   "gi"
 );
+/** Name-only forms, for the create/drop ledger below. */
+const CREATE_NAME_RE = new RegExp(
+  String.raw`\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}`,
+  "gi"
+);
+const DROP_TABLE_RE = new RegExp(
+  String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?${QUALIFIED}`,
+  "gi"
+);
 
 function stripLineComments(sql: string): string {
   return sql
@@ -53,15 +62,56 @@ function businessScopedTables(): Map<string, string> {
 }
 
 /**
- * Tables whose CREATE TABLE name was later renamed. The guard follows the
- * rename and requires the CURRENT name to be handled by the privacy
+ * Tables the migration history CREATEs and later DROPs without recreating,
+ * keyed to the migration that dropped them. Replaying the files in version
+ * order is the only honest way to answer "does this table still exist?":
+ * a drop can be followed by a recreate, and only the last statement wins.
+ */
+function droppedTables(): Map<string, string> {
+  const live = new Set<string>();
+  const dropped = new Map<string, string>();
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  for (const file of files) {
+    const sql = stripLineComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+    // Within one file, order still matters (contacts_unify creates nothing
+    // but drops one), so walk both statement kinds in source order.
+    const events: Array<{ at: number; name: string; drop: boolean }> = [];
+    for (const m of sql.matchAll(CREATE_NAME_RE)) {
+      events.push({ at: m.index ?? 0, name: m[1].toLowerCase(), drop: false });
+    }
+    for (const m of sql.matchAll(DROP_TABLE_RE)) {
+      events.push({ at: m.index ?? 0, name: m[1].toLowerCase(), drop: true });
+    }
+    events.sort((a, b) => a.at - b.at);
+    for (const ev of events) {
+      if (ev.drop) {
+        live.delete(ev.name);
+        dropped.set(ev.name, file);
+      } else {
+        live.add(ev.name);
+        dropped.delete(ev.name);
+      }
+    }
+  }
+  return dropped;
+}
+
+/**
+ * Tables whose CREATE TABLE name was later renamed, or whose rows were
+ * folded into another table. The guard follows the move and requires the
+ * SUCCESSOR name to be handled by the privacy
  * modules, so a rename can never mask dropped coverage of the live table
  * (Bugbot finding, 2026-08-01: an exemption entry alone would keep CI green
  * even if deleteEndUserData stopped touching contacts).
  */
 const RENAMED: Record<string, string> = {
-  // 20260704000000_contacts_unify.sql
-  customer_memories: "contacts"
+  // 20260704000000_contacts_unify.sql renamed customer_memories to contacts
+  // and folded contact_overrides into the same row set before dropping it.
+  // Both map to contacts, so the successor's coverage is what CI checks.
+  customer_memories: "contacts",
+  contact_overrides: "contacts"
 };
 
 /**
@@ -273,6 +323,36 @@ describe("privacy coverage guard", () => {
         `${oldName} must not ALSO be exempted; the rename mapping is its decision`
       ).toBe(false);
     }
+  });
+
+  it("the privacy modules never touch a table the schema has dropped", () => {
+    const dropped = droppedTables();
+    const zombies = [...dropped.keys()]
+      .filter((name) => handled(name))
+      .sort()
+      .map((name) => `${name} (dropped in ${dropped.get(name)})`);
+    expect(
+      zombies,
+      "src/lib/privacy/deletion.ts or retention.ts still names these dropped tables. " +
+        "PostgREST answers a query against a missing table with an error, and " +
+        "deleteEndUserData turns any error into a throw, so ONE stale name aborts the " +
+        "whole erasure request. That is what the contact_overrides block did between " +
+        "contacts_unify and 2026-08-26, on BOTH identifier axes: a request carrying an " +
+        "e164 seeds linkedNumbers with it unconditionally, and an email-only request " +
+        "cross-links through collectLinkedIdentifiers, which harvests the matched " +
+        "contact row's customer_e164 (NOT NULL, and itself an 'email:<addr>' key for a " +
+        "contact known only by email). Only an email-only request matching zero " +
+        "contacts got past it. Delete the block, or repoint it at the table that " +
+        "absorbed the data."
+    ).toEqual([]);
+  });
+
+  it("the dropped-table ledger is not vacuously green", () => {
+    // The guard above only bites while the create/drop replay actually
+    // finds drops. contacts_unify is the one drop in the history so far; a
+    // zero here means the replay broke, not that the schema stopped
+    // dropping tables.
+    expect(droppedTables().size).toBeGreaterThan(0);
   });
 
   it("exempt entries are not simultaneously handled (keep the registry honest)", () => {
