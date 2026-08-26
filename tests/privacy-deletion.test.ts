@@ -1034,3 +1034,125 @@ describe("deleteEndUserData, expanded coverage stores", () => {
     }
   );
 });
+
+/**
+ * The phone-keyed section spans linkedNumbers, not the raw request e164.
+ *
+ * Before this, the section was gated `if (e164)` and every delete inside it
+ * filtered on the scalar, so an email-only erasure skipped the person's SMS
+ * and call history entirely while still answering 200, and a phone erasure
+ * missed rows keyed by a merge alias. Both are silent under-erasure on a
+ * compliance endpoint, which is worse than failing loudly.
+ */
+describe("deleteEndUserData, phone-keyed section spans every linked number", () => {
+  const ALIAS = "+15559990000";
+
+  /** Central stub that RECORDS the filter values each table was queried with. */
+  function recordingDb(perCall: Partial<Record<string, TableResult>> = {}) {
+    const seen = new Map<string, number>();
+    const ins: Array<{ table: string; column: string; values: unknown }> = [];
+    const from = vi.fn((table: string) => {
+      const n = (seen.get(table) ?? 0) + 1;
+      seen.set(table, n);
+      const result = perCall[`${table}#${n}`] ?? perCall[table] ?? { data: [], error: null };
+      const chain: Record<string, unknown> = {};
+      for (const m of [
+        "delete", "update", "select", "eq", "lt", "not", "neq",
+        "contains", "ilike", "or", "order", "range"
+      ]) {
+        chain[m] = vi.fn().mockReturnValue(chain);
+      }
+      chain.in = vi.fn((column: string, values: unknown) => {
+        ins.push({ table, column, values });
+        return chain;
+      });
+      chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject);
+      return chain;
+    });
+    return { db: { from, storage: { from: vi.fn(() => ({ remove: vi.fn() })) } }, ins };
+  }
+
+  it("an email-only request erases the SMS and voice history of the number on their contact row", async () => {
+    const { db, ins } = recordingDb({
+      // The email scan finds their contact row, which carries the number.
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: [ALIAS], email: "person@example.com" }],
+        error: null
+      },
+      sms_rowboat_threads: { data: [{ business_id: BIZ }], error: null },
+      voice_call_transcripts: { data: [{ id: "v1" }], error: null }
+    });
+
+    const res = await deleteEndUserData(BIZ, { email: EMAIL }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+
+    // The whole point: no e164 was supplied, and the phone-keyed section still ran.
+    expect(byTable.sms_rowboat_threads.central).toBe(1);
+    expect(byTable.voice_call_transcripts.central).toBe(1);
+    expect(byTable.sms_outbound_log).toBeDefined();
+    expect(byTable.scheduled_sms).toBeDefined();
+
+    // And it spanned BOTH the primary and the merge alias, not just one.
+    const threads = ins.find((i) => i.table === "sms_rowboat_threads");
+    expect(threads?.column).toBe("customer_e164");
+    expect(threads?.values).toEqual(expect.arrayContaining([E164, ALIAS]));
+  });
+
+  it("a phone request also erases rows keyed by a merge alias", async () => {
+    const { db, ins } = recordingDb({
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: [ALIAS], email: null }],
+        error: null
+      }
+    });
+
+    await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
+
+    for (const table of ["sms_outbound_log", "scheduled_sms"]) {
+      const call = ins.find((i) => i.table === table);
+      expect(call?.column, `${table} must filter on to_e164`).toBe("to_e164");
+      expect(call?.values, `${table} must span the alias`).toEqual(
+        expect.arrayContaining([E164, ALIAS])
+      );
+    }
+  });
+
+  it("still skips the section when no number is linked at all", async () => {
+    // An email-only request matching zero contact rows has nothing phone-keyed
+    // to erase, and must not start issuing unfiltered deletes.
+    const { db, ins } = recordingDb();
+    const res = await deleteEndUserData(BIZ, { email: EMAIL }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.sms_rowboat_threads).toBeUndefined();
+    expect(byTable.voice_call_transcripts).toBeUndefined();
+    expect(ins.some((i) => i.table === "sms_rowboat_threads")).toBe(false);
+  });
+
+  it("carries every linked number to the tenant box, not just the request one", async () => {
+    vi.mocked(residencyModeFor).mockResolvedValue("vps");
+    const { db } = recordingDb({
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: [ALIAS], email: null }],
+        error: null
+      }
+    });
+    const boxDelete = vi.fn().mockResolvedValue({ ok: true, rows: [] });
+    const api = makeApi({ delete: boxDelete });
+
+    await deleteEndUserData(
+      BIZ,
+      { e164: E164 },
+      { client: db as never, dataApiFor: () => api, syncVault: vi.fn() as never }
+    );
+
+    const threadCall = boxDelete.mock.calls.find(
+      ([arg]) => (arg as { table: string }).table === "sms_rowboat_threads"
+    );
+    const filter = (threadCall?.[0] as { filters: Array<Record<string, unknown>> }).filters.find(
+      (f) => f.column === "customer_e164"
+    );
+    expect(filter?.op).toBe("in");
+    expect(filter?.value).toEqual(expect.arrayContaining([E164, ALIAS]));
+  });
+});

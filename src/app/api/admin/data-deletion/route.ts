@@ -1,7 +1,11 @@
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
 import { insertCoworkerLog } from "@/lib/db/logs";
-import { deleteEndUserData, EndUserDeletionError } from "@/lib/privacy/deletion";
+import {
+  deleteEndUserData,
+  EndUserDeletionError,
+  fingerprintIdentifier
+} from "@/lib/privacy/deletion";
 import { logger } from "@/lib/logger";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
@@ -24,6 +28,44 @@ const bodySchema = z
 export const maxDuration = 120;
 
 /**
+ * Record an erasure that aborted part way through, so a half-erased subject is
+ * findable later. Best effort: a failed audit insert must not replace the real
+ * error with a logging error, so it only logs.
+ */
+async function recordAbortedErasure(
+  body: z.infer<typeof bodySchema> | null,
+  err: EndUserDeletionError
+): Promise<void> {
+  const fingerprint = body
+    ? fingerprintIdentifier(body.e164?.trim() || null, body.email?.trim().toLowerCase() || null)
+    : null;
+  logger.error("data-deletion: erasure aborted part way through", {
+    businessId: body?.businessId ?? null,
+    identifierFingerprint: fingerprint,
+    error: err.message
+  });
+  if (!body) return;
+  try {
+    await insertCoworkerLog({
+      id: crypto.randomUUID(),
+      business_id: body.businessId,
+      task_type: "data_flow",
+      status: "error",
+      log_payload: {
+        action: "end_user_data_deletion_aborted",
+        identifierFingerprint: fingerprint,
+        error: err.message
+      }
+    });
+  } catch (logErr) {
+    logger.error("data-deletion: aborted-erasure audit insert failed", {
+      businessId: body.businessId,
+      error: logErr instanceof Error ? logErr.message : String(logErr)
+    });
+  }
+}
+
+/**
  * Admin end-user erasure (security review G6): deletes one person's rows
  * across the tenant's content tables, central AND the tenant box for
  * dual/vps residency tenants. Runs on a verified privacy request (PIPEDA /
@@ -31,10 +73,11 @@ export const maxDuration = 120;
  * identifier, never the identifier itself.
  */
 export async function POST(request: Request) {
+  let body: z.infer<typeof bodySchema> | null = null;
   try {
     await requireAdmin();
 
-    const body = bodySchema.parse(await request.json());
+    body = bodySchema.parse(await request.json());
     const business = await getBusiness(body.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
 
@@ -75,7 +118,18 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
     }
     if (err instanceof EndUserDeletionError) {
-      return errorResponse("VALIDATION_ERROR", err.message);
+      if (err.kind === "input") {
+        return errorResponse("VALIDATION_ERROR", err.message);
+      }
+      // An execution failure means a store broke PART WAY THROUGH: there is no
+      // transaction across these calls, so rows already deleted stay deleted
+      // and the subject is half erased. Leave a durable trace, because until
+      // this branch existed there was none: a dropped-table reference aborted
+      // every erasure for seven weeks while returning a 400 that reads as
+      // "you typed a bad identifier". Erasure is idempotent, so the recorded
+      // fingerprint is enough to re-run the request once the cause is fixed.
+      await recordAbortedErasure(body, err);
+      return errorResponse("INTERNAL_SERVER_ERROR", err.message);
     }
     return handleRouteError(err);
   }
