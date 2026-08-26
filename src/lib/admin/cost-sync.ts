@@ -24,6 +24,7 @@
  */
 
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
+import { cycleContradictsNextBilling } from "@/lib/vps/box-term";
 import type {
   HostingerVpsCostInsert,
   StripeFeeMonthlyInsert,
@@ -488,7 +489,10 @@ export function buildHostingerSnapshot(params: {
   subscriptions: BillingSubscription[];
   virtualMachines: VirtualMachine[];
   assignments: Array<{ businessId: string; vmId: number }>;
+  /** Anchor for the stale-cycle check; injectable so tests are not time bombs. */
+  now?: Date;
 }): HostingerVpsCostInsert[] {
+  const now = params.now ?? new Date();
   const vmBySubscription = new Map<string, VirtualMachine>();
   for (const vm of params.virtualMachines) {
     if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
@@ -505,6 +509,19 @@ export function buildHostingerSnapshot(params: {
     const vm = vmBySubscription.get(sub.id) ?? null;
     const months = billingCycleMonths(sub.billing_period, sub.billing_period_unit ?? null);
     const cycleCents = sub.renewal_price ?? sub.total_price ?? null;
+    // A subscription whose declared cycle cannot explain its next billing
+    // date has a stale cycle AND a stale price (see
+    // cycleContradictsNextBilling), so any monthly figure derived from the
+    // pair would be fiction published as an ACTUAL. Emit null instead and
+    // let the margin engine fall back to its SKU estimate, which is at
+    // least LABELED an estimate on every surface that renders it. For VM
+    // 1806097 that swaps a $19.49 "actual" for an $11.99 estimate against a
+    // true $12.99, so it is both honest and closer.
+    //
+    // The raw billing_period / renewal_price_cents / next_billing_at fields
+    // are still stored verbatim: they are the evidence the disagreement is
+    // diagnosed from, and blanking them would hide the problem instead.
+    const cycleStale = cycleContradictsNextBilling(months, sub.next_billing_at, now);
     rows.push({
       subscription_id: sub.id,
       vm_id: vm?.id ?? null,
@@ -516,7 +533,9 @@ export function buildHostingerSnapshot(params: {
       total_price_cents: sub.total_price ?? null,
       renewal_price_cents: sub.renewal_price ?? null,
       monthly_price_cents:
-        months !== null && cycleCents !== null ? Math.round(cycleCents / months) : null,
+        months !== null && cycleCents !== null && !cycleStale
+          ? Math.round(cycleCents / months)
+          : null,
       is_auto_renewed: sub.is_auto_renewed ?? null,
       next_billing_at: sub.next_billing_at ?? null,
       expires_at: sub.expires_at ?? null,
@@ -575,7 +594,7 @@ export async function runPlatformCostSync(
       deps.listVirtualMachines(),
       deps.listBusinessVpsAssignments()
     ]);
-    const rows = buildHostingerSnapshot({ subscriptions, virtualMachines, assignments });
+    const rows = buildHostingerSnapshot({ subscriptions, virtualMachines, assignments, now });
     await deps.replaceHostingerVpsCosts(rows);
     hostingerRows = rows.length;
   } catch (err) {

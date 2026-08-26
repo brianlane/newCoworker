@@ -31,7 +31,8 @@ import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { CostSyncButton } from "@/components/admin/CostSyncButton";
 import { MarginAlertSettings } from "@/components/admin/MarginAlertSettings";
-import { boxTermState, boxTermEndsAt } from "@/lib/vps/box-term";
+import { boxTermState, boxTermEndsAt, cycleContradictsNextBilling } from "@/lib/vps/box-term";
+import { billingCycleMonths } from "@/lib/admin/cost-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -628,6 +629,15 @@ export default async function AdminCostsPage({
                   const state = boxTermState(row);
                   const notRenewing = state !== "renewing";
                   const at = boxTermEndsAt(row);
+                  // The sync blanks monthly_price_cents when the declared
+                  // cycle cannot explain the next billing date, because both
+                  // the cycle and the price Hostinger quotes are stale then.
+                  // A bare "-" would read as "no data"; this is the opposite,
+                  // we have data and know it is wrong, so name it.
+                  const cycleStale = cycleContradictsNextBilling(
+                    billingCycleMonths(row.billing_period, row.billing_period_unit),
+                    row.next_billing_at
+                  );
                   return (
                     <tr key={row.subscription_id}>
                       <td className="py-2 font-mono text-parchment/80">
@@ -648,7 +658,23 @@ export default async function AdminCostsPage({
                         )}
                       </td>
                       <td className="py-2 text-right text-parchment font-medium">
-                        {row.monthly_price_cents !== null ? money(row.monthly_price_cents) : "-"}
+                        {row.monthly_price_cents !== null ? (
+                          money(row.monthly_price_cents)
+                        ) : cycleStale ? (
+                          <span
+                            className="text-spark-orange"
+                            title={
+                              "Hostinger moved this subscription's next billing date without " +
+                              "updating its period or price, so no monthly cost can be derived. " +
+                              "Margin falls back to the SKU estimate. Read the real amount off " +
+                              "the hPanel invoice."
+                            }
+                          >
+                            term changed
+                          </span>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                       <td className="py-2">
                         <Badge variant={notRenewing ? "pending" : "success"}>

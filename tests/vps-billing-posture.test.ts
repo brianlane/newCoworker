@@ -1228,3 +1228,210 @@ describe("checkVpsBillingPosture, fleet consistency", () => {
     expect(res.findings.some((f) => f.kind === "online_tenant_no_box")).toBe(false);
   });
 });
+
+describe("checkVpsBillingPosture, stale billing cycle", () => {
+  /** Comfortably past one declared month (31 + 7 days of slack). */
+  const A_YEAR_OUT = runwayIso(24 * 400);
+
+  it("reports a subscription whose declared cycle cannot explain its next billing date", async () => {
+    // The VM 1806097 shape: a one-year period was bought, Hostinger moved the
+    // date and left billing_period at "1 month" with a $19.49 renewal price.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          total_price: 1949,
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    const stale = result.findings.filter((f) => f.kind === "billing_cycle_price_stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].hostingerBillingSubscriptionId).toBe("16BcBrVOTACBI8WdU");
+    expect(stale[0].autoHealed).toBe(false);
+    expect(stale[0].detail).toMatch(/\$19\.49/);
+    expect(stale[0].detail).toMatch(/SKU ESTIMATE/);
+  });
+
+  it("attributes the finding to the tenant when the VM listing resolves", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "biz-hq", name: "New Coworker", hostinger_vps_id: "1806097" })]),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 1806097, state: "running", subscription_id: "hsub-hq" }),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1806097, state: "running", subscription_id: "hsub-hq" }]),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-hq",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    const stale = result.findings.filter((f) => f.kind === "billing_cycle_price_stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].vmId).toBe(1806097);
+    expect(stale[0].businessId).toBe("biz-hq");
+    expect(stale[0].businessName).toBe("New Coworker");
+  });
+
+  it("still reports when the VM listing failed, without attribution", async () => {
+    // The subscription list alone is enough to spot the disagreement, so a
+    // Hostinger VM-listing outage must not silence this.
+    const deps = makeDeps({
+      listVirtualMachines: vi.fn().mockRejectedValue(new Error("hostinger down")),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-hq",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    const stale = result.findings.filter((f) => f.kind === "billing_cycle_price_stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].vmId).toBeNull();
+    expect(stale[0].businessId).toBeNull();
+  });
+
+  it("says the price is unknown rather than printing $0.00 when no price is quoted", async () => {
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-noprice",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    const stale = result.findings.filter((f) => f.kind === "billing_cycle_price_stale");
+    expect(stale[0].detail).toMatch(/an unknown price/);
+  });
+
+  it("reports a pooled box with no tenant, without attribution", async () => {
+    // A pool box's mis-priced burn still shows on the Costs page, so the
+    // finding fires even though no business owns the VM.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1815606, state: "running", subscription_id: "hsub-pool" }]),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-pool",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 2449,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    const stale = result.findings.filter((f) => f.kind === "billing_cycle_price_stale");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].vmId).toBe(1815606);
+    expect(stale[0].businessId).toBeNull();
+    expect(stale[0].detail).toMatch(/VM 1815606/);
+  });
+
+  it("skips subscriptions the detector cannot judge", async () => {
+    // An unrecognized billing unit yields no cycle length, and a cancelled
+    // subscription carries no next_billing_at. Neither can be judged, and
+    // neither may be reported as a term change.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-weird-unit",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 1,
+          billing_period_unit: "fortnight",
+          renewal_price: 2449,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        },
+        {
+          id: "hsub-cancelled",
+          status: "cancelled",
+          name: "KVM 2",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 2449,
+          is_auto_renewed: false,
+          next_billing_at: null,
+          expires_at: lapsedIso()
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
+  });
+
+  it("stays silent on healthy subscriptions", async () => {
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-monthly",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 2449,
+          is_auto_renewed: true,
+          next_billing_at: runwayIso(24 * 5),
+          expires_at: null
+        },
+        {
+          id: "hsub-2year",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 2,
+          billing_period_unit: "year",
+          renewal_price: 35976,
+          is_auto_renewed: true,
+          next_billing_at: runwayIso(24 * 688),
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
+  });
+});

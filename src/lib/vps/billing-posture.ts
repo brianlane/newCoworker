@@ -66,6 +66,8 @@ import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
+import { cycleContradictsNextBilling } from "@/lib/vps/box-term";
+import { billingCycleMonths as hostingerCycleMonths } from "@/lib/admin/cost-sync";
 import { isBusinessRunningStatus } from "@/lib/provisioning/progress";
 
 export type BillingPostureFinding = {
@@ -84,7 +86,13 @@ export type BillingPostureFinding = {
     /** A Hostinger VM the account owns that vps_inventory has never heard of. */
     | "untracked_vm"
     /** A live tenant with no hostinger_vps_id at all. */
-    | "online_tenant_no_box";
+    | "online_tenant_no_box"
+    /**
+     * A subscription whose declared billing cycle cannot explain its next
+     * billing date, so its quoted renewal price is stale too and no monthly
+     * cost can be derived from it. The cost sync refuses to publish one.
+     */
+    | "billing_cycle_price_stale";
   /** Null for findings about a tenant rather than a box. */
   vmId: number | null;
   businessId: string | null;
@@ -584,6 +592,60 @@ export async function checkVpsBillingPosture(
         `(${business.hostinger_vps_id === null || business.hostinger_vps_id === "" ? "unset" : `unusable value ${JSON.stringify(business.hostinger_vps_id)}`}): ` +
         "it is serving from nowhere. Check for a half-finished migration and " +
         "re-point or re-provision"
+    });
+  }
+
+  // A subscription whose declared billing cycle cannot explain its next
+  // billing date. Hostinger sometimes moves next_billing_at for a term
+  // change without updating billing_period OR renewal_price, which makes any
+  // derived monthly cost fiction; buildHostingerSnapshot now refuses to
+  // publish it as an actual, so the box silently falls back to the SKU
+  // estimate. Say so out loud: the amount actually paid is not reachable
+  // from the Hostinger API at all (no orders/invoices read endpoint), so
+  // only a human can reconcile it against the hPanel invoice.
+  //
+  // Report-only by construction. There is nothing to heal: the disagreement
+  // is upstream, in what Hostinger reports about its own subscription.
+  // Reuses the VM listing taken above; when it failed, the finding still
+  // fires with no VM/tenant attribution rather than going silent, since the
+  // subscription list alone is enough to spot the disagreement.
+  const vmBySubscriptionId = new Map(
+    (allVms ?? [])
+      .filter((vm) => typeof vm.subscription_id === "string" && vm.subscription_id.length > 0)
+      .map((vm) => [vm.subscription_id as string, vm])
+  );
+  const nowDate = new Date(nowMs);
+  for (const sub of subscriptions) {
+    // Narrow both inputs BEFORE the detector rather than defaulting them
+    // after it. The detector already returns false for an unknown cycle or a
+    // missing date, so any `?? fallback` downstream would be unreachable
+    // code that reads like a real case.
+    const months = hostingerCycleMonths(sub.billing_period, sub.billing_period_unit ?? null);
+    const nextBillingAt = sub.next_billing_at;
+    if (months === null || !nextBillingAt) continue;
+    if (!cycleContradictsNextBilling(months, nextBillingAt, nowDate)) continue;
+    const vm = vmBySubscriptionId.get(sub.id) ?? null;
+    // A pooled box has a VM but no tenant, and its mis-priced burn still
+    // shows on the Costs page, so report it with null attribution.
+    const owner = vm === null ? null : (tenantByVmId.get(vm.id) ?? null);
+    const quoted = sub.renewal_price ?? sub.total_price ?? null;
+    findings.push({
+      kind: "billing_cycle_price_stale",
+      vmId: vm?.id ?? null,
+      businessId: owner?.id ?? null,
+      businessName: owner?.name ?? null,
+      hostingerBillingSubscriptionId: sub.id,
+      expiresAt: nextBillingAt,
+      autoHealed: false,
+      detail:
+        `Hostinger subscription ${sub.id}${vm ? ` (VM ${vm.id})` : ""} reports a ` +
+        `${months}-month cycle at ` +
+        `${quoted === null ? "an unknown price" : `$${(quoted / 100).toFixed(2)}`}, but its next ` +
+        `billing date is ${nextBillingAt}, far beyond one such cycle. The term was ` +
+        "almost certainly changed and Hostinger did not update the period or the price. " +
+        "The cost sync has dropped this box's derived monthly cost, so it now shows as an " +
+        "SKU ESTIMATE rather than a wrong actual. Read the real amount off the hPanel " +
+        "invoice to reconcile margin"
     });
   }
 

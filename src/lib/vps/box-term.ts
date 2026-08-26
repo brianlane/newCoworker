@@ -42,6 +42,59 @@ export const BOX_LAPSE_WARNING_DAYS = 14;
  */
 export const BOX_SNAPSHOT_STALE_MS = 26 * 60 * 60 * 1000;
 
+/**
+ * Longest a declared month can stretch, plus slack, before the declared
+ * cycle is judged unable to explain the next billing date. Deliberately
+ * generous: a false positive downgrades a CORRECT synced price to an
+ * estimate, so the bar is "unambiguously longer than one whole cycle", not
+ * "a few days off". 31 is already the longest month; the extra week absorbs
+ * Hostinger billing early (VM 1863856 bills 14 days before its term ends).
+ */
+const MAX_DAYS_PER_CYCLE_MONTH = 31;
+const CYCLE_SLACK_DAYS = 7;
+
+/**
+ * True when `nextBillingAt` sits further out than one declared billing cycle
+ * could possibly reach, which means the declared cycle, and the renewal
+ * price quoted alongside it, no longer describe what this subscription costs.
+ *
+ * Observed on VM 1806097 (Aug 26 2026): the owner bought a one-year period
+ * for $155.88, Hostinger pushed `next_billing_at` a full year out to
+ * 2027-09-05, and still reported `billing_period: 1, billing_period_unit:
+ * "month", renewal_price: 1949`. Not universal, VM 1863856's 2-year term
+ * reports `2 year` / `35976` correctly, so the fields update for some term
+ * changes and not others.
+ *
+ * Why this is a DETECTOR and not a correction: BOTH halves of
+ * `renewal_price / cycleMonths` are stale, not just the period, so no
+ * divisor repairs it ($19.49 is not a twelfth of $155.88). The real cycle
+ * cannot be measured either, because the API exposes no period start:
+ * `created_at` is the ORIGINAL purchase, so next_billing minus created spans
+ * the whole subscription life (427 days for this box, i.e. 14 months, not
+ * the 12 that were bought). And the $155.88 appears in no field at all,
+ * with no orders/invoices read endpoint to fetch it from (`/orders` is
+ * POST-only; invoices, payments and transactions all 404). So the amount
+ * paid is simply not reachable from the API.
+ *
+ * The only sound response is to stop presenting a derived monthly price as
+ * an ACTUAL, which is what callers do with this.
+ *
+ * Fails SAFE: unknown cycle, missing date, or an unparseable date all return
+ * false, so a gap in the data never downgrades a price that is fine.
+ */
+export function cycleContradictsNextBilling(
+  cycleMonths: number | null | undefined,
+  nextBillingAt: string | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (cycleMonths == null || !Number.isFinite(cycleMonths) || cycleMonths <= 0) return false;
+  if (!nextBillingAt) return false;
+  const ms = Date.parse(nextBillingAt);
+  if (!Number.isFinite(ms)) return false;
+  const daysOut = (ms - now.getTime()) / DAY_MS;
+  return daysOut > cycleMonths * MAX_DAYS_PER_CYCLE_MONTH + CYCLE_SLACK_DAYS;
+}
+
 export type BoxTermState =
   /** Auto-renew is on: the box keeps running and we get charged again. */
   | "renewing"
