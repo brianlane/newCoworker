@@ -97,6 +97,9 @@ function makeDeps(
 ): Required<Omit<MessengerWorkerDeps, "now">> & { now: () => Date } {
   return {
     reclaimStale: vi.fn(async () => 0),
+    // These conversations are all customers; the staff path has its own
+    // suite (messenger-staff-turn.test.ts).
+    runStaffTurn: vi.fn(async () => ({ kind: "customer" as const })),
     claimJob: vi.fn().mockResolvedValueOnce(job()).mockResolvedValue(null),
     getConversation: vi.fn(async () => CONVERSATION),
     listMessages: vi.fn(async () => HISTORY),
@@ -532,5 +535,80 @@ describe("a dead Meta token during a send", () => {
     await processMessengerJobs({}, deps);
     expect(deps.requeue).toHaveBeenCalled();
     expect(deps.fail).not.toHaveBeenCalled();
+  });
+});
+
+describe("staff on WhatsApp", () => {
+  it("sends the staff reply and never runs the customer engine", async () => {
+    const deps = makeDeps({
+      runStaffTurn: vi.fn(async () => ({ kind: "reply" as const, reply: "Two bookings today." }))
+    });
+    const summary = await processMessengerJobs({}, deps);
+
+    expect(deps.runTurn).not.toHaveBeenCalled();
+    expect(deps.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      "Two bookings today."
+    );
+    expect(deps.complete).toHaveBeenCalledWith("job-1", "Two bookings today.", expect.any(Number));
+    expect(summary.replied).toBe(1);
+  });
+
+  it("stays silent when the owner turned staff mode off, and does NOT fall through", async () => {
+    // Falling through to the customer engine would pitch the owner, which is
+    // the bug this whole path exists to remove.
+    const deps = makeDeps({
+      runStaffTurn: vi.fn(async () => ({ kind: "silent" as const, reason: "staff_mode_off" }))
+    });
+    await processMessengerJobs({}, deps);
+
+    expect(deps.runTurn).not.toHaveBeenCalled();
+    expect(deps.send).not.toHaveBeenCalled();
+    expect(deps.fail).toHaveBeenCalledWith(
+      "job-1",
+      "staff_mode_off",
+      "staff_mode_off",
+      expect.any(String)
+    );
+  });
+
+  it("retries a failed staff turn instead of answering as a customer", async () => {
+    const deps = makeDeps({
+      claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+      runStaffTurn: vi.fn(async () => ({ kind: "failed" as const, detail: "model_failed" }))
+    });
+    await processMessengerJobs({}, deps);
+
+    expect(deps.runTurn).not.toHaveBeenCalled();
+    expect(deps.send).not.toHaveBeenCalled();
+    expect(deps.requeue).toHaveBeenCalled();
+  });
+
+  it("does not burn retries on a terminal staff outcome", async () => {
+    // "Nothing to answer" and "over the cap" cannot change on a retry, so
+    // requeueing them three times just dead-letters the job under a
+    // misleading turn_failed.
+    const deps = makeDeps({
+      claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+      runStaffTurn: vi.fn(async () => ({
+        kind: "failed" as const,
+        detail: "no_input",
+        terminal: true
+      }))
+    });
+    await processMessengerJobs({}, deps);
+
+    expect(deps.requeue).not.toHaveBeenCalled();
+    expect(deps.fail).toHaveBeenCalledWith("job-1", "no_input", "no_input", expect.any(String));
+  });
+
+  it("still runs the customer engine for an ordinary sender", async () => {
+    const deps = makeDeps();
+    await processMessengerJobs({}, deps);
+    expect(deps.runTurn).toHaveBeenCalled();
+    expect(deps.send).toHaveBeenCalled();
   });
 });
