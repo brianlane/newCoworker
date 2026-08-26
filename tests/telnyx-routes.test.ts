@@ -655,31 +655,19 @@ describe("telnyx-routes DB layer", () => {
       const c = chain();
       c.single.mockResolvedValue({ data: sampleSettings, error: null });
       const db = makeDb(c);
-      await setStaffSmsSettings(
-        "biz",
-        { assistantReplyEnabled: false, forwardToOwnerEnabled: true },
-        db as never
-      );
+      await setStaffSmsSettings("biz", { forwardToOwnerEnabled: true }, db as never);
       const [row, opts] = c.upsert.mock.calls[0];
       expect(row as Record<string, unknown>).toMatchObject({
         business_id: "biz",
-        staff_sms_assistant_reply_enabled: false,
         staff_sms_forward_to_owner_enabled: true
       });
       expect(opts).toEqual({ onConflict: "business_id" });
     });
 
-    it("writes only the assistant-reply flag when forward is omitted", async () => {
-      const c = chain();
-      c.single.mockResolvedValue({ data: sampleSettings, error: null });
-      await setStaffSmsSettings("biz", { assistantReplyEnabled: true }, makeDb(c) as never);
-      const [row] = c.upsert.mock.calls[0];
-      const r = row as Record<string, unknown>;
-      expect(r.staff_sms_assistant_reply_enabled).toBe(true);
-      expect(r).not.toHaveProperty("staff_sms_forward_to_owner_enabled");
-    });
-
-    it("writes only the forward flag when assistant-reply is omitted", async () => {
+    it("never writes the retired assistant-reply column", async () => {
+      // Whether staff get answered is per-surface now
+      // (public.coworker_staff_mode), and the SMS webhook reads it there.
+      // Writing the old column would be a save that changes nothing.
       const c = chain();
       c.single.mockResolvedValue({ data: sampleSettings, error: null });
       await setStaffSmsSettings("biz", { forwardToOwnerEnabled: false }, makeDb(c) as never);
@@ -689,11 +677,23 @@ describe("telnyx-routes DB layer", () => {
       expect(r).not.toHaveProperty("staff_sms_assistant_reply_enabled");
     });
 
+    it("touches only updated_at when the caller sends no forward flag", async () => {
+      // The real case: /api/business/staff-sms with just assistantReplyEnabled,
+      // which now lands in coworker_staff_mode instead.
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setStaffSmsSettings("biz", {}, makeDb(c) as never);
+      const [row] = c.upsert.mock.calls[0];
+      expect(row as Record<string, unknown>).not.toHaveProperty(
+        "staff_sms_forward_to_owner_enabled"
+      );
+    });
+
     it("surfaces underlying DB errors", async () => {
       const c = chain();
       c.single.mockResolvedValue({ data: null, error: { message: "staff boom" } });
       await expect(
-        setStaffSmsSettings("biz", { assistantReplyEnabled: true }, makeDb(c) as never)
+        setStaffSmsSettings("biz", { forwardToOwnerEnabled: true }, makeDb(c) as never)
       ).rejects.toThrow(/staff boom/);
     });
 
@@ -702,7 +702,7 @@ describe("telnyx-routes DB layer", () => {
       c.single.mockResolvedValue({ data: sampleSettings, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(
-        setStaffSmsSettings("biz", { assistantReplyEnabled: true })
+        setStaffSmsSettings("biz", { forwardToOwnerEnabled: true })
       ).resolves.toEqual(sampleSettings);
     });
   });

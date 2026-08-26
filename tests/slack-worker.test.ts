@@ -41,12 +41,21 @@ vi.mock("@/lib/dashboard-chat/context-blocks", () => ({
 vi.mock("@/lib/dashboard-chat/schedule-memory-capture", () => ({
   scheduleCaptureOwnerRuleInline: vi.fn()
 }));
-vi.mock("@/app/api/dashboard/chat/route", () => ({
+// Sentinels, because these assertions are about WHICH persona the worker
+// selected, not how it is worded. Mocked at the library that owns them now
+// rather than through the dashboard chat route.
+vi.mock("@/lib/owner-surfaces/preambles", () => ({
   EMAIL_TOOL_DISABLED_PREAMBLE: "EMAIL_DISABLED",
   EMAIL_TOOL_ENABLED_PREAMBLE: "EMAIL_ENABLED",
   OWNER_PREAMBLE: "OWNER_PREAMBLE"
 }));
-vi.mock("@/lib/dashboard-chat/email-blocks", () => ({ fulfillOwnerEmailBlocks: vi.fn() }));
+// The EMAIL_SEND sentinels are real, not stubbed: the owner preambles
+// interpolate them into the prompt, so a stub would silently replace the
+// protocol the model is taught with "undefined".
+vi.mock("@/lib/dashboard-chat/email-blocks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/dashboard-chat/email-blocks")>()),
+  fulfillOwnerEmailBlocks: vi.fn()
+}));
 vi.mock("@/lib/booking-page/prompt-line", () => ({
   bookingLinkPromptLine: vi.fn(async () => "BOOKING_LINK")
 }));

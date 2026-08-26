@@ -7,7 +7,11 @@
  * business number:
  *   - assistantReplyEnabled: the assistant replies in internal-assistant mode
  *     (staff mode, no lead intake, no customer profile), like the dashboard
- *     chat. Default on.
+ *     chat. Default on. This half now lives in the shared per-surface store
+ *     (public.coworker_staff_mode, surface_key 'sms'), which is what the SMS
+ *     webhook reads and what Settings → Coworker shows alongside every other
+ *     surface. Writing the old business_telnyx_settings column here would
+ *     silently do nothing.
  *   - forwardToOwnerEnabled: also relay the staff text to the owner's cell.
  *     Default off.
  */
@@ -16,6 +20,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { setStaffSmsSettings } from "@/lib/db/telnyx-routes";
+import { setStaffMode } from "@/lib/owner-surfaces/staff-mode";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -37,13 +42,24 @@ export async function POST(request: Request) {
     }
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
-    const row = await setStaffSmsSettings(body.businessId, {
-      assistantReplyEnabled: body.assistantReplyEnabled,
-      forwardToOwnerEnabled: body.forwardToOwnerEnabled
-    });
+    // Forwarding to the owner's cell is SMS-specific and stays on the
+    // Telnyx settings row; the reply flag is per-surface.
+    // null means "not part of this request", NOT "false". Re-reading it
+    // here would be worse than saying nothing: staffModeEnabled resolves a
+    // failed lookup to the default (true), and the client applies whatever
+    // comes back to its sibling switch, so one blip would show staff replies
+    // as ON while they are still off, and the next save would persist that.
+    const [assistantReplyEnabled, row] = await Promise.all([
+      body.assistantReplyEnabled === undefined
+        ? Promise.resolve(null)
+        : setStaffMode(body.businessId, "sms", body.assistantReplyEnabled),
+      setStaffSmsSettings(body.businessId, {
+        forwardToOwnerEnabled: body.forwardToOwnerEnabled
+      })
+    ]);
 
     return successResponse({
-      assistantReplyEnabled: row.staff_sms_assistant_reply_enabled,
+      assistantReplyEnabled,
       forwardToOwnerEnabled: row.staff_sms_forward_to_owner_enabled
     });
   } catch (err) {

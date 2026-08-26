@@ -14,6 +14,7 @@
 import { diffFlowDefinitions } from "@/lib/ai-flows/edit-diff";
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
 import type { AiFlowVersionRow } from "@/lib/ai-flows/versions";
+import { ownerSurfaceByFlowEditSource } from "@/lib/owner-surfaces/registry";
 
 /** One row of the History panel, newest first. */
 export type FlowHistoryEntry = {
@@ -48,6 +49,10 @@ export type FlowHistoryEntry = {
  * the trigger nulls the carrier columns after copying them).
  */
 export function describeEditSource(source: string | null): string {
+  // Coworker surfaces answer from the registry, so a newly registered one
+  // is described here without this switch being touched.
+  const surface = ownerSurfaceByFlowEditSource(source);
+  if (surface) return surface.historyLabel;
   switch (source) {
     case "dashboard":
       return "Edited in the builder";
@@ -55,14 +60,6 @@ export function describeEditSource(source: string | null): string {
       return "Restored from history";
     case "ai_edit":
       return "Edited by your coworker";
-    case "ai_edit_sms":
-      return "Edited by your coworker, by text";
-    case "ai_edit_email":
-      return "Edited by your coworker, by email";
-    case "ai_edit_slack":
-      return "Edited by your coworker, in Slack";
-    case "ai_edit_dashboard":
-      return "Edited by your coworker, in dashboard chat";
     case "mcp":
       return "Edited through a connected app";
     case "mcp_restore":

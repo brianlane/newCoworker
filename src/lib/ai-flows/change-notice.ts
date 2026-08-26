@@ -19,24 +19,25 @@
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
+import { ownerSurfaceByFlowEditSource } from "@/lib/owner-surfaces/registry";
 
 /**
  * Edit sources that represent the AI acting on the owner's behalf, away from
  * the flow itself. `dashboard` and `white_glove` are absent on purpose: the
  * first is the owner in the builder, the second is us, with the tenant
  * already in the loop.
+ *
+ * Every registered coworker surface announces, by construction, so the list
+ * below holds only the sources that are NOT surfaces. If a surface ever
+ * needs to stay silent, give it a flag in the registry rather than
+ * reintroducing a hand-kept set here.
  */
-const ANNOUNCED_SOURCES: ReadonlySet<string> = new Set([
-  "ai_edit_sms",
-  "ai_edit_email",
-  "ai_edit_slack",
-  "ai_edit_dashboard",
-  "mcp",
-  "mcp_restore"
-]);
+const ANNOUNCED_NON_SURFACE_SOURCES: ReadonlySet<string> = new Set(["mcp", "mcp_restore"]);
 
 export function shouldAnnounceFlowChange(source: string | undefined): boolean {
-  return source !== undefined && ANNOUNCED_SOURCES.has(source);
+  if (source === undefined) return false;
+  if (ownerSurfaceByFlowEditSource(source)) return true;
+  return ANNOUNCED_NON_SURFACE_SOURCES.has(source);
 }
 
 export type FlowChangeNoticeInput = {
@@ -59,15 +60,9 @@ export type FlowChangeNoticeDeps = {
 
 /** Human name for a surface, for a line the owner reads on their phone. */
 function surfaceLabel(source: string): string {
+  const surface = ownerSurfaceByFlowEditSource(source);
+  if (surface) return surface.changeNoticeLabel;
   switch (source) {
-    case "ai_edit_sms":
-      return "by text";
-    case "ai_edit_email":
-      return "by email";
-    case "ai_edit_slack":
-      return "in Slack";
-    case "ai_edit_dashboard":
-      return "in dashboard chat";
     case "mcp":
     case "mcp_restore":
       return "through a connected app";
