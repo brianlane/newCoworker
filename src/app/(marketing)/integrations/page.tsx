@@ -9,7 +9,9 @@ import {
   KeyRound,
   Mail,
   MessageSquareText,
+  MessagesSquare,
   PhoneCall,
+  Video,
   Webhook,
   Zap
 } from "lucide-react";
@@ -45,15 +47,21 @@ const TRIGGER_DEFS = [
   { labelKey: "triggerEmailActivity", descKey: "triggerEmailActivityDesc", Icon: Mail }
 ] as const;
 
+/** `href` links a card to its detail page or the API reference; without it
+ *  the card is informational. The Slack, Zoom, and ChatGPT pages exist for
+ *  their marketplace listings and were previously reachable only from the
+ *  sitemap, which made them invisible to actual visitors. */
 const NATIVE_DEFS = [
   { key: "google", Icon: CalendarCheck },
   { key: "microsoft", Icon: CalendarCheck },
+  { key: "slack", Icon: MessagesSquare, href: "/integrations/slack" },
+  { key: "zoom", Icon: Video, href: "/integrations/zoom" },
   { key: "zapier", Icon: Zap },
-  { key: "api", Icon: Code2 },
-  { key: "webhooks", Icon: Webhook },
+  { key: "api", Icon: Code2, href: "/docs/api" },
+  { key: "webhooks", Icon: Webhook, href: "/docs/api" },
   { key: "csv", Icon: FileSpreadsheet },
   { key: "custom", Icon: ArrowLeftRight },
-  { key: "keys", Icon: KeyRound }
+  { key: "keys", Icon: KeyRound, href: "/docs/api" }
 ] as const;
 
 export default async function IntegrationsPage() {
@@ -65,15 +73,21 @@ export default async function IntegrationsPage() {
     Icon
   }));
 
-  const nativeIntegrations = NATIVE_DEFS.map(({ key, Icon }) => ({
-    title: t(`${key}.title`),
-    description: t(`${key}.description`),
-    Icon
+  const nativeIntegrations = NATIVE_DEFS.map((def) => ({
+    title: t(`${def.key}.title`),
+    description: t(`${def.key}.description`),
+    Icon: def.Icon,
+    href: "href" in def ? def.href : undefined
   }));
 
   const assistantConnectors = [
     { title: t("claude.title"), description: t("claude.description"), Icon: Bot },
-    { title: t("chatgpt.title"), description: t("chatgpt.description"), Icon: Bot }
+    {
+      title: t("chatgpt.title"),
+      description: t("chatgpt.description"),
+      Icon: Bot,
+      href: "/integrations/chatgpt"
+    }
   ];
 
   return (
@@ -204,7 +218,7 @@ export default async function IntegrationsPage() {
               <h2 className="text-2xl font-bold text-parchment">{t("devTitle")}</h2>
               <p className="mt-4 leading-relaxed text-parchment/60">{t("devBody")}</p>
               <Link
-                href="/onboard"
+                href="/docs/api"
                 className="mt-6 inline-block rounded-lg border border-claw-green/40 px-6 py-2.5 text-sm font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
               >
                 {t("devCta")}

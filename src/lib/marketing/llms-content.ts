@@ -86,11 +86,12 @@ const CAPABILITY_LINES = [
   "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
     "a webhook (Standard plan and up), a calendar event, or an inbound message, " +
     "with round-robin routing to a staff roster.",
-  "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, and Meta Lead Ads " +
-    "through a direct first-party Facebook Page connect in the dashboard (no bridge account needed; " +
+  "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, " +
+    "Slack (the coworker answers DMs and mentions and takes approvals there; Standard plan and up), " +
+    "and Meta Lead Ads through a direct first-party Facebook Page connect in the dashboard (no bridge account needed; " +
     "Zapier or Make.com bridges still work), a public REST API, and webhooks " +
     "(Zapier, Meta lead ads, lead webhooks, the REST API: Standard plan and up), " +
-    "plus a Claude connector (remote MCP) so Claude can act on the business's behalf.",
+    "plus a Claude connector (remote MCP) and a ChatGPT app so an owner's assistant can act on the business's behalf.",
   "- Languages: the owner dashboard is English or Spanish, and the coworker replies to each customer in the customer's own language."
 ];
 
@@ -108,7 +109,7 @@ const PAGES: { path: string; label: string; note: string }[] = [
   { path: "/", label: "Home", note: "product overview" },
   { path: "/features", label: "Features", note: "voice, messaging, intelligence, automation, and platform capabilities" },
   { path: "/pricing", label: "Pricing", note: "plans, feature comparison, and billing FAQ" },
-  { path: "/integrations", label: "Integrations", note: "Zapier, Google, Microsoft, Zoom, API, and webhooks" },
+  { path: "/integrations", label: "Integrations", note: "Meta lead ads, Zapier, Google, Microsoft, Zoom, Slack, Claude, ChatGPT, API, and webhooks" },
   { path: "/industries", label: "Industries", note: "how the coworker is used per industry" },
   {
     path: "/compare",
