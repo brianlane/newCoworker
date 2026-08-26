@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   listBusinessVpsAssignments,
   listHostingerVpsCosts,
+  listHostingerVpsCostsByVmId,
   listTelnyxCostDaily,
   listTenantDids,
   listStripeCustomerBusinessIds,
@@ -211,6 +212,40 @@ describe("listHostingerVpsCosts", () => {
     const { client } = mockClient([{ data: [], error: null }]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     expect(await listHostingerVpsCosts()).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listHostingerVpsCostsByVmId", () => {
+  it("filters the snapshot to one VM", async () => {
+    const { client, calls } = mockClient([{ data: [HOSTINGER_ROW], error: null }]);
+    const rows = await listHostingerVpsCostsByVmId(1806097, client);
+    expect(rows).toEqual([HOSTINGER_ROW]);
+    expect(calls[0].table).toBe("hostinger_vps_costs");
+    expect(calls[0].ops).toContainEqual({ method: "eq", args: ["vm_id", 1806097] });
+  });
+
+  it("returns every row for the VM rather than assuming one", async () => {
+    // The table's primary key is subscription_id and vm_id has no unique
+    // constraint, so a rebuilt box legitimately carries two rows. Returning a
+    // list is what keeps `.maybeSingle()` (which throws on the second row)
+    // out of the admin page's render path.
+    const second = { ...HOSTINGER_ROW, subscription_id: "sub-2", status: "cancelled" };
+    const { client } = mockClient([{ data: [HOSTINGER_ROW, second], error: null }]);
+    expect(await listHostingerVpsCostsByVmId(1806097, client)).toHaveLength(2);
+  });
+
+  it("handles null data and throws on error", async () => {
+    const empty = mockClient([{ data: null, error: null }]);
+    expect(await listHostingerVpsCostsByVmId(1, empty.client)).toEqual([]);
+    const err = mockClient([{ data: null, error: { message: "read failed" } }]);
+    await expect(listHostingerVpsCostsByVmId(1, err.client)).rejects.toThrow(/read failed/);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const { client } = mockClient([{ data: [], error: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    expect(await listHostingerVpsCostsByVmId(1)).toEqual([]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
