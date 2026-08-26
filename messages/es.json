@@ -163,8 +163,8 @@
       "browserStarter": "Lee páginas web públicas",
       "browserStandard": "Opera sitios web como una persona",
       "rowSupport": "Soporte",
-      "supportStarter": "Correo",
-      "supportStandard": "Correo prioritario",
+      "supportStarter": "Correo (complemento prioritario disponible)",
+      "supportStandard": "Correo prioritario (complemento de teléfono y video disponible)",
       "supportEnterprise": "SLA + dedicado, teléfono y video",
       "rowWhiteLabel": "White-label y configuración multi-tenant",
       "compareSubtitle": "Cada función de cada plan. Nada escondido tras un clic.",
@@ -197,6 +197,12 @@
       "rowCustomLimits": "Límites de uso personalizados y personalización de llamadas",
       "rowHardware": "Despliegue de hardware independiente y residencia de datos",
       "rowEarlyAccess": "Acceso prioritario a nuevas funciones",
+      "addOnsTitle": "Complementos",
+      "addOnsSubtitle": "Extras opcionales que puedes activar en cualquier momento, sin cambiar de plan.",
+      "addOnPriorityTitle": "Soporte prioritario",
+      "addOnPriorityBody": "Soporte prioritario por teléfono y video con un especialista por {prioritySupportPrice}/mes en Starter y Standard, además del soporte por correo que incluye tu plan. Se cobra por separado de tu plan en su propia fecha mensual y puedes cancelar cuando quieras. Enterprise lo incluye de forma permanente.",
+      "addOnPacksTitle": "Paquetes de uso y recarga automática",
+      "addOnPacksBody": "Compra paquetes únicos de minutos de voz, SMS o IA desde Panel → Facturación cuando los necesites, o agrega paquetes recurrentes con descuento al iniciar o cambiar una membresía. La recarga automática opcional compra un paquete cuando te queda poco, con un tope de gasto que tú controlas.",
       "faqTitle": "Preguntas de precios, respondidas",
       "faqBillingQ": "¿Cómo funciona la facturación en planes de 12 y 24 meses?",
       "faqBillingA": "El término completo se factura una sola vez al pagar, a la tarifa mensual efectiva con descuento. Así aseguramos tu servidor dedicado durante todo el contrato. El uso incluido (minutos de voz, SMS, presupuesto de IA) se reinicia cada mes.",
@@ -216,6 +222,8 @@
       "faqExtraNumbersA": "Todos los planes incluyen un número dedicado. Los números extra cuestan $5/mes cada uno. Contacta a <email>{contactEmail}</email> para agregar uno a tu cuenta.",
       "faqUsageCapsQ": "¿Qué pasa si agoto mis minutos de voz o SMS incluidos?",
       "faqUsageCapsA": "Tu coworker deja de hacer llamadas de voz medidas o enviar textos a clientes al alcanzar el límite mensual, y recibes una alerta mucho antes. Los límites se reinician cada mes y puedes mejorar tu plan en cualquier momento desde el panel. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, o agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan). Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde.",
+      "faqPrioritySupportQ": "¿Qué es el complemento de soporte prioritario?",
+      "faqPrioritySupportA": "Soporte prioritario por teléfono y video con un especialista, además del soporte por correo que incluye tu plan. En Starter y Standard cuesta {prioritySupportPrice}/mes, se cobra por separado de tu plan en su propia fecha mensual y puedes cancelar cuando quieras; conservas los días ya pagados. Enterprise incluye el soporte prioritario de forma permanente, y los paquetes de onboarding white-glove incluyen 30 días.",
       "faqWhiteGloveQ": "¿Qué incluye el onboarding white-glove?",
       "faqWhiteGloveA": "Dos paquetes únicos: <b>White-glove setup</b> cubre configuración guiada, portabilidad de número y una llamada de entrenamiento 1:1 en vivo; <b>White-glove buildout</b> agrega todo lo del setup más una construcción completa de AiFlows a medida. Ambos incluyen 30 días de soporte prioritario por teléfono y video. <link>Cuéntanos que te interesa</link> y un especialista te contactará.",
       "ctaTitle": "¿Listo para contratar a tu New Coworker?",
@@ -684,7 +692,7 @@
       "capsQ": "¿Qué pasa si alcanzo mis límites de uso mensuales?",
       "capsA": "El uso incluido se reinicia cada mes: por ejemplo, Standard incluye {standardVoice} y {standardSms} textos por mes (un mensaje largo cuenta como varios textos, uno por cada 160 caracteres). Recibes alertas antes de agotarlo; al llegar al límite, las llamadas de voz medidas y los textos a clientes se pausan hasta el próximo ciclo o una mejora de plan. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, o agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan). Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde. Los mensajes de cumplimiento nunca se bloquean.",
       "supportQ": "¿Qué soporte está incluido?",
-      "supportA": "Starter incluye soporte por correo; Standard incluye soporte prioritario por correo; Enterprise incluye un SLA con soporte dedicado. El soporte en vivo por llamada/video está disponible con los paquetes de onboarding white-glove.",
+      "supportA": "Starter incluye soporte por correo; Standard incluye soporte prioritario por correo; Enterprise incluye un SLA con soporte dedicado y línea prioritaria de teléfono y video de forma permanente. En Starter y Standard puedes agregar soporte prioritario por teléfono y video con un especialista por {prioritySupportPrice}/mes desde Panel → Facturación: se cobra por separado de tu plan y puedes cancelar cuando quieras. Los paquetes de onboarding white-glove también incluyen 30 días.",
       "ctaTitle": "¿Aún con dudas? Pruébalo sin riesgo",
       "ctaSubtitle": "Respaldado por una garantía de devolución de 30 días.",
       "ctaLabel": "Comenzar"
@@ -738,7 +746,7 @@
       "formBody": "Ya sea que estés evaluando planes, necesites ayuda con la configuración o facturación, o quieras que un especialista construya todo contigo, usa el formulario y responderemos lo antes posible. La mayoría de las consultas se responden en 24 horas.",
       "support": {
         "title": "Soporte",
-        "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria; los clientes white-glove tienen una línea prioritaria de teléfono y video por 30 días."
+        "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria, y el complemento de soporte prioritario (o los 30 días incluidos en un paquete white-glove) agrega una línea de teléfono y video con un especialista."
       },
       "enterprise": {
         "title": "Ventas Enterprise",

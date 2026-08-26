@@ -15,6 +15,7 @@ import { PlanCards } from "@/components/pricing/PlanCards";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { buildComparisonGroups, type ComparisonCell } from "@/lib/plans/comparison";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import { PRIORITY_SUPPORT_MONTHLY_CENTS } from "@/lib/plans/priority-support";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
 import { SMS_MONTHLY_CAP_MX } from "../../../../supabase/functions/_shared/sms_monthly_limits";
@@ -64,6 +65,7 @@ export default async function PricingPage() {
   const contactEmail = resolveContactEmail();
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
   const canadaFeeMonthly = formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS);
+  const prioritySupportPrice = formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS);
   const mexicoFeeMonthly = formatPriceCents(MEXICO_MESSAGING_FEE_MONTHLY_CENTS);
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
@@ -104,6 +106,10 @@ export default async function PricingPage() {
       )
     },
     { question: t("faqUsageCapsQ"), answer: <>{t("faqUsageCapsA")}</> },
+    {
+      question: t("faqPrioritySupportQ"),
+      answer: <>{t("faqPrioritySupportA", { prioritySupportPrice })}</>
+    },
     {
       question: t("faqWhiteGloveQ"),
       answer: (
@@ -182,6 +188,26 @@ export default async function PricingPage() {
               </tbody>
             ))}
           </table>
+        </div>
+      </section>
+
+      {/* Add-ons: purchasable extras that are not tier features, so they get
+          cards rather than fake per-tier table rows. */}
+      <section className="mx-auto max-w-5xl px-6 pb-20">
+        <SectionHeading title={t("addOnsTitle")} subtitle={t("addOnsSubtitle")} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6">
+            <h3 className="text-base font-semibold text-parchment">{t("addOnPriorityTitle")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/70">
+              {t("addOnPriorityBody", { prioritySupportPrice })}
+            </p>
+          </div>
+          <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6">
+            <h3 className="text-base font-semibold text-parchment">{t("addOnPacksTitle")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/70">
+              {t("addOnPacksBody")}
+            </p>
+          </div>
         </div>
       </section>
 

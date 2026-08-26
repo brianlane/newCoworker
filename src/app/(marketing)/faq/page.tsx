@@ -16,6 +16,7 @@ import { TIER_LIMITS } from "@/lib/plans/limits";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import { PRIORITY_SUPPORT_MONTHLY_CENTS } from "@/lib/plans/priority-support";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { JsonLd } from "@/components/marketing/JsonLd";
 
@@ -44,6 +45,7 @@ export default async function FaqPage() {
 
   const starterPrice = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
+  const prioritySupportPrice = formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS);
   // e.g. "250 voice minutes" / "up to 10 concurrent calls", same helpers as /pricing.
   const standardVoice = voiceMinutesLine("standard", undefined, locale);
   const standardConcurrent = concurrentCallsLine(
@@ -119,7 +121,11 @@ export default async function FaqPage() {
           plainAnswer: t("capsA", { standardVoice, standardSms }),
           answer: <>{t("capsA", { standardVoice, standardSms })}</>
         },
-        { question: t("supportQ"), plainAnswer: t("supportA"), answer: <>{t("supportA")}</> }
+        {
+          question: t("supportQ"),
+          plainAnswer: t("supportA", { prioritySupportPrice }),
+          answer: <>{t("supportA", { prioritySupportPrice })}</>
+        }
       ]
     }
   ];

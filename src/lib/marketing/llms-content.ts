@@ -13,7 +13,8 @@
 
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
-import { formatPricePerMonth } from "@/lib/pricing";
+import { PRIORITY_SUPPORT_MONTHLY_CENTS } from "@/lib/plans/priority-support";
+import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { SITE_URL } from "./site-url";
 
 export { SITE_URL } from "./site-url";
@@ -65,6 +66,9 @@ function pricingLines(): string[] {
     "- Every paid plan carries a 30-day money-back guarantee. 12 and 24-month terms are charged " +
       "in full at checkout because the dedicated server is prepaid for the whole term; included " +
       "usage still resets monthly.",
+    `- Priority phone & video support: a ${formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS)} per month add-on ` +
+      "on Starter and Standard, billed separately from the plan and cancelable any time; " +
+      "included permanently on Enterprise.",
     `- Live prices are on ${SITE_URL}/pricing, which is the authority if this file is stale.`
   ];
 }
