@@ -13,6 +13,15 @@ import {
   CONNECTED_MAILBOX_SOURCES
 } from "@/lib/dashboard/email-mailbox";
 
+/**
+ * Platform alert mail is logged so its delivery receipt has somewhere to
+ * land, but it is never correspondence, so EVERY view drops it. Asserted on
+ * each expectation rather than stripped by a helper: a view that silently
+ * stopped excluding it would bury the coworker's mail with customers under
+ * the platform's own alerts.
+ */
+const NO_ALERTS = ["notification"];
+
 describe("email-filters", () => {
   it("parses known views and defaults unknown values", () => {
     expect(parseEmailsViewFilter("inbox")).toBe("inbox");
@@ -27,27 +36,35 @@ describe("email-filters", () => {
   });
 
   it("maps each view chip onto listEmailLog options", () => {
-    expect(emailListFiltersFromView({ view: "all" })).toEqual({ limit: 100 });
+    expect(emailListFiltersFromView({ view: "all" })).toEqual({
+      limit: 100,
+      excludeSources: NO_ALERTS
+    });
     expect(emailListFiltersFromView({ view: "sent" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       direction: "outbound"
     });
     expect(emailListFiltersFromView({ view: "received" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       direction: "inbound"
     });
     expect(emailListFiltersFromView({ view: "inbox" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       inbox: true,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "archived" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       inbox: false,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "unread" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       unreadOnly: true,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
@@ -63,6 +80,7 @@ describe("email-filters", () => {
       })
     ).toEqual({
       limit: 50,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       label: "VIP",
       direction: "inbound",
@@ -72,24 +90,28 @@ describe("email-filters", () => {
       emailListFiltersFromView({ view: "archived", folder: "Sales" })
     ).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       inbox: false,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "sent", folder: "Sales" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       direction: "outbound",
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "unread", folder: "Sales" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       unreadOnly: true,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "all", folder: "Sales" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
@@ -97,6 +119,7 @@ describe("email-filters", () => {
       emailListFiltersFromView({ view: "received", folder: "Sales" })
     ).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       direction: "inbound",
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
@@ -106,10 +129,12 @@ describe("email-filters", () => {
   it("narrows the fetch to the selected mailbox", () => {
     expect(emailListFiltersFromView({ view: "all", mailbox: AI_MAILBOX_KEY })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       sources: AI_MAILBOX_SOURCES
     });
     expect(emailListFiltersFromView({ view: "sent", mailbox: "conn-1" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       direction: "outbound",
       sources: CONNECTED_MAILBOX_SOURCES
     });
@@ -119,6 +144,7 @@ describe("email-filters", () => {
     // Inbox is already AI-mailbox-only; the AI chip must not widen it.
     expect(emailListFiltersFromView({ view: "inbox", mailbox: AI_MAILBOX_KEY })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       inbox: true,
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
@@ -130,6 +156,7 @@ describe("email-filters", () => {
     // the other mailbox's mail under a connected-mailbox chip.
     expect(emailListFiltersFromView({ view: "inbox", mailbox: "conn-1" })).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       inbox: true,
       sources: CONNECTED_MAILBOX_SOURCES
     });
@@ -137,6 +164,7 @@ describe("email-filters", () => {
       emailListFiltersFromView({ view: "all", folder: "Sales", mailbox: "conn-1" })
     ).toEqual({
       limit: 100,
+      excludeSources: NO_ALERTS,
       folder: "Sales",
       sources: CONNECTED_MAILBOX_SOURCES
     });

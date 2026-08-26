@@ -72,6 +72,8 @@ const PURGED_READ_CENTRAL_BY_DESIGN: Record<SiteKey, string> = {
     "same read-after-write on the call in flight, keyed by call_control_id, to attach the intake SMS to it",
   "vps/voice-bridge/src/index.ts::sendIntakeLeadSms::voice_call_transcript_turns":
     "the turns of that same in-flight transcript, written by this process moments before and not yet replayed",
+  "src/lib/email/delivery.ts::applyEmailDeliveryStatus::email_log":
+    "provider-webhook lookup with NO tenant in hand: a Resend receipt carries only its own message id, and the whole point of this read is to DISCOVER which business the mail belonged to, so there is no box to route to. Fanning out across every residency tenant per receipt would be one tunnel round trip each, on the hot path of every delivered email on the account. It is also a read-after-write on a row this system wrote centrally minutes earlier (the send logs it, the receipt lands in seconds), and the journal replays the UPDATE box-ward, so the box still ends up with the receipt. A receipt arriving after the purge keep-floor finds nothing and records nothing, which loses information but never states anything false",
   "src/lib/db/usage.ts::getFleetCalendarMonthUsageByBusiness::voice_call_transcripts":
     "cross-tenant fleet usage rollup, no business_id filter. Degrades only peakConcurrentCalls for a residency tenant; billable minutes come from voice_settlements, which is central and does not move"
 };
