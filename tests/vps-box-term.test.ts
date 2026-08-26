@@ -164,6 +164,25 @@ describe("pickLiveBoxSnapshot", () => {
     expect(pickLiveBoxSnapshot([])).toBeNull();
   });
 
+  it("prefers a lapsing subscription over a cancelled one with a longer leftover term", () => {
+    // Liveness outranks the date. A lapsing subscription is still ours and
+    // the billing-posture cron can re-enable it; a cancelled one is gone and
+    // its remaining term is a leftover. Ranking them as equals let the
+    // leftover's later date hide the live box.
+    const cancelled = row({
+      status: "cancelled",
+      is_auto_renewed: false,
+      expires_at: "2027-06-01T00:00:00Z"
+    });
+    const lapsing = row({
+      status: "active",
+      is_auto_renewed: false,
+      expires_at: "2026-09-10T00:00:00Z"
+    });
+    expect(pickLiveBoxSnapshot([cancelled, lapsing])).toBe(lapsing);
+    expect(pickLiveBoxSnapshot([lapsing, cancelled])).toBe(lapsing);
+  });
+
   it("prefers the live subscription over a stale cancelled one for the same VM", () => {
     // The rebuilt-box case: the cancelled row's expiry describes hardware we
     // no longer pay for, and showing it would announce an outage that is not

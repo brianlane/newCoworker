@@ -144,30 +144,46 @@ export function boxSnapshotStale(
 }
 
 /**
+ * How alive a subscription is, as a sortable rank.
+ *
+ * The three states are genuinely ordered, not just "renews or not": a
+ * `lapsing` subscription is still ours and can be re-enabled (the
+ * billing-posture cron does exactly that), while a `cancelled` one is gone
+ * and its remaining term is just a leftover. Collapsing those two into one
+ * bucket let a cancelled row with a longer leftover term outrank the live
+ * subscription, which is the precise case this picker exists to prevent.
+ */
+function boxLivenessRank(state: BoxTermState): number {
+  if (state === "renewing") return 2;
+  if (state === "lapsing") return 1;
+  return 0;
+}
+
+/**
  * Pick the row that describes the box we are running RIGHT NOW.
  *
  * `hostinger_vps_costs` is keyed on `subscription_id`, not `vm_id`, and
  * nothing constrains a VM to one subscription, so a rebuilt or re-billed box
  * can carry both its old cancelled subscription and its new active one. The
  * cancelled row's expiry describes hardware we no longer pay for, and showing
- * it would announce an outage that is not coming. Prefer a subscription that
- * still renews; among equals, the one with the furthest end date; a row with
- * no date at all loses to any row that has one.
+ * it would announce an outage that is not coming. Rank by liveness first, and
+ * only among equally-live rows by the furthest end date; a row with no usable
+ * date at all loses to any row that has one.
  */
 export function pickLiveBoxSnapshot<T extends BoxBillingFields>(
   rows: readonly T[]
 ): T | null {
   let best: T | null = null;
-  let bestRenewing = false;
+  let bestRank = -1;
   let bestEnd = Number.NEGATIVE_INFINITY;
   for (const row of rows) {
-    const renewing = boxTermState(row) === "renewing";
+    const rank = boxLivenessRank(boxTermState(row));
     const endsAt = boxTermEndsAt(row);
-    const end = endsAt ? Date.parse(endsAt) : Number.NaN;
-    const endMs = Number.isFinite(end) ? end : Number.NEGATIVE_INFINITY;
-    if (best === null || (renewing && !bestRenewing) || (renewing === bestRenewing && endMs > bestEnd)) {
+    const parsed = endsAt ? Date.parse(endsAt) : Number.NaN;
+    const endMs = Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    if (rank > bestRank || (rank === bestRank && endMs > bestEnd)) {
       best = row;
-      bestRenewing = renewing;
+      bestRank = rank;
       bestEnd = endMs;
     }
   }

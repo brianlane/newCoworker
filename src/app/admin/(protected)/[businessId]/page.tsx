@@ -76,6 +76,7 @@ import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
 import { peakLoadPerCore } from "@/lib/vps/host-metrics";
 import { listHostingerVpsCostsByVmId } from "@/lib/db/platform-costs";
 import { pickLiveBoxSnapshot, summarizeBoxTerm, boxSnapshotStale } from "@/lib/vps/box-term";
+import { resolveVpsProvider, providerUsesHostingerLifecycle } from "@/lib/vps/provider";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
 import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
@@ -134,10 +135,19 @@ export default async function BusinessDetailPage({
   // When this box's paid period ends. Read from the daily Hostinger billing
   // snapshot rather than the live API: the admin page must not block on a
   // vendor call, and /admin/costs already keeps this table fresh. Best
-  // effort and one row at most, a missing or unreadable snapshot degrades
-  // the field to "no billing snapshot", never errors the page.
+  // effort, a missing or unreadable snapshot degrades the field to "no
+  // billing snapshot", never errors the page.
+  //
+  // Gated on the provider, not just on the id being numeric. `businesses.
+  // hostinger_vps_id` is REUSED by the other providers (src/lib/ovh/
+  // provision.ts stores the OVH serviceName in it), and a tenant moved off
+  // Hostinger keeps whatever id it had. Without the gate, a leftover numeric
+  // id would match an unrelated Hostinger VM and label this tenant with
+  // another one's renewal date.
+  const boxProvider = resolveVpsProvider(business?.vps_provider);
+  const boxHasHostingerBilling = providerUsesHostingerLifecycle(boxProvider);
   const boxVmId = Number(business?.hostinger_vps_id ?? "");
-  const boxBillingRows = Number.isFinite(boxVmId) && boxVmId > 0
+  const boxBillingRows = boxHasHostingerBilling && Number.isFinite(boxVmId) && boxVmId > 0
     ? await listHostingerVpsCostsByVmId(boxVmId).catch(
         (err: unknown) => {
           console.error(
@@ -815,6 +825,13 @@ export default async function BusinessDetailPage({
                     </span>
                   )}
                 </>
+              ) : !boxHasHostingerBilling ? (
+                // OVH and BYOS boxes are never in the Hostinger snapshot, so
+                // "run Sync now" would be advice that cannot work. Say which
+                // provider owns the answer instead.
+                <span className="text-parchment/40 text-xs">
+                  {boxProvider} box: no Hostinger billing to show
+                </span>
               ) : (
                 <span className="text-parchment/40 text-xs">
                   {business.hostinger_vps_id
