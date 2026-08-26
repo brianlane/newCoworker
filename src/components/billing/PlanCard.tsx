@@ -24,9 +24,11 @@ import { Card } from "@/components/ui/Card";
 import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
 import {
   formatCommitmentTotal,
+  formatPriceCents,
   getMonthlyRateDisplay,
   getRenewalRateDisplay
 } from "@/lib/pricing";
+import type { MembershipDiscountState } from "@/lib/billing/membership-discount";
 import { CancelSheet } from "./CancelSheet";
 import { ChangePlanSelector } from "./ChangePlanSelector";
 import type {
@@ -66,6 +68,14 @@ export type PlanCardProps = {
   packAddonOptions?: MembershipPackAddonOption[];
   /** Packs the tenant already carries, so change-plan does not start empty. */
   currentPackAddons?: MembershipPackAddonSelection;
+  /**
+   * An operator-applied discount on this membership, mirrored from Stripe.
+   *
+   * Shown because the card states a plan and a renewal date, and a customer
+   * paying less than their plan's price should be able to see why here rather
+   * than only discovering it on the invoice. Omitted/all-null renders nothing.
+   */
+  discount?: MembershipDiscountState | null;
 };
 
 function formatDate(iso: string | null | undefined): string {
@@ -90,6 +100,48 @@ function tierLabel(tier: PlanTier | null): string {
 
 export function PlanCard(props: PlanCardProps) {
   const t = useTranslations("dashboard.planCard");
+
+  /**
+   * The operator-applied discount, in the reader's own language.
+   *
+   * Built from the mirrored fields rather than reusing
+   * `describeMembershipDiscount`, which writes English for the admin page. Six
+   * keys instead of one because the amount and the span both vary, and a
+   * catalog cannot interpolate a pre-built English phrase into Spanish
+   * grammar. Returns null when nothing is live, so the caller can render the
+   * whole row on one value.
+   *
+   * Written out as six literal `t()` calls rather than a composed
+   * `t(`${key}${span}`)`. The composed version reads better and is exactly
+   * what tests/i18n-key-usage.test.ts documents itself as unable to check: a
+   * dynamic key is skipped, so a typo in one of these six would ship as a
+   * raw key string on a paying customer's billing page.
+   */
+  function discountSummary(): string | null {
+    const discount = props.discount;
+    if (!discount || !discount.discount_coupon_id) return null;
+    const months = discount.discount_duration_in_months ?? 0;
+
+    if (discount.discount_percent_off !== null) {
+      const percent = discount.discount_percent_off;
+      if (discount.discount_duration === "forever") return t("discountPercentForever", { percent });
+      if (discount.discount_duration === "repeating") {
+        return t("discountPercentMonths", { percent, months });
+      }
+      return t("discountPercentOnce", { percent });
+    }
+
+    if (discount.discount_amount_off_cents !== null) {
+      const amount = formatPriceCents(discount.discount_amount_off_cents);
+      if (discount.discount_duration === "forever") return t("discountAmountForever", { amount });
+      if (discount.discount_duration === "repeating") {
+        return t("discountAmountMonths", { amount, months });
+      }
+      return t("discountAmountOnce", { amount });
+    }
+
+    return null;
+  }
 
   function periodLabel(p: BillingPeriod | null): string {
     if (!p) return "–";
@@ -142,6 +194,7 @@ export function PlanCard(props: PlanCardProps) {
   const [recontractError, setRecontractError] = useState<string | null>(null);
 
   const badge = statusBadge(status, periodEnd, graceEndsAt);
+  const discountLabel = discountSummary();
   const cancelable =
     status === "active" || status === "active_cancel_at_period_end";
   const alreadyPeriodEnd = status === "active_cancel_at_period_end";
@@ -290,6 +343,14 @@ export function PlanCard(props: PlanCardProps) {
           <div>
             <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("dataWipesOn")}</dt>
             <dd className="mt-1 font-mono text-spark-orange">{formatDate(graceEndsAt)}</dd>
+          </div>
+        )}
+        {discountLabel && (
+          <div>
+            <dt className="text-xs text-parchment/50 uppercase tracking-wider">
+              {t("discountApplied")}
+            </dt>
+            <dd className="mt-1 text-signal-teal">{discountLabel}</dd>
           </div>
         )}
       </dl>

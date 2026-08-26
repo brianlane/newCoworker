@@ -281,6 +281,115 @@ describe("computeDayCurrentMrr, recurring pack add-ons", () => {
     expect(result.committedCents).toBe(4800);
   });
 
+  describe("admin membership discount", () => {
+    it("takes a live percentage discount off the plan rate", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            discount_coupon_id: "co_1",
+            discount_percent_off: 30,
+            discount_duration: "forever"
+          })
+        ],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(Math.round(9900 * 0.7));
+    });
+
+    it("takes a live amount discount off the plan rate", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            discount_coupon_id: "co_1",
+            discount_amount_off_cents: 4000,
+            discount_duration: "forever"
+          })
+        ],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(9900 - 4000);
+    });
+
+    it("discounts the plan line only, never the packs riding beside it", () => {
+      // The coupon is scoped to the plan product at Stripe, so a discounted
+      // tenant still pays full freight on their packs. This number has to
+      // agree with the invoice.
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            membership_pack_addons: { addonVoice: "min_30:1:1800" },
+            discount_coupon_id: "co_1",
+            discount_percent_off: 50,
+            discount_duration: "forever"
+          })
+        ],
+        enterpriseDeals: [],
+        packAddonOptions: options,
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(Math.round(9900 * 0.5) + 4800);
+    });
+
+    it("carries the discount into the refund-exposed figure too", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            refund_exposed: true,
+            discount_coupon_id: "co_1",
+            discount_percent_off: 30,
+            discount_duration: "forever"
+          })
+        ],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.refundExposedCents).toBe(Math.round(9900 * 0.7));
+      expect(result.committedCents).toBe(0);
+    });
+
+    it("ignores a one-off discount, same treatment as the monthly intro coupon", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            discount_coupon_id: "co_1",
+            discount_percent_off: 30,
+            discount_duration: "once"
+          })
+        ],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(9900);
+    });
+
+    it("ignores a repeating discount that has already run out", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [
+          sub({
+            discount_coupon_id: "co_1",
+            discount_percent_off: 30,
+            discount_duration: "repeating",
+            discount_ends_at: "2026-01-01T00:00:00Z"
+          })
+        ],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(9900);
+    });
+
+    it("prices a row that predates the discount columns at full rate", () => {
+      const result = computeDayCurrentMrr({
+        subscriptions: [sub()],
+        enterpriseDeals: [],
+        now: NOW
+      });
+      expect(result.subscriptionCents).toBe(9900);
+    });
+  });
+
   it("ignores junk mirrors and unknown pack ids rather than erroring the tile", () => {
     const result = computeDayCurrentMrr({
       subscriptions: [

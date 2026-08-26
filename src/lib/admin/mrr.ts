@@ -25,11 +25,23 @@
  * renewal prices (pre-Jul-2026 schedules), the monthly intro coupon, and
  * the Canadian and Mexican messaging surcharge add-ons. Nothing bills from
  * these numbers, they are an operator-facing health metric.
+ *
+ * An ADMIN MEMBERSHIP DISCOUNT is modeled, unlike the intro coupon, because it
+ * is neither small nor self-limiting: an operator can take 30% off one tenant
+ * forever, and an unmodeled forever-discount leaves the tile permanently
+ * claiming revenue nobody is being charged. It is applied to the plan rate
+ * only, matching the coupon's own product scoping, and only while it actually
+ * recurs (see `membershipDiscountReducesMrr`, which excludes a `once` discount
+ * for the same reason the intro coupon is excluded).
  */
 
 import { getCommitmentMonths, getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import { isCommitmentElapsed } from "@/lib/db/subscriptions";
+import {
+  applyMembershipDiscountToCents,
+  type MembershipDiscountState
+} from "@/lib/billing/membership-discount";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
@@ -69,7 +81,13 @@ export type MrrSubscriptionInput = {
    * jsonb read the pricer validates itself.
    */
   membership_pack_addons?: unknown;
-};
+  /**
+   * The `subscriptions` discount mirror columns, when an operator has comped
+   * this tenant through /api/admin/membership-discount. Partial so existing
+   * callers and fixtures that predate the feature stay valid; anything missing
+   * reads as "no discount".
+   */
+} & Partial<MembershipDiscountState>;
 
 export type DayCurrentMrr = {
   totalCents: number;
@@ -158,8 +176,15 @@ export function computeDayCurrentMrr(params: {
     // dollars are non-refundable (the refund executor carves pack lines out
     // of the money-back, Aug 2026), so counting them in refundExposedCents
     // would overstate the at-risk number the admin cards display.
-    const planRateCents = dayCurrentSubscriptionRateCents(
-      sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
+    // The discount comes off the plan rate and nothing else: the coupon is
+    // scoped to the plan product, so a discounted tenant still pays full
+    // freight on their packs and surcharges, and so does this number.
+    const planRateCents = applyMembershipDiscountToCents(
+      dayCurrentSubscriptionRateCents(
+        sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
+        now
+      ),
+      sub,
       now
     );
     const packCents = monthlyPackAddonCents(

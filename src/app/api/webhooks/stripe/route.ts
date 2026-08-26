@@ -25,6 +25,7 @@ import {
 } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { pauseStateFromStripeSubscription } from "@/lib/billing/admin-billing-controls";
+import { discountStateFromStripeSubscription } from "@/lib/billing/membership-discount";
 import {
   incrementLifetimeSubscriptionCount,
   markFirstPaidIfUnset,
@@ -496,6 +497,19 @@ export async function POST(request: Request) {
             // edit, so the cache cannot drift for long.
             membership_pack_addons: membershipPackAddonsForRow(sub.metadata),
             ...pauseStateFromStripeSubscription(sub),
+            // Same idea for an admin membership discount, with one asymmetry
+            // worth knowing: a webhook payload cannot expand `discounts`, so
+            // this reader can only ever CLEAR the mirror here (Stripe sends an
+            // empty array when there is no discount) and returns null, meaning
+            // "leave it alone", when the array holds unexpandable ids. That is
+            // the safe direction: it is how a discount that expired, or that
+            // someone removed in the Stripe dashboard, stops being claimed on
+            // the admin page, while a live discount is never wiped by an
+            // unrelated subscription edit. The cost is that a discount
+            // attached outside this lever is never adopted into the mirror, so
+            // the admin panel's copy tells the operator that a coupon added by
+            // hand in the Stripe dashboard will not show up here.
+            ...(discountStateFromStripeSubscription(sub) ?? {}),
             ...stripeSubscriptionPeriodCache(sub)
           });
 

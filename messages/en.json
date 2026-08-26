@@ -2596,7 +2596,14 @@
       "recontractBody": "Your original {term} term has ended, so you're billed month-to-month at <rollover></rollover>. Start a new {term} contract to get back to <rate></rate>; <total></total> billed today.",
       "startNewContractCta": "Start a new {term} contract",
       "changePlan": "Change plan",
-      "changePlanBody": "Upgrade, downgrade, or switch your billing period. Current plan is canceled immediately with no proration; your workspace data migrates to a new server at the new tier."
+      "changePlanBody": "Upgrade, downgrade, or switch your billing period. Current plan is canceled immediately with no proration; your workspace data migrates to a new server at the new tier.",
+      "discountApplied": "Discount applied",
+      "discountPercentOnce": "{percent}% off your next invoice",
+      "discountPercentMonths": "{percent}% off for {months, plural, one {# month} other {# months}}",
+      "discountPercentForever": "{percent}% off every invoice",
+      "discountAmountOnce": "{amount} off your next invoice",
+      "discountAmountMonths": "{amount} off for {months, plural, one {# month} other {# months}}",
+      "discountAmountForever": "{amount} off every invoice"
     },
     "notificationsPage": {
       "title": "Notifications",
