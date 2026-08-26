@@ -435,10 +435,6 @@
           "title": "Warm Call Transfers",
           "description": "When a caller needs a human, the call is transferred to you or a teammate with context, so the caller never repeats themselves."
         },
-        "booking": {
-          "title": "Appointment Booking",
-          "description": "Connected to your Google or Microsoft calendar, your coworker finds open slots and books them during the call."
-        },
         "qualification": {
           "title": "Lead Qualification",
           "description": "Caller intent is understood within seconds; details are captured, qualified, and logged so follow-up is effortless."
@@ -475,6 +471,23 @@
         "email": {
           "title": "Email Handling",
           "description": "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too."
+        }
+      },
+      "scheduling": {
+        "eyebrow": "Scheduling",
+        "title": "Booked, rebooked, and on everyone's calendar",
+        "subtitle": "Real availability from the tools you already use, or a booking page we host when you have none.",
+        "booking": {
+          "title": "Appointment Booking",
+          "description": "Your coworker checks live availability on Google Calendar, Microsoft 365, CalDAV, Calendly (multiple accounts supported), Vagaro, or Acuity, books mid-call or mid-text, and reschedules or cancels when plans change. Video appointments get a Zoom or Google Meet link automatically."
+        },
+        "bookingPage": {
+          "title": "Your Own Booking Page",
+          "description": "A self-serve scheduling page we host for you, no calendar tool required. Per-employee pages, round robin, intake questions, confirmations and reminders, and a waitlist text when an earlier slot frees up."
+        },
+        "teamCalendar": {
+          "title": "Team Calendar & Feed",
+          "description": "Every booking lands on a shared team calendar with a feed anyone can subscribe to from their own calendar app, including appointments booked outside New Coworker."
         }
       },
       "intelligence": {
@@ -659,7 +672,7 @@
       "transfersQ": "Can it transfer calls to me or my team?",
       "transfersA": "Yes. Standard plans include warm handoff transfers: when a caller needs a human, your coworker brings you onto the line with the context already gathered, so the caller never repeats themselves.",
       "bookQ": "Can an AI actually book appointments, or does it just take a message?",
-      "bookA": "It books. Your coworker checks live availability on your real calendar (Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro), offers times, and writes the appointment while the caller is still on the phone. If you have no calendar tool at all, it books on a scheduling page we host for you, and everyone gets a confirmation and a reminder.",
+      "bookA": "It books. Your coworker checks live availability on your real calendar (Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity), offers times, and writes the appointment while the caller is still on the phone. If you have no calendar tool at all, it books on a scheduling page we host for you, and everyone gets a confirmation and a reminder.",
       "channelsQ": "Does it handle texts and DMs, or only phone calls?",
       "channelsA": "Both. The same coworker answers calls, two-way SMS, WhatsApp, Facebook Messenger, Instagram DMs, and website chat, and it gets its own email address. It is one memory across all of them, so a customer who called on Tuesday and texts on Friday does not have to start over.",
       "languagesQ": "Can it talk to my Spanish-speaking customers?",
@@ -1793,7 +1806,7 @@
       },
       "appointmentBooking": {
         "title": "Appointment Booking",
-        "description": "Your coworker checks live availability on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro and books mid-call, then reschedules or cancels when plans change."
+        "description": "Your coworker checks live availability on Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity and books mid-call, then reschedules or cancels when plans change."
       },
       "bookingPage": {
         "title": "Your Own Booking Page",

@@ -79,8 +79,10 @@ const CAPABILITY_LINES = [
     "who do not share a language (live interpretation: Standard plan and up).",
   "- Messaging: two-way SMS and a dedicated email address per business on every plan; " +
     "AI replies on Messenger, Instagram DM, WhatsApp, and website chat on Standard and up.",
-  "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity Scheduling, " +
-    "plus a public self-serve booking page with confirmations and reminders for businesses with no calendar tool at all.",
+  "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly (multiple accounts), Vagaro, or Acuity Scheduling, " +
+    "adds a Zoom or Google Meet link to video bookings, " +
+    "plus a public self-serve booking page with confirmations, reminders, and a cancellation waitlist for businesses with no calendar tool at all, " +
+    "and a shared team calendar with a feed anyone on the roster can subscribe to.",
   "- Memory: a permanent per-business knowledge base plus a customer knowledge graph, so the coworker " +
     "remembers what was said months ago on any channel.",
   "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
