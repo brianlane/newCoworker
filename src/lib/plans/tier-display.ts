@@ -214,7 +214,10 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es ? "Soporte prioritario por correo y mantenimiento" : "Priority email support & maintenance",
     es
       ? "Habilidades completas de navegador: opera sitios web como una persona"
-      : "Full browser skills: operates websites like a person"
+      : "Full browser skills: operates websites like a person",
+    es
+      ? "Slack: chatea con tu coworker y aprueba sus automatizaciones desde Slack"
+      : "Slack: chat with your coworker and approve its automations from Slack"
   ];
 }
 
