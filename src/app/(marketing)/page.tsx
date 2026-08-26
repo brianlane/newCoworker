@@ -21,6 +21,7 @@ import { getLocale, getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaLink } from "@/components/marketing/CtaLink";
+import { TrackedCtaLink } from "@/components/marketing/TrackedCtaLink";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import {
   CtaBanner,
@@ -128,7 +129,9 @@ export default async function HomePage() {
         subtitle={t("home.heroSubtitle")}
       >
         <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <CtaLink href="/onboard">{t("home.startFor", { price: starterFrom })}</CtaLink>
+          <TrackedCtaLink href="/onboard" event="cta_get_started" eventProps={{ source: "hero" }}>
+            {t("home.startFor", { price: starterFrom })}
+          </TrackedCtaLink>
           <CtaLink href="/pricing" variant="secondary">
             {t("home.seePricing")}
           </CtaLink>
@@ -156,13 +159,16 @@ export default async function HomePage() {
           </p>
           <h2 className="text-2xl font-bold text-parchment sm:text-3xl">{t("home.callDemoTitle")}</h2>
           <p className="mx-auto mt-4 max-w-xl text-parchment/55">{t("home.callDemoBody")}</p>
-          <a
+          <TrackedCtaLink
             href="tel:+16023131823"
-            className="mt-7 inline-flex items-center gap-3 rounded-lg bg-claw-green px-8 py-3.5 text-lg font-bold text-deep-ink transition-colors hover:bg-claw-green/90"
+            asAnchor
+            event="demo_call_click"
+            size="xl"
+            className="mt-7"
           >
             <Phone className="h-5 w-5" aria-hidden />
             +1 (602) 313-1823
-          </a>
+          </TrackedCtaLink>
         </div>
       </section>
 

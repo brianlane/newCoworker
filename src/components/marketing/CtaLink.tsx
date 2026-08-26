@@ -22,8 +22,10 @@ const VARIANT_CLASSES = {
 } as const;
 
 const SIZE_CLASSES = {
-  md: "px-4 py-2 text-sm",
-  lg: "px-8 py-3.5 text-sm"
+  md: "inline-block px-4 py-2 text-sm font-semibold",
+  lg: "inline-block px-8 py-3.5 text-sm font-semibold",
+  /** The one oversized CTA (the homepage call-the-demo number). */
+  xl: "inline-flex items-center gap-3 px-8 py-3.5 text-lg font-bold"
 } as const;
 
 export type CtaLinkProps = {
@@ -49,7 +51,7 @@ export function CtaLink({
   onClick
 }: CtaLinkProps) {
   const classes = [
-    "inline-block rounded-lg font-semibold transition-colors",
+    "rounded-lg transition-colors",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claw-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-deep-ink",
     VARIANT_CLASSES[variant],
     SIZE_CLASSES[size],

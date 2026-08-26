@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import type { ComponentType, ReactNode, SVGProps } from "react";
-import { CtaLink } from "./CtaLink";
+import { TrackedCtaLink } from "./TrackedCtaLink";
 
 /**
  * Shared section primitives for the public marketing pages, so every page
@@ -138,7 +138,9 @@ export function CtaBanner({
       <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
         <h2 className="mb-3 font-display text-2xl font-bold text-parchment">{title}</h2>
         {subtitle && <p className="mb-8 text-parchment/50">{subtitle}</p>}
-        <CtaLink href={ctaHref}>{ctaLabel}</CtaLink>
+        <TrackedCtaLink href={ctaHref} event="cta_get_started" eventProps={{ source: "banner" }}>
+          {ctaLabel}
+        </TrackedCtaLink>
       </div>
     </section>
   );

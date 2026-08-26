@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { track } from "@vercel/analytics";
 import { CONTACT_TOPIC_DEFS_BY_PARAM } from "@/lib/marketing/contact-topics";
 
 type Status = "idle" | "sending" | "sent" | "error";
@@ -166,6 +167,7 @@ function ContactFormFields({
         return;
       }
       setStatus("sent");
+      track("contact_submitted", { topic: topic ?? "general" });
     } catch {
       setError(tf("sendFailed"));
       setStatus("error");

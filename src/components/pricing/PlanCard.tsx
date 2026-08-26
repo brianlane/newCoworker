@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { track } from "@vercel/analytics";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
@@ -145,6 +146,7 @@ export function PlanCard({
       <div className="mt-4 self-end">
         <a
           href={isEnterprise ? "/contact" : `/onboard/questionnaire?tier=${tier.id}&period=${period}`}
+          onClick={() => track("plan_selected", { tier: tier.id, period })}
           className={[
             // `border` on all three, transparent on the filled ones: only
             // Enterprise's button is outlined, and without a matching border
