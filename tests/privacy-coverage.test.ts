@@ -90,6 +90,8 @@ const EXEMPT: Record<string, string> = {
 
   // Tenant/platform configuration: no end-customer person rows.
   agent_tool_settings: "per-tenant tool toggles",
+  coworker_staff_mode:
+    "per-tenant, per-surface staff toggles (business_id, surface key, boolean); no person columns, and the rows cascade with the business",
   ai_flow_definition_versions:
     "prior versions of the same owner-authored flow definitions ai_flows is exempted for; FK cascades from ai_flows",
   ai_flow_pending_edits:

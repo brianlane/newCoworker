@@ -68,16 +68,13 @@ export type BusinessTelnyxSettingsRow = {
 /** Persist the staff-SMS behavior toggles (owner settings UI). */
 export async function setStaffSmsSettings(
   businessId: string,
-  input: { assistantReplyEnabled?: boolean; forwardToOwnerEnabled?: boolean },
+  input: { forwardToOwnerEnabled?: boolean },
   client?: SupabaseClient
 ): Promise<BusinessTelnyxSettingsRow> {
   const db = client ?? (await createSupabaseServiceClient());
   const row: Record<string, unknown> = {
     business_id: businessId,
     updated_at: new Date().toISOString(),
-    ...(input.assistantReplyEnabled !== undefined
-      ? { staff_sms_assistant_reply_enabled: input.assistantReplyEnabled }
-      : {}),
     ...(input.forwardToOwnerEnabled !== undefined
       ? { staff_sms_forward_to_owner_enabled: input.forwardToOwnerEnabled }
       : {})

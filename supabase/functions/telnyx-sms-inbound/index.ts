@@ -3880,21 +3880,34 @@ serve(async (req: Request) => {
     let staffReplyEnabled = true;
     let staffForwardEnabled = false;
     if (teamMember) {
-      const { data: staffCfg } = await supabase
-        .from("business_telnyx_settings")
-        .select(
-          "staff_sms_assistant_reply_enabled, staff_sms_forward_to_owner_enabled"
-        )
-        .eq("business_id", businessId)
-        .maybeSingle();
-      if (staffCfg) {
-        staffReplyEnabled =
-          (staffCfg as { staff_sms_assistant_reply_enabled?: boolean | null })
-            .staff_sms_assistant_reply_enabled !== false;
-        staffForwardEnabled =
-          (staffCfg as { staff_sms_forward_to_owner_enabled?: boolean | null })
-            .staff_sms_forward_to_owner_enabled === true;
-      }
+      const [fwdCfgRes, staffModeRes] = await Promise.all([
+        // Forwarding a staff text to the owner's cell is SMS-specific and
+        // stays on the Telnyx settings row.
+        supabase
+          .from("business_telnyx_settings")
+          .select("staff_sms_forward_to_owner_enabled")
+          .eq("business_id", businessId)
+          .maybeSingle(),
+        // Whether staff get answered at all is now per surface, shared with
+        // every other channel. Lockstep mirror of
+        // src/lib/owner-surfaces/staff-mode.ts, which Deno cannot import:
+        // same table, same key, same default (a missing row means enabled).
+        // The migration that created the table backfilled every tenant's
+        // previous staff_sms_assistant_reply_enabled value into it, so an
+        // owner who had turned staff replies off stays off.
+        supabase
+          .from("coworker_staff_mode")
+          .select("assistant_reply_enabled")
+          .eq("business_id", businessId)
+          .eq("surface_key", "sms")
+          .maybeSingle()
+      ]);
+      staffForwardEnabled =
+        (fwdCfgRes.data as { staff_sms_forward_to_owner_enabled?: boolean | null } | null)
+          ?.staff_sms_forward_to_owner_enabled === true;
+      staffReplyEnabled =
+        (staffModeRes.data as { assistant_reply_enabled?: boolean | null } | null)
+          ?.assistant_reply_enabled !== false;
     }
 
     // Owner/employee gate, shared by the Safe Mode and normal paths. Two

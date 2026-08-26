@@ -17,6 +17,7 @@ import {
   getTelnyxVoiceRouteForBusiness,
   getBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
+import { staffModeEnabled } from "@/lib/owner-surfaces/staff-mode";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 import { PhoneNumberCard } from "@/components/dashboard/PhoneNumberCard";
 import { UnverifiedEmailBanner } from "@/components/dashboard/UnverifiedEmailBanner";
@@ -71,6 +72,9 @@ export default async function DashboardPage() {
   let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
   let voiceSnapshot: Awaited<ReturnType<typeof getVoiceBillingSnapshotForBusiness>> | null = null;
   let smsUsedThisPeriod: number | null = null;
+  // Per-surface staff mode for SMS. Defaults to enabled on its own if the
+  // read fails, so this never blanks the card.
+  let staffSmsReplyEnabled = true;
   if (business) {
     [
       recentActivity,
@@ -79,7 +83,8 @@ export default async function DashboardPage() {
       telnyxSettings,
       chatSpend,
       voiceSnapshot,
-      smsUsedThisPeriod
+      smsUsedThisPeriod,
+      staffSmsReplyEnabled
     ] = await Promise.all([
       getRecentActivity(business.id, 10, undefined, business.tier),
       getLatestProvisioningStatus(business.id),
@@ -95,7 +100,8 @@ export default async function DashboardPage() {
         // Cap surface: show text UNITS (the number the reserve RPC enforces),
         // ceiled so the displayed remainder is never more than Postgres allows.
         .then((t) => Math.ceil(t.sms_text_units))
-        .catch(() => null)
+        .catch(() => null),
+      staffModeEnabled(business.id, "sms")
     ]);
   }
 
@@ -325,9 +331,10 @@ export default async function DashboardPage() {
 
           <StaffSmsToggle
             businessId={business.id}
-            initialAssistantReplyEnabled={
-              telnyxSettings?.staff_sms_assistant_reply_enabled ?? true
-            }
+            // Shared per-surface store, the same row Settings → Coworker
+            // shows and the SMS webhook reads. The old
+            // business_telnyx_settings column has no readers left.
+            initialAssistantReplyEnabled={staffSmsReplyEnabled}
             initialForwardToOwnerEnabled={
               telnyxSettings?.staff_sms_forward_to_owner_enabled ?? false
             }

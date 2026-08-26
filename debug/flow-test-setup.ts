@@ -145,10 +145,15 @@ if (!APPLY) {
     );
   }
   console.log(`[setup] DID: ${existingRoute.to_e164}`);
-  const { error: staffErr } = await db
-    .from("business_telnyx_settings")
-    .update({ staff_sms_assistant_reply_enabled: false })
-    .eq("business_id", FLOW_TEST_BUSINESS_ID);
+  const { error: staffErr } = await db.from("coworker_staff_mode").upsert(
+    {
+      business_id: FLOW_TEST_BUSINESS_ID,
+      surface_key: "sms",
+      assistant_reply_enabled: false,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: "business_id,surface_key" }
+  );
   if (staffErr) throw new Error(`staff toggle: ${staffErr.message}`);
   console.log("[setup] staff assistant replies disabled");
 }

@@ -36,6 +36,23 @@ export async function businessOwnerNumbers(
   businessId: string,
   client?: SupabaseClient
 ): Promise<string[]> {
+  return (await businessOwnerNumbersResult(businessId, client)).numbers;
+}
+
+/**
+ * The same three reads, plus whether any of them ERRORED.
+ *
+ * The bare version above swallows a failed read into an empty list, which is
+ * right for the cosmetic callers (an unlabeled thread is a miss, not an
+ * incident) and dangerous for one that decides ACCESS: an unreadable
+ * businesses row would silently demote the owner to a customer and report it
+ * as a confident answer. resolveSurfaceSpeaker uses this form so it can tell
+ * "no owner numbers on file" from "could not find out".
+ */
+export async function businessOwnerNumbersResult(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<{ numbers: string[]; readFailed: boolean }> {
   const db = client ?? (await createSupabaseServiceClient());
   const [bizRes, telnyxRes, prefsRes] = await Promise.all([
     db.from("businesses").select("phone").eq("id", businessId).maybeSingle(),
@@ -50,11 +67,15 @@ export async function businessOwnerNumbers(
       .eq("business_id", businessId)
       .maybeSingle()
   ]);
-  return ownerNumbersFrom({
-    phone: (bizRes.data as { phone?: string | null } | null)?.phone,
-    forwardToE164: (telnyxRes.data as { forward_to_e164?: string | null } | null)?.forward_to_e164,
-    alertPhone: (prefsRes.data as { phone_number?: string | null } | null)?.phone_number
-  });
+  return {
+    numbers: ownerNumbersFrom({
+      phone: (bizRes.data as { phone?: string | null } | null)?.phone,
+      forwardToE164: (telnyxRes.data as { forward_to_e164?: string | null } | null)
+        ?.forward_to_e164,
+      alertPhone: (prefsRes.data as { phone_number?: string | null } | null)?.phone_number
+    }),
+    readFailed: Boolean(bizRes.error || telnyxRes.error || prefsRes.error)
+  };
 }
 
 /**

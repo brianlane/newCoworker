@@ -26,9 +26,14 @@
  * whoever is on the other end of an unverified channel. So every uncertain
  * answer here resolves to `customer`, and `readFailed` reports that the
  * answer was forced rather than found.
+ *
+ * For that flag to be worth anything, a failed read has to be VISIBLE. See
+ * ownerNumbersOrThrow below: the shared readers swallow PostgREST errors by
+ * design, and a swallowed error here would demote the owner to a customer
+ * and call it confident.
  */
 
-import { businessOwnerNumbers } from "@/lib/db/contact-names";
+import { businessOwnerNumbersResult } from "@/lib/db/contact-names";
 import { listTeamMembers, type TeamMemberRow } from "@/lib/db/employees";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
@@ -82,17 +87,42 @@ const unresolvedSpeaker = (): SurfaceSpeaker => ({
   readFailed: true
 });
 
-/* c8 ignore start -- production default; tests inject */
-async function fetchBusinessIdentity(businessId: string): Promise<BusinessIdentityRow | null> {
+/**
+ * The two production readers, both LOUD about a failed read.
+ *
+ * This is the half Bugbot caught on PR #1629, and it is worth spelling out.
+ * The fail-closed promise in the header only held when a reader THREW.
+ * `businessOwnerNumbers` and a plain `businesses` read both swallow a
+ * PostgREST error and hand back an empty list or a null row, which is
+ * indistinguishable from "this business has no owner number on file". The
+ * owner would then be classified `customer` with `readFailed: false`: not
+ * merely a wrong answer, but one that tells the caller it was a confident
+ * one, sending the owner down the customer path. That IS the WhatsApp
+ * incident this module exists to prevent.
+ *
+ * So both readers below turn a failed read into a throw, and the catch in
+ * resolveSurfaceSpeaker turns that into the honest fail-closed answer.
+ */
+export async function ownerNumbersOrThrow(businessId: string): Promise<string[]> {
+  const { numbers, readFailed } = await businessOwnerNumbersResult(businessId);
+  if (readFailed) throw new Error(`owner number lookup failed for ${businessId}`);
+  return numbers;
+}
+
+export async function businessIdentityOrThrow(
+  businessId: string
+): Promise<BusinessIdentityRow | null> {
   const db = await createSupabaseServiceClient();
-  const { data } = await db
+  const { data, error } = await db
     .from("businesses")
     .select("owner_name, owner_email")
     .eq("id", businessId)
     .maybeSingle();
+  if (error) throw new Error(`business identity lookup failed: ${error.message}`);
+  // A genuinely absent row is a real answer (no owner email on record), not
+  // a failure: it costs a label, never a classification.
   return (data as BusinessIdentityRow | null) ?? null;
 }
-/* c8 ignore stop */
 
 export async function resolveSurfaceSpeaker(
   businessId: string,
@@ -106,9 +136,9 @@ export async function resolveSurfaceSpeaker(
   if (!phone && !email) return unknownSpeaker();
 
   /* c8 ignore start -- production defaults; tests inject */
-  const fetchOwnerNumbers = deps.fetchOwnerNumbers ?? businessOwnerNumbers;
+  const fetchOwnerNumbers = deps.fetchOwnerNumbers ?? ownerNumbersOrThrow;
   const fetchRoster = deps.fetchRoster ?? listTeamMembers;
-  const fetchBusiness = deps.fetchBusiness ?? fetchBusinessIdentity;
+  const fetchBusiness = deps.fetchBusiness ?? businessIdentityOrThrow;
   /* c8 ignore stop */
 
   let ownerNumbers: string[];
