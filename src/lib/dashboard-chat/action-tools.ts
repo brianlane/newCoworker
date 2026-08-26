@@ -86,6 +86,7 @@ import {
 } from "@/lib/notifications/preferences-tool";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
+import { OWNER_SURFACES } from "@/lib/owner-surfaces/registry";
 
 /** Tool names as declared to the inline Gemini call (base keys, no prefix). */
 export const ACTION_TOOL_NAMES = [
@@ -1088,12 +1089,9 @@ export type ActionToolDeps = {
  * source the caller already passes. Unknown values fall back to the
  * dashboard rather than inventing a surface name the history cannot read.
  */
-const CT_SOURCE_BY_FLOW_EDIT: Readonly<Record<string, string>> = {
-  ai_edit_dashboard: "ai_dashboard",
-  ai_edit_sms: "ai_sms",
-  ai_edit_slack: "ai_slack",
-  ai_edit_email: "ai_email"
-};
+const CT_SOURCE_BY_FLOW_EDIT: Readonly<Record<string, string>> = Object.fromEntries(
+  OWNER_SURFACES.map((surface) => [surface.flowEditSource, surface.customTableSource])
+);
 
 export async function executeActionTool(
   businessId: string,
