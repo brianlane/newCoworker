@@ -230,7 +230,7 @@ describe("reassignMeetingContact: the repair", () => {
     expect(result.ok === true && result.renamedFrom).toBe("Alexander");
   });
 
-  it("re-runs the classification with the contact forced, against the CORRECTED minutes", async () => {
+  it("re-runs the classification with the contact forced, against the CORRECTED content", async () => {
     const d = deps();
     await reassignMeetingContact(
       { businessId: BIZ, documentId: DOC, contactId: CONTACT_ID },
@@ -241,8 +241,8 @@ describe("reassignMeetingContact: the repair", () => {
     const applied = callArgs(d.classifyAndApply)[0] as Record<string, unknown>;
     expect(applied.forcedContact).toEqual({ contactId: CONTACT_ID, contactKey: CONTACT_KEY });
     expect(applied.documentTitle).toBe("Bobby Zoom meeting recording");
-    expect(applied.minutes).toContain("Bobby operates as a rental locator");
-    expect(applied.minutes).not.toContain("Alexander");
+    expect(applied.content).toContain("Bobby operates as a rental locator");
+    expect(applied.content).not.toContain("Alexander");
   });
 
   it("reports what the re-classification filed", async () => {

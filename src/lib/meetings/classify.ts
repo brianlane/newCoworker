@@ -1,7 +1,7 @@
 /**
  * Meeting-minutes classification: the model pass.
  *
- * Two Gemini calls against the condensed minutes, both metered into the
+ * Two Gemini calls against the imported document, both metered into the
  * tenant's own shared AI budget on the `meeting_classify` surface, mirroring
  * `runCondense` in src/lib/documents/ingest.ts (same model resolution, same
  * abort budget, same meter-even-on-empty handling).
@@ -49,7 +49,7 @@ const DEFAULT_MEETING_MODEL = "gemini-3.5-flash-lite";
 const MEETING_CALL_TIMEOUT_MS = 30_000;
 
 const CLASSIFY_SYSTEM_PROMPT =
-  "You read the minutes of a business meeting and report what the meeting was, strictly and conservatively. You never infer a commitment that was not made.";
+  "You read the record of a business meeting and report what the meeting was, strictly and conservatively. You never infer a commitment that was not made.";
 
 const EXTRACT_SYSTEM_PROMPT =
   "You read the minutes of a business meeting and list the follow-up tasks people committed to. You never invent a task that nobody agreed to.";
@@ -145,17 +145,22 @@ async function runMeetingCall(
 /**
  * Classify the meeting and pull its action items.
  *
- * Blank minutes short-circuit to `unclear` without spending anything: an
+ * `content` is the WHOLE imported document: the condensed minutes with the
+ * raw dialogue underneath. Naming it "minutes" is what hid the fact that the
+ * classifier was reading mostly transcript; `buildMeetingClassifyPrompt`
+ * now splits the two apart and budgets them separately.
+ *
+ * Blank content short-circuits to `unclear` without spending anything: an
  * empty condensation means the ingest already had nothing to work with.
  */
 export async function classifyMeeting(
   businessId: string,
-  minutes: string,
+  content: string,
   options: ClassifyMeetingOptions = {}
 ): Promise<ClassifiedMeeting> {
   /* c8 ignore next -- production default; tests inject */
   const generate = options.generate ?? geminiGenerateTextDetailed;
-  const text = minutes.trim();
+  const text = content.trim();
   if (!text) return { outcome: MEETING_OUTCOME_UNCLEAR, actionItems: [] };
 
   const classifyRaw = await runMeetingCall(

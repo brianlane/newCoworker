@@ -2838,6 +2838,61 @@ tenant's own AI budget on the `meeting_classify` surface:
 Two calls rather than one combined prompt so each reuses a proven builder
 verbatim, and so a to-do extraction failure never costs the stage move.
 
+### What the classifier reads, and why that was the whole bug
+
+A Zoom import stores ONE column: the condensed minutes with the raw dialogue
+below a `## Transcript` heading. Everything downstream called that whole blob
+"the minutes", and the name hid what was really happening.
+
+The classifier had a 6,000-character budget against an 8,000-character
+document, and the shared `buildClassifyPrompt` keeps the TAIL when it clips.
+That is right for an SMS window, where the newest message is the one being
+classified, and wrong here: on real imports the cut landed PAST the end of
+the minutes. Measured on live meetings, two of three long ones reached the
+model with NO minutes at all, just dialogue starting mid-sentence, under a
+prompt saying "these are the minutes". The one meeting an owner complained
+about came back `unclear` on 8 of 13 runs of identical input.
+
+Three things fix it, and `buildMeetingClassifyInput` does all three:
+
+1. **Read the whole document.** `MEETING_CLASSIFY_MAX_CHARS` is now
+   `DOCUMENT_CONTENT_MD_MAX_CHARS` itself, so nothing is ever clipped. The
+   two constants are tied in code, not matched by hand, so raising the
+   document cap cannot silently reintroduce the gap.
+2. **Label the two halves.** They are worth different things: the minutes
+   cover the whole call but are second-hand, the transcript is first-hand but
+   stops early (the ingest keeps the OPENING and throws the rest away).
+   Handing the model one undifferentiated wall of text left it unable to tell
+   a summary from evidence.
+3. **Say that the transcript stops early.** This line is load-bearing, not
+   decoration. Without it the model read the truncated opening as the whole
+   call and downgraded a real signup to `follow_up` on 5 of 5 runs.
+
+Trimming is now a safety net that no real import reaches, and the two halves
+trim from OPPOSITE ends on purpose. The condenser writes minutes in call
+order ending on "Next Steps", so the sentence saying whether anybody
+committed is the last one: head-trimming the minutes kept the participant
+list and lost "will sign up via self-service with his credit card". The
+transcript trims from the other end, matching how the document was built.
+
+**Score it, do not argue about it.**
+`npx tsx debug/meeting-classify-score.ts --runs 3 <docId>=signed ...` runs the
+real prompt against real imports and grades it. That harness exists because
+the reasoning here is unreliable: the shipped prompt scored 3/9 on three
+graded meetings, and two plausible-sounding fixes each scored WORSE (dropping
+the transcript invented a `signed` for a prospect who never signed; describing
+the excerpt as the END of the call cost a real one). The shape above scores
+9/9, with three identical answers per meeting.
+
+One consequence worth knowing: a meeting where the guest verbally agreed to
+start, but has not paid yet, now reads `signed` and moves the card to Won.
+That is the intended rule (`LIFECYCLE_STAGE_TAGS` documents why Won is a
+meeting-only moment), and the stage move is forward-only, so a human can drag
+the card back without the platform rewriting it. Nothing in a call recording
+can distinguish "will sign up tomorrow" from "will sign up eventually"; both
+of the graded meetings that said it were worded almost identically, and one
+became a paying tenant the next day.
+
 **Four writes, each independently guarded** (a failed to-do must not cost the
 note, and nothing may throw: the import already succeeded and the document is
 the valuable part):

@@ -334,7 +334,7 @@ describe("importZoomTranscriptDocument, the meeting classification hand-off", ()
     expect(d.scheduleClassification.mock.calls[0][0]).toMatchObject({
       businessId: BIZ,
       documentId: DOC_ID,
-      minutes: "## Minutes",
+      content: "## Minutes",
       summary: "Short recap",
       meetingUuid: MEETING_UUID,
       zoomMeetingId: "89815540862",

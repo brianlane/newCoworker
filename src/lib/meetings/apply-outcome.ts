@@ -59,8 +59,12 @@ export type MeetingClassificationInput = {
   /** The document the import just produced. */
   documentId: string;
   documentTitle: string;
-  /** Condensed minutes, what the classifier reads. */
-  minutes: string;
+  /**
+   * The whole imported document: condensed minutes with the raw dialogue
+   * under a `## Transcript` heading. The classifier reads both halves,
+   * separately budgeted (`buildMeetingClassifyInput`).
+   */
+  content: string;
   /** The document's retrieval summary, quoted into the note. */
   summary: string | null;
   /** Raw WebVTT, for contact-resolution fallbacks. */
@@ -260,7 +264,7 @@ export async function applyMeetingClassification(
     return result;
   }
 
-  const { outcome, actionItems } = await classify(input.businessId, input.minutes, {
+  const { outcome, actionItems } = await classify(input.businessId, input.content, {
     // An owner-forced contact wants its to-dos even when the model cannot
     // categorize the call: the reason the extraction is normally skipped
     // for `unclear` is that the applier would discard the list, and this
