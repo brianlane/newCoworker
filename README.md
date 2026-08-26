@@ -4532,21 +4532,20 @@ The output is **gitignored and generated**: never hand-edit it, and
 regenerate when the header timestamp is more than a day old. It is derived
 from the local agent transcript archive and live tenant rows, neither of
 which belongs in git. Because it is gitignored, a fresh worktree starts
-without it, and Claude Code opens every session in a fresh worktree under
-`.claude/worktrees/`: the generator therefore mirrors the pack into every
-checkout (main plus all linked worktrees), and the SessionStart hook
-(`scripts/sync-context-pack.sh`, wired in `.claude/settings.json`) copies the
-main checkout's pack into any worktree created since the last run and prints
-its age into the session context. `--days N` widens the window, `--no-fleet`
+without it. The generator therefore mirrors the pack into every checkout
+(main plus all linked worktrees), and the session-start hook
+(`scripts/sync-context-pack.sh`, wired in [`.cursor/hooks.json`](.cursor/hooks.json)
+and still in `.claude/settings.json` for Claude Code) copies the main
+checkout's pack into any worktree created since the last run and prints its
+age into the session context. `--days N` widens the window, `--no-fleet`
 skips the Supabase queries, `--out -` prints to stdout.
 
-The session digest reads every transcript archive this repo owns: the main
-checkout's Claude Code archive (`~/.claude/projects/<slug>/`), one per
-worktree session (worktree slugs extend the main slug, and archives of
-removed worktrees still count), and the older Cursor one
-(`~/.cursor/projects/<slug>/agent-transcripts/`), so sessions from before the
-switch stay visible. `CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search with
-an explicit directory.
+The session digest reads every transcript archive this repo owns: Cursor
+(`~/.cursor/projects/<slug>/agent-transcripts/`) and the Claude Code archives
+(`~/.claude/projects/<slug>/`, including worktree slugs of removed
+worktrees), so history from both tools stays visible.
+`CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search with an explicit
+directory.
 
 The pack orients, it does not replace reading. Go to the source when you are
 changing code, when the task names a tenant (`docs/tenants/<slug>.md` first,
@@ -4616,12 +4615,13 @@ Recent captures, and what each replaced:
 | "Which tenant flows would this phone-field change break?" | `tsx debug/audit-phone-field-names.ts` |
 
 Multi-step procedures that are judgment, not code, are captured as agent
-skills under [.claude/skills/](.claude/skills) (`e2e-bug-hunt`,
-`dependabot-triage`, `oneshot-patch`). Those are tracked and survive a fresh
-clone. The standing working agreements live alongside them in
-[CLAUDE.md](CLAUDE.md), with the migration-specific pair in
-[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md), which loads
-only when you are touching a migration.
+skills under [`.cursor/skills/`](.cursor/skills) (`e2e-bug-hunt`,
+`dependabot-triage`, `oneshot-patch`). Project memories live in
+[`.cursor/memory/MEMORY.md`](.cursor/memory/MEMORY.md). The standing working
+agreements live in [`.cursor/rules/`](.cursor/rules) and the short index
+[AGENTS.md](AGENTS.md), with the migration-specific pair in
+[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md) (also globbed
+as Cursor rules when you touch a migration).
 
 ### The same rule, applied to model spend
 

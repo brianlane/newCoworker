@@ -23,22 +23,22 @@
  *   npx tsx scripts/context-pack.ts --no-fleet  # skip the Supabase queries
  *
  * A relative --out (the default included) is written into EVERY checkout of
- * the repo: the main one and each linked worktree. Claude Code opens every
- * session in a fresh worktree under .claude/worktrees/, and a gitignored file
- * is never part of a fresh checkout, so a single-copy pack was unreadable in
- * exactly the place sessions begin. The SessionStart hook
- * (scripts/sync-context-pack.sh) covers worktrees created after the last
- * regeneration. An absolute --out, or "-", stays a single target.
+ * the repo: the main one and each linked worktree. A gitignored file is never
+ * part of a fresh checkout, so a single-copy pack was unreadable in exactly
+ * the place sessions begin. The session-start hook
+ * (scripts/sync-context-pack.sh, wired from .cursor/hooks.json) covers
+ * worktrees created after the last regeneration. An absolute --out, or "-",
+ * stays a single target.
  *
  * Env:
  *   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) + SUPABASE_SERVICE_ROLE_KEY
  *     read from the repo-root `.env` for the fleet snapshot; without them
  *     that one section is skipped.
  *   CONTEXT_PACK_TRANSCRIPTS_DIR
- *     overrides where the agent transcripts are found. Unset, the Claude Code
+ *     overrides where the agent transcripts are found. Unset, Cursor
+ *     (`~/.cursor/projects/<slug>/agent-transcripts/`) and the Claude Code
  *     archives (`~/.claude/projects/<slug>/`, one per checkout a session has
- *     run in, worktrees included) and the older Cursor one
- *     (`~/.cursor/projects/<slug>/agent-transcripts/`) are read.
+ *     run in, worktrees included) are both read.
  *
  * The output is gitignored on purpose. It is derived from local transcripts
  * and live tenant rows, both of which stay on the laptop, and a committed copy

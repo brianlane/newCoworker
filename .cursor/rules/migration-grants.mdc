@@ -1,0 +1,57 @@
+---
+description: New tables/views/functions/sequences in migrations need explicit Data API grants (auto-grants are revoked)
+globs: supabase/migrations/**
+alwaysApply: false
+---
+
+# Migration Data API grants: explicit, always
+
+Since `20260820100400_revoke_default_data_api_grants.sql`, objects created in
+`public` get NO automatic Data API grants. This repo opted in early to the
+Supabase platform default that reaches every existing project on October 30,
+2026 (changelog 45329). supabase-js / PostgREST cannot see a new table, view,
+sequence, or function, EVEN WITH THE SERVICE-ROLE KEY, until the migration
+grants access explicitly. `supabase db push` applies a grant-less migration
+cleanly; the breakage only shows up at runtime as "permission denied", so
+grants are not optional polish, they are part of creating the object.
+
+Every migration that creates an object must grant in the SAME file:
+
+```sql
+-- Service-role-only table (the default posture: RLS on, zero policies)
+create table public.example (...);
+alter table public.example enable row level security;
+grant select, insert, update, delete on table public.example to service_role;
+
+-- Serial column? Grant its sequence too (or prefer an identity column,
+-- which needs no sequence grant)
+grant usage, select on sequence public.example_id_seq to service_role;
+
+-- View read by the app
+grant select on public.example_view to service_role;
+
+-- Function called via .rpc() (trigger / event-trigger functions need no
+-- grant: they run as owner and are never called through PostgREST)
+grant execute on function public.example_fn(uuid) to service_role;
+```
+
+Rules:
+
+1. Grant `authenticated` / `anon` ONLY when the table is deliberately
+   client-readable through RLS policies (the notifications / dashboard-chat /
+   ai_flow_library pattern). Everything else is service_role-only.
+2. The `fn_grants_lockdown` event trigger still strips anon / authenticated /
+   PUBLIC EXECUTE from every new function; that guard is unchanged. What is
+   new is that service_role EXECUTE no longer appears by default.
+3. Deliberately unexposed object (e.g. a pg_cron-only helper that must never
+   be a PostgREST RPC)? Add a marker comment naming it:
+   `-- grants: none (my_helper): pg_cron runs it as owner`.
+4. Never re-enable the auto-expose default (dashboard "Automatically expose
+   new tables and functions" toggle); deny-by-default is the documented
+   security posture.
+
+CI enforces this: `tests/migration-grants.test.ts` fails any migration
+stamped after the convention start that creates an object without a matching
+service_role grant or marker, and the `Worker Integration (local Supabase)`
+job runs the migrations against a stack with the same revoked defaults, so a
+missed grant fails the PR instead of production.

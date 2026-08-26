@@ -1,0 +1,64 @@
+---
+description: Required checks and review-comment policy before merging any PR
+alwaysApply: true
+---
+
+# PR Merge Policy
+
+Never merge a pull request until ALL of the following hold:
+
+1. **Every check is green, none skipped.** All CI jobs (tests, lint, build,
+   Vercel) AND the Cursor Bugbot review must show passing/complete. A check
+   stuck in "skipping"/"pending" counts as NOT passing: wait for it or
+   re-trigger it (`git commit --allow-empty` push, or re-run from the Checks
+   tab). Do not use admin/auto-merge to bypass a queued or skipped check.
+2. **Every review comment thread is resolved.** For each Bugbot or human
+   comment: fix it in the same PR (or reply explaining why it is not an
+   issue), then mark the thread resolved on GitHub. Check with:
+   `gh api graphql` on `reviewThreads(first: 50) { nodes { isResolved } }`.
+   Zero unresolved threads before merge.
+3. **Findings that surface after merge still get fixed.** If Bugbot posts a
+   comment after the merge happened, treat it as an open bug: fix it in the
+   next PR and resolve the thread, never leave threads dangling.
+
+When the user asks to merge and a check is skipped or a thread is unresolved,
+say so and finish the checklist first instead of merging.
+
+## Checks appear in waves: "all green" can be a false green
+
+`ci.yml` gates jobs on earlier jobs (`vercel-deploy` needs the six core jobs,
+`e2e` and `indexnow-ping` need `vercel-deploy`), and GitHub creates a check
+only when its job is created. A check that does not exist yet cannot show as
+pending, so `gh pr checks` can read all-pass while later jobs have not been
+born. Observed twice on PR #1181: the list was fully green before
+`Vercel Deploy` existed, and again before `E2E (live AI + AiFlows)` existed.
+
+Since Aug 2026 a GitHub ruleset ("main: PRs with all checks green") makes
+this structural for the 20 stable check contexts: they are required, so an
+uncreated one blocks the merge as "expected", and squash is the only allowed
+merge method. Unresolved-thread blocking is enforced by the same ruleset. Two
+things it deliberately does NOT cover, so the manual policy above still
+applies: the Cursor Bugbot conclusion (Bugbot does not run on Dependabot PRs,
+so requiring it would deadlock automerge), and anything on a repo where the
+ruleset is disabled. Before merging, still confirm zero checks pending on two
+consecutive polls about 30s apart, `mergeStateStatus` is `CLEAN` (it reads
+`UNSTABLE` while any check is pending or expected), and Bugbot is literally
+`SUCCESS`.
+
+## Reading the Cursor Bugbot check conclusion
+
+The `Cursor Bugbot` check's GitHub conclusion is meaningful. Do not read it as
+"passed" unless it is literally `SUCCESS`:
+
+- **`SUCCESS`**: Bugbot reviewed and there are no open Bugbot findings.
+  Passing.
+- **`NEUTRAL`** (shows as "skipping" in `gh pr checks`): Bugbot has **open,
+  unresolved review conversations** on the PR. This is NOT a pass. Do not
+  merge. Fetch the threads (`reviewThreads` via `gh api graphql`), then for
+  each: fix it in the same PR or reply explaining why it is not an issue, and
+  mark the thread resolved. Once every Bugbot thread is resolved, Bugbot flips
+  to `SUCCESS`.
+
+So a `NEUTRAL`/"skipping" Bugbot means "go resolve my comments", not
+"re-trigger me". Re-triggering an unaddressed Bugbot just returns `NEUTRAL`
+again.

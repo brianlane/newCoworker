@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# SessionStart hook: put docs/CONTEXT-PACK.md in this checkout before the
+# Session-start hook: put docs/CONTEXT-PACK.md in this checkout before the
 # session goes looking for it.
 #
-# The pack is generated and gitignored, and Claude Code runs each session in
-# a fresh worktree under .claude/worktrees/, which `git worktree add`
-# populates with tracked files only. Without this copy, every worktree
+# The pack is generated and gitignored, and a fresh worktree (Cursor
+# `newCoworker-wt-<name>`, or Claude Code under .claude/worktrees/) is
+# populated with tracked files only. Without this copy, every worktree
 # session opens with a failed read and re-buys the orientation the pack
 # exists to provide. The generator (scripts/context-pack.ts) mirrors into
 # every checkout that exists when it runs; this hook covers worktrees created
-# after the last regeneration, which is every fresh session.
+# after the last regeneration. Wired from .cursor/hooks.json and from
+# .claude/settings.json.
 #
 # Copy, not symlink: the generator replaces the main copy by rename, and a
 # symlinked pack could change or vanish under a session that already read it.

@@ -1,8 +1,9 @@
 # Writing a migration
 
-Two rules govern every file in this directory. Both were previously Cursor
-rules globbed to `supabase/migrations/**`. The README's "Writing a migration"
-section carries the shipped long form; keep the two in step.
+Two rules govern every file in this directory. Cursor loads them as globbed
+rules under `.cursor/rules/` (`migration-timestamps.mdc`,
+`migration-grants.mdc`). The README's "Writing a migration" section carries
+the shipped long form; keep this file and those three in step.
 
 ---
 

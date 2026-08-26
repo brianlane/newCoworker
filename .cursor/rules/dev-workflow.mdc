@@ -1,0 +1,112 @@
+---
+description: Every code change goes worktree -> branch -> PR -> babysit CI and Bugbot to green -> merge -> post-merge -> remove the worktree. Never commit to main, never stop at "tests pass".
+alwaysApply: true
+---
+
+# How work ships here
+
+**No change reaches main except through a PR.** Never commit directly to
+main, and never treat "the tests pass locally" as done: that is the middle of
+the job, not the end.
+
+The full flow, for every code change, however small:
+
+1. **Worktree + branch.** `git worktree add -b <branch>
+   /Users/brianlane/newCoworker-wt-<name> origin/main`. Never work in the
+   main checkout. The worktree needs `node_modules` (symlink the main
+   checkout's, or `npm ci`); `.env` resolves automatically through
+   `debug/_shared.ts`.
+2. **Make the change**, with tests. `npm test` must pass and coverage is
+   pinned at 100% for `src/lib/**`, so new logic there needs new assertions.
+   `npx tsc --noEmit` and `npx eslint .` too. **Touching
+   `vps/voice-bridge/`? The root `tsc` does NOT cover it** (the root tsconfig
+   excludes it; it is its own package with its own compiler), so also run
+   `cd vps/voice-bridge && npx tsc --noEmit`. Its build otherwise runs for
+   the first time inside the Docker image at REDEPLOY, which is after the
+   merge: on 2026-08-17 a type error there passed every gate, merged green,
+   and then failed the redeploy on all four boxes, leaving main green and the
+   fix not live. CI now runs that compiler too, so this is belt-and-braces.
+3. **Open the PR** and label it for the weekly blog digest: `blog: feature`
+   if customers should read about it, `blog: skip` for bug fixes, internal,
+   UI cleanup, or ops work. The label is authoritative; unlabeled PRs fall to
+   an AI classifier.
+4. **Babysit CI and Bugbot to green.** Do not walk away at "pushed". Bugbot
+   reliably finds real bugs here and re-reviews every push, so expect more
+   than one round. See the PR merge policy rule for what counts as green.
+5. **Merge** (squash), then **watch the push-to-main run to green**: it
+   applies migrations and deploys, and a failure there means production did
+   not update.
+6. **Post-merge, still manual when the change calls for it:** a VPS redeploy
+   if `vps/` changed, and running any new `scripts/oneshot/` script. The
+   redeploy scripts are **not interchangeable**: each one ships a single
+   subtree, so picking the wrong one silently deploys nothing and the change
+   looks live when it is not.
+
+   | Changed subtree | Script |
+   | --- | --- |
+   | `vps/chat-worker/` | `tsx debug/update-all-vps.ts` (whole fleet) |
+   | `vps/voice-bridge/` | `tsx debug/redeploy-voice-bridge.ts --all` (whole fleet) |
+   | `vps/aiflow-render/` | `tsx debug/redeploy-aiflow-render.ts --business-id <uuid>` (one tenant) |
+
+   Only aiflow-render still lacks a fleet sweep: loop it one run per distinct
+   unrotated `business_id` in `vps_ssh_keys`, and check `voice_active_sessions`
+   for calls in flight first, since recreating a container drops them. A row
+   counts as a live call only when `ended_at is null` AND `last_seen_at` is
+   recent: the bridge heartbeats it every 15s, so anything quiet for more than
+   a couple of minutes is a leaked row, not a caller.
+   `redeploy-voice-bridge.ts --all` does both of those for you (it skips a
+   tenant that is mid-call and exits non-zero, so a skip never reads as done,
+   and it ages out rows silent for over two hours with a warning rather than
+   letting a leak block redeploys forever).
+   Dry-run any sweep first, and verify boxes with
+   `tsx debug/box-verify.ts <businessId>`.
+7. **Remove the worktree. Mandatory.** Kill anything running out of it,
+   re-anchor your shell to `/Users/brianlane/newCoworker` FIRST, then
+   `git worktree remove`, `git worktree prune`, and delete the branch. A shell
+   left inside a deleted worktree fails every later command and looks like a
+   dead terminal backend.
+
+Continue through all of it without stopping to ask permission between steps.
+
+## Do not stop early
+
+A plan or a summary that ends at "run the tests" is incomplete. The change is
+not shipped until the PR is merged, main is green, and the worktree is gone.
+If you are in plan mode, the plan should say so.
+
+## Repo-specific traps worth knowing before you start
+
+- **Migrations:** never hand-write the version stamp. `bash
+  scripts/new-migration.sh <name>`. New tables need explicit Data API grants
+  in the same file. Both rules are detailed in
+  `supabase/migrations/CLAUDE.md`.
+- **i18n:** user-facing strings live in `messages/en.json` AND
+  `messages/es.json`, and a parity test fails when they drift.
+- **Tenant changes** (flows, seeds, one-shots) must update the matching
+  dossier in `docs/tenants/`, which CI enforces.
+- **New coworker tools** must satisfy the parity contract, and **new content
+  surfaces** must register in the KG source registry. Both are CI-guarded.
+- **Data-residency reads:** the 15 `RESIDENCY_MOVED_TABLES` split in two, and
+  the halves have opposite rules. `residency_purge_business()` DELETES from 8
+  of them, so a central read of `email_log`, `sms_outbound_log`,
+  `voice_call_transcripts` (+turns), `voice_outbound_dial_log`,
+  `notifications`, `scheduled_sms`, or `sms_owner_reply_prompts` is silently
+  incomplete for a `vps` tenant: route it through `@/lib/residency/read`. The
+  other 7 (`contacts`, `sms_rowboat_threads`, `dashboard_chat_*`, `ai_flows`,
+  `aiflow_url_memory`) are deliberately KEPT central, so a central read of
+  those is correct and in fact fresher than the box; do not route one on its
+  own. WRITES need nothing either way, the journal triggers catch every
+  writer by construction. `tests/residency-read-coverage.test.ts` enforces
+  this and `npx tsx debug/residency-read-report.ts` shows the current state.
+  The Deno workers route through `supabase/functions/_shared/residency.ts`
+  (a lockstep mirror, since they cannot import `@/lib/*`); pick
+  `edgeReadMovedRows` when the reply depends on the rows and
+  `edgeReadMovedRowsOrNull` when the read only suppresses something. Routing
+  a KEPT table box-ward in isolation is still wrong on the engine side too:
+  central is the write ingress, so the box copy only ever lags it.
+- **`package.json` overrides** each have a documented reason in
+  `docs/DEPENDENCY-OVERRIDES.md`. Adding, changing, or removing an override
+  means updating that file in the same PR.
+
+The shipped copy of this lives in the README under "All work and code
+modifications must follow this flow". Keep the two in step.

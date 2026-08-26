@@ -1,0 +1,10 @@
+---
+description: Read project memories from .cursor/memory/MEMORY.md before acting on a matching topic
+alwaysApply: true
+---
+
+# Project memories
+
+Do not re-derive a known answer. **Read [`.cursor/memory/MEMORY.md`](../memory/MEMORY.md) first**, then open every linked file whose title matches the task.
+
+Those files are the Cursor copy of the Claude Code project memory store: traps, tenant policies, deploy mechanics, and feedback. The index is the lookup; the linked file is the source. If you find yourself re-deriving something a memory already covers, update that memory file rather than leaving the new answer only in chat.

@@ -35,7 +35,7 @@ export const MCP_MAX_DURATION_SECONDS = 300;
  * automation starts), and the behavior annotations tell a client a call is
  * consequential without telling it to ask first.
  *
- * Product term is "AI coworker", never "AI receptionist" (CLAUDE.md rule 5).
+ * Product term is "AI coworker", never "AI receptionist" (product-terminology rule).
  */
 export const CHATGPT_MCP_INSTRUCTIONS = [
   "New Coworker is an AI coworker for businesses.",

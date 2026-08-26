@@ -1,0 +1,22 @@
+---
+description: Never call New Coworker an "AI receptionist", always "AI coworker"
+alwaysApply: true
+---
+
+# Product terminology: "AI coworker", never "AI receptionist"
+
+New Coworker is an **AI coworker**, never an "AI receptionist". Do not
+introduce the phrase "AI receptionist" (any casing) anywhere: user-facing copy,
+SMS/email text, SEO keywords, AI prompts, code comments, docs, PR titles, or
+marketing text. All instances were removed in PR #725. Keep it that way.
+
+```text
+BAD:  your AI receptionist couldn't take a live call
+GOOD: your AI coworker couldn't take a live call
+```
+
+Scope note: this bans the specific product label "AI receptionist". Standalone
+"receptionist" is still allowed where it describes a role or a comparison, not
+the product, e.g. the voice persona's system instruction ("You are the phone
+receptionist for {business}", which tests assert on) and pricing copy comparing
+cost against "a receptionist or answering service".
