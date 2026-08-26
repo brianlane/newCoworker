@@ -85,7 +85,7 @@ export function AddCustomerForm({ businessId }: Props) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors"
         >
           Add contact
         </button>
@@ -148,7 +148,7 @@ export function AddCustomerForm({ businessId }: Props) {
           type="button"
           onClick={save}
           disabled={saving || (!phone.trim() && !email.trim())}
-          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? "Saving…" : "Add"}
         </button>

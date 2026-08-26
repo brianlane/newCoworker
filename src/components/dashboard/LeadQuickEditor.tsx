@@ -256,7 +256,7 @@ export function LeadQuickEditor({
           data-testid="lead-edit-save"
           onClick={() => void save()}
           disabled={!patch || busy !== null}
-          className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy === "saving" ? t("editSaving") : t("editSave")}
         </button>

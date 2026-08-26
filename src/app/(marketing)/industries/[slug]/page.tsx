@@ -4,6 +4,7 @@ import { ShieldCheck } from "lucide-react";
 import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { CtaLink } from "@/components/marketing/CtaLink";
 import {
   CtaBanner,
   FeatureGrid,
@@ -100,12 +101,7 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
         title={tIndustries(`${k}.headline`)}
         subtitle={tIndustries(`${k}.subheadline`)}
       >
-        <a
-          href="/onboard"
-          className="inline-block rounded-lg bg-claw-green px-8 py-3.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-        >
-          {t("detailGetStarted")}
-        </a>
+        <CtaLink href="/onboard">{t("detailGetStarted")}</CtaLink>
       </PageHero>
 
       <section className="mx-auto max-w-6xl px-6 pb-20">

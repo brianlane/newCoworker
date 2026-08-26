@@ -153,8 +153,8 @@ export function PlanCard({
             isEnterprise
               ? "border-parchment/20 text-parchment hover:bg-parchment/10"
               : tier.highlight
-                ? "border-transparent bg-signal-teal text-deep-ink hover:bg-opacity-90"
-                : "border-transparent bg-claw-green text-deep-ink hover:bg-opacity-90"
+                ? "border-transparent bg-signal-teal text-deep-ink hover:bg-signal-teal/90"
+                : "border-transparent bg-claw-green text-deep-ink hover:bg-claw-green/90"
           ].join(" ")}
         >
           {tier.cta}

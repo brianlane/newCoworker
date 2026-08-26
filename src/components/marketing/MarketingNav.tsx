@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
+import { CtaLink } from "@/components/marketing/CtaLink";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export type NavLink = { href: string; labelKey: string };
@@ -69,23 +70,17 @@ export function MarketingNav() {
         <div className="hidden items-center gap-4 md:flex">
           <LanguageSwitcher />
           {authed ? (
-            <Link
-              href="/dashboard"
-              className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-            >
+            <CtaLink href="/dashboard" size="md">
               {t("dashboard")}
-            </Link>
+            </CtaLink>
           ) : (
             <>
               <Link href="/login" className="text-sm text-parchment/60 transition-colors hover:text-parchment">
                 {t("signIn")}
               </Link>
-              <Link
-                href="/onboard"
-                className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-              >
+              <CtaLink href="/onboard" size="md">
                 {t("getStarted")}
-              </Link>
+              </CtaLink>
             </>
           )}
         </div>
@@ -118,13 +113,14 @@ export function MarketingNav() {
               </Link>
             ))}
             {authed ? (
-              <Link
+              <CtaLink
                 href="/dashboard"
+                size="md"
+                className="mt-2 block text-center"
                 onClick={() => setOpen(false)}
-                className="mt-2 rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink"
               >
                 {t("dashboard")}
-              </Link>
+              </CtaLink>
             ) : (
               <>
                 <Link
@@ -134,13 +130,14 @@ export function MarketingNav() {
                 >
                   {t("signIn")}
                 </Link>
-                <Link
+                <CtaLink
                   href="/onboard"
+                  size="md"
+                  className="mt-2 block text-center"
                   onClick={() => setOpen(false)}
-                  className="mt-2 rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink"
                 >
                   {t("getStarted")}
-                </Link>
+                </CtaLink>
               </>
             )}
           </div>

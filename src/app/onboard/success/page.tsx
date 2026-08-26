@@ -474,7 +474,7 @@ function OnboardSuccessContent() {
               <a
                 href="/dashboard"
                 onClick={clearOnboardingStorage}
-                className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+                className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors"
               >
                 {t("goToDashboard")}
               </a>
@@ -487,7 +487,7 @@ function OnboardSuccessContent() {
           <div className="text-center">
             <a
               href="/dashboard"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3 font-semibold hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3 font-semibold hover:bg-claw-green/90 transition-colors"
             >
               {t("goToDashboard")}
             </a>
@@ -500,7 +500,7 @@ function OnboardSuccessContent() {
             <a
               href="/login"
               onClick={clearOnboardingStorage}
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors"
             >
               {tAuth("signIn")}
             </a>

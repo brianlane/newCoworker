@@ -559,7 +559,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         </div>
         <a
           href="/pricing"
-          className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+          className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
         >
           {t("upgradeCta")}
         </a>

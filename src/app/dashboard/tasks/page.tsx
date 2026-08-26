@@ -45,7 +45,7 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
             <p className="mb-4 text-parchment/60">{t("noCoworker")}</p>
             <a
               href="/onboard"
-              className="inline-block rounded-lg bg-claw-green px-5 py-2.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+              className="inline-block rounded-lg bg-claw-green px-5 py-2.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
             >{t("getStarted")}</a>
           </div>
         </Card>

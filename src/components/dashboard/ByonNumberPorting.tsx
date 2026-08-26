@@ -73,7 +73,7 @@ const labelClass = "block text-xs text-parchment/50 mb-1";
 
 const primaryBtn =
   "inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-4 py-2 " +
-  "text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40";
+  "text-sm font-semibold hover:bg-signal-teal/90 transition-colors disabled:opacity-40";
 
 const secondaryBtn =
   "inline-flex items-center gap-1.5 rounded-lg border border-parchment/20 text-parchment/70 " +
@@ -295,7 +295,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
             </p>
             <a
               href="/dashboard/billing"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >
               Upgrade to Standard →
             </a>

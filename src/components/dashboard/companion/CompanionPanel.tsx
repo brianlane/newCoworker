@@ -346,7 +346,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                   <button
                     type="button"
                     onClick={() => openDraft(draft)}
-                    className="mt-2 inline-flex items-center rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+                    className="mt-2 inline-flex items-center rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
                   >
                     {draft.kind === "aiflow" ? t("panel.draftOpenAiflow") : t("panel.draftOpenAgent")}
                   </button>
@@ -374,7 +374,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
             disabled={
               sending || loading || isPaused || !input.trim() || input.trim().length > MAX_MESSAGE_CHARS
             }
-            className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+            className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-50"
           >
             {t("panel.send")}
           </button>

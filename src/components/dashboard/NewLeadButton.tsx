@@ -135,7 +135,7 @@ export function NewLeadButton({
         type="button"
         data-testid="new-lead"
         onClick={openDialog}
-        className="inline-flex items-center gap-1.5 rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+        className="inline-flex items-center gap-1.5 rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
       >
         <Plus className="h-3.5 w-3.5" />
         {t("newLead")}
@@ -257,7 +257,7 @@ export function NewLeadButton({
                   data-testid="new-lead-save"
                   onClick={() => void create()}
                   disabled={!canSubmit}
-                  className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {busy ? t("newLeadCreating") : t("newLeadCreate")}
                 </button>

@@ -58,7 +58,7 @@ export default async function OfferPayPage({
             <Link
               href={`/offer/${payToken}/pay`}
               prefetch={false}
-              className="block w-full rounded-lg bg-claw-green px-4 py-3 text-center font-semibold text-deep-ink hover:bg-opacity-90"
+              className="block w-full rounded-lg bg-claw-green px-4 py-3 text-center font-semibold text-deep-ink hover:bg-claw-green/90"
             >
               Continue to secure payment
             </Link>

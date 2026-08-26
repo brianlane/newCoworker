@@ -162,7 +162,7 @@ export function FubImport({ businessId }: Props) {
           type="button"
           onClick={() => void send(true)}
           disabled={busy !== null || !file}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-signal-teal/90 transition-colors disabled:opacity-40"
         >
           <FileSpreadsheet className="h-3.5 w-3.5" />
           {busy === "preview" ? t("previewRunning") : t("previewButton")}
@@ -216,7 +216,7 @@ export function FubImport({ businessId }: Props) {
             type="button"
             onClick={() => void send(false)}
             disabled={busy !== null}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40"
           >
             <CloudDownload className="h-3.5 w-3.5" />
             {busy === "import"

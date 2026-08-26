@@ -378,7 +378,7 @@ export function CustomTableWorkspace({
           <button
             onClick={() => void addRow()}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             {busy ? t("adding") : t("addRow")}

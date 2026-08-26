@@ -88,7 +88,7 @@ export function ContactNameEditor(props: Props) {
         type="button"
         onClick={() => call("POST", { e164: props.e164, name: name.trim() })}
         disabled={busy || name.trim().length === 0}
-        className="rounded bg-claw-green text-deep-ink px-2 py-1 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+        className="rounded bg-claw-green text-deep-ink px-2 py-1 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40"
       >
         {busy ? "Saving…" : "Save"}
       </button>

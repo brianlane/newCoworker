@@ -1,5 +1,5 @@
-import Link from "next/link";
 import type { ComponentType, ReactNode, SVGProps } from "react";
+import { CtaLink } from "./CtaLink";
 
 /**
  * Shared section primitives for the public marketing pages, so every page
@@ -60,7 +60,7 @@ export type Feature = {
 
 export function FeatureCard({ feature }: { feature: Feature }) {
   return (
-    <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-colors hover:border-signal-teal/30">
+    <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-[border-color,background-color,transform,box-shadow] duration-200 hover:border-signal-teal/40 hover:bg-parchment/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)] motion-safe:hover:-translate-y-0.5">
       <div className="mb-2 flex items-center gap-2">
         <feature.Icon className="h-5 w-5 shrink-0 text-claw-green" />
         <h3 className="font-semibold text-parchment">{feature.title}</h3>
@@ -119,12 +119,7 @@ export function CtaBanner({
       <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
         <h2 className="mb-3 text-2xl font-bold text-parchment">{title}</h2>
         {subtitle && <p className="mb-8 text-parchment/50">{subtitle}</p>}
-        <Link
-          href={ctaHref}
-          className="inline-block rounded-lg bg-claw-green px-8 py-3.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-        >
-          {ctaLabel}
-        </Link>
+        <CtaLink href={ctaHref}>{ctaLabel}</CtaLink>
       </div>
     </section>
   );

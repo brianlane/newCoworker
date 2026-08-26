@@ -433,7 +433,7 @@ export function LeadDataGrid({
               <button
                 onClick={() => void seedDefault()}
                 disabled={seeding}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-50"
               >
                 {t("createPipeline")}
               </button>
