@@ -80,55 +80,63 @@ booking link, booking itself happens in JaneApp. JaneApp has no integration
 today (Zapier-only, revisited on the Aug 20 call as a possible future
 first-class integration).
 
-### The four links, and how a lead reaches the right one
+### The pages, and how a lead reaches the right one
 
-Kingsley sent three service pages plus one general page on 2026-08-25. The
-table lives in `scripts/oneshot/kin-booking-links.ts`, imported by BOTH
-halves of the routing so they cannot drift:
+Kingsley's booking site (2026-08-26). The table lives in
+`scripts/oneshot/kin-booking-links.ts`, imported by BOTH halves of the
+routing so they cannot drift:
 
-| Service | Page |
+| Need | Page |
 | --- | --- |
-| Teen / youth counselling, ages 14-17 | `.../#/teen-youth-counselling-ages-14-17` |
-| Psychological assessment | `.../#/psychological-assessment` |
 | Occupational therapy | `.../#/occupational-therapy` |
+| Psychological assessment | `.../#/psychological-assessment` |
+| Counselling, ages 3-12 | `.../#/child-counselling-ages-3-12` |
+| Counselling, ages 13-17 | `.../#/teen-youth-counselling-ages-13-17` |
+| Counselling, adults | `.../#/adult-counselling` |
+| Couples counselling | `.../#/couples-counselling` (coworker only, the form cannot produce it) |
 | Anything else, or unknown | `https://kinintegrated.janeapp.com/` |
 
-Routing happens twice, because a lead can tell us what they need at two
-different moments:
+**Routing is SERVICE-first, with age nested inside counselling.** That shape
+is load-bearing, not tidiness. `lead_notes` concatenates both form answers,
+and the v3 form's age value `teen_13_to_17` contains the substring "teen".
+A flat service-level match on "teen" was therefore hijacked by the AGE
+field: `occupational_therapy` + `teen_13_to_17` routed a 15-year-old needing
+OT to counselling. Simulated across the v3 matrix before the ads switched,
+5 of 12 combinations mis-routed. Service now decides the discipline, and age
+only sub-routes within counselling, which is the one age-split discipline.
+So the collision is structurally impossible rather than merely avoided.
 
-1. **Proactive, in the flow.** `s_route_booking` branches on `lead_notes`
-   (whatever the Meta form captured) and sends that discipline's page.
-   Deterministic, no model call. Each arm matches ONE token, `teen`,
-   `occupational`, `psycholog`, because `MAX_BRANCH_ARMS` is 4 (three
-   services plus the fallback fills it) and a `when` condition takes exactly
-   one comparator, so an arm cannot OR several phrasings. `resolveKinService`
-   considers only those same tokens, and a test asserts the live arm
-   conditions equal them, so the two halves cannot drift. Anything phrased
-   differently falls to the general page and the copy asks which service,
-   which is what makes the reply path work.
+Both form generations are handled while the ads switch over: v1 sent labels
+("My child (12 and under)"), v3 sends keys (`child_12_and_under`), and the
+tokens `child` / `teen` / `adult` appear in both.
+
+Routing happens twice, because a lead can say what they need at two moments:
+
+1. **Proactive, in the flow.** `s_route_booking` branches on the service
+   answer, and `s_route_age` nested inside the counselling arm branches on
+   age. Deterministic, no model call. Each arm matches ONE token because
+   `MAX_BRANCH_ARMS` is 4 and a `when` takes exactly one comparator, so an
+   arm cannot OR several phrasings. A test asserts the live arm conditions
+   equal those tokens.
 2. **Reactive, in the coworker.** The moment a lead replies, the SMS
-   coworker owns the conversation (Kingsley's own plan: "if they reply the
-   ai worker will nurture"). It reads the same table out of `identity.md`
-   under Booking Links, written by `patch-kin-knowledge.ts`. Before that
-   patch the coworker had NO links at all, so a lead answering "it's for OT"
-   dead-ended.
+   coworker owns the conversation (Kingsley's plan: "if they reply the ai
+   worker will nurture"). It reads the same table out of `identity.md`.
 
-**The age trap.** The teen page is scoped to ages 14-17 inside JaneApp, and
-this is a paediatric clinic, so most counselling enquiries are about younger
-children. The teen arm therefore requires an explicit teen/youth/adolescent
-or 14-17 signal, and bare "counselling" routes to the GENERAL page instead.
-The coworker's rules go further and tell it to ask the child's age when it
-is unclear. Sending a 7-year-old's parent the 14-17 page is a wrong booking,
-not a near miss.
+**Counselling pages turn away the wrong age group**, so a counselling
+enquiry with no usable age answer is NEVER guessed into one: the flow sends
+the general page and asks whether it is for a child, a teenager or an adult,
+and the coworker is told to ask before sending any counselling link.
 
-**"Assessment" alone decides nothing.** OT, speech and psychology all run
-assessments, so the word is not any service's token; an unqualified
-"assessment" reaches the general page and the coworker asks what kind. The
-psych token is `psycholog` precisely so an OT assessment stays OT.
+**The 13-year-old gap is closed.** Child ended at 12 and teen began at 14,
+so 13 had no bookable page regardless of how the form was labelled (raised
+by James 2026-08-25). Kingsley extended the teen service down to 13, which
+also changed its slug from `...-ages-14-17` to `...-ages-13-17`. The old
+slug is retired and a test asserts it appears nowhere.
 
-**Services with no dedicated page** (speech/SLP, behaviour consulting,
-nurse practitioner, counselling outside 14-17) route to the general page,
-which lists every discipline.
+**Speech / SLP has no booking page.** The v3 form offers it as an option, so
+those leads arrive with nowhere to book: they get the general page, and the
+coworker is told explicitly not to invent a link, to take details and alert
+the team instead. Raised with Kingsley 2026-08-26, unanswered.
 
 **Link fragments are load-bearing.** All three specific pages are `#`
 fragment URLs. The SMS shortener matches `https?://[^\s<>"']+`, so the

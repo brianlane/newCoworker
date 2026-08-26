@@ -48,8 +48,10 @@
 
 import {
   KIN_BOOKING_SERVICES,
+  KIN_COUNSELLING_AGES,
   KIN_GENERAL_BOOKING_LINK,
-  type KinBookingService
+  type KinBookingService,
+  type KinCounsellingAge
 } from "./kin-booking-links.ts";
 
 export const KIN_FLOW_NAME = "Lead follow-up (white-glove build)";
@@ -103,23 +105,36 @@ export function buildKinLeadDefinition(
   // A link followed immediately by a period gets swallowed into the URL by
   // the shortener's matcher (https?://[^\s<>"']+), and JaneApp 404s on the
   // trailing dot. Every link here therefore ends its line.
-  const greetFor = (service: KinBookingService | null): string => {
+  const greetFor = (
+    what: KinBookingService | KinCounsellingAge | null,
+    askAge = false
+  ): string => {
     const opening =
       "Hi {{vars.lead_name}}, this is the assistant for KIN Integrated Child Health. " +
       "Thanks for requesting your free 15 minute consult.";
-    if (service) {
+    if (what) {
       return (
-        `${opening} You can book your ${service.serviceName} consult right here:\n` +
-        `${service.link}\n` +
+        `${opening} You can book your ${what.serviceName} consult right here:\n` +
+        `${what.link}\n` +
         "Or reply here with any questions and I will help."
+      );
+    }
+    if (askAge) {
+      // Counselling with no usable age answer. The pages are age-split, so
+      // guessing one books them into a service that will turn them away.
+      return (
+        `${opening} You can pick a time here:\n` +
+        `${bookingLink}\n` +
+        "So I can point you at the right counsellor, is this for a child, a teenager, " +
+        "or an adult?"
       );
     }
     return (
       `${opening} You can pick a time here:\n` +
       `${bookingLink}\n` +
-      "If you tell me what you are looking for, occupational therapy, a psychological " +
-      "assessment, counselling, speech, or behaviour consulting, I will send you the " +
-      "right booking page and answer any questions."
+      "If you tell me what you are looking for, occupational therapy, counselling, speech, " +
+      "or a psychological assessment, I will send you the right booking page and answer " +
+      "any questions."
     );
   };
 
@@ -175,15 +190,13 @@ export function buildKinLeadDefinition(
           "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. Details: {{vars.lead_notes}}. I'm sending them the consult booking link (overnight leads get their text from 9am) and I'm on follow-up duty."
       },
       {
-        // Deterministic service routing on whatever the Meta lead form
-        // captured (extract_text puts the custom-question answers in
-        // lead_notes). No model call: the repo prefers an explicit branch
-        // when the rule is knowable, same posture as Scar Fairy routing on
-        // the lead-form name. Arm order mirrors resolveKinService, and the
-        // teen arm is first on purpose (its link is age-scoped 14-17).
+        // SERVICE decides the discipline; age only sub-routes inside
+        // counselling. Flat matching on an age word was hijacked by the v3
+        // form, where `teen_13_to_17` made an occupational-therapy lead
+        // route to counselling. Deterministic throughout, no model call.
         id: "s_route_booking",
         type: "branch",
-        question: "Which booking page does this lead need",
+        question: "Which discipline does this lead need",
         branches: KIN_BOOKING_SERVICES.map((service) => ({
           id: `arm_${service.key}`,
           label: service.label,
@@ -192,18 +205,55 @@ export function buildKinLeadDefinition(
             contains: service.flowMatch,
             caseInsensitive: true
           },
-          steps: [
-            {
-              id: `s_greet_${service.key}`,
-              type: "send_sms",
-              to: "{{vars.lead_phone}}",
-              body: greetFor(service),
-              quietHours: { ...KIN_QUIET_HOURS }
-            }
-          ]
+          steps:
+            service.key === "counselling"
+              ? [
+                  {
+                    // Counselling is the only age-split discipline, so its
+                    // page is chosen here rather than by the service answer.
+                    id: "s_route_age",
+                    type: "branch",
+                    question: "Which counselling age group",
+                    branches: KIN_COUNSELLING_AGES.map((age) => ({
+                      id: `arm_age_${age.key}`,
+                      label: age.label,
+                      condition: {
+                        var: "lead_notes",
+                        contains: age.flowMatch,
+                        caseInsensitive: true
+                      },
+                      steps: [
+                        {
+                          id: `s_greet_age_${age.key}`,
+                          type: "send_sms",
+                          to: "{{vars.lead_phone}}",
+                          body: greetFor(age),
+                          quietHours: { ...KIN_QUIET_HOURS }
+                        }
+                      ]
+                    })),
+                    else: [
+                      {
+                        id: "s_greet_counselling_unknown_age",
+                        type: "send_sms",
+                        to: "{{vars.lead_phone}}",
+                        body: greetFor(null, true),
+                        quietHours: { ...KIN_QUIET_HOURS }
+                      }
+                    ]
+                  }
+                ]
+              : [
+                  {
+                    id: `s_greet_${service.key}`,
+                    type: "send_sms",
+                    to: "{{vars.lead_phone}}",
+                    body: greetFor(service),
+                    quietHours: { ...KIN_QUIET_HOURS }
+                  }
+                ]
         })),
-        // Cannot tell: the general page lists every discipline, and the copy
-        // asks which one so the coworker can send the specific link on reply.
+        // Speech/SLP (no booking page exists) and anything unrecognized.
         else: [
           {
             id: "s_greet_general",

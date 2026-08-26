@@ -27,8 +27,11 @@ import {
 } from "../scripts/oneshot/kin-lead-definition";
 import {
   KIN_BOOKING_SERVICES,
+  KIN_COUNSELLING_AGES,
   KIN_GENERAL_BOOKING_LINK,
   allKinBookingLinks,
+  resolveKinBookingLink,
+  resolveKinCounsellingAge,
   resolveKinService
 } from "../scripts/oneshot/kin-booking-links";
 import {
@@ -73,13 +76,22 @@ describe("kin lead definition", () => {
   });
 
   it("names the clinic in every first text a lead can receive", () => {
-    const branch = steps().find((s) => s.id === "s_route_booking") as never as {
-      branches: Array<{ steps: StepJson[] }>;
-      else: StepJson[];
+    // Recurses: the counselling arm now holds a NESTED age branch, so its
+    // greetings are one level deeper than the other disciplines'.
+    const flat: StepJson[] = [];
+    const walk = (list: StepJson[]) => {
+      for (const st of list) {
+        flat.push(st);
+        const b = st as unknown as { branches?: Array<{ steps: StepJson[] }>; else?: StepJson[] };
+        for (const arm of b.branches ?? []) walk(arm.steps);
+        if (b.else) walk(b.else);
+      }
     };
-    const firstTexts = [...branch.branches.map((a) => a.steps[0]), branch.else[0]];
-    expect(firstTexts).toHaveLength(KIN_BOOKING_SERVICES.length + 1);
-    for (const t of firstTexts) expect(t.body).toContain("KIN Integrated Child Health");
+    walk(steps());
+    const greetings = flat.filter((st) => String(st.id ?? "").startsWith("s_greet"));
+    // 2 terminal disciplines + 3 counselling ages + unknown-age + general.
+    expect(greetings.length).toBe(KIN_BOOKING_SERVICES.length - 1 + KIN_COUNSELLING_AGES.length + 2);
+    for (const t of greetings) expect(t.body).toContain("KIN Integrated Child Health");
   });
 
   it("carries none of the intake's typos", () => {
@@ -164,86 +176,122 @@ describe("kin lead definition", () => {
 });
 
 describe("kin booking-link routing", () => {
-  it("carries exactly the four links Kingsley sent, general last", () => {
+  it("carries every page Kingsley sent, general last", () => {
     expect(allKinBookingLinks()).toEqual([
-      "https://kinintegrated.janeapp.com/#/teen-youth-counselling-ages-14-17",
       "https://kinintegrated.janeapp.com/#/occupational-therapy",
       "https://kinintegrated.janeapp.com/#/psychological-assessment",
+      "https://kinintegrated.janeapp.com/#/child-counselling-ages-3-12",
+      "https://kinintegrated.janeapp.com/#/teen-youth-counselling-ages-13-17",
+      "https://kinintegrated.janeapp.com/#/adult-counselling",
+      // Couples has no flow arm (the form cannot produce it) but must stay in
+      // the catalog so the coworker-knowledge drift guard covers it.
+      "https://kinintegrated.janeapp.com/#/couples-counselling",
       "https://kinintegrated.janeapp.com/"
     ]);
   });
+
+  it("uses the 13-17 teen slug, never the retired 14-17 one", () => {
+    // Kingsley extended the service down to 13 on 2026-08-26 and the slug
+    // changed with it. The old link is stale and must not be handed out.
+    const all = JSON.stringify([allKinBookingLinks(), buildKinBookingLinksSection()]);
+    expect(all).toContain("teen-youth-counselling-ages-13-17");
+    expect(all).not.toContain("ages-14-17");
+  });
+
+  // The v3 form made the age field collide with the service field: its value
+  // `teen_13_to_17` contains "teen", so a flat match sent an occupational
+  // therapy lead to counselling. 5 of 12 combinations mis-routed.
+  it.each([
+    ["counselling", "child_12_and_under", "#/child-counselling-ages-3-12"],
+    ["counselling", "teen_13_to_17", "#/teen-youth-counselling-ages-13-17"],
+    ["counselling", "adult", "#/adult-counselling"],
+    ["occupational_therapy", "child_12_and_under", "#/occupational-therapy"],
+    ["occupational_therapy", "teen_13_to_17", "#/occupational-therapy"],
+    ["occupational_therapy", "adult", "#/occupational-therapy"],
+    ["psychological_assessment", "teen_13_to_17", "#/psychological-assessment"],
+    ["psychological_assessment", "child_12_and_under", "#/psychological-assessment"],
+    ["speech_slp", "teen_13_to_17", "GENERAL"],
+    ["speech_slp", "child_12_and_under", "GENERAL"]
+  ])("v3 %s + %s books %s", (service, age, expected) => {
+    const notes = `what_kind_of_support: ${service}, who_is_the_support_for: ${age}`;
+    const got = resolveKinBookingLink(notes);
+    if (expected === "GENERAL") expect(got).toBe(KIN_GENERAL_BOOKING_LINK);
+    else expect(got).toContain(expected);
+  });
+
+  // The ads switch over gradually, so v1 answers must keep working.
+  it("still routes the old form's wording while the ads switch", () => {
+    expect(
+      resolveKinBookingLink(
+        "what_kind_of_support: Counselling or therapy, who_is_the_support_for: My child (12 and under)"
+      )
+    ).toContain("#/child-counselling-ages-3-12");
+    expect(
+      resolveKinBookingLink(
+        "What kind of support: Not sure yet, need guidance. Who is the support for: Our family."
+      )
+    ).toBe(KIN_GENERAL_BOOKING_LINK);
+  });
+
+  it("never lets an age word decide a non-counselling discipline", () => {
+    for (const age of KIN_COUNSELLING_AGES) {
+      const notes = `what_kind_of_support: occupational_therapy, who_is_the_support_for: ${age.flowMatch}`;
+      expect(resolveKinBookingLink(notes)).toContain("#/occupational-therapy");
+    }
+  });
+
+  // Counselling pages turn away the wrong age group, so a missing age must
+  // never be guessed into one.
+  it("falls back to the general page when counselling has no age answer", () => {
+    expect(resolveKinBookingLink("what_kind_of_support: counselling")).toBe(
+      KIN_GENERAL_BOOKING_LINK
+    );
+    expect(resolveKinCounsellingAge("counselling please")).toBeNull();
+  });
+
+  it("routes an OT assessment to OT, not psychology", () => {
+    expect(resolveKinBookingLink("occupational therapy assessment")).toContain(
+      "#/occupational-therapy"
+    );
+    expect(resolveKinService("assessment")).toBeNull();
+  });
+
+  it("matches the live arm conditions exactly, service and nested age", () => {
+    const branch = steps().find((s) => s.id === "s_route_booking") as never as {
+      branches: Array<{ id: string; condition: { contains: string }; steps: StepJson[] }>;
+    };
+    expect(branch.branches.map((a) => a.condition.contains)).toEqual(
+      KIN_BOOKING_SERVICES.map((s) => s.flowMatch)
+    );
+    const counselling = branch.branches.find((a) => a.id === "arm_counselling")!;
+    const nested = counselling.steps[0] as unknown as {
+      id: string;
+      branches: Array<{ condition: { contains: string } }>;
+    };
+    expect(nested.id).toBe("s_route_age");
+    expect(nested.branches.map((a) => a.condition.contains)).toEqual(
+      KIN_COUNSELLING_AGES.map((a) => a.flowMatch)
+    );
+  });
+
+  it("asks for the age instead of guessing a counselling page", () => {
+    const flat = JSON.stringify(buildKinLeadDefinition(LINK));
+    expect(flat).toContain("is this for a child, a teenager, or an adult?");
+  });
+
+
 
   it("every specific link keeps its JaneApp fragment", () => {
     // The shortener matches https?://[^\s<>"']+ so "#" survives, and the
     // redirect carries it. Lose the fragment and all three specific links
     // silently collapse to the general page.
-    for (const s of KIN_BOOKING_SERVICES) expect(s.link).toContain("#/");
-  });
-
-  it.each([
-    ["occupational therapy for my son", "ot"],
-    ["Occupational-Therapy", "ot"],
-    ["occupational therapy assessment", "ot"],
-    ["psychological assessment", "psych"],
-    ["we would like to see a psychologist", "psych"],
-    ["teen counselling", "teen"],
-    ["counselling for my teenager", "teen"]
-  ])("routes %j to the %s page", (text, key) => {
-    expect(resolveKinService(text)?.key).toBe(key);
-  });
-
-  // Bugbot, PR #1619: bare "assessment" used to belong to psych and was
-  // checked before OT, so an OT eval landed on the psychological assessment
-  // page. OT is now ahead of psych AND the ambiguous word is nobody's token.
-  it("never lets the word assessment alone decide a discipline", () => {
-    expect(resolveKinService("assessment")).toBeNull();
-    expect(resolveKinService("we need an assessment booked")).toBeNull();
-    expect(resolveKinService("occupational therapy assessment")?.key).toBe("ot");
-  });
-
-  // Bugbot, PR #1619: the branch matched only matches[0] while this function
-  // matched every alias, so the two halves disagreed about "youth",
-  // "adolescent" and friends. There is now ONE token, and this pins that the
-  // live arm condition IS that token.
-  it("matches the flow arm conditions exactly, token for token", () => {
-    const branch = steps().find((s) => s.id === "s_route_booking") as never as {
-      branches: Array<{ id: string; condition: { var: string; contains: string } }>;
-    };
-    expect(branch.branches.map((a) => a.condition.contains)).toEqual(
-      KIN_BOOKING_SERVICES.map((s) => s.flowMatch)
-    );
-    for (const arm of branch.branches) expect(arm.condition.var).toBe("lead_notes");
-    // Every token routes to its own service through the shared resolver.
-    for (const svc of KIN_BOOKING_SERVICES) {
-      expect(resolveKinService(svc.flowMatch)?.key).toBe(svc.key);
+    // Counselling's own entry points at the general page on purpose: its
+    // real pages are age-split and live in KIN_COUNSELLING_AGES.
+    for (const s of KIN_BOOKING_SERVICES) {
+      if (s.link === KIN_GENERAL_BOOKING_LINK) continue;
+      expect(s.link).toContain("#/");
     }
-  });
-
-  it("keeps aliases out of the resolver, since the flow cannot match them", () => {
-    // They are coworker guidance only; claiming them here would promise a
-    // routing the branch cannot perform.
-    for (const svc of KIN_BOOKING_SERVICES) {
-      for (const alias of svc.aliases) {
-        if (alias.includes(svc.flowMatch)) continue;
-        expect(resolveKinService(alias)?.key ?? null).not.toBe(svc.key);
-      }
-    }
-  });
-
-  // The age trap: the teen page is scoped 14-17 in JaneApp, and this is a
-  // paediatric clinic, so most counselling asks are about younger children.
-  // Bare "counselling" must NOT reach the teen page.
-  it.each([
-    "counselling for my 7 year old",
-    "counselling",
-    "youth counselling",
-    "speech therapy",
-    "SLP for my daughter",
-    "behaviour consulting",
-    "not sure yet",
-    ""
-  ])("sends %j to the general page rather than guessing", (text) => {
-    expect(resolveKinService(text)).toBeNull();
+    for (const a of KIN_COUNSELLING_AGES) expect(a.link).toContain("#/");
   });
 
   it("returns null for missing notes", () => {
@@ -251,24 +299,35 @@ describe("kin booking-link routing", () => {
     expect(resolveKinService(undefined)).toBeNull();
   });
 
-  it("puts teen first so an age signal wins, and OT ahead of psych", () => {
-    expect(KIN_BOOKING_SERVICES.map((s) => s.key)).toEqual(["teen", "ot", "psych"]);
-    // Both signals present: the age one must win.
-    expect(resolveKinService("psychologist for my teen")?.key).toBe("teen");
-  });
+
 });
 
 describe("kin coworker knowledge", () => {
+  it("tells the coworker speech has no booking page, rather than inventing one", () => {
+    const section = buildKinBookingLinksSection();
+    expect(section).toContain("no online booking page for speech");
+    expect(section).toContain("Do not invent one");
+  });
+
+  it("tells the coworker to ask the age before sending a counselling link", () => {
+    const section = buildKinBookingLinksSection();
+    expect(section).toContain("COUNSELLING IS SPLIT BY AGE");
+    expect(section).toContain("ASK before sending a counselling link");
+  });
+
   it("teaches the coworker every link, so a reply does not dead-end", () => {
     const section = buildKinBookingLinksSection();
     for (const link of allKinBookingLinks()) expect(section).toContain(link);
     expect(section).toContain(KIN_GENERAL_BOOKING_LINK);
   });
 
-  it("spells out the under-14 counselling rule in the coworker's own words", () => {
+  it("spells out the age-split counselling rule in the coworker's own words", () => {
+    // Kingsley extended teen to 13, so the old "under 14" framing is wrong:
+    // the split is now 3-12 / 13-17 / adult, with no gap.
     const section = buildKinBookingLinksSection();
-    expect(section).toContain("UNDER 14");
-    expect(section).toContain("ask how old the child is");
+    expect(section).toContain("Ages 3 to 12");
+    expect(section).toContain("13 to 17");
+    expect(section).toContain("ASK before sending a counselling link");
   });
 
   it("warns the coworker that a bare assessment request is ambiguous", () => {

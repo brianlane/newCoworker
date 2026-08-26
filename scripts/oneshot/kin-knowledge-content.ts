@@ -20,6 +20,8 @@
  */
 import {
   KIN_BOOKING_SERVICES,
+  KIN_COUNSELLING_AGES,
+  KIN_COUPLES_BOOKING_LINK,
   KIN_GENERAL_BOOKING_LINK
 } from "./kin-booking-links.ts";
 
@@ -38,12 +40,17 @@ export function replaceMarkdownSection(doc: string, heading: string, body: strin
 
 /** The booking-link table, rendered for the coworker's business knowledge. */
 export function buildKinBookingLinksSection(): string {
-  const rows = KIN_BOOKING_SERVICES.map((s) => `- ${s.label}: ${s.link}`).join("\n");
+  const disciplines = KIN_BOOKING_SERVICES.filter(
+    (s) => s.link !== KIN_GENERAL_BOOKING_LINK
+  ).map((s) => `- ${s.label}: ${s.link}`);
+  const ages = KIN_COUNSELLING_AGES.map((a) => `- ${a.label}: ${a.link}`);
   return [
     "Send the booking page that matches what the family needs. Paste the link on its own",
     "line, never with a period straight after it.",
     "",
-    rows,
+    ...disciplines,
+    ...ages,
+    `- Couples counselling: ${KIN_COUPLES_BOOKING_LINK}`,
     `- Anything else, or not sure yet: ${KIN_GENERAL_BOOKING_LINK}`,
     "",
     "Rules that decide which one. The lead flow only recognises the plainest wording, so",
@@ -54,13 +61,13 @@ export function buildKinBookingLinksSection(): string {
     "  funding report: the psychological assessment page.",
     "- The word assessment ON ITS OWN does not tell you which. OT, speech and psychology all",
     "  run assessments, so ask what kind before sending a link.",
-    "- Counselling for a teen aged 14 to 17: the teen and youth counselling page.",
-    "- Counselling for a child UNDER 14, or for an adult: the general page. The teen page is",
-    "  scoped to ages 14 to 17 in JaneApp, so sending it to a younger child's parent books",
-    "  them into the wrong service. When the age is unclear, ask how old the child is before",
-    "  choosing between the teen page and the general page.",
-    "- Speech therapy, SLP, behaviour consulting, nurse practitioner, or several services at",
-    "  once: the general page, which lists every discipline.",
+    "- COUNSELLING IS SPLIT BY AGE, and the pages turn away the wrong age group. Ages 3 to 12",
+    "  book the child page, 13 to 17 the teen and youth page, and grown-ups the adult page.",
+    "  If you do not know the age, ASK before sending a counselling link. Never guess.",
+    "- Two adults wanting counselling together: the couples page.",
+    "- Speech therapy or SLP: there is no online booking page for speech. Do not invent one.",
+    "  Take their details, tell them the clinic will call to arrange it, and alert the team.",
+    "- Nurse practitioner, behaviour consulting, or several services at once: the general page.",
     "- If they have already booked, do not resend a link. Confirm and offer to answer questions."
   ].join("\n");
 }
