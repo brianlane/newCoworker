@@ -278,7 +278,7 @@ export async function reassignMeetingContact(
         businessId,
         documentId,
         documentTitle: nextTitle,
-        minutes: nextContent,
+        content: nextContent,
         summary: nextSummary || null,
         vtt,
         meetingUuid: ledger.meeting_uuid,

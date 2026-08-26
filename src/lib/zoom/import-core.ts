@@ -237,7 +237,7 @@ export async function importZoomTranscriptDocument(
           businessId,
           documentId,
           documentTitle: derivedTitle ?? title,
-          minutes: ingested.contentMd,
+          content: ingested.contentMd,
           summary: ingested.summary,
           vtt,
           meetingUuid: params.meetingUuid,

@@ -36,7 +36,7 @@ const input = {
   businessId: BIZ,
   documentId: "doc-1",
   documentTitle: "Kingsley Moyo + New Coworker: Discovery Call",
-  minutes: "Kingsley agreed to sign up.",
+  content: "Kingsley agreed to sign up.",
   summary: "Two clinics, two accounts.",
   vtt: "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nKingsley Moyo: Yes.\n",
   meetingUuid: MEETING_UUID,
@@ -530,7 +530,7 @@ describe("applyMeetingClassification: an owner-forced contact", () => {
   it("asks for action items on an outcome that would normally skip them", async () => {
     const classify = vi.fn(async () => ({ outcome: "unclear", actionItems: [] }));
     await applyMeetingClassification(forced, deps({ classify }));
-    expect(classify).toHaveBeenCalledWith(BIZ, input.minutes, {
+    expect(classify).toHaveBeenCalledWith(BIZ, input.content, {
       alwaysExtractActionItems: true
     });
   });
@@ -538,7 +538,7 @@ describe("applyMeetingClassification: an owner-forced contact", () => {
   it("does not ask for them on an ordinary automatic pass", async () => {
     const classify = vi.fn(async () => ({ outcome: "signed", actionItems: [] }));
     await applyMeetingClassification(input, deps({ classify }));
-    expect(classify).toHaveBeenCalledWith(BIZ, input.minutes, {
+    expect(classify).toHaveBeenCalledWith(BIZ, input.content, {
       alwaysExtractActionItems: false
     });
   });
