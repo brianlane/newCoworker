@@ -222,3 +222,108 @@ describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
     expect(email.text).toContain("Acme Plumbing (biz-nobox):");
   });
 });
+
+describe("buildOpsBillingPostureEmail, advisory findings", () => {
+  const advisory = (over: Partial<BillingPostureFinding> = {}): BillingPostureFinding =>
+    finding({
+      kind: "billing_cycle_price_stale",
+      vmId: 1806097,
+      businessId: "biz-hq",
+      businessName: "New Coworker",
+      hostingerBillingSubscriptionId: "16BcBrVOTACBI8WdU",
+      expiresAt: null,
+      autoHealed: false,
+      detail: "Hostinger subscription 16BcBrVOTACBI8WdU reports a 1-month cycle at $19.49",
+      ...over
+    });
+
+  it("never claims a lapse risk when only advisory findings need a human", () => {
+    // The whole point: this box is healthy and renewing. Announcing that
+    // Hostinger is about to DELETE it would be false.
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory()],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.subject).toBe("[ops] VPS billing posture: 1 finding(s) to review");
+    expect(email.subject).not.toContain("ACTION REQUIRED");
+    expect(email.text).not.toContain("DELETED");
+    expect(email.text).toContain("Nothing is at risk of lapsing");
+  });
+
+  it("never tells the operator to flip the renewal toggle on an advisory-only run", () => {
+    // Following that instruction here would disable auto-renew on a healthy
+    // tenant box, causing the very outage the digest warns about.
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory()],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.text).not.toContain("flip the renewal toggle");
+    expect(email.text).toContain("No renewal toggle to flip");
+  });
+
+  it("tags an advisory line REVIEW, not ACTION REQUIRED", () => {
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory()],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.text).toContain("[REVIEW: reconciliation note]");
+    expect(email.text).not.toContain("[ACTION REQUIRED]");
+  });
+
+  it("does not append a period-ends deadline to an advisory line", () => {
+    // The date involved is a RENEWAL, not a period end, and the detail
+    // already states it.
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory()],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.text).not.toContain("period ends");
+  });
+
+  it("calls an unattributed advisory row unattributed, never pool", () => {
+    // Null attribution here means the Hostinger VM listing failed, so we do
+    // not know who runs the box. "pool" would assert something false.
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory({ vmId: null, businessId: null, businessName: null })],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.text).toContain("unattributed:");
+    expect(email.text).not.toContain("pool:");
+  });
+
+  it("keeps the lapse framing but warns off the advisory lines when both are present", () => {
+    const email = buildOpsBillingPostureEmail({
+      findings: [finding(), advisory()],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    // Count in the subject stays the total needing a human, both kinds.
+    expect(email.subject).toContain("ACTION REQUIRED: 2 VPS billing posture finding(s)");
+    expect(email.text).toContain("flip the renewal toggle");
+    expect(email.text).toContain("Lines tagged REVIEW are NOT renewal problems");
+    expect(email.text).toContain("[ACTION REQUIRED]");
+    expect(email.text).toContain("[REVIEW: reconciliation note]");
+  });
+
+  it("still reports an all-healed run as auto-healed even with an advisory kind present", () => {
+    const email = buildOpsBillingPostureEmail({
+      findings: [advisory({ autoHealed: true })],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 0,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.subject).toContain("1 finding(s) auto-healed");
+    expect(email.text).toContain("No action needed");
+  });
+});

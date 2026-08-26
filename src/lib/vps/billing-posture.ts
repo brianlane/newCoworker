@@ -105,6 +105,26 @@ export type BillingPostureFinding = {
   detail: string;
 };
 
+/**
+ * Findings that are ADVISORY: report-only, and not an auto-renew or lapse
+ * risk. The ops digest frames everything else as "live boxes at risk of
+ * lapsing" and closes by telling the operator to flip the hPanel renewal
+ * toggle, which for these is both untrue and actively harmful: flipping
+ * renewal off on a healthy tenant box is how you cause the outage the digest
+ * is warning about.
+ *
+ * Advisory findings still need a human, they just need a DIFFERENT human
+ * action, so they are counted and shown, never hidden.
+ */
+export const ADVISORY_FINDING_KINDS: ReadonlySet<BillingPostureFinding["kind"]> = new Set([
+  "billing_cycle_price_stale"
+]);
+
+/** True when a finding is an auto-renew/lapse risk rather than advisory. */
+export function isLapseRiskFinding(finding: Pick<BillingPostureFinding, "kind">): boolean {
+  return !ADVISORY_FINDING_KINDS.has(finding.kind);
+}
+
 export type BillingPostureResult = {
   checkedTenantVms: number;
   checkedPoolBoxes: number;
@@ -635,7 +655,14 @@ export async function checkVpsBillingPosture(
       businessId: owner?.id ?? null,
       businessName: owner?.name ?? null,
       hostingerBillingSubscriptionId: sub.id,
-      expiresAt: nextBillingAt,
+      // Deliberately null. `expiresAt` is rendered as "period ends", the
+      // deadline a finding is RACING, and this box has no deadline: the date
+      // in question is a RENEWAL, and calling a renewal a period end is the
+      // exact confusion box-term.ts exists to prevent. The detail below
+      // already states the date, so setting it here would also print the
+      // same timestamp twice (the same reason pool_box_lapsed_retired
+      // suppresses the suffix).
+      expiresAt: null,
       autoHealed: false,
       detail:
         `Hostinger subscription ${sub.id}${vm ? ` (VM ${vm.id})` : ""} reports a ` +
