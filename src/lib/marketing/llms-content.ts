@@ -87,7 +87,9 @@ const CAPABILITY_LINES = [
     "remembers what was said months ago on any channel.",
   "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
     "a webhook (Standard plan and up), a calendar event, or an inbound message, " +
-    "with round-robin routing to a staff roster.",
+    "with round-robin routing to a staff roster. Speed to lead: the coworker can phone a brand-new " +
+    "lead within seconds and warm-transfer to whichever teammate claims it (outbound AI calls: Standard plan and up). " +
+    "Prospecting: it finds local businesses and emails them, with owner-editable drafts (Standard plan and up).",
   "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, " +
     "Slack (the coworker answers DMs and mentions and takes approvals there; Standard plan and up), " +
     "and Meta Lead Ads through a direct first-party Facebook Page connect in the dashboard (no bridge account needed; " +

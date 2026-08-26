@@ -522,7 +522,7 @@
       "automation": {
         "eyebrow": "Automatización",
         "title": "Flujos que hacen el seguimiento por ti",
-        "subtitle": "Los AiFlows conectan disparadores con acciones en llamadas, textos, correo y leads de anuncios, más habilidades reales de navegador para todo lo demás.",
+        "subtitle": "Los AiFlows conectan disparadores con acciones en llamadas, textos, correo y leads de anuncios: tu coworker puede incluso llamar a un lead nuevo en segundos, más habilidades reales de navegador para todo lo demás.",
         "metaLeads": {
           "title": "Captura instantánea de leads de Meta",
           "description": "Los anuncios de leads de Facebook e Instagram llegan directo a tu coworker: el lead recibe un texto en segundos, queda archivado como cliente y tú recibes el resumen."
@@ -535,13 +535,21 @@
           "title": "Llamadas salientes",
           "description": "Tu coworker puede hacer llamadas salientes programadas (recordatorios, confirmaciones y seguimientos) por ti."
         },
+        "speedToLead": {
+          "title": "Velocidad al lead",
+          "description": "Un lead recién llegado puede recibir una llamada del AI en segundos, no solo un texto. Tus compañeros compiten por el lead (se reclama respondiendo 1 o con un nombre), y una transferencia cálida mantiene al lead conversando mientras tu coworker llama al equipo, con cada oferta y aceptación registrada."
+        },
+        "prospecting": {
+          "title": "Prospección",
+          "description": "Tu coworker encuentra negocios locales que encajan con tu perfil de cliente y les escribe por correo, con borradores que puedes revisar, editar o reescribir antes de enviar nada. Plan Standard y superiores."
+        },
+        "emailLeads": {
+          "title": "Leads solo con correo",
+          "description": "Un lead que llega solo con una dirección de correo también se trabaja: se archiva como contacto, recibe seguimiento por correo a un ritmo pausado y puede reservar sin necesitar nunca un número de teléfono."
+        },
         "browser": {
           "title": "Habilidades de navegador",
-          "description": "Puede operar sitios web reales: actualizar CRMs, revisar portales y completar formularios, incluso detrás de inicios de sesión."
-        },
-        "routing": {
-          "title": "Enrutamiento a tu equipo",
-          "description": "Ofertas y tareas se envían al miembro correcto por SMS, con seguimiento de aceptación integrado."
+          "description": "Opera sitios web reales: actualiza CRMs, revisa portales y completa formularios, incluso detrás de inicios de sesión. Enséñale una tarea nueva haciéndola tú una vez; graba los pasos y los repite."
         },
         "notifications": {
           "title": "Notificaciones para el dueño",
@@ -1794,7 +1802,7 @@
       },
       "automatedWorkflows": {
         "title": "Flujos automatizados",
-        "description": "AiFlows capturan leads de anuncios de Meta (Facebook e Instagram) y les responden por texto en segundos, dan seguimiento, hacen llamadas salientes y asignan cada lead a un compañero de equipo por nombre para que lo tome."
+        "description": "AiFlows capturan leads de anuncios de Meta (Facebook e Instagram), les responden por texto en segundos o les devuelven la llamada con AI, dan seguimiento y asignan cada lead a un compañero de equipo por nombre para que lo tome."
       },
       "appIntegrations": {
         "title": "Más de 8,000 integraciones",
