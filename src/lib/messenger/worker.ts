@@ -34,6 +34,11 @@ import {
   type MessengerGeminiTurnResult,
   type RunMessengerGeminiTurnArgs
 } from "@/lib/messenger/engine";
+import {
+  runMessengerStaffTurn,
+  type MessengerStaffTurnArgs,
+  type MessengerStaffTurnOutcome
+} from "@/lib/messenger/staff-turn";
 import { getActiveMetaConnectionByPageId } from "@/lib/db/meta-connections";
 import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-connections";
 import {
@@ -116,6 +121,7 @@ export type MessengerWorkerDeps = {
   ) => Promise<{ name: string | null }>;
   updateContact?: typeof updateMessengerConversationContact;
   runTurn?: (args: RunMessengerGeminiTurnArgs) => Promise<MessengerGeminiTurnResult>;
+  runStaffTurn?: (args: MessengerStaffTurnArgs) => Promise<MessengerStaffTurnOutcome>;
   send?: (
     platform: MessengerConversationRow["platform"],
     accountKey: string,
@@ -153,6 +159,7 @@ export async function processMessengerJobs(
   const fetchProfileName = deps.fetchProfileName ?? getMessengerProfile;
   const updateContact = deps.updateContact ?? updateMessengerConversationContact;
   const runTurn = deps.runTurn ?? runMessengerGeminiTurn;
+  const runStaffTurn = deps.runStaffTurn ?? runMessengerStaffTurn;
   const send = deps.send ?? sendDefault;
   const complete = deps.complete ?? completeMessengerJob;
   const fail = deps.fail ?? failMessengerJob;
@@ -265,23 +272,53 @@ export async function processMessengerJobs(
         continue;
       }
 
-      const turn = await runTurn({
+      // Staff first. On WhatsApp the sender's number is verified by WhatsApp
+      // itself, so the owner or a roster member reaching their own business
+      // number gets the OWNER coworker, not the customer sales assistant
+      // that used to pitch them and file them as a lead.
+      //
+      // Deliberately AFTER the tier gate, so this changes nothing about who
+      // is billed for an AI reply.
+      const staff = await runStaffTurn({
         businessId: job.business_id,
         conversation: conversationForTurn,
-        history,
-        tier
+        history
       });
+      if (staff.kind === "silent") {
+        // The owner turned this surface off. Terminal and quiet: no reply,
+        // no retry, and above all no fall-through to the customer engine,
+        // which would pitch them.
+        await failJob("staff_mode_off", staff.reason);
+        continue;
+      }
+      if (staff.kind === "failed") {
+        // Thrown so the existing retry/dead-letter logic below owns it. A
+        // failed staff turn must never degrade into a customer reply.
+        throw new Error(staff.detail);
+      }
+
+      const reply =
+        staff.kind === "reply"
+          ? staff.reply
+          : (
+              await runTurn({
+                businessId: job.business_id,
+                conversation: conversationForTurn,
+                history,
+                tier
+              })
+            ).reply;
 
       await send(
         conversation.platform,
         conversation.page_id,
         account.token,
         conversation.psid,
-        turn.reply
+        reply
       );
 
       try {
-        await complete(job.id, turn.reply, historyMaxMessageId);
+        await complete(job.id, reply, historyMaxMessageId);
       } catch (err) {
         // The reply already reached the lead. The job must NOT stay
         // 'processing': the stale reclaim would requeue it and a retry

@@ -188,6 +188,29 @@ How the pieces fit:
   settings instead of naming the platform limit. PR #1514 makes every send_sms and roster
   tool state the +1-only fact and recommend WhatsApp; Brian has told
   James to connect WhatsApp (pending on James).
+  Status 2026-08-26: WhatsApp IS connected (since Aug 20), but the WABA
+  cannot START conversations: every business-initiated send fails with Meta
+  error 131042, "Business eligibility payment issue", which is billing, not
+  verification. Confirmed from the delivery receipts PR #1609 added: every
+  owner-alert template send to his Canadian mobile is stamped `failed` with
+  that code, so he is receiving NO WhatsApp alerts. James reports Meta will
+  not accept his Canadian payment method. Note the shape of the limit: only
+  business-initiated (billed) conversations fail. A reply inside the 24-hour
+  window opened by an INBOUND message is free-form and unaffected, which is
+  why the live customer threads on this WABA work normally.
+- **The WABA sender number is James's own phone, so he cannot be reached on
+  WhatsApp at it.** The Cloud API sender is the +852 number, and a number on
+  the Cloud API is taken off consumer WhatsApp: messages to it arrive at our
+  webhook rather than on a handset. Owner alerts therefore target his
+  Canadian mobile (`notification_preferences.phone_number`), which is also
+  `businesses.phone`. Practical consequence, and the reason PR #1632 exists:
+  the one WhatsApp path that works for him today is HIM messaging the
+  business number first, which opens the 24-hour window and gets a free-form
+  reply that billing cannot block. Before that PR, doing so would have
+  reached the CUSTOMER sales assistant, which would have pitched him and
+  filed him as a lead. He has not tried it yet (the WhatsApp conversation row
+  for his Canadian mobile is outbound-only, `last_user_message_at` is still
+  epoch zero), so this was latent rather than experienced.
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free
