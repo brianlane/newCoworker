@@ -9,7 +9,11 @@
  *     mode (no lead intake, no customer profile), like the dashboard chat.
  *   - "Forward to owner", also relay the text to the owner's cell.
  *
- * Both persist to business_telnyx_settings via /api/business/staff-sms.
+ * Both persist via /api/business/staff-sms, but to different places:
+ * "Reply as assistant" is per-surface staff mode (public.coworker_staff_mode,
+ * surface_key 'sms'), the same row Settings > Coworker shows next to every
+ * other surface, while forwarding stays on business_telnyx_settings because
+ * relaying a text to the owner's cell is SMS-specific.
  */
 
 import { useState } from "react";
@@ -61,7 +65,10 @@ export function StaffSmsToggle({
         body: JSON.stringify({ businessId, ...patch })
       });
       const env = await parseEnvelope<{
-        assistantReplyEnabled: boolean;
+        // null = the server did not write this field in this request, so it
+        // has nothing authoritative to report about it. Never overwrite a
+        // switch from a value the server did not actually store.
+        assistantReplyEnabled: boolean | null;
         forwardToOwnerEnabled: boolean;
       }>(res);
       if (!env.ok) {
@@ -69,7 +76,9 @@ export function StaffSmsToggle({
         rollback();
         return;
       }
-      setAssistantReply(env.data.assistantReplyEnabled);
+      if (env.data.assistantReplyEnabled !== null) {
+        setAssistantReply(env.data.assistantReplyEnabled);
+      }
       setForwardToOwner(env.data.forwardToOwnerEnabled);
       router.refresh();
     } catch {

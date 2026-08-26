@@ -20,7 +20,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { setStaffSmsSettings } from "@/lib/db/telnyx-routes";
-import { setStaffMode, staffModeEnabled } from "@/lib/owner-surfaces/staff-mode";
+import { setStaffMode } from "@/lib/owner-surfaces/staff-mode";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -44,9 +44,14 @@ export async function POST(request: Request) {
 
     // Forwarding to the owner's cell is SMS-specific and stays on the
     // Telnyx settings row; the reply flag is per-surface.
+    // null means "not part of this request", NOT "false". Re-reading it
+    // here would be worse than saying nothing: staffModeEnabled resolves a
+    // failed lookup to the default (true), and the client applies whatever
+    // comes back to its sibling switch, so one blip would show staff replies
+    // as ON while they are still off, and the next save would persist that.
     const [assistantReplyEnabled, row] = await Promise.all([
       body.assistantReplyEnabled === undefined
-        ? staffModeEnabled(body.businessId, "sms")
+        ? Promise.resolve(null)
         : setStaffMode(body.businessId, "sms", body.assistantReplyEnabled),
       setStaffSmsSettings(body.businessId, {
         forwardToOwnerEnabled: body.forwardToOwnerEnabled

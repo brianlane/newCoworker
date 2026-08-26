@@ -43,7 +43,14 @@ export default async function CoworkerSettingsPage() {
       )}
 
       {business && staffModes && (
-        <CoworkerStaffModeManager businessId={business.id} initialModes={staffModes} />
+        <CoworkerStaffModeManager
+          // Keyed by business so an admin/business switch remounts the card:
+          // useState(initialModes) would otherwise keep the previous tenant's
+          // switches on screen while saves already target the new business.
+          key={business.id}
+          businessId={business.id}
+          initialModes={staffModes}
+        />
       )}
 
       {business && agents && (
