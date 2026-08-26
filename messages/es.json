@@ -347,14 +347,7 @@
       "promoExpiredDuringCheckout": "Ese código promocional dejó de ser válido, así que lo quitamos. Continúa con el precio normal."
     },
     "legal": {
-      "navPrivacy": "Privacidad",
-      "navTerms": "Términos",
-      "navGetStarted": "Comenzar",
       "effectiveDate": "Fecha de vigencia: {date}",
-      "copyright": "© {year} New Coworker. Todos los derechos reservados.",
-      "footerContact": "Contacto",
-      "footerPrivacy": "Política de privacidad",
-      "footerTerms": "Términos de servicio",
       "englishGoverns": "Este documento se proporciona solo en inglés; la versión en inglés es el texto legalmente vinculante."
     },
     "orderSummary": {
@@ -1352,110 +1345,110 @@
       "privacyMore": "Todos los detalles están en nuestra",
       "privacyLink": "política de privacidad"
     },
-    "compareGhl": {
-      "metaTitle": "New Coworker vs GoHighLevel",
-      "metaDescription": "GoHighLevel te da software para operar tú mismo. New Coworker te da un empleado de IA que lo opera por ti: llamadas contestadas, leads de anuncios de Meta respondidos por texto en segundos y seguimiento resuelto, a una fracción del costo total.",
-      "ogTitle": "New Coworker vs GoHighLevel",
-      "ogDescription": "Una caja de herramientas que tú operas vs un empleado que se opera solo. Una comparación honesta para cualquier negocio.",
-      "heroEyebrow": "New Coworker vs GoHighLevel",
-      "heroTitle": "Uno te vende software.",
-      "heroHighlight": "Nosotros llegamos a trabajar.",
-      "heroSubtitle": "GoHighLevel es una caja de herramientas poderosa si tienes tiempo para aprenderla, construir en ella y operarla. New Coworker es un empleado de IA que contesta tus llamadas, responde por texto a tus leads de anuncios en segundos y da seguimiento por su cuenta, desde el día en que te registras.",
-      "stat1Value": "15 min",
-      "stat1Label": "Configuración guiada vs semanas de curva de plataforma",
-      "stat2Value": "Segundos",
-      "stat2Label": "Del lead de anuncio de Meta al texto personal, automáticamente",
-      "stat3Value": "Incluido",
-      "stat3Label": "Contestación y seguimiento con IA, sin complemento de IA de $97/mes",
-      "stat4Label": "Los planes comienzan aquí, todo incluido, garantía de 30 días",
-      "tableEyebrow": "Lado a lado",
-      "tableTitle": "Una comparación honesta",
-      "tableSubtitle": "Los detalles de GoHighLevel reflejan sus precios y documentación publicados a julio de 2026. Donde ellos son más fuertes, lo decimos.",
-      "usColumn": "New Coworker",
-      "themColumn": "GoHighLevel",
-      "row1": {
-        "label": "Qué estás comprando",
-        "us": "Un empleado de IA que contesta, textea, reserva y da seguimiento por su cuenta",
-        "them": "Una caja de herramientas de software (CRM, funnels, flujos) que tú configuras y operas"
-      },
-      "row2": {
-        "label": "Configuración",
-        "us": "Una entrevista guiada de 15 minutos; en vivo el mismo día, hecho por nosotros",
-        "them": "Configuración de agencia + subcuentas, cableado de teléfono/correo, construcción de flujos que según reseñas toma semanas dominar"
-      },
-      "row3": {
-        "label": "Contestación de llamadas con IA 24/7",
-        "us": "Incluida en todos los planes, hasta 10 llamadas simultáneas en Standard",
-        "them": "IA de voz disponible, pero con uso por minuto o el complemento AI Employee, configurado por ti"
-      },
-      "row4": {
-        "label": "Captura de leads de Meta (Facebook/Instagram)",
-        "us": "Configuración guiada; el lead recibe texto en segundos y la conversación se atiende de punta a punta",
-        "them": "Integración nativa al CRM; tú construyes los flujos de seguimiento"
-      },
-      "row5": {
-        "label": "IA incluida en el precio",
-        "us": "Todo incluido: la IA conversacional, la IA de voz, los resúmenes y los flujos son el producto",
-        "them": "Extra: AI Employee cuesta $97/mes por ubicación (o medido por mensaje/minuto) sobre el plan"
-      },
-      "row6": {
-        "label": "Facturación por uso",
-        "us": "Cuotas mensuales generosas incluidas; límites claros, sin sorpresas de tarifas de IA por mensaje",
-        "them": "SMS, correo, voz e IA premium se miden encima de la suscripción"
-      },
-      "row7": {
-        "label": "Infraestructura",
-        "us": "Un servidor privado dedicado por negocio, cómputo y credenciales aislados",
-        "them": "SaaS multi-tenant compartido"
-      },
-      "row8": {
-        "label": "Funnels, sitios web y cursos",
-        "us": "No es nuestro producto. Nos integramos con lo que ya usas",
-        "them": "Suite completa de construcción incluida; genuinamente fuertes aquí"
-      },
-      "row9": {
-        "label": "White-label de agencia y reventa",
-        "us": "Existe white-label Enterprise, pero las agencias no son nuestro foco",
-        "them": "La reventa SaaS Mode es la razón de ser de GoHighLevel"
-      },
-      "row10": {
-        "label": "Para quién es realmente",
-        "us": "Un dueño de negocio que quiere resultados sin volverse operador de software",
-        "them": "Agencias que gestionan muchos clientes, o dueños dispuestos a construir y mantener sistemas"
-      },
-      "diffEyebrow": "La diferencia real",
-      "diffTitle": "Las herramientas te esperan. Los empleados no.",
-      "themCardTitle": "Con GoHighLevel, un lead de Meta significa…",
-      "themCard1": "El lead cae en tu pipeline del CRM.",
-      "themCard2": "Los flujos que construiste (y mantienes) se disparan, si los construiste.",
-      "themCard3": "Las respuestas llegan a tu bandeja unificada, esperando a un humano.",
-      "themCard4": "Tú (o personal que pagas) trabajan la conversación hasta una reserva.",
-      "usCardTitle": "Con New Coworker, el mismo lead significa…",
-      "usCard1": "El lead recibe un texto en segundos, desde tu número de negocio.",
-      "usCard2": "Tu coworker sostiene la conversación: responde preguntas, califica, reserva.",
-      "usCard3": "El lead queda archivado con todo el contexto y enrutado a tu equipo si quieres.",
-      "usCard4": "Tú recibes un resumen. Ese es todo tu papel en el proceso.",
-      "reviewsNote": "Las reseñas independientes describen consistentemente a GoHighLevel como poderoso pero denso. Hecho para agencias, con una curva de aprendizaje para la que los dueños deberían planear semanas. No es una crítica; es un producto distinto. Si quieres <em>operar</em> una plataforma de marketing, compra la plataforma. Si quieres tu teléfono contestado y tus leads trabajados, <link>contrata al coworker</link>.",
-      "faqEyebrow": "Preguntas",
-      "faqTitle": "Preguntas comunes",
-      "faqCheaperQ": "¿No es GoHighLevel más barato a $97/mes?",
-      "faqCheaperA": "El plan Starter de $97 es el boleto de entrada, no el costo de operación. Para igualar lo que New Coworker hace de fábrica tendrías que agregar el plan AI Employee ($97/mes por ubicación según los precios publicados de HighLevel), más uso medido de SMS, correo y voz. Más tus propias horas configurando y manteniéndolo. New Coworker Standard cuesta {standardMonthly} con la IA, el número telefónico y cuotas de uso generosas incluidas, funcionando desde el primer día.",
-      "faqMetaQ": "¿New Coworker puede capturar mis leads de anuncios de Facebook e Instagram como GoHighLevel?",
-      "faqMetaA": "Sí. Conecta tu página de Facebook directamente desde el panel en un par de minutos, y desde entonces cada lead recibe un texto en segundos, queda archivado con todo el contexto, se enruta a tu equipo si quieres y recibe seguimiento automático. La diferencia es lo que pasa después de la captura: GoHighLevel guarda el lead y corre los flujos que tú construiste; tu coworker hace esto y además atiende la conversación real.",
-      "faqBetterQ": "¿Cuándo es GoHighLevel la mejor opción?",
-      "faqBetterA": "Si eres una agencia que revende software a clientes, o quieres construir funnels, sitios web y cursos dentro de una plataforma y tienes tiempo para operarla, GoHighLevel es un producto fuerte, para eso fue construido. New Coworker está hecho para el dueño de negocio que quiere el teléfono contestado y los leads trabajados sin operar software.",
-      "faqBothQ": "¿Puedo usar ambos?",
-      "faqBothA": "Sí. Muchos negocios conservan su CRM actual y dejan que New Coworker haga la contestación y el seguimiento. Zapier, webhooks y nuestra API envían cada llamada, texto y lead al sistema que uses, incluido GoHighLevel.",
-      "faqSwitchQ": "¿Qué implica cambiarse?",
-      "faqSwitchA": "Del registro al coworker en vivo pasan minutos: elige un plan, responde una entrevista de 15 minutos, y tu número, correo y coworker entrenado se aprovisionan automáticamente. Puedes portar tu número de negocio existente, importar contactos por CSV, y hay garantía de devolución de 30 días.",
-      "ctaTitle": "Pon a un empleado a cargo, no otro inicio de sesión",
-      "ctaSubtitle": "En vivo en minutos, leads de Meta respondidos en segundos, garantía de devolución de 30 días.",
-      "ctaLabel": "Comenzar"
-    },
     "compare": {
       "gohighlevel": {
         "name": "GoHighLevel",
-        "teaser": "Una caja de herramientas potente que tú operas, frente a un empleado que se opera solo."
+        "teaser": "Una caja de herramientas potente que tú operas, frente a un empleado que se opera solo.",
+        "metaTitle": "New Coworker vs GoHighLevel",
+        "metaDescription": "GoHighLevel te da software para operar tú mismo. New Coworker te da un empleado de IA que lo opera por ti: llamadas contestadas, leads de anuncios de Meta respondidos por texto en segundos y seguimiento resuelto, a una fracción del costo total.",
+        "ogTitle": "New Coworker vs GoHighLevel",
+        "ogDescription": "Una caja de herramientas que tú operas vs un empleado que se opera solo. Una comparación honesta para cualquier negocio.",
+        "heroEyebrow": "New Coworker vs GoHighLevel",
+        "heroTitle": "Uno te vende software.",
+        "heroHighlight": "Nosotros llegamos a trabajar.",
+        "heroSubtitle": "GoHighLevel es una caja de herramientas poderosa si tienes tiempo para aprenderla, construir en ella y operarla. New Coworker es un empleado de IA que contesta tus llamadas, responde por texto a tus leads de anuncios en segundos y da seguimiento por su cuenta, desde el día en que te registras.",
+        "stat1Value": "15 min",
+        "stat1Label": "Configuración guiada vs semanas de curva de plataforma",
+        "stat2Value": "Segundos",
+        "stat2Label": "Del lead de anuncio de Meta al texto personal, automáticamente",
+        "stat3Value": "Incluido",
+        "stat3Label": "Contestación y seguimiento con IA, sin complemento de IA de $97/mes",
+        "stat4Value": "{starterMonthly}",
+        "stat4Label": "Los planes comienzan aquí, todo incluido, garantía de 30 días",
+        "themColumn": "GoHighLevel",
+        "row1": {
+          "label": "Qué estás comprando",
+          "us": "Un empleado de IA que contesta, textea, reserva y da seguimiento por su cuenta",
+          "them": "Una caja de herramientas de software (CRM, funnels, flujos) que tú configuras y operas"
+        },
+        "row2": {
+          "label": "Configuración",
+          "us": "Una entrevista guiada de 15 minutos; en vivo el mismo día, hecho por nosotros",
+          "them": "Configuración de agencia + subcuentas, cableado de teléfono/correo, construcción de flujos que según reseñas toma semanas dominar"
+        },
+        "row3": {
+          "label": "Contestación de llamadas con IA 24/7",
+          "us": "Incluida en todos los planes, hasta 10 llamadas simultáneas en Standard",
+          "them": "IA de voz disponible, pero con uso por minuto o el complemento AI Employee, configurado por ti"
+        },
+        "row4": {
+          "label": "Captura de leads de Meta (Facebook/Instagram)",
+          "us": "Configuración guiada; el lead recibe texto en segundos y la conversación se atiende de punta a punta",
+          "them": "Integración nativa al CRM; tú construyes los flujos de seguimiento"
+        },
+        "row5": {
+          "label": "IA incluida en el precio",
+          "us": "Todo incluido: la IA conversacional, la IA de voz, los resúmenes y los flujos son el producto",
+          "them": "Extra: AI Employee cuesta $97/mes por ubicación (o medido por mensaje/minuto) sobre el plan"
+        },
+        "row6": {
+          "label": "Facturación por uso",
+          "us": "Cuotas mensuales generosas incluidas; límites claros, sin sorpresas de tarifas de IA por mensaje",
+          "them": "SMS, correo, voz e IA premium se miden encima de la suscripción"
+        },
+        "row7": {
+          "label": "Infraestructura",
+          "us": "Un servidor privado dedicado por negocio, cómputo y credenciales aislados",
+          "them": "SaaS multi-tenant compartido"
+        },
+        "row8": {
+          "label": "Funnels, sitios web y cursos",
+          "us": "No es nuestro producto. Nos integramos con lo que ya usas",
+          "them": "Suite completa de construcción incluida; genuinamente fuertes aquí"
+        },
+        "row9": {
+          "label": "White-label de agencia y reventa",
+          "us": "Existe white-label Enterprise, pero las agencias no son nuestro foco",
+          "them": "La reventa SaaS Mode es la razón de ser de GoHighLevel"
+        },
+        "row10": {
+          "label": "Para quién es realmente",
+          "us": "Un dueño de negocio que quiere resultados sin volverse operador de software",
+          "them": "Agencias que gestionan muchos clientes, o dueños dispuestos a construir y mantener sistemas"
+        },
+        "themCardTitle": "Con GoHighLevel, un lead de Meta significa…",
+        "themCard1": "El lead cae en tu pipeline del CRM.",
+        "themCard2": "Los flujos que construiste (y mantienes) se disparan, si los construiste.",
+        "themCard3": "Las respuestas llegan a tu bandeja unificada, esperando a un humano.",
+        "themCard4": "Tú (o personal que pagas) trabajan la conversación hasta una reserva.",
+        "usCardTitle": "Con New Coworker, el mismo lead significa…",
+        "usCard1": "El lead recibe un texto en segundos, desde tu número de negocio.",
+        "usCard2": "Tu coworker sostiene la conversación: responde preguntas, califica, reserva.",
+        "usCard3": "El lead queda archivado con todo el contexto y enrutado a tu equipo si quieres.",
+        "usCard4": "Tú recibes un resumen. Ese es todo tu papel en el proceso.",
+        "reviewsNote": "Las reseñas independientes describen consistentemente a GoHighLevel como poderoso pero denso. Hecho para agencias, con una curva de aprendizaje para la que los dueños deberían planear semanas. No es una crítica; es un producto distinto. Si quieres <em>operar</em> una plataforma de marketing, compra la plataforma. Si quieres tu teléfono contestado y tus leads trabajados, <link>contrata al coworker</link>.",
+        "faq1": {
+          "q": "¿No es GoHighLevel más barato a $97/mes?",
+          "a": "El plan Starter de $97 es el boleto de entrada, no el costo de operación. Para igualar lo que New Coworker hace de fábrica tendrías que agregar el plan AI Employee ($97/mes por ubicación según los precios publicados de HighLevel), más uso medido de SMS, correo y voz. Más tus propias horas configurando y manteniéndolo. New Coworker Standard cuesta {standardMonthly} con la IA, el número telefónico y cuotas de uso generosas incluidas, funcionando desde el primer día."
+        },
+        "faq2": {
+          "q": "¿New Coworker puede capturar mis leads de anuncios de Facebook e Instagram como GoHighLevel?",
+          "a": "Sí. Conecta tu página de Facebook directamente desde el panel en un par de minutos, y desde entonces cada lead recibe un texto en segundos, queda archivado con todo el contexto, se enruta a tu equipo si quieres y recibe seguimiento automático. La diferencia es lo que pasa después de la captura: GoHighLevel guarda el lead y corre los flujos que tú construiste; tu coworker hace esto y además atiende la conversación real."
+        },
+        "faq3": {
+          "q": "¿Cuándo es GoHighLevel la mejor opción?",
+          "a": "Si eres una agencia que revende software a clientes, o quieres construir funnels, sitios web y cursos dentro de una plataforma y tienes tiempo para operarla, GoHighLevel es un producto fuerte, para eso fue construido. New Coworker está hecho para el dueño de negocio que quiere el teléfono contestado y los leads trabajados sin operar software."
+        },
+        "faq4": {
+          "q": "¿Puedo usar ambos?",
+          "a": "Sí. Muchos negocios conservan su CRM actual y dejan que New Coworker haga la contestación y el seguimiento. Zapier, webhooks y nuestra API envían cada llamada, texto y lead al sistema que uses, incluido GoHighLevel."
+        },
+        "faq5": {
+          "q": "¿Qué implica cambiarse?",
+          "a": "Del registro al coworker en vivo pasan minutos: elige un plan, responde una entrevista de 15 minutos, y tu número, correo y coworker entrenado se aprovisionan automáticamente. Puedes portar tu número de negocio existente, importar contactos por CSV, y hay garantía de devolución de 30 días."
+        },
+        "ctaTitle": "Pon a un empleado a cargo, no otro inicio de sesión",
+        "ctaSubtitle": "En vivo en minutos, leads de Meta respondidos en segundos, garantía de devolución de 30 días."
       },
       "zinng": {
         "name": "Zinng",

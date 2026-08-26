@@ -347,14 +347,7 @@
       "promoExpiredDuringCheckout": "That promo code stopped being valid, so we removed it. Continue at the regular price."
     },
     "legal": {
-      "navPrivacy": "Privacy",
-      "navTerms": "Terms",
-      "navGetStarted": "Get Started",
       "effectiveDate": "Effective date: {date}",
-      "copyright": "© {year} New Coworker. All rights reserved.",
-      "footerContact": "Contact",
-      "footerPrivacy": "Privacy Policy",
-      "footerTerms": "Terms of Service",
       "englishGoverns": "This document is provided in English only; the English version is the legally binding text."
     },
     "orderSummary": {
@@ -1352,110 +1345,110 @@
       "privacyMore": "Full detail is in our",
       "privacyLink": "privacy policy"
     },
-    "compareGhl": {
-      "metaTitle": "New Coworker vs GoHighLevel",
-      "metaDescription": "GoHighLevel gives you software to run yourself. New Coworker gives you an AI employee that runs it for you: calls answered, Meta ad leads texted back in seconds, and follow-up handled, at a fraction of the all-in cost.",
-      "ogTitle": "New Coworker vs GoHighLevel",
-      "ogDescription": "A toolbox you operate vs an employee that operates itself. An honest comparison for any business.",
-      "heroEyebrow": "New Coworker vs GoHighLevel",
-      "heroTitle": "One sells you software.",
-      "heroHighlight": "We show up to work.",
-      "heroSubtitle": "GoHighLevel is a powerful toolbox if you have the time to learn it, build in it, and run it. New Coworker is an AI employee that answers your calls, texts your ad leads back in seconds, and follows up on its own, starting the day you sign up.",
-      "stat1Value": "15 min",
-      "stat1Label": "Guided setup vs weeks of platform ramp-up",
-      "stat2Value": "Seconds",
-      "stat2Label": "Meta ad lead to personal text-back, automatically",
-      "stat3Value": "Included",
-      "stat3Label": "AI answering & follow-up, no $97/mo AI add-on",
-      "stat4Label": "Plans start here, all-in, 30-day guarantee",
-      "tableEyebrow": "Side by side",
-      "tableTitle": "An honest comparison",
-      "tableSubtitle": "GoHighLevel details reflect their published pricing and plan documentation as of July 2026. Where they're stronger, we say so.",
-      "usColumn": "New Coworker",
-      "themColumn": "GoHighLevel",
-      "row1": {
-        "label": "What you're buying",
-        "us": "An AI employee that answers, texts, books, and follows up on its own",
-        "them": "A software toolbox (CRM, funnels, workflows) you configure and operate"
-      },
-      "row2": {
-        "label": "Setup",
-        "us": "A 15-minute guided interview; live the same day, done-for-you",
-        "them": "Agency + sub-account setup, phone/email wiring, workflow building which reviewers report weeks to feel comfortable"
-      },
-      "row3": {
-        "label": "24/7 AI call answering",
-        "us": "Included on every plan, up to 10 concurrent calls on Standard",
-        "them": "Voice AI available, but per-minute usage or the AI Employee add-on, configured by you"
-      },
-      "row4": {
-        "label": "Meta (Facebook/Instagram) lead capture",
-        "us": "Guided setup; lead texted back in seconds and conversation handled end-to-end",
-        "them": "Native integration into the CRM; you build the follow-up workflows yourself"
-      },
-      "row5": {
-        "label": "AI included in the price",
-        "us": "All included conversation AI, voice AI, summaries, and workflows are the product",
-        "them": "Extra: AI Employee is $97/mo per location (or metered per message/minute) on top of the plan"
-      },
-      "row6": {
-        "label": "Usage billing",
-        "us": "Generous monthly quotas included; clear caps, no surprise per-message AI fees",
-        "them": "SMS, email, voice, and premium AI are metered on top of the subscription"
-      },
-      "row7": {
-        "label": "Infrastructure",
-        "us": "A dedicated private server per business, isolated compute and credentials",
-        "them": "Shared multi-tenant SaaS"
-      },
-      "row8": {
-        "label": "Funnels, websites & courses",
-        "us": "Not our product. We integrate with what you already use",
-        "them": "Full builder suite included; genuinely strong here"
-      },
-      "row9": {
-        "label": "Agency white-labeling & resale",
-        "us": "Enterprise white-label exists, but agencies aren't our focus",
-        "them": "SaaS Mode resale is what GoHighLevel is built around"
-      },
-      "row10": {
-        "label": "Who it's really for",
-        "us": "A business owner who wants outcomes without becoming a software operator",
-        "them": "Agencies managing many clients, or owners happy to build and maintain systems"
-      },
-      "diffEyebrow": "The real difference",
-      "diffTitle": "Tools wait for you. Employees don't.",
-      "themCardTitle": "With GoHighLevel, a Meta lead means…",
-      "themCard1": "The lead lands in your CRM pipeline.",
-      "themCard2": "The workflows you built (and maintain) fire, if you built them.",
-      "themCard3": "Replies come back to your unified inbox, waiting for a human.",
-      "themCard4": "You (or staff you pay) work the conversation to a booking.",
-      "usCardTitle": "With New Coworker, the same lead means…",
-      "usCard1": "The lead is texted back within seconds, from your business number.",
-      "usCard2": "Your coworker holds the conversation: answers questions, qualifies, books.",
-      "usCard3": "The lead is filed with full context and routed to your team if you want.",
-      "usCard4": "You get a summary. That's your whole job in the loop.",
-      "reviewsNote": "Independent reviews consistently describe GoHighLevel as powerful but dense. Built for agencies, with a learning curve owners should plan weeks for. That's not a knock; it's a different product. If you want to <em>run</em> a marketing platform, buy the platform. If you want your phone answered and your leads worked, <link>hire the coworker</link>.",
-      "faqEyebrow": "FAQ",
-      "faqTitle": "Common questions",
-      "faqCheaperQ": "Isn't GoHighLevel cheaper at $97/month?",
-      "faqCheaperA": "The $97 Starter plan is the entry ticket, not the running cost. To match what New Coworker does out of the box you'd add the AI Employee plan ($97/mo per location per HighLevel's published pricing), plus metered SMS, email, and voice usage. Plus your own hours configuring and maintaining it. New Coworker Standard is {standardMonthly} with the AI, the phone number, and generous usage quotas included, working on day one.",
-      "faqMetaQ": "Can New Coworker capture my Facebook and Instagram ad leads like GoHighLevel?",
-      "faqMetaA": "Yes. Connect your Facebook Page directly from the dashboard in a couple of minutes, and from then on every lead is texted back within seconds, filed with full context, routed to your team if you want, and followed up automatically. The difference is what happens after capture: GoHighLevel stores the lead and runs the workflows you built; your coworker does this then handles the actual conversation too.",
-      "faqBetterQ": "When is GoHighLevel the better choice?",
-      "faqBetterA": "If you're an agency reselling software to clients, or you want to build funnels, websites, and courses inside one platform and have the time to run it, GoHighLevel is a strong product, that's what it was built for. New Coworker is built for the business owner who wants the phone answered and the leads worked without operating software.",
-      "faqBothQ": "Can I use both?",
-      "faqBothA": "Yes. Plenty of businesses keep their existing CRM and let New Coworker do the answering and follow-up. Zapier, webhooks, and our API push every call, text, and lead into whatever system you run including GoHighLevel.",
-      "faqSwitchQ": "What does switching involve?",
-      "faqSwitchA": "Signup to live coworker takes minutes: pick a plan, answer a 15-minute interview, and your number, email, and trained coworker are provisioned automatically. You can port your existing business number in, import contacts by CSV, and there's a 30-day money-back guarantee.",
-      "ctaTitle": "Put an employee on it, not another login",
-      "ctaSubtitle": "Live in minutes, Meta leads answered in seconds, 30-day money-back guarantee.",
-      "ctaLabel": "Get Started"
-    },
     "compare": {
       "gohighlevel": {
         "name": "GoHighLevel",
-        "teaser": "A powerful toolbox you operate, against an employee that operates itself."
+        "teaser": "A powerful toolbox you operate, against an employee that operates itself.",
+        "metaTitle": "New Coworker vs GoHighLevel",
+        "metaDescription": "GoHighLevel gives you software to run yourself. New Coworker gives you an AI employee that runs it for you: calls answered, Meta ad leads texted back in seconds, and follow-up handled, at a fraction of the all-in cost.",
+        "ogTitle": "New Coworker vs GoHighLevel",
+        "ogDescription": "A toolbox you operate vs an employee that operates itself. An honest comparison for any business.",
+        "heroEyebrow": "New Coworker vs GoHighLevel",
+        "heroTitle": "One sells you software.",
+        "heroHighlight": "We show up to work.",
+        "heroSubtitle": "GoHighLevel is a powerful toolbox if you have the time to learn it, build in it, and run it. New Coworker is an AI employee that answers your calls, texts your ad leads back in seconds, and follows up on its own, starting the day you sign up.",
+        "stat1Value": "15 min",
+        "stat1Label": "Guided setup vs weeks of platform ramp-up",
+        "stat2Value": "Seconds",
+        "stat2Label": "Meta ad lead to personal text-back, automatically",
+        "stat3Value": "Included",
+        "stat3Label": "AI answering & follow-up, no $97/mo AI add-on",
+        "stat4Value": "{starterMonthly}",
+        "stat4Label": "Plans start here, all-in, 30-day guarantee",
+        "themColumn": "GoHighLevel",
+        "row1": {
+          "label": "What you're buying",
+          "us": "An AI employee that answers, texts, books, and follows up on its own",
+          "them": "A software toolbox (CRM, funnels, workflows) you configure and operate"
+        },
+        "row2": {
+          "label": "Setup",
+          "us": "A 15-minute guided interview; live the same day, done-for-you",
+          "them": "Agency + sub-account setup, phone/email wiring, workflow building which reviewers report weeks to feel comfortable"
+        },
+        "row3": {
+          "label": "24/7 AI call answering",
+          "us": "Included on every plan, up to 10 concurrent calls on Standard",
+          "them": "Voice AI available, but per-minute usage or the AI Employee add-on, configured by you"
+        },
+        "row4": {
+          "label": "Meta (Facebook/Instagram) lead capture",
+          "us": "Guided setup; lead texted back in seconds and conversation handled end-to-end",
+          "them": "Native integration into the CRM; you build the follow-up workflows yourself"
+        },
+        "row5": {
+          "label": "AI included in the price",
+          "us": "All included conversation AI, voice AI, summaries, and workflows are the product",
+          "them": "Extra: AI Employee is $97/mo per location (or metered per message/minute) on top of the plan"
+        },
+        "row6": {
+          "label": "Usage billing",
+          "us": "Generous monthly quotas included; clear caps, no surprise per-message AI fees",
+          "them": "SMS, email, voice, and premium AI are metered on top of the subscription"
+        },
+        "row7": {
+          "label": "Infrastructure",
+          "us": "A dedicated private server per business, isolated compute and credentials",
+          "them": "Shared multi-tenant SaaS"
+        },
+        "row8": {
+          "label": "Funnels, websites & courses",
+          "us": "Not our product. We integrate with what you already use",
+          "them": "Full builder suite included; genuinely strong here"
+        },
+        "row9": {
+          "label": "Agency white-labeling & resale",
+          "us": "Enterprise white-label exists, but agencies aren't our focus",
+          "them": "SaaS Mode resale is what GoHighLevel is built around"
+        },
+        "row10": {
+          "label": "Who it's really for",
+          "us": "A business owner who wants outcomes without becoming a software operator",
+          "them": "Agencies managing many clients, or owners happy to build and maintain systems"
+        },
+        "themCardTitle": "With GoHighLevel, a Meta lead means…",
+        "themCard1": "The lead lands in your CRM pipeline.",
+        "themCard2": "The workflows you built (and maintain) fire, if you built them.",
+        "themCard3": "Replies come back to your unified inbox, waiting for a human.",
+        "themCard4": "You (or staff you pay) work the conversation to a booking.",
+        "usCardTitle": "With New Coworker, the same lead means…",
+        "usCard1": "The lead is texted back within seconds, from your business number.",
+        "usCard2": "Your coworker holds the conversation: answers questions, qualifies, books.",
+        "usCard3": "The lead is filed with full context and routed to your team if you want.",
+        "usCard4": "You get a summary. That's your whole job in the loop.",
+        "reviewsNote": "Independent reviews consistently describe GoHighLevel as powerful but dense. Built for agencies, with a learning curve owners should plan weeks for. That's not a knock; it's a different product. If you want to <em>run</em> a marketing platform, buy the platform. If you want your phone answered and your leads worked, <link>hire the coworker</link>.",
+        "faq1": {
+          "q": "Isn't GoHighLevel cheaper at $97/month?",
+          "a": "The $97 Starter plan is the entry ticket, not the running cost. To match what New Coworker does out of the box you'd add the AI Employee plan ($97/mo per location per HighLevel's published pricing), plus metered SMS, email, and voice usage. Plus your own hours configuring and maintaining it. New Coworker Standard is {standardMonthly} with the AI, the phone number, and generous usage quotas included, working on day one."
+        },
+        "faq2": {
+          "q": "Can New Coworker capture my Facebook and Instagram ad leads like GoHighLevel?",
+          "a": "Yes. Connect your Facebook Page directly from the dashboard in a couple of minutes, and from then on every lead is texted back within seconds, filed with full context, routed to your team if you want, and followed up automatically. The difference is what happens after capture: GoHighLevel stores the lead and runs the workflows you built; your coworker does this then handles the actual conversation too."
+        },
+        "faq3": {
+          "q": "When is GoHighLevel the better choice?",
+          "a": "If you're an agency reselling software to clients, or you want to build funnels, websites, and courses inside one platform and have the time to run it, GoHighLevel is a strong product, that's what it was built for. New Coworker is built for the business owner who wants the phone answered and the leads worked without operating software."
+        },
+        "faq4": {
+          "q": "Can I use both?",
+          "a": "Yes. Plenty of businesses keep their existing CRM and let New Coworker do the answering and follow-up. Zapier, webhooks, and our API push every call, text, and lead into whatever system you run including GoHighLevel."
+        },
+        "faq5": {
+          "q": "What does switching involve?",
+          "a": "Signup to live coworker takes minutes: pick a plan, answer a 15-minute interview, and your number, email, and trained coworker are provisioned automatically. You can port your existing business number in, import contacts by CSV, and there's a 30-day money-back guarantee."
+        },
+        "ctaTitle": "Put an employee on it, not another login",
+        "ctaSubtitle": "Live in minutes, Meta leads answered in seconds, 30-day money-back guarantee."
       },
       "zinng": {
         "name": "Zinng",

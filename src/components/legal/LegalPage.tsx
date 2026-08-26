@@ -1,49 +1,36 @@
-import Link from "next/link";
-import Image from "next/image";
 import type { ReactNode } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 
 type LegalPageProps = {
   eyebrow: string;
   title: string;
   summary: string;
   effectiveDate: string;
-  contactEmail: string;
   children: ReactNode;
 };
 
+/**
+ * Shared frame for the legal pages (/terms, /privacy and its subpages, and
+ * /security/vulnerability-disclosure): the standard marketing chrome around a
+ * single article card. These pages used to carry their own smaller nav and
+ * footer; they now render MarketingNav/MarketingFooter like every other
+ * public page, which is why they live inside the `(marketing)` route group
+ * (its layout provides the client i18n namespaces the shared chrome needs).
+ */
 export function LegalPage({
   eyebrow,
   title,
   summary,
   effectiveDate,
-  contactEmail,
   children
 }: LegalPageProps) {
   const t = useTranslations("marketing.legal");
   const locale = useLocale();
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
-      <nav className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-5">
-        <Link href="/" className="flex items-center gap-3">
-          <Image src="/logo.png" alt="New Coworker" width={36} height={36} className="rounded-full" />
-          <span className="text-lg font-bold tracking-tight">New Coworker</span>
-        </Link>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/privacy" className="text-parchment/60 transition-colors hover:text-parchment">
-            {t("navPrivacy")}
-          </Link>
-          <Link href="/terms" className="text-parchment/60 transition-colors hover:text-parchment">
-            {t("navTerms")}
-          </Link>
-          <Link
-            href="/onboard"
-            className="rounded-lg bg-claw-green px-4 py-2 font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
-          >
-            {t("navGetStarted")}
-          </Link>
-        </div>
-      </nav>
+      <MarketingNav />
 
       <main className="mx-auto max-w-4xl px-6 pb-20 pt-8">
         <div className="rounded-3xl border border-parchment/10 bg-parchment/[0.03] p-8 sm:p-12">
@@ -68,16 +55,7 @@ export function LegalPage({
         </div>
       </main>
 
-      <footer className="border-t border-parchment/10 py-8">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-parchment/35 sm:flex-row">
-          <p>{t("copyright", { year: String(new Date().getFullYear()) })}</p>
-          <div className="flex gap-6">
-            <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-parchment/60">{t("footerContact")}</a>
-            <Link href="/privacy" className="transition-colors hover:text-parchment/60">{t("footerPrivacy")}</Link>
-            <Link href="/terms" className="transition-colors hover:text-parchment/60">{t("footerTerms")}</Link>
-          </div>
-        </div>
-      </footer>
+      <MarketingFooter />
     </div>
   );
 }

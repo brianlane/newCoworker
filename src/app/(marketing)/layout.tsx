@@ -8,9 +8,10 @@ import { SectionMessages } from "@/components/i18n/SectionMessages";
  * changes no URLs.
  *
  * A page belongs here if it renders MarketingNav/MarketingFooter or another
- * client component using `marketing.*` translations. Pages that only use
- * translations server-side (privacy, terms, security) stay outside: server
- * rendering reads the request config, not this provider.
+ * client component using `marketing.*` translations. That now includes the
+ * legal pages (privacy, terms, security): LegalPage renders the shared
+ * chrome, whose client components need this provider. Server-side
+ * translation calls are unaffected either way, they read the request config.
  */
 export default function MarketingLayout({
   children

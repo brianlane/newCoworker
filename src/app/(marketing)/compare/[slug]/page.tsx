@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Check, Minus, X } from "lucide-react";
 import { getTranslations } from "next-intl/server";
@@ -8,36 +10,37 @@ import {
   CtaBanner,
   FaqAccordion,
   PageHero,
-  SectionHeading
+  SectionHeading,
+  StatBand
 } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { formatPricePerMonth } from "@/lib/pricing";
-import { COMPARE_ROW_COUNT, COMPARISONS, getComparison, type RowVerdict } from "../data";
+import {
+  COMPARISONS,
+  DEFAULT_CARD_BULLETS,
+  DEFAULT_FAQ_COUNT,
+  getComparison,
+  type RowVerdict
+} from "../data";
 import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
 
-/** Entries with their own hand-built page are excluded; Next would shadow them anyway. */
 export function generateStaticParams(): Params[] {
-  return COMPARISONS.filter((c) => !c.bespoke).map((c) => ({ slug: c.slug }));
+  return COMPARISONS.map((c) => ({ slug: c.slug }));
 }
 
 // Only the comparisons defined in data.ts exist, anything else is a 404.
 export const dynamicParams = false;
-
-function templated(slug: string) {
-  const entry = getComparison(slug);
-  return entry && !entry.bespoke ? entry : undefined;
-}
 
 export async function generateMetadata({
   params
 }: {
   params: Promise<Params>;
 }): Promise<Metadata> {
-  const entry = templated((await params).slug);
+  const entry = getComparison((await params).slug);
   if (!entry) return {};
   const t = await getTranslations(`marketing.compare.${entry.i18nKey}`);
   return {
@@ -58,8 +61,13 @@ function VerdictIcon({ verdict, side }: { verdict: RowVerdict; side: "us" | "the
   return <X className="h-4 w-4 shrink-0 text-parchment/30" />;
 }
 
+/** 1..n, for the catalog's numbered key families (row1.., faq1.., usCard1..). */
+function oneTo(n: number): number[] {
+  return Array.from({ length: n }, (_, i) => i + 1);
+}
+
 export default async function ComparePage({ params }: { params: Promise<Params> }) {
-  const entry = templated((await params).slug);
+  const entry = getComparison((await params).slug);
   if (!entry) notFound();
 
   const t = await getTranslations(`marketing.compare.${entry.i18nKey}`);
@@ -69,18 +77,20 @@ export default async function ComparePage({ params }: { params: Promise<Params> 
     getPeriodPricing("standard", "biennial").monthlyCents
   );
 
-  const rows = entry.verdicts.slice(0, COMPARE_ROW_COUNT).map((verdict, index) => ({
+  const rows = entry.verdicts.map((verdict, index) => ({
     label: t(`row${index + 1}.label`),
     us: t(`row${index + 1}.us`, { starterMonthly, standardMonthly }),
     them: t(`row${index + 1}.them`),
     verdict
   }));
 
-  const faq = [1, 2, 3].map((n) => ({
+  const faq = oneTo(entry.faqCount ?? DEFAULT_FAQ_COUNT).map((n) => ({
     question: t(`faq${n}.q`),
     plainAnswer: t(`faq${n}.a`, { starterMonthly, standardMonthly }),
     answer: <>{t(`faq${n}.a`, { starterMonthly, standardMonthly })}</>
   }));
+
+  const cardBullets = oneTo(entry.cardBullets ?? DEFAULT_CARD_BULLETS);
 
   const name = t("name");
 
@@ -125,6 +135,15 @@ export default async function ComparePage({ params }: { params: Promise<Params> 
         }
         subtitle={t("heroSubtitle")}
       />
+
+      {entry.statBand && (
+        <StatBand
+          stats={oneTo(4).map((n) => ({
+            value: t(`stat${n}Value`, { starterMonthly, standardMonthly }),
+            label: t(`stat${n}Label`)
+          }))}
+        />
+      )}
 
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
@@ -176,22 +195,31 @@ export default async function ComparePage({ params }: { params: Promise<Params> 
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-8">
             <h3 className="text-lg font-bold text-parchment">{t("themCardTitle")}</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-parchment/55">
-              <li>{t("themCard1")}</li>
-              <li>{t("themCard2")}</li>
-              <li>{t("themCard3")}</li>
+              {cardBullets.map((n) => (
+                <li key={n}>{t(`themCard${n}`)}</li>
+              ))}
             </ul>
           </div>
           <div className="rounded-2xl border border-claw-green/25 bg-claw-green/[0.04] p-8">
             <h3 className="text-lg font-bold text-parchment">{t("usCardTitle")}</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-parchment/55">
-              <li>{t("usCard1")}</li>
-              <li>{t("usCard2")}</li>
-              <li>{t("usCard3")}</li>
+              {cardBullets.map((n) => (
+                <li key={n}>{t(`usCard${n}`)}</li>
+              ))}
             </ul>
           </div>
         </div>
         <p className="mx-auto mt-8 max-w-3xl text-center text-sm leading-relaxed text-parchment/45">
-          {tPage("sourcedNote", { name })}
+          {entry.reviewsNote
+            ? t.rich("reviewsNote", {
+                em: (chunks: ReactNode) => <em>{chunks}</em>,
+                link: (chunks: ReactNode) => (
+                  <Link href="/onboard" className="text-claw-green hover:underline">
+                    {chunks}
+                  </Link>
+                )
+              })
+            : tPage("sourcedNote", { name })}
         </p>
       </section>
 
