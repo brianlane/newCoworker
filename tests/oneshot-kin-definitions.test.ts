@@ -183,6 +183,9 @@ describe("kin booking-link routing", () => {
       "https://kinintegrated.janeapp.com/#/child-counselling-ages-3-12",
       "https://kinintegrated.janeapp.com/#/teen-youth-counselling-ages-13-17",
       "https://kinintegrated.janeapp.com/#/adult-counselling",
+      // Couples has no flow arm (the form cannot produce it) but must stay in
+      // the catalog so the coworker-knowledge drift guard covers it.
+      "https://kinintegrated.janeapp.com/#/couples-counselling",
       "https://kinintegrated.janeapp.com/"
     ]);
   });

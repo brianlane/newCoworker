@@ -161,11 +161,18 @@ export const KIN_COUNSELLING_AGES: readonly KinCounsellingAge[] = [
  */
 export const KIN_COUPLES_BOOKING_LINK = "https://kinintegrated.janeapp.com/#/couples-counselling";
 
-/** Every page the tenant hands out, general last. */
+/**
+ * Every page the tenant hands out, general last.
+ *
+ * Includes couples even though no flow arm can reach it: the coworker-side
+ * drift guard loops this list against identity.md, so anything missing here
+ * is a page that could silently disappear from the coworker's knowledge.
+ */
 export function allKinBookingLinks(): string[] {
   return [
     ...KIN_BOOKING_SERVICES.filter((s) => s.link !== KIN_GENERAL_BOOKING_LINK).map((s) => s.link),
     ...KIN_COUNSELLING_AGES.map((a) => a.link),
+    KIN_COUPLES_BOOKING_LINK,
     KIN_GENERAL_BOOKING_LINK
   ];
 }
