@@ -39,7 +39,13 @@ import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
 import { formatPricePerMonthLocalized, intlLocaleForApp } from "@/lib/i18n/format";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { localeCookieValue, resolveUiLocale } from "@/lib/i18n/resolve-locale";
-import { isSpanishMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
+import {
+  esAlternates,
+  isMirroredMarketingPath,
+  isSpanishMarketingPath,
+  SPANISH_MARKETING_PREFIXES,
+  stripSpanishPrefix
+} from "@/lib/i18n/es-routes";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -396,6 +402,35 @@ describe("es SEO route helpers", () => {
     expect(stripSpanishPrefix("/es")).toBe("/");
     expect(stripSpanishPrefix("/es/pricing")).toBe("/pricing");
     expect(stripSpanishPrefix("/pricing")).toBe("/pricing");
+  });
+
+  it("isMirroredMarketingPath matches root, nested, and /es-prefixed forms", () => {
+    expect(isMirroredMarketingPath("/")).toBe(true);
+    expect(isMirroredMarketingPath("/pricing")).toBe(true);
+    expect(isMirroredMarketingPath("/industries/real-estate")).toBe(true);
+    expect(isMirroredMarketingPath("/es/blog")).toBe(true);
+    expect(isMirroredMarketingPath("/dashboard")).toBe(false);
+    expect(isMirroredMarketingPath("/docs/api")).toBe(false);
+  });
+
+  it("the mirrored list carries /blog and /compare (the switcher's private copy dropped them)", () => {
+    expect(SPANISH_MARKETING_PREFIXES).toContain("/blog");
+    expect(SPANISH_MARKETING_PREFIXES).toContain("/compare");
+  });
+
+  it("esAlternates keeps English canonical and points es at the /es mirror", () => {
+    expect(esAlternates("/")).toEqual({
+      canonical: "/",
+      languages: { en: "/", es: "/es", "x-default": "/" }
+    });
+    expect(esAlternates("/compare/gohighlevel")).toEqual({
+      canonical: "/compare/gohighlevel",
+      languages: {
+        en: "/compare/gohighlevel",
+        es: "/es/compare/gohighlevel",
+        "x-default": "/compare/gohighlevel"
+      }
+    });
   });
 });
 

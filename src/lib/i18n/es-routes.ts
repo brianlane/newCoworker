@@ -7,7 +7,7 @@
 const ES_PREFIX = "/es";
 
 /** Marketing paths that get a public /es/... mirror. */
-const SPANISH_MARKETING_PREFIXES = [
+export const SPANISH_MARKETING_PREFIXES = [
   "/",
   "/blog",
   "/features",
@@ -25,12 +25,41 @@ const SPANISH_MARKETING_PREFIXES = [
   "/signup"
 ];
 
-export function isSpanishMarketingPath(pathname: string): boolean {
-  if (pathname !== ES_PREFIX && !pathname.startsWith(`${ES_PREFIX}/`)) return false;
+/**
+ * True when the path (with or without the /es prefix) has a public /es/...
+ * mirror. This is the single source of truth for "which paths are mirrored":
+ * the proxy rewrite, the sitemap, hreflang alternates, and the language
+ * switcher all match against it.
+ */
+export function isMirroredMarketingPath(pathname: string): boolean {
   const stripped = stripSpanishPrefix(pathname);
   return SPANISH_MARKETING_PREFIXES.some(
     (p) => stripped === p || (p !== "/" && stripped.startsWith(`${p}/`))
   );
+}
+
+export function isSpanishMarketingPath(pathname: string): boolean {
+  if (pathname !== ES_PREFIX && !pathname.startsWith(`${ES_PREFIX}/`)) return false;
+  return isMirroredMarketingPath(pathname);
+}
+
+/**
+ * `Metadata.alternates` for a mirrored marketing path: the English URL stays
+ * canonical (and x-default), the /es mirror is the Spanish alternate. `path`
+ * is the unprefixed route path, e.g. "/pricing" or "/".
+ */
+export function esAlternates(path: string): {
+  canonical: string;
+  languages: { en: string; es: string; "x-default": string };
+} {
+  return {
+    canonical: path,
+    languages: {
+      en: path,
+      es: path === "/" ? ES_PREFIX : `${ES_PREFIX}${path}`,
+      "x-default": path
+    }
+  };
 }
 
 export function stripSpanishPrefix(pathname: string): string {

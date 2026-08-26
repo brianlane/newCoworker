@@ -31,6 +31,7 @@ import {
   type Feature
 } from "@/components/marketing/sections";
 import type { AppLocale } from "@/i18n/routing";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { formatPricePerMonthLocalized } from "@/lib/i18n/format";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
@@ -64,9 +65,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.home");
   return {
     description: t("metaDescription"),
-    alternates: {
-      canonical: "/"
-    },
+    alternates: esAlternates("/"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

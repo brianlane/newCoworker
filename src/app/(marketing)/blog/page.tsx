@@ -6,6 +6,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero } from "@/components/marketing/sections";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
 import { BLOG_CATEGORIES, BLOG_PAGE_SIZE, type BlogCategory } from "@/lib/blog/db";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import {
   countPublishedPostsIsr,
   listPublishedCategoriesIsr,
@@ -23,8 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
     title: t("metaTitle"),
     description: t("metaDescription"),
     alternates: {
-      canonical: "/blog",
-      languages: { en: "/blog", es: "/es/blog" },
+      ...esAlternates("/blog"),
       types: { "application/rss+xml": "/blog/feed.xml" }
     },
     openGraph: {

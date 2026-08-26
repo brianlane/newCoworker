@@ -5,13 +5,14 @@ import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero, SectionHeading } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.about");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/about" },
+    alternates: esAlternates("/about"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

@@ -13,6 +13,7 @@ import {
 } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { getIndustry, INDUSTRIES } from "../data";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
@@ -34,7 +35,7 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   return {
     title: t("detailMetaTitle", { name }),
     description: teaser,
-    alternates: { canonical: `/industries/${industry.slug}` },
+    alternates: esAlternates(`/industries/${industry.slug}`),
     openGraph: {
       title: t("detailOgTitle", { name }),
       description: teaser,

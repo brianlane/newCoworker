@@ -12,6 +12,7 @@ import { CtaBanner } from "@/components/marketing/sections";
 import { blogImagePublicUrl } from "@/lib/blog/db";
 import { getPublishedPostBySlugIsr, listRelatedPostsIsr } from "@/lib/blog/public-isr";
 import { renderMarkdown } from "@/lib/blog/markdown";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 // ISR: posts show within a minute of publish without paying a full Node
@@ -41,14 +42,7 @@ export async function generateMetadata({
     // " | New Coworker", so a suffix here renders the brand twice.
     title,
     description,
-    alternates: {
-      canonical: translated ? `/es/blog/${post.slug}` : `/blog/${post.slug}`,
-      languages: {
-        en: `/blog/${post.slug}`,
-        // Advertise the Spanish mirror only when a translation exists.
-        ...(post.title_es ? { es: `/es/blog/${post.slug}` } : {})
-      }
-    },
+    alternates: esAlternates(`/blog/${post.slug}`),
     openGraph: {
       title,
       description,

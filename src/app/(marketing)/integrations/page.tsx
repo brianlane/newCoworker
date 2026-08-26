@@ -25,13 +25,14 @@ import {
   SectionHeading,
   StatBand
 } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.integrationsPage");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/integrations" },
+    alternates: esAlternates("/integrations"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

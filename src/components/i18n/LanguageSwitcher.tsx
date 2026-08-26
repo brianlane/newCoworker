@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import type { AppLocale } from "@/i18n/routing";
 import { LOCALE_COOKIE } from "@/i18n/routing";
+import { esAlternates, isMirroredMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
 
 type Props = {
   /** When true, POST /api/account/locale after change (signed-in dashboard). */
@@ -46,15 +47,19 @@ export function LanguageSwitcher({ persist = false, className = "" }: Props) {
         body: JSON.stringify({ locale: next }),
         keepalive: true
       }).catch(() => undefined);
-      if (next === "es" && isMarketingPath(window.location.pathname)) {
-        const prefixed = prefixSpanishPath(window.location.pathname);
+      // Non-marketing paths have no /es mirror, so they fall through to a
+      // plain refresh instead of gaining a prefix that would 404.
+      if (next === "es" && isMirroredMarketingPath(window.location.pathname)) {
+        const prefixed = esAlternates(stripSpanishPrefix(window.location.pathname)).languages.es;
         window.location.href = prefixed + window.location.search;
         return;
       }
-      if (next === "en" && window.location.pathname.startsWith("/es")) {
-        const bare = window.location.pathname.replace(/^\/es/, "") || "/";
-        window.location.href = bare + window.location.search;
-        return;
+      if (next === "en") {
+        const bare = stripSpanishPrefix(window.location.pathname);
+        if (bare !== window.location.pathname) {
+          window.location.href = bare + window.location.search;
+          return;
+        }
       }
     }
 
@@ -77,20 +82,4 @@ export function LanguageSwitcher({ persist = false, className = "" }: Props) {
       {error && <span className="text-xs text-red-400">{error}</span>}
     </div>
   );
-}
-
-function isMarketingPath(path: string): boolean {
-  const bare = path.startsWith("/es") ? path.slice(3) || "/" : path;
-  return (
-    bare === "/" ||
-    ["/features", "/pricing", "/integrations", "/industries", "/faq", "/about", "/contact", "/login", "/onboard", "/signup", "/terms", "/privacy"].some(
-      (p) => bare === p || bare.startsWith(`${p}/`)
-    )
-  );
-}
-
-function prefixSpanishPath(path: string): string {
-  const bare = path.startsWith("/es") ? path.slice(3) || "/" : path;
-  if (bare === "/") return "/es";
-  return `/es${bare}`;
 }

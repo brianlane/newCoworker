@@ -7,6 +7,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { COMPARISONS } from "./data";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -14,7 +15,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/compare" },
+    alternates: esAlternates("/compare"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

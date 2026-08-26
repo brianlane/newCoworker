@@ -8,6 +8,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { ContactForm } from "@/components/marketing/ContactForm";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { PageHero } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 const CONTACT_PAGE_JSON_LD = {
@@ -29,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/contact" },
+    alternates: esAlternates("/contact"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
