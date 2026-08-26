@@ -43,8 +43,9 @@ export class EndUserDeletionError extends Error {
    *             always safe.
    *
    * The route maps these to different statuses on purpose. Reporting an
-   * execution failure as a 400 is what let a dropped-table reference hide
-   * for seven weeks: it reads to an admin as "you typed a bad identifier".
+   * execution failure as a 400 is what let a dropped-table reference hide for
+   * the 24 days it was live (2026-08-02 to 2026-08-26): a 400 reads to an
+   * admin as "you typed a bad identifier", so nobody went looking.
    */
   readonly kind: "input" | "execution";
   constructor(message: string, kind: "input" | "execution" = "execution") {

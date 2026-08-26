@@ -125,9 +125,9 @@ export async function POST(request: Request) {
       // transaction across these calls, so rows already deleted stay deleted
       // and the subject is half erased. Leave a durable trace, because until
       // this branch existed there was none: a dropped-table reference aborted
-      // every erasure for seven weeks while returning a 400 that reads as
-      // "you typed a bad identifier". Erasure is idempotent, so the recorded
-      // fingerprint is enough to re-run the request once the cause is fixed.
+      // every erasure from 2026-08-02 to 2026-08-26 while returning a 400 that
+      // reads as "you typed a bad identifier". Erasure is idempotent, so the
+      // recorded fingerprint is enough to re-run once the cause is fixed.
       await recordAbortedErasure(body, err);
       return errorResponse("INTERNAL_SERVER_ERROR", err.message);
     }
