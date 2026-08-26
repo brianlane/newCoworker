@@ -161,6 +161,26 @@ export async function listHostingerVpsCosts(
 }
 
 /**
+ * Every billing snapshot row pointing at one VM, in no particular order.
+ * Callers pick the one that describes the live box with `pickLiveBoxSnapshot`.
+ *
+ * Returns a LIST, not a single row, on purpose. The table's primary key is
+ * `subscription_id` and `vm_id` carries no unique constraint, so a rebuilt
+ * box can legitimately hold two rows (the old cancelled subscription and the
+ * new active one). `.maybeSingle()` throws on a second row, which would take
+ * the whole admin page down over a display field.
+ */
+export async function listHostingerVpsCostsByVmId(
+  vmId: number,
+  client?: SupabaseClient
+): Promise<HostingerVpsCostRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db.from("hostinger_vps_costs").select().eq("vm_id", vmId);
+  if (error) throw new Error(`listHostingerVpsCostsByVmId: ${error.message}`);
+  return (data ?? []) as HostingerVpsCostRow[];
+}
+
+/**
  * Every tenant DID that can appear as cli/cld on a Telnyx MDR: the
  * messaging from-number plus every routed voice DID. `businesses.phone` is
  * deliberately NOT included, that's the owner's onboarding cell, not a

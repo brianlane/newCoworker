@@ -31,6 +31,7 @@ import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { CostSyncButton } from "@/components/admin/CostSyncButton";
 import { MarginAlertSettings } from "@/components/admin/MarginAlertSettings";
+import { boxTermState, boxTermEndsAt } from "@/lib/vps/box-term";
 
 export const dynamic = "force-dynamic";
 
@@ -621,13 +622,12 @@ export default async function AdminCostsPage({
               </thead>
               <tbody className="divide-y divide-parchment/8">
                 {hostingerRows.map((row) => {
-                  const notRenewing =
-                    row.is_auto_renewed === false ||
-                    row.status === "non_renewing" ||
-                    row.status === "cancelled";
-                  const at = notRenewing
-                    ? (row.expires_at ?? row.next_billing_at)
-                    : row.next_billing_at;
+                  // Same two helpers the per-tenant Infrastructure card
+                  // renders from, so the fleet table and the tenant page can
+                  // never disagree about when a box dies.
+                  const state = boxTermState(row);
+                  const notRenewing = state !== "renewing";
+                  const at = boxTermEndsAt(row);
                   return (
                     <tr key={row.subscription_id}>
                       <td className="py-2 font-mono text-parchment/80">
@@ -652,7 +652,7 @@ export default async function AdminCostsPage({
                       </td>
                       <td className="py-2">
                         <Badge variant={notRenewing ? "pending" : "success"}>
-                          {notRenewing ? (row.status === "cancelled" ? "cancelled" : "lapsing") : "renewing"}
+                          {state}
                         </Badge>
                       </td>
                       <td className="py-2 text-parchment/60">

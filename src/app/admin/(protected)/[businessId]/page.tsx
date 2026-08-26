@@ -74,6 +74,9 @@ import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
 import { peakLoadPerCore } from "@/lib/vps/host-metrics";
+import { listHostingerVpsCostsByVmId } from "@/lib/db/platform-costs";
+import { pickLiveBoxSnapshot, summarizeBoxTerm, boxSnapshotStale } from "@/lib/vps/box-term";
+import { resolveVpsProvider, providerUsesHostingerLifecycle } from "@/lib/vps/provider";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
 import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
@@ -129,6 +132,36 @@ export default async function BusinessDetailPage({
     getLivePrioritySupportSubscription(businessId).catch(() => null)
   ]);
   const postureReport = await getLatestVpsPostureReport(businessId);
+  // When this box's paid period ends. Read from the daily Hostinger billing
+  // snapshot rather than the live API: the admin page must not block on a
+  // vendor call, and /admin/costs already keeps this table fresh. Best
+  // effort, a missing or unreadable snapshot degrades the field to "no
+  // billing snapshot", never errors the page.
+  //
+  // Gated on the provider, not just on the id being numeric. `businesses.
+  // hostinger_vps_id` is REUSED by the other providers (src/lib/ovh/
+  // provision.ts stores the OVH serviceName in it), and a tenant moved off
+  // Hostinger keeps whatever id it had. Without the gate, a leftover numeric
+  // id would match an unrelated Hostinger VM and label this tenant with
+  // another one's renewal date.
+  const boxProvider = resolveVpsProvider(business?.vps_provider);
+  const boxHasHostingerBilling = providerUsesHostingerLifecycle(boxProvider);
+  const boxVmId = Number(business?.hostinger_vps_id ?? "");
+  const boxBillingRows = boxHasHostingerBilling && Number.isFinite(boxVmId) && boxVmId > 0
+    ? await listHostingerVpsCostsByVmId(boxVmId).catch(
+        (err: unknown) => {
+          console.error(
+            "admin business: hostinger billing snapshot read failed",
+            err instanceof Error ? err.message : err
+          );
+          return [];
+        }
+      )
+    : [];
+  const boxBilling = pickLiveBoxSnapshot(boxBillingRows);
+  const boxTerm = boxBilling ? summarizeBoxTerm(boxBilling) : null;
+  const boxSnapshotAt = boxBilling?.snapshot_at ?? null;
+  const boxSnapshotIsStale = boxSnapshotAt !== null && boxSnapshotStale(boxSnapshotAt);
   const teamMembers = await listBusinessMembers(businessId);
   // Widget settings for the Web chat card. Best-effort read, the page
   // must render even if the row is missing (owner never enabled it).
@@ -734,6 +767,78 @@ export default async function BusinessDetailPage({
             <dt className="text-parchment/40 text-xs">Provider / region</dt>
             <dd className="text-parchment font-mono">
               {business.vps_provider ?? "hostinger"} · {business.vps_region ?? "us"}
+            </dd>
+          </div>
+          {/* When the paid period ends. The one infrastructure fact that is
+              invisible everywhere else on this page: a box can be healthy,
+              in posture, and idling at 8% load, and still be eleven days
+              from going dark because auto-renew is off. Renewing boxes show
+              the same field as prepaid runway, which is what answers "how
+              long is this one paid up for" after a term change. */}
+          <div>
+            <dt className="text-parchment/40 text-xs">Renews / expires</dt>
+            <dd className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              {boxTerm ? (
+                <>
+                  <Badge
+                    variant={
+                      boxTerm.urgent
+                        ? "error"
+                        : boxTerm.state === "renewing"
+                          ? "success"
+                          : "pending"
+                    }
+                  >
+                    {boxTerm.state}
+                  </Badge>
+                  {boxTerm.endsAt ? (
+                    <span className="text-parchment font-mono text-xs">
+                      <LocalDateTime iso={boxTerm.endsAt} style="date" />
+                    </span>
+                  ) : (
+                    <span className="text-parchment/40 text-xs">date unknown</span>
+                  )}
+                  {boxTerm.runwayLabel && (
+                    <span
+                      className={
+                        boxTerm.urgent
+                          ? "text-spark-orange text-xs"
+                          : "text-parchment/40 text-xs"
+                      }
+                    >
+                      {boxTerm.runwayLabel}
+                    </span>
+                  )}
+                  {/* The date is a snapshot, not a live read. Stamp it, so a
+                      term the owner changed an hour ago is visibly not in it
+                      yet rather than silently contradicting Hostinger. */}
+                  {boxSnapshotAt && (
+                    <span
+                      className={
+                        boxSnapshotIsStale
+                          ? "text-spark-orange text-[11px]"
+                          : "text-parchment/30 text-[11px]"
+                      }
+                    >
+                      (as of <LocalDateTime iso={boxSnapshotAt} />
+                      {boxSnapshotIsStale ? ", sync is behind" : ""})
+                    </span>
+                  )}
+                </>
+              ) : !boxHasHostingerBilling ? (
+                // OVH and BYOS boxes are never in the Hostinger snapshot, so
+                // "run Sync now" would be advice that cannot work. Say which
+                // provider owns the answer instead.
+                <span className="text-parchment/40 text-xs">
+                  {boxProvider} box: no Hostinger billing to show
+                </span>
+              ) : (
+                <span className="text-parchment/40 text-xs">
+                  {business.hostinger_vps_id
+                    ? "no billing snapshot: run Sync now on /admin/costs"
+                    : "–"}
+                </span>
+              )}
             </dd>
           </div>
           <div>
