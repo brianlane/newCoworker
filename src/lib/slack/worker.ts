@@ -39,8 +39,6 @@ import {
 } from "@/lib/slack/client";
 import {
   SLACK_REPLY_MAX_CHARS,
-  SLACK_SURFACE_BLOCK,
-  SLACK_TEAM_PREAMBLE,
   slackOverCapMessage,
   slackTierBlockedMessage,
   slackTurnFailedMessage
@@ -52,31 +50,26 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
+import { ownerSurfaceToolGates } from "@/lib/owner-surfaces/gates";
+import { buildOwnerSurfaceSystem } from "@/lib/owner-surfaces/system";
+import { ownerTurnSurface } from "@/lib/owner-surfaces/turn-surfaces";
 import {
   buildBusinessContextBlock,
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
-import {
-  buildMcpBridgeExtraTools,
-  mcpBridgeToolsPreamble
-} from "@/lib/dashboard-chat/mcp-bridge";
-import {
-  EMAIL_TOOL_DISABLED_PREAMBLE,
-  EMAIL_TOOL_ENABLED_PREAMBLE,
-  OWNER_PREAMBLE
-} from "@/app/api/dashboard/chat/route";
+import { buildMcpBridgeExtraTools } from "@/lib/dashboard-chat/mcp-bridge";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
 import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { logger } from "@/lib/logger";
-import { currentDateTimeLine } from "../../../supabase/functions/_shared/datetime_line";
 
 /** Recent thread messages replayed for continuity (owner-SMS convention). */
 const SLACK_HISTORY_MESSAGES = 12;
 
 /** Same engine budget as the owner-SMS turn: streaming makes waiting visible. */
-const SLACK_TURN_BUDGET_MS = 60_000;
+/** Prompt blocks, budget, and gate policy for this surface. */
+const SURFACE = ownerTurnSurface("slack");
 
 /** Claim ceiling per sweep pass; the inline kick handles the common case. */
 const MAX_JOBS_PER_RUN = 8;
@@ -340,31 +333,24 @@ async function runOneSlackJob(
         )
       : null;
 
-  const speakerLine = isOwner
-    ? `The speaker is the business OWNER${displayName ? `, ${displayName}` : ""}, verified from their Slack profile email.`
-    : `The speaker is team member ${speaker} in the business's Slack workspace.`;
-
-  const systemInstruction = [
-    ...(isOwner ? [OWNER_PREAMBLE] : [SLACK_TEAM_PREAMBLE]),
-    SLACK_SURFACE_BLOCK,
-    speakerLine,
-    // The EMAIL_SEND protocol is owner-only on this surface: the enabled
-    // preamble (or its equally load-bearing disabled twin) only for the
-    // verified owner; the team preamble already names email as owner-only.
-    ...(isOwner ? [emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE] : []),
-    currentDateTimeLine(new Date(), business?.timezone ?? null),
-    ...(integrationsLine ? [integrationsLine] : []),
-    ...(bookingLinkLine ? [bookingLinkLine] : []),
-    ...(businessContextBlock ? [businessContextBlock] : []),
-    // includeCreationTools is false on this surface, so the ladder must
-    // not advertise create_aiflow (Bugbot Medium on PR #1382).
-    ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: false })] : []),
-    ...(transcript
-      ? [
-          `Recent Slack exchange (oldest first, ground truth for what was already said):\n${transcript}`
-        ]
-      : [])
-  ].join("\n\n");
+  const systemInstruction = buildOwnerSurfaceSystem({
+    surface: SURFACE,
+    // Identity comes from the Slack profile email, matched against the
+    // business owner email upstream in this function.
+    speaker: {
+      kind: isOwner ? "owner" : "teammate",
+      name: displayName || null,
+      readFailed: false
+    },
+    speakerRef: speaker,
+    emailToolEnabled,
+    timezone: business?.timezone ?? null,
+    integrationsLine,
+    bookingLinkLine,
+    businessContextBlock,
+    bridgeToolsDeclared: Boolean(bridgeExtraTools),
+    transcript
+  });
 
   // Streaming: start best-effort; refusals (free plan, non-agent context)
   // degrade to a single post. The append is withheld the moment a potential
@@ -386,10 +372,10 @@ async function runOneSlackJob(
     extraTools: bridgeExtraTools,
     // Bridged read chains need headroom; the turn budget still bounds the
     // wall clock regardless of the step count.
-    maxToolSteps: 6,
-    budgetMs: SLACK_TURN_BUDGET_MS,
-    spendSurface: "slack_chat",
-    flowEditSource: "ai_edit_slack",
+    maxToolSteps: SURFACE.maxToolSteps,
+    budgetMs: SURFACE.budgetMs,
+    spendSurface: SURFACE.spendSurface,
+    flowEditSource: SURFACE.flowEditSource,
     flowEditActor: speaker,
     onTextDelta: (text) => {
       if (!stream) return;
@@ -400,45 +386,32 @@ async function runOneSlackJob(
         }
       );
     },
-    actionToolGates: {
-      send_sms: smsToolEnabled,
+    actionToolGates: ownerSurfaceToolGates({
+      toolStates: {
+        send_sms: smsToolEnabled,
+        send_whatsapp: whatsappToolEnabled,
+        calendar_find_slots: calFindEnabled,
+        calendar_book_appointment: calBookEnabled,
+        calendar_reschedule_appointment: calRescheduleEnabled,
+        calendar_cancel_appointment: calCancelEnabled,
+        calendar_join_waitlist: calWaitlistEnabled,
+        run_aiflow: runAiflowEnabled,
+        edit_aiflow: editAiflowEnabled,
+        update_notification_preferences: notificationPrefsToolEnabled,
+        flag_contact_spam: flagSpamToolEnabled,
+        set_contact_reply_mode: replyModeToolEnabled,
+        manage_employee: manageEmployeeToolEnabled,
+        custom_table_read: customTableReadEnabled,
+        custom_table_write: customTableWriteEnabled,
+        custom_table_manage: customTableManageEnabled
+      },
+      // A team member in the workspace can read and act, never reconfigure.
+      isOwner,
       // Connection-aware, like dashboard chat: never declare a tool that
       // can only fail.
-      send_whatsapp:
-        whatsappToolEnabled &&
-        (await getPublicWhatsAppConnection(businessId).catch(() => null))?.is_active === true,
-      calendar_find_slots: calFindEnabled,
-      calendar_book_appointment: calBookEnabled,
-      calendar_reschedule_appointment: calRescheduleEnabled,
-      calendar_cancel_appointment: calCancelEnabled,
-      calendar_join_waitlist: calWaitlistEnabled,
-      list_aiflows: runAiflowEnabled,
-      run_aiflow: runAiflowEnabled,
-      // Owner-power tools: per-surface toggle AND the verified owner. A
-      // team member in the workspace can read and act, never reconfigure.
-      edit_aiflow: isOwner && editAiflowEnabled,
-      undo_aiflow_edit: isOwner && editAiflowEnabled,
-      generate_image: false,
-      update_notification_preferences: isOwner && notificationPrefsToolEnabled,
-      flag_contact_spam: isOwner && flagSpamToolEnabled,
-      set_contact_reply_mode: isOwner && replyModeToolEnabled,
-      manage_employee: isOwner && manageEmployeeToolEnabled,
-      // Same line this surface already draws in words: a team member in the
-      // workspace can read and act, never reconfigure. So reading and
-      // filling in a table is open to the workspace, while BUILDING or
-      // deleting one is the owner's alone.
-      custom_table_list: customTableReadEnabled,
-      custom_table_find_rows: customTableReadEnabled,
-      custom_table_history: customTableReadEnabled,
-      custom_table_add_row: customTableWriteEnabled,
-      custom_table_update_row: customTableWriteEnabled,
-      custom_table_delete_row: customTableWriteEnabled,
-      custom_table_undo: customTableWriteEnabled,
-      custom_table_create: isOwner && customTableManageEnabled,
-      custom_table_update_schema: isOwner && customTableManageEnabled,
-      custom_table_delete: isOwner && customTableManageEnabled,
-      custom_table_restore: isOwner && customTableManageEnabled
-    }
+      whatsappConnected:
+        (await getPublicWhatsAppConnection(businessId).catch(() => null))?.is_active === true
+    })
   });
 
   if (!inline.ok) {

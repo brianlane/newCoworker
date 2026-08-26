@@ -38,20 +38,14 @@ import {
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
-import {
-  buildMcpBridgeExtraTools,
-  mcpBridgeToolsPreamble
-} from "@/lib/dashboard-chat/mcp-bridge";
+import { buildMcpBridgeExtraTools } from "@/lib/dashboard-chat/mcp-bridge";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import {
-  EMAIL_TOOL_DISABLED_PREAMBLE,
-  EMAIL_TOOL_ENABLED_PREAMBLE,
-  OWNER_PREAMBLE
-} from "@/app/api/dashboard/chat/route";
+import { ownerSurfaceToolGates } from "@/lib/owner-surfaces/gates";
+import { buildOwnerSurfaceSystem } from "@/lib/owner-surfaces/system";
+import { SMS_SURFACE_BLOCK, ownerTurnSurface } from "@/lib/owner-surfaces/turn-surfaces";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
 import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { logger } from "@/lib/logger";
-import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 
 export const dynamic = "force-dynamic";
 // Same worst-case budget as dashboard chat (tool loops); the SMS worker
@@ -65,19 +59,16 @@ const bodySchema = z.object({
   text: z.string().trim().min(1).max(4000)
 });
 
-/** SMS replies must fit texting: hard clip as the last resort. */
-const SMS_REPLY_MAX_CHARS = 1200;
-
 /** Recent owner-thread messages replayed for continuity. */
 const OWNER_SMS_TAIL_MESSAGES = 12;
 
-// Exported for the live-AI e2e suite (tests/e2e/kyp-owner-sms-operator):
-// the replay must run against the EXACT production string, not a paraphrase
-// (same convention as sms_prompt_lines.ts / the exported OWNER_PREAMBLE).
-export const SMS_SURFACE_BLOCK = `THIS CONVERSATION IS OVER SMS. You are texting with the OWNER on their own phone (identity verified by the platform from their number, do not ask them to prove who they are). Everything in OWNER MODE applies here exactly as on the dashboard.
-- Keep replies SHORT and plain-text: no markdown, no bullets unless truly needed, well under ${SMS_REPLY_MAX_CHARS} characters.
-- You HAVE working tools on this surface (texting, calendar, running automations, editing automations). Use them per your rules; never claim you can't act just because this is SMS.
-- When you need a decision (e.g. presenting options), ask ONE clear question and wait for their reply.`;
+/** Prompt block, budget, gates channel: all of it lives in the registry now. */
+const SURFACE = ownerTurnSurface("sms");
+
+// Re-exported for the live-AI e2e suites (kyp-owner-sms-operator,
+// beth-delegation, owner-ask-needs-flow-change), which replay the EXACT
+// production string and import it from this route.
+export { SMS_SURFACE_BLOCK };
 
 export async function POST(request: Request) {
   let body: z.infer<typeof bodySchema>;
@@ -217,31 +208,25 @@ export async function POST(request: Request) {
       });
     }
 
-    const ownerLine = `The texter is the business OWNER${body.ownerName ? `, ${body.ownerName}` : ""}, texting from ${body.ownerE164}.`;
-    const systemInstruction = [
-      OWNER_PREAMBLE,
-      SMS_SURFACE_BLOCK,
-      ownerLine,
+    const systemInstruction = buildOwnerSurfaceSystem({
+      surface: SURFACE,
+      // This route is only ever called after telnyx-sms-inbound has
+      // classified the sender as the owner from their known number, so the
+      // speaker is established server-side before we get here.
+      speaker: { kind: "owner", name: body.ownerName ?? null, readFailed: false },
+      speakerRef: body.ownerE164,
       // Email over SMS (the Beth delegation, Jul 2026): the owner texting
       // "schedule Liz through her assistant Beth" needs the SAME EMAIL_SEND
       // protocol dashboard chat teaches, or the coworker can only offer to
-      // text a person who works by email. The disabled twin is equally
-      // load-bearing: without it the model invents tool-call syntax and
-      // claims the mail went out.
-      emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE,
-      currentDateTimeLine(new Date(), meta.timezone),
-      ...(integrationsLine ? [integrationsLine] : []),
-      ...(bookingLinkLine ? [bookingLinkLine] : []),
-      ...(businessContextBlock ? [businessContextBlock] : []),
-      // includeCreationTools is false on this surface, so the ladder must
-      // not advertise create_aiflow (Bugbot Medium on PR #1382).
-      ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: false })] : []),
-      ...(transcript
-        ? [
-            `Recent SMS exchange with the owner (oldest first, ground truth for what was already said):\n${transcript}`
-          ]
-        : [])
-    ].join("\n\n");
+      // text a person who works by email.
+      emailToolEnabled,
+      timezone: meta.timezone,
+      integrationsLine,
+      bookingLinkLine,
+      businessContextBlock,
+      bridgeToolsDeclared: Boolean(bridgeExtraTools),
+      transcript
+    });
 
     const inline = await runInlineChatTurn({
       businessId: body.businessId,
@@ -251,10 +236,10 @@ export async function POST(request: Request) {
       extraTools: bridgeExtraTools,
       // Bridged read chains need headroom; the 60s budget below still
       // bounds the wall clock regardless of the step count.
-      maxToolSteps: 6,
+      maxToolSteps: SURFACE.maxToolSteps,
       // Provenance for the definition history: an edit made by text is the
       // one an owner is least likely to remember agreeing to.
-      flowEditSource: "ai_edit_sms",
+      flowEditSource: SURFACE.flowEditSource,
       flowEditActor: body.ownerE164,
       // By text the coworker can change what an automation SAYS. Changing
       // what it DOES needs the owner looking at the flow, so structural
@@ -274,63 +259,35 @@ export async function POST(request: Request) {
       // (up to 3 provider sends). At 70s a slow turn could still be mailing
       // when the worker aborts, leaving mail in flight that the owner is
       // never told about.
-      budgetMs: 60_000,
-      actionToolGates: {
-        send_sms: smsToolEnabled,
+      budgetMs: SURFACE.budgetMs,
+      actionToolGates: ownerSurfaceToolGates({
+        toolStates: {
+          send_sms: smsToolEnabled,
+          send_whatsapp: whatsappToolEnabled,
+          calendar_find_slots: calFindEnabled,
+          calendar_book_appointment: calBookEnabled,
+          calendar_reschedule_appointment: calRescheduleEnabled,
+          calendar_cancel_appointment: calCancelEnabled,
+          calendar_join_waitlist: calWaitlistEnabled,
+          run_aiflow: runAiflowEnabled,
+          edit_aiflow: editAiflowEnabled,
+          update_notification_preferences: notificationPrefsToolEnabled,
+          flag_contact_spam: flagSpamToolEnabled,
+          set_contact_reply_mode: replyModeToolEnabled,
+          manage_employee: manageEmployeeToolEnabled,
+          custom_table_read: customTableReadEnabled,
+          custom_table_write: customTableWriteEnabled,
+          custom_table_manage: customTableManageEnabled
+        },
+        // The texter IS the verified owner: identity was established from
+        // their number before this route was called.
+        isOwner: true,
         // Same connection-aware gating as dashboard chat: never declare a
         // tool that can only fail.
-        send_whatsapp:
-          whatsappToolEnabled &&
+        whatsappConnected:
           (await getPublicWhatsAppConnection(body.businessId).catch(() => null))
-            ?.is_active === true,
-        calendar_find_slots: calFindEnabled,
-        calendar_book_appointment: calBookEnabled,
-        calendar_reschedule_appointment: calRescheduleEnabled,
-        calendar_cancel_appointment: calCancelEnabled,
-        calendar_join_waitlist: calWaitlistEnabled,
-        list_aiflows: runAiflowEnabled,
-        run_aiflow: runAiflowEnabled,
-        // Edits apply in place with full validation, no builder step
-        // needed, so the SMS surface gets the tool too (unlike the
-        // draft-card creation tools below).
-        edit_aiflow: editAiflowEnabled,
-        // Same toggle: the surface that can rewrite a live automation by
-        // text must be able to take that rewrite back by text.
-        undo_aiflow_edit: editAiflowEnabled,
-        // The dashboard image tool returns an inline /api/dashboard/images
-        // URL + markdown, there is nowhere to render that over SMS (the
-        // texting coworker's MMS path is a different tool). Off by design.
-        generate_image: false,
-        // FULL toggle control: the texter is the verified OWNER (identity
-        // established server-side from their number before this route is
-        // called), and owners always pass manage_settings, "let me know
-        // when clients text back" flips the toggle right from this thread.
-        update_notification_preferences: notificationPrefsToolEnabled,
-        // The texter is the verified OWNER, exactly the caller a spam
-        // declaration comes from ("hes spam", KYP Jul 23 2026, was THIS
-        // surface promising an action it had no tool for).
-        flag_contact_spam: flagSpamToolEnabled,
-        // "stop texting chris please" (KYP Jul 24 2026) belongs HERE, not
-        // on the spam block, the reversible sibling.
-        set_contact_reply_mode: replyModeToolEnabled,
-        // Roster changes happen away from a laptop ("Sandy starts today,
-        // her cell is..."), and the texter is the verified owner, who
-        // always passes manage_settings.
-        manage_employee: manageEmployeeToolEnabled,
-        // This surface is the VERIFIED owner texting their own coworker, so
-        // it gets the same tables access as dashboard chat.
-        custom_table_list: customTableReadEnabled,
-        custom_table_find_rows: customTableReadEnabled,
-        custom_table_history: customTableReadEnabled,
-        custom_table_add_row: customTableWriteEnabled,
-        custom_table_update_row: customTableWriteEnabled,
-        custom_table_delete_row: customTableWriteEnabled,
-        custom_table_undo: customTableWriteEnabled,
-        custom_table_create: customTableManageEnabled,
-        custom_table_update_schema: customTableManageEnabled,
-        custom_table_delete: customTableManageEnabled,
-        custom_table_restore: customTableManageEnabled
-      }
+            ?.is_active === true
+      })
     });
 
     if (!inline.ok) {
@@ -360,7 +317,7 @@ export async function POST(request: Request) {
       assistantReply: emailOutcome.content
     });
 
-    return NextResponse.json({ ok: true, reply: emailOutcome.content.slice(0, SMS_REPLY_MAX_CHARS) });
+    return NextResponse.json({ ok: true, reply: emailOutcome.content.slice(0, SURFACE.replyMaxChars) });
   } catch (err) {
     logger.error("owner-sms-turn: unexpected error", {
       businessId: body.businessId,
