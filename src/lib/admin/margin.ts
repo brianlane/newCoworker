@@ -3,8 +3,9 @@
  * (PRDs/tier-economics-jul-2026.md) as live code.
  *
  * Revenue is the renewal-aware day-current rate the MRR card uses
- * ({@link dayCurrentSubscriptionRateCents}) plus recurring pack add-ons,
- * priced exactly as computeDayCurrentMrr prices them so the two never
+ * ({@link dayCurrentSubscriptionRateCents}), less any operator-applied
+ * membership discount, plus recurring pack add-ons, priced exactly as
+ * computeDayCurrentMrr prices them so the two never
  * disagree, or the active enterprise deal's real monthly price. Costs itemize hosting, DID rental, Telnyx
  * usage, Gemini (metered spend actuals, `owner_chat_model_spend` is the
  * single pool for ALL per-tenant Gemini usage, including Gemini Live audio
@@ -26,6 +27,7 @@ import {
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { dayCurrentSubscriptionRateCents, type MrrSubscriptionInput } from "@/lib/admin/mrr";
+import { applyMembershipDiscountToCents } from "@/lib/billing/membership-discount";
 import {
   listMembershipPackAddonOptions,
   monthlyPackAddonCents,
@@ -167,8 +169,20 @@ export function computeBusinessMargin(
     // Dashboard subtracts cost from.
     const period: BillingPeriod = input.subscription.billing_period ?? "monthly";
     revenueCents =
-      dayCurrentSubscriptionRateCents(
-        input.subscription as MrrSubscriptionInput & { tier: "starter" | "standard" },
+      // An operator-applied membership discount comes off the plan line and
+      // nothing else, exactly as computeDayCurrentMrr takes it off. Without
+      // this the two numbers disagree the moment anyone is comped, and the
+      // disagreement runs the wrong way: margin would report full revenue on
+      // the very tenants whose revenue was cut, hiding a comp that had gone
+      // margin-negative. The Stripe fee line below derives from revenueCents,
+      // so it follows down on its own, which is also correct: Stripe charges
+      // a percentage of what is actually collected.
+      applyMembershipDiscountToCents(
+        dayCurrentSubscriptionRateCents(
+          input.subscription as MrrSubscriptionInput & { tier: "starter" | "standard" },
+          now
+        ),
+        input.subscription,
         now
       ) +
       monthlyPackAddonCents(

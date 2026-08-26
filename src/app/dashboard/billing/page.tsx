@@ -559,6 +559,23 @@ export default async function BillingPage(props: {
         commitmentElapsed={commitmentElapsed}
         packAddonOptions={packAddonOptions}
         currentPackAddons={currentPackAddons}
+        // An operator-applied discount, so the card does not quote a plan the
+        // owner is no longer paying in full. Mirrored from Stripe by
+        // /api/admin/membership-discount and the subscription webhook.
+        discount={
+          subscription
+            ? {
+                discount_coupon_id: subscription.discount_coupon_id,
+                discount_name: subscription.discount_name,
+                discount_percent_off: subscription.discount_percent_off,
+                discount_amount_off_cents: subscription.discount_amount_off_cents,
+                discount_duration: subscription.discount_duration,
+                discount_duration_in_months: subscription.discount_duration_in_months,
+                discount_started_at: subscription.discount_started_at,
+                discount_ends_at: subscription.discount_ends_at
+              }
+            : null
+        }
       />
 
       <Card>

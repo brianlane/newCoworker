@@ -23,6 +23,7 @@ import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { PaymentLinkButton } from "@/components/admin/PaymentLinkButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { BillingControlsPanel } from "@/components/admin/BillingControlsPanel";
+import { MembershipDiscountPanel } from "@/components/admin/MembershipDiscountPanel";
 import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
 import { computeOnboardingNudgeItems } from "@/lib/admin/onboarding-nudge";
 import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPanel";
@@ -654,6 +655,28 @@ export default async function BusinessDetailPage({
                 initialResumesAt={subscription.billing_pause_resumes_at}
                 nextChargeAt={subscription.stripe_current_period_end}
               />
+              {/* The partial comp, next to the two all-or-nothing ones. Same
+                  visibility rule (active + Stripe-linked), because a row
+                  nobody is charged for has no invoice to take a percentage
+                  off. */}
+              <div className="mt-6 border-t border-parchment/10 pt-4">
+                <MembershipDiscountPanel
+                  // Remount when the mirrored discount changes, so the form
+                  // re-seeds after the router.refresh() a save triggers.
+                  key={`${businessId}:${subscription.discount_coupon_id ?? ""}`}
+                  businessId={businessId}
+                  discount={{
+                    discount_coupon_id: subscription.discount_coupon_id,
+                    discount_name: subscription.discount_name,
+                    discount_percent_off: subscription.discount_percent_off,
+                    discount_amount_off_cents: subscription.discount_amount_off_cents,
+                    discount_duration: subscription.discount_duration,
+                    discount_duration_in_months: subscription.discount_duration_in_months,
+                    discount_started_at: subscription.discount_started_at,
+                    discount_ends_at: subscription.discount_ends_at
+                  }}
+                />
+              </div>
             </div>
           )}
         {/* Nudge the owner about unfinished onboarding (checkout, website,

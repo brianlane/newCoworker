@@ -2596,7 +2596,14 @@
       "recontractBody": "Tu término original de {term} terminó, así que se te factura mes a mes a <rollover></rollover>. Inicia un nuevo contrato de {term} para volver a <rate></rate>; <total></total> facturado hoy.",
       "startNewContractCta": "Iniciar un contrato nuevo de {term}",
       "changePlan": "Cambiar plan",
-      "changePlanBody": "Mejora, baja o cambia tu periodo de facturación. El plan actual se cancela de inmediato sin prorrateo; los datos de tu espacio migran a un servidor nuevo en el nuevo nivel."
+      "changePlanBody": "Mejora, baja o cambia tu periodo de facturación. El plan actual se cancela de inmediato sin prorrateo; los datos de tu espacio migran a un servidor nuevo en el nuevo nivel.",
+      "discountApplied": "Descuento aplicado",
+      "discountPercentOnce": "{percent}% de descuento en tu próxima factura",
+      "discountPercentMonths": "{percent}% de descuento durante {months, plural, one {# mes} other {# meses}}",
+      "discountPercentForever": "{percent}% de descuento en todas las facturas",
+      "discountAmountOnce": "{amount} de descuento en tu próxima factura",
+      "discountAmountMonths": "{amount} de descuento durante {months, plural, one {# mes} other {# meses}}",
+      "discountAmountForever": "{amount} de descuento en todas las facturas"
     },
     "notificationsPage": {
       "title": "Notificaciones",

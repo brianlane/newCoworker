@@ -6,6 +6,7 @@ import {
   type BusinessMarginInput
 } from "@/lib/admin/margin";
 import { getPeriodPricing } from "@/lib/plans/tier";
+import { computeDayCurrentMrr } from "@/lib/admin/mrr";
 import { monthlyPackAddonCents } from "@/lib/billing/membership-pack-addons";
 import {
   ENTERPRISE_UNIT_COSTS,
@@ -419,5 +420,100 @@ describe("computeBusinessMargin - recurring pack add-ons", () => {
     expect(result.revenueCents).toBe(
       computeBusinessMargin(input({ packAddonOptions: PACK_OPTIONS }), NOW).revenueCents
     );
+  });
+});
+
+describe("computeBusinessMargin - admin membership discount", () => {
+  const PACK_OPTIONS = [
+    { category: "voice" as const, id: "min_30", label: "30 minutes", listPriceCents: 6000 }
+  ];
+
+  const COMPED = {
+    discount_coupon_id: "co_1",
+    discount_percent_off: 30,
+    discount_duration: "forever" as const
+  };
+
+  /**
+   * The regression: computeDayCurrentMrr learned to take an operator's
+   * membership discount off the plan rate, and this engine did not, so margin
+   * kept reporting FULL revenue for a comped tenant. The disagreement ran the
+   * wrong way, hiding exactly the comps that had gone margin-negative on the
+   * costs page and the per-tenant economics card.
+   */
+  it("takes a live discount off plan revenue, matching the MRR basis", () => {
+    const comped = computeBusinessMargin(
+      input({ subscription: { ...input().subscription!, ...COMPED } }),
+      NOW
+    );
+    const full = computeBusinessMargin(input(), NOW);
+
+    expect(comped.revenueCents).toBe(Math.round(full.revenueCents * 0.7));
+    // The invariant this engine's own header promises: revenue priced
+    // exactly as computeDayCurrentMrr prices it.
+    expect(comped.revenueCents).toBe(
+      computeDayCurrentMrr({
+        subscriptions: [{ ...input().subscription!, ...COMPED }],
+        enterpriseDeals: [],
+        now: NOW
+      }).subscriptionCents
+    );
+  });
+
+  it("discounts the plan line only, never the packs riding beside it", () => {
+    const packs = monthlyPackAddonCents({ addonVoice: "min_30:1:1800" }, "monthly", PACK_OPTIONS);
+    const plan = computeBusinessMargin(input(), NOW).revenueCents;
+
+    const comped = computeBusinessMargin(
+      input({
+        subscription: {
+          ...input().subscription!,
+          ...COMPED,
+          membership_pack_addons: { addonVoice: "min_30:1:1800" }
+        },
+        packAddonOptions: PACK_OPTIONS
+      }),
+      NOW
+    );
+    expect(comped.revenueCents).toBe(Math.round(plan * 0.7) + packs);
+  });
+
+  it("lets Stripe's cut follow the smaller charge down", () => {
+    const comped = computeBusinessMargin(
+      input({ subscription: { ...input().subscription!, ...COMPED } }),
+      NOW
+    );
+    const full = computeBusinessMargin(input(), NOW);
+    // Stripe charges a percentage of what is actually collected, so a comped
+    // tenant costs less to bill.
+    expect(line(comped, "stripe_fees")!.cents).toBeLessThan(line(full, "stripe_fees")!.cents);
+  });
+
+  it("ignores a one-off discount, which is not recurring revenue", () => {
+    const once = computeBusinessMargin(
+      input({
+        subscription: {
+          ...input().subscription!,
+          discount_coupon_id: "co_1",
+          discount_percent_off: 30,
+          discount_duration: "once"
+        }
+      }),
+      NOW
+    );
+    expect(once.revenueCents).toBe(computeBusinessMargin(input(), NOW).revenueCents);
+  });
+
+  it("leaves an enterprise deal's quoted price alone", () => {
+    const result = computeBusinessMargin(
+      input({
+        enterpriseDealMonthlyCents: 50_000,
+        subscription: { ...input().subscription!, tier: "enterprise", ...COMPED }
+      }),
+      NOW
+    );
+    // Enterprise is priced from its deal row, which is already the real
+    // negotiated number; a membership coupon has no say over it.
+    expect(result.revenueCents).toBe(50_000);
   });
 });

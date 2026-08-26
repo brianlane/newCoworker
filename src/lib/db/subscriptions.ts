@@ -70,6 +70,30 @@ export type SubscriptionRow = {
   /** Mirror of `pause_collection.resumes_at`; null = paused until resumed. */
   billing_pause_resumes_at: string | null;
   /**
+   * Mirror of the Stripe discount attached to this LIVE subscription
+   * (§20260826042127_admin_membership_discount), applied by an operator on
+   * /admin/[businessId] through /api/admin/membership-discount. Distinct from
+   * `promotions`, which prices a promo code at signup and never touches a
+   * subscription that is already being billed.
+   *
+   * Every column is written FROM a Stripe response: the route writes them from
+   * its expanded subscription, and the customer.subscription.updated webhook
+   * clears them when Stripe reports no discount. Null coupon id = none live.
+   * The declared shape is `MembershipDiscountState` in
+   * src/lib/billing/membership-discount.ts, which is what produces these.
+   */
+  discount_coupon_id: string | null;
+  /** Coupon `name`: the operator's reason, shown on the customer's invoice. */
+  discount_name: string | null;
+  discount_percent_off: number | null;
+  discount_amount_off_cents: number | null;
+  discount_duration: "once" | "repeating" | "forever" | null;
+  discount_duration_in_months: number | null;
+  /** Stripe discount.start. The discount lands on the NEXT invoice. */
+  discount_started_at: string | null;
+  /** Stripe discount.end; null for `once` and `forever`, per Stripe. */
+  discount_ends_at: string | null;
+  /**
    * When the first-month month-to-month intro nudge email was claimed/sent
    * (§ monthly_intro_nudge migration). Null until the daily sweep stamps it.
    */
@@ -444,6 +468,14 @@ export async function updateSubscription(
       | "contract_auto_renew"
       | "billing_paused"
       | "billing_pause_resumes_at"
+      | "discount_coupon_id"
+      | "discount_name"
+      | "discount_percent_off"
+      | "discount_amount_off_cents"
+      | "discount_duration"
+      | "discount_duration_in_months"
+      | "discount_started_at"
+      | "discount_ends_at"
     >
   >,
   client?: SupabaseClient
