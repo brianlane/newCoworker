@@ -592,6 +592,10 @@
           "title": "Acciones masivas de contactos",
           "description": "Selecciona muchos contactos y etiquétalos, quítales la etiqueta, asígnales responsable o expórtalos de una vez, hasta 200 por tanda. Cambiar etiquetas dispara tus automatizaciones, y te lo decimos antes de confirmar."
         },
+        "customTables": {
+          "title": "Tablas a tu medida",
+          "description": "Crea tus propias tablas y listas para lo que sea que tu negocio registre. Tu coworker las lee, las llena mientras trabaja, y cada cambio que hace se puede deshacer. También accesibles desde Claude y ChatGPT."
+        },
         "crmImport": {
           "title": "Importa desde Follow Up Boss",
           "description": "Sube el CSV que exportas de Follow Up Boss y traemos tus contactos, etiquetas, etapa y fuente del prospecto, después de mostrarte qué trae el archivo. Las notas y los negocios no vienen en esa exportación, así que no llegan con él."
@@ -1115,11 +1119,11 @@
       "nativeTitle": "Conexiones integradas, más una API para todo lo demás",
       "claude": {
         "title": "Conector de Claude",
-        "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas y gestionar AiFlows, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel."
+        "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas, gestionar AiFlows y leer o actualizar tus tablas a medida, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel."
       },
       "chatgpt": {
         "title": "Aplicación de ChatGPT",
-        "description": "Deja que ChatGPT trabaje con tu coworker: consultar contactos, leer mensajes y resúmenes de llamadas, enviar mensajes y agendar citas, todo autenticado como tú mediante OAuth, con permisos que coinciden con tu rol en el panel."
+        "description": "Deja que ChatGPT trabaje con tu coworker: consultar contactos, leer mensajes y resúmenes de llamadas, enviar mensajes, agendar citas y leer o actualizar tus tablas a medida, todo autenticado como tú mediante OAuth, con permisos que coinciden con tu rol en el panel."
       },
       "google": {
         "title": "Google Workspace",
@@ -1311,6 +1315,7 @@
       "access4": "Enviar un mensaje de texto o de WhatsApp desde el numero de tu negocio. Cuentan para el limite de mensajes de tu plan igual que los enviados desde el panel.",
       "access5": "Buscar horarios libres y agendar citas en tu calendario conectado.",
       "access6": "Leer, crear y editar tus automatizaciones, y ejecutar una cuando lo pidas. Las automatizaciones pueden enviar mensajes a clientes, por eso ChatGPT tiene instrucciones de confirmar contigo primero.",
+      "access7": "Leer y actualizar las tablas a medida que construiste, con cada cambio registrado para poder deshacerlo desde el panel.",
       "privacyEyebrow": "Privacidad y control",
       "privacyTitle": "Que hacemos y que no",
       "privacyRole": "El acceso sigue tu rol de equipo. Una cuenta de personal no puede gestionar automatizaciones desde ChatGPT igual que no puede en la web, y no hay ninguna contrasena ni clave aparte que se pueda filtrar.",

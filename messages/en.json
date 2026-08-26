@@ -592,6 +592,10 @@
           "title": "Bulk Contact Actions",
           "description": "Select many contacts and tag, untag, assign an owner, or export them at once, up to 200 per go. Tag changes fire your automations, and we say so before you confirm."
         },
+        "customTables": {
+          "title": "Custom Tables",
+          "description": "Build your own tables and lists for whatever your business tracks. Your coworker reads them, fills them in as it works, and every change it makes can be undone. Reachable from Claude and ChatGPT too."
+        },
         "crmImport": {
           "title": "Import from Follow Up Boss",
           "description": "Upload the CSV you export from Follow Up Boss and we bring your contacts, tags, stage, and lead source across, after showing you what is in the file. Notes and deals are not in that export, so they do not come with it."
@@ -1115,11 +1119,11 @@
       "nativeTitle": "Built-in connections, plus an API for everything else",
       "claude": {
         "title": "Claude connector",
-        "description": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows all authenticated as you through OAuth, with permissions matching your dashboard role."
+        "description": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, manage AiFlows, and read or update your custom tables, all authenticated as you through OAuth, with permissions matching your dashboard role."
       },
       "chatgpt": {
         "title": "ChatGPT app",
-        "description": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments, all authenticated as you through OAuth, with permissions matching your dashboard role."
+        "description": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and read or update your custom tables, all authenticated as you through OAuth, with permissions matching your dashboard role."
       },
       "google": {
         "title": "Google Workspace",
@@ -1311,6 +1315,7 @@
       "access4": "Send a text or WhatsApp message from your business number. These count against your plan's message allowance exactly like a message sent from the dashboard.",
       "access5": "Find open calendar times and book appointments on your connected calendar.",
       "access6": "Read, create and edit your automations, and start one on demand. Automations can message customers, so ChatGPT is instructed to confirm with you first.",
+      "access7": "Read and update the custom tables you built, with every change recorded so it can be undone from the dashboard.",
       "privacyEyebrow": "Privacy and control",
       "privacyTitle": "What we do and do not do",
       "privacyRole": "Access follows your team role. A staff login cannot manage automations through ChatGPT any more than it can on the web, and there is no separate password or key to leak.",

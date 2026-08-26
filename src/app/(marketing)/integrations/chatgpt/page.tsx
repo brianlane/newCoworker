@@ -37,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
  * asks "what does this touch", and thirty-odd snake_case tool names answer a
  * different question. Ordered least to most consequential.
  */
-const CAPABILITY_COUNT = 6;
+const CAPABILITY_COUNT = 7;
 
 export default async function ChatGptIntegrationPage() {
   const t = await getTranslations("marketing.chatgptPage");
