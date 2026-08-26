@@ -34,9 +34,23 @@ import { logger } from "@/lib/logger";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export class EndUserDeletionError extends Error {
-  constructor(message: string) {
+  /**
+   * "input"     the caller supplied a bad identifier. Nothing was deleted.
+   * "execution" a store failed part way through. Rows already deleted STAY
+   *             deleted (there is no transaction across these calls), so the
+   *             subject is half erased and the request must be re-run once
+   *             the cause is fixed. Erasure is idempotent, so a re-run is
+   *             always safe.
+   *
+   * The route maps these to different statuses on purpose. Reporting an
+   * execution failure as a 400 is what let a dropped-table reference hide
+   * for seven weeks: it reads to an admin as "you typed a bad identifier".
+   */
+  readonly kind: "input" | "execution";
+  constructor(message: string, kind: "input" | "execution" = "execution") {
     super(message);
     this.name = "EndUserDeletionError";
+    this.kind = kind;
   }
 }
 
@@ -83,13 +97,13 @@ export function normalizeEndUserIdentifier(ident: EndUserIdentifier): {
   const e164 = ident.e164?.trim() || null;
   const email = ident.email?.trim().toLowerCase() || null;
   if (!e164 && !email) {
-    throw new EndUserDeletionError("Provide an E.164 phone number and/or an email address");
+    throw new EndUserDeletionError("Provide an E.164 phone number and/or an email address", "input");
   }
   if (e164 && !E164_RE.test(e164)) {
-    throw new EndUserDeletionError(`Not a valid E.164 number: ${e164}`);
+    throw new EndUserDeletionError(`Not a valid E.164 number: ${e164}`, "input");
   }
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new EndUserDeletionError("Not a valid email address");
+    throw new EndUserDeletionError("Not a valid email address", "input");
   }
   return { e164, email };
 }
@@ -294,14 +308,24 @@ export async function deleteEndUserData(
   }
 
   // ── phone-keyed content ─────────────────────────────────────────────────
-  if (e164) {
+  // Spans linkedNumbers, not the raw request e164, for the same two reasons
+  // the capture above exists: an EMAIL-ONLY request reaches this section at
+  // all only through the numbers harvested from the person's contact rows,
+  // and a PHONE request must still reach rows keyed by a merge alias
+  // (merge_customer_memories moves the old number into alias_e164s and deletes
+  // its row, so the person's SMS and call history keeps arriving on a number
+  // they no longer key on). Gating on the scalar left both behind while still
+  // answering 200, which is worse than failing: the admin is told the erasure
+  // succeeded.
+  const phoneKeys = [...linkedNumbers];
+  if (phoneKeys.length > 0) {
     // sms_rowboat_threads (conversation state, PK business_id+customer_e164)
     {
       const { data, error } = await db
         .from("sms_rowboat_threads")
         .delete()
         .eq("business_id", businessId)
-        .eq("customer_e164", e164)
+        .in("customer_e164", phoneKeys)
         .select("business_id");
       if (error) throw new EndUserDeletionError(`sms_rowboat_threads: ${error.message}`);
       results.push({
@@ -309,7 +333,7 @@ export async function deleteEndUserData(
         central: count(data),
         box: api
           ? await boxDelete("sms_rowboat_threads", [
-              { column: "customer_e164", op: "eq", value: e164 }
+              { column: "customer_e164", op: "in", value: phoneKeys }
             ])
           : null
       });
@@ -321,14 +345,14 @@ export async function deleteEndUserData(
         .from("sms_outbound_log")
         .delete()
         .eq("business_id", businessId)
-        .eq("to_e164", e164)
+        .in("to_e164", phoneKeys)
         .select("id");
       if (error) throw new EndUserDeletionError(`sms_outbound_log: ${error.message}`);
       results.push({
         table: "sms_outbound_log",
         central: count(data),
         box: api
-          ? await boxDelete("sms_outbound_log", [{ column: "to_e164", op: "eq", value: e164 }])
+          ? await boxDelete("sms_outbound_log", [{ column: "to_e164", op: "in", value: phoneKeys }])
           : null
       });
     }
@@ -341,7 +365,7 @@ export async function deleteEndUserData(
         .from("unowned_lead_alerts")
         .delete()
         .eq("business_id", businessId)
-        .eq("lead_e164", e164)
+        .in("lead_e164", phoneKeys)
         .select("id");
       if (error) throw new EndUserDeletionError(`unowned_lead_alerts: ${error.message}`);
       // Central-only, like the other engine/job tables: the row is written by
@@ -356,14 +380,14 @@ export async function deleteEndUserData(
         .from("scheduled_sms")
         .delete()
         .eq("business_id", businessId)
-        .eq("to_e164", e164)
+        .in("to_e164", phoneKeys)
         .select("id");
       if (error) throw new EndUserDeletionError(`scheduled_sms: ${error.message}`);
       results.push({
         table: "scheduled_sms",
         central: count(data),
         box: api
-          ? await boxDelete("scheduled_sms", [{ column: "to_e164", op: "eq", value: e164 }])
+          ? await boxDelete("scheduled_sms", [{ column: "to_e164", op: "in", value: phoneKeys }])
           : null
       });
     }
@@ -374,7 +398,7 @@ export async function deleteEndUserData(
         .from("sms_owner_reply_prompts")
         .delete()
         .eq("business_id", businessId)
-        .eq("customer_e164", e164)
+        .in("customer_e164", phoneKeys)
         .select("id");
       if (error) throw new EndUserDeletionError(`sms_owner_reply_prompts: ${error.message}`);
       results.push({
@@ -382,7 +406,7 @@ export async function deleteEndUserData(
         central: count(data),
         box: api
           ? await boxDelete("sms_owner_reply_prompts", [
-              { column: "customer_e164", op: "eq", value: e164 }
+              { column: "customer_e164", op: "in", value: phoneKeys }
             ])
           : null
       });
@@ -399,7 +423,7 @@ export async function deleteEndUserData(
           columns: ["id"],
           filters: [
             { column: "business_id", op: "eq", value: businessId },
-            { column: "caller_e164", op: "eq", value: e164 }
+            { column: "caller_e164", op: "in", value: phoneKeys }
           ]
         });
         if (!theirs.ok) {
@@ -421,14 +445,14 @@ export async function deleteEndUserData(
           }
         }
         box = await boxDelete("voice_call_transcripts", [
-          { column: "caller_e164", op: "eq", value: e164 }
+          { column: "caller_e164", op: "in", value: phoneKeys }
         ]);
       }
       const { data, error } = await db
         .from("voice_call_transcripts")
         .delete()
         .eq("business_id", businessId)
-        .eq("caller_e164", e164)
+        .in("caller_e164", phoneKeys)
         .select("id");
       if (error) throw new EndUserDeletionError(`voice_call_transcripts: ${error.message}`);
       results.push({ table: "voice_call_transcripts", central: count(data), box });

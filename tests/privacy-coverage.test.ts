@@ -28,21 +28,108 @@ const CREATE_TABLE_RE = new RegExp(
   String.raw`\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}\s*\(([\s\S]*?)\n\);`,
   "gi"
 );
-/** Name-only forms, for the create/drop ledger below. */
+/**
+ * Name-only forms, for the create/drop ledger below.
+ *
+ * The question the ledger answers is "does PostgREST still resolve this
+ * name?", which is NOT the same as "was a table dropped". Four statements
+ * move a name in or out of the schema cache and all four are matched:
+ * CREATE TABLE, DROP TABLE, ALTER TABLE ... RENAME TO (the old name stops
+ * resolving and the new one starts), and the VIEW pair (a compat view over a
+ * renamed table keeps the old name resolving, which is exactly what
+ * contacts_unify did for customer_memories).
+ */
 const CREATE_NAME_RE = new RegExp(
   String.raw`\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}`,
   "gi"
 );
-const DROP_TABLE_RE = new RegExp(
-  String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?${QUALIFIED}`,
+/**
+ * Postgres accepts a comma list, so capture everything up to the terminator
+ * and split it. Matching one name would silently ledger only the first, and
+ * a missed drop is exactly the failure this guard exists to catch.
+ */
+const DROP_TABLE_RE = /\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+?)(?:\s+(?:cascade|restrict))?\s*;/gi;
+const RENAME_TABLE_RE = new RegExp(
+  String.raw`\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?${QUALIFIED}\s+rename\s+to\s+${QUALIFIED}`,
   "gi"
 );
+const CREATE_VIEW_RE = new RegExp(
+  String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:materialized\s+)?view\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}`,
+  "gi"
+);
+const DROP_VIEW_RE = /\bdrop\s+(?:materialized\s+)?view\s+(?:if\s+exists\s+)?([^;]+?)(?:\s+(?:cascade|restrict))?\s*;/gi;
 
-function stripLineComments(sql: string): string {
-  return sql
-    .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
-    .join("\n");
+/** Strip a comma list of possibly schema-qualified names down to bare names. */
+function splitNameList(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((part) => part.trim().replace(/^"?public"?\./i, "").replace(/"/g, "").toLowerCase())
+    .filter((part) => /^[a-z_][a-z0-9_]*$/.test(part));
+}
+
+/**
+ * Blank out SQL comments so DDL prose cannot register a phantom create or
+ * drop, WITHOUT touching string literals.
+ *
+ * The literal-awareness is not academic. 20260711002041_spend_velocity_alerts
+ * carries a comment string ending in a slash-star at :38 (an /api/admin route
+ * glob) and an every-ten-minutes cron literal at :161 that begins with a
+ * star-slash. A naive block-comment regex reads the first as an opening
+ * delimiter and the second as its close, silently eating the 120 lines between
+ * them, two CREATE TABLEs included. That failure is why this scanner tracks
+ * single-quoted strings and dollar-quoted bodies and only recognises a comment
+ * outside them.
+ *
+ * Comments are replaced with spaces rather than removed, so every surviving
+ * statement keeps its original offset and the in-file ordering the ledger
+ * relies on stays exact.
+ */
+function stripSqlComments(sql: string): string {
+  const out = sql.split("");
+  let i = 0;
+  const blank = (from: number, to: number): void => {
+    for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " ";
+  };
+  while (i < sql.length) {
+    const two = sql.slice(i, i + 2);
+    if (sql[i] === "'") {
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
+        else if (sql[i] === "'") { i++; break; }
+        else i++;
+      }
+      continue;
+    }
+    const dollar = /^\$[a-z_]*\$/i.exec(sql.slice(i));
+    if (dollar) {
+      const tag = dollar[0];
+      const end = sql.indexOf(tag, i + tag.length);
+      i = end === -1 ? sql.length : end + tag.length;
+      continue;
+    }
+    if (two === "--") {
+      const nl = sql.indexOf("\n", i);
+      const stop = nl === -1 ? sql.length : nl;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (two === "/*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < sql.length && depth > 0) {
+        if (sql.slice(j, j + 2) === "/*") { depth++; j += 2; }
+        else if (sql.slice(j, j + 2) === "*/") { depth--; j += 2; }
+        else j++;
+      }
+      blank(i, j);
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
 }
 
 /** Tables with a business_id column, keyed to the migration that created them. */
@@ -52,7 +139,7 @@ function businessScopedTables(): Map<string, string> {
     .filter((f) => f.endsWith(".sql"))
     .sort();
   for (const file of files) {
-    const sql = stripLineComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+    const sql = stripSqlComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
     for (const m of sql.matchAll(CREATE_TABLE_RE)) {
       const name = m[1].toLowerCase();
       if (/\bbusiness_id\b/.test(m[2]) && !tables.has(name)) tables.set(name, file);
@@ -62,37 +149,54 @@ function businessScopedTables(): Map<string, string> {
 }
 
 /**
- * Tables the migration history CREATEs and later DROPs without recreating,
- * keyed to the migration that dropped them. Replaying the files in version
- * order is the only honest way to answer "does this table still exist?":
- * a drop can be followed by a recreate, and only the last statement wins.
+ * Names the migration history stops resolving, keyed to the migration that
+ * stopped them. Replaying the files in version order is the only honest way
+ * to answer "does PostgREST still resolve this name?": a drop can be followed
+ * by a recreate, a rename retires one name and introduces another, and a
+ * compat VIEW can keep a renamed-away name resolving. Only the last statement
+ * wins, so the ledger has to see all of them.
+ *
+ * contacts_unify exercises three of the four in one file: it renames
+ * customer_memories to contacts, drops contact_overrides, and then creates a
+ * customer_memories view over contacts. The correct answer is that only
+ * contact_overrides is unresolvable, and the replay produces exactly that.
  */
-function droppedTables(): Map<string, string> {
-  const live = new Set<string>();
+function unresolvableNames(): Map<string, string> {
   const dropped = new Map<string, string>();
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
     .sort();
   for (const file of files) {
-    const sql = stripLineComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
-    // Within one file, order still matters (contacts_unify creates nothing
-    // but drops one), so walk both statement kinds in source order.
+    const sql = stripSqlComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+    // Within one file, order still matters (contacts_unify renames one table,
+    // drops another, and creates a compat view over the renamed one), so walk
+    // every statement kind in source order.
     const events: Array<{ at: number; name: string; drop: boolean }> = [];
+    const add = (at: number, names: string[], drop: boolean): void => {
+      for (const name of names) events.push({ at, name, drop });
+    };
     for (const m of sql.matchAll(CREATE_NAME_RE)) {
-      events.push({ at: m.index ?? 0, name: m[1].toLowerCase(), drop: false });
+      add(m.index ?? 0, [m[1].toLowerCase()], false);
+    }
+    for (const m of sql.matchAll(CREATE_VIEW_RE)) {
+      add(m.index ?? 0, [m[1].toLowerCase()], false);
     }
     for (const m of sql.matchAll(DROP_TABLE_RE)) {
-      events.push({ at: m.index ?? 0, name: m[1].toLowerCase(), drop: true });
+      add(m.index ?? 0, splitNameList(m[1]), true);
+    }
+    for (const m of sql.matchAll(DROP_VIEW_RE)) {
+      add(m.index ?? 0, splitNameList(m[1]), true);
+    }
+    for (const m of sql.matchAll(RENAME_TABLE_RE)) {
+      // The old name stops resolving, the new one starts. Same offset, so
+      // order them explicitly: drop first, then create.
+      add(m.index ?? 0, [m[1].toLowerCase()], true);
+      add((m.index ?? 0) + 1, [m[2].toLowerCase()], false);
     }
     events.sort((a, b) => a.at - b.at);
     for (const ev of events) {
-      if (ev.drop) {
-        live.delete(ev.name);
-        dropped.set(ev.name, file);
-      } else {
-        live.add(ev.name);
-        dropped.delete(ev.name);
-      }
+      if (ev.drop) dropped.set(ev.name, file);
+      else dropped.delete(ev.name);
     }
   }
   return dropped;
@@ -322,15 +426,25 @@ describe("privacy coverage guard", () => {
         oldName in EXEMPT,
         `${oldName} must not ALSO be exempted; the rename mapping is its decision`
       ).toBe(false);
+      // The successor being covered is only half of it. Without this, a
+      // RENAMED entry proves the live table is handled while the privacy
+      // modules go on querying the dead name, which is the same abort this
+      // whole guard exists to prevent, just reached through the map.
+      expect(
+        handled(oldName),
+        `${oldName} no longer resolves; the privacy modules must not still name it ` +
+          `(PostgREST answers a missing name with an error, and deleteEndUserData ` +
+          `turns any error into a throw, so one stale name aborts the whole erasure)`
+      ).toBe(false);
     }
   });
 
-  it("the privacy modules never touch a table the schema has dropped", () => {
-    const dropped = droppedTables();
+  it("the privacy modules never touch a name the schema no longer resolves", () => {
+    const dropped = unresolvableNames();
     const zombies = [...dropped.keys()]
       .filter((name) => handled(name))
       .sort()
-      .map((name) => `${name} (dropped in ${dropped.get(name)})`);
+      .map((name) => `${name} (stopped resolving in ${dropped.get(name)})`);
     expect(
       zombies,
       "src/lib/privacy/deletion.ts or retention.ts still names these dropped tables. " +
@@ -347,12 +461,25 @@ describe("privacy coverage guard", () => {
     ).toEqual([]);
   });
 
-  it("the dropped-table ledger is not vacuously green", () => {
-    // The guard above only bites while the create/drop replay actually
-    // finds drops. contacts_unify is the one drop in the history so far; a
-    // zero here means the replay broke, not that the schema stopped
-    // dropping tables.
-    expect(droppedTables().size).toBeGreaterThan(0);
+  it("the unresolvable-name ledger is not vacuously green", () => {
+    // The guard above only bites while the replay actually resolves names.
+    // Pin the CASE, not a count: a count floor of 1 stays green if the replay
+    // breaks and some unrelated future drop takes its place, and the whole
+    // point of this ledger is that it keeps recognising THIS one.
+    const dropped = unresolvableNames();
+    expect(
+      dropped.get("contact_overrides"),
+      "the replay no longer sees contacts_unify dropping contact_overrides, so the " +
+        "guard above is asserting over an empty set. Fix the replay, do not delete this."
+    ).toBe("20260704000000_contacts_unify.sql");
+    // customer_memories was renamed away by the same migration and then given
+    // a compat view, so it must NOT read as unresolvable. This pins both the
+    // rename and the view halves of the replay: drop either and this flips.
+    expect(
+      dropped.has("customer_memories"),
+      "customer_memories resolves through the compat view contacts_unify created. " +
+        "If this fails, the replay stopped modelling renames or views."
+    ).toBe(false);
   });
 
   it("exempt entries are not simultaneously handled (keep the registry honest)", () => {
