@@ -173,7 +173,43 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
     return false;
   }
 
-  if (result.outcome !== "applied") return false;
+  if (result.outcome !== "applied") {
+    // A failure we could not attribute is still a failure worth seeing.
+    //
+    // Two ways to land here, and both matter. Most Resend traffic is sent by
+    // callers that write no email_log row at all (email verification, the
+    // password set, provisioning notices), so a bounce there would otherwise
+    // vanish entirely. And there is a narrow race on the alert path: the send
+    // returns, then we insert the row, and an instant rejection (a suppressed
+    // recipient, the exact case an owner who has been bouncing lands in) can
+    // fire its receipt inside that window and find nothing.
+    //
+    // Logged with a null business_id, which is what the fleet-wide error feed
+    // is for. Deliberately failures only: Resend fires for every message on
+    // the account, so logging routine misses would drown the feed.
+    if (result.outcome === "not_found" && isEmailDeliveryFailure(event.status)) {
+      await recordSystemLog({
+        businessId: null,
+        level: "error",
+        source: "email",
+        event: "email_delivery_failed_unattributed",
+        message:
+          `Email was not delivered (${event.status})` +
+          (event.to ? ` to ${event.to}` : "") +
+          ", and matched no logged send" +
+          (event.errorMessage ? `: ${event.errorMessage}` : ""),
+        payload: {
+          status: event.status,
+          providerMessageId: event.providerMessageId,
+          to: event.to,
+          subject: event.subject,
+          errorCode: event.errorCode,
+          errorMessage: event.errorMessage
+        }
+      });
+    }
+    return false;
+  }
 
   if (isEmailDeliveryFailure(event.status)) {
     await recordSystemLog({

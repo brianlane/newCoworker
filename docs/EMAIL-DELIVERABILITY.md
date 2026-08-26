@@ -127,6 +127,14 @@ what surfaces it on the admin System Errors view.
 shipped, and for callers that log no provider id. **Null means UNKNOWN, never
 delivered.**
 
+A failure we cannot attribute to a tenant still raises a log, as
+`email_delivery_failed_unattributed` with a null `business_id`. Plenty of
+Resend traffic writes no `email_log` row at all (email verification, the
+password set, provisioning notices), and on the alert path an instant
+rejection can beat our own insert, so a bounce must not vanish down either
+hole just because we cannot name the tenant. Routine unattributed receipts
+stay silent: Resend fires for every message on the account.
+
 **Setup** (once per environment): create the endpoint at
 [resend.com/webhooks](https://resend.com/webhooks) pointing at
 `<app>/api/webhooks/resend`, subscribe it to the `email.sent`,

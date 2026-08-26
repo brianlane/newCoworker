@@ -317,11 +317,42 @@ describe("processResendDeliveryEvent", () => {
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
 
-  it("stays quiet when the receipt matched nothing or lost a race", async () => {
-    for (const outcome of ["not_found", "stale"]) {
-      applyEmailDeliveryStatus.mockResolvedValue({ outcome, businessId: null });
-      expect(await processResendDeliveryEvent(event)).toBe(false);
-    }
+  it("still raises a failure it could not attribute to a tenant", async () => {
+    // Most Resend traffic (verification mail, provisioning notices) writes no
+    // email_log row at all, and the alert path has a narrow race where an
+    // instant rejection beats our own insert. A bounce must not vanish down
+    // either hole just because we cannot name the tenant.
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    expect(await processResendDeliveryEvent(event)).toBe(false);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: null,
+        level: "error",
+        source: "email",
+        event: "email_delivery_failed_unattributed"
+      })
+    );
+    const { message } = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
+    expect(message).toContain("matched no logged send");
+
+    // Same path with nothing to say about it still names the failure.
+    recordSystemLog.mockClear();
+    await processResendDeliveryEvent({ ...event, to: null, errorMessage: null });
+    const second = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
+    expect(second.message).toBe("Email was not delivered (bounced), and matched no logged send");
+  });
+
+  it("stays quiet about an unattributed receipt that is not a failure", async () => {
+    // Resend fires for every message on the account; logging routine misses
+    // would drown the fleet error feed.
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    expect(await processResendDeliveryEvent({ ...event, status: "delivered" })).toBe(false);
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet when the receipt lost a race to a higher state", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "stale", businessId: BIZ });
+    expect(await processResendDeliveryEvent(event)).toBe(false);
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
 
