@@ -484,6 +484,18 @@ export function billingCycleMonths(
   return null;
 }
 
+/**
+ * Whether a Hostinger billing subscription is a VPS (KVM) product at all.
+ *
+ * The billing list carries the whole account: domains, hosting plans and
+ * anything else bought under it. Every consumer that reasons about BOXES has
+ * to apply this first, and there is one definition so a new consumer cannot
+ * quietly disagree with the snapshot about what counts as a box.
+ */
+export function isVpsBillingSubscription(sub: { name?: string | null }): boolean {
+  return /kvm/i.test(sub.name ?? "");
+}
+
 /** Map Hostinger billing subscriptions + VMs + tenant assignments to snapshot rows. */
 export function buildHostingerSnapshot(params: {
   subscriptions: BillingSubscription[];
@@ -505,7 +517,7 @@ export function buildHostingerSnapshot(params: {
   for (const sub of params.subscriptions) {
     // Only VPS (KVM) subscriptions, the billing list can carry other products.
     const planName = sub.name ?? "";
-    if (!/kvm/i.test(planName)) continue;
+    if (!isVpsBillingSubscription(sub)) continue;
     const vm = vmBySubscription.get(sub.id) ?? null;
     const months = billingCycleMonths(sub.billing_period, sub.billing_period_unit ?? null);
     const cycleCents = sub.renewal_price ?? sub.total_price ?? null;

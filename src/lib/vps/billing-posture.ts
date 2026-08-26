@@ -67,7 +67,10 @@ import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 import { cycleContradictsNextBilling } from "@/lib/vps/box-term";
-import { billingCycleMonths as hostingerCycleMonths } from "@/lib/admin/cost-sync";
+import {
+  billingCycleMonths as hostingerCycleMonths,
+  isVpsBillingSubscription
+} from "@/lib/admin/cost-sync";
 import { isBusinessRunningStatus } from "@/lib/provisioning/progress";
 
 export type BillingPostureFinding = {
@@ -636,6 +639,13 @@ export async function checkVpsBillingPosture(
   );
   const nowDate = new Date(nowMs);
   for (const sub of subscriptions) {
+    // Boxes only. The billing list carries the whole Hostinger account, and
+    // this finding's text asserts that the COST SYNC dropped a box's monthly
+    // price and that margin now shows an SKU estimate. Neither is true of a
+    // domain renewal, which buildHostingerSnapshot never put in the snapshot
+    // in the first place. Same predicate the snapshot uses, so the two cannot
+    // disagree about what counts as a box.
+    if (!isVpsBillingSubscription(sub)) continue;
     // Narrow both inputs BEFORE the detector rather than defaulting them
     // after it. The detector already returns false for an unknown cycle or a
     // missing date, so any `?? fallback` downstream would be unreachable

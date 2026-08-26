@@ -1397,6 +1397,42 @@ describe("checkVpsBillingPosture, stale billing cycle", () => {
           is_auto_renewed: false,
           next_billing_at: null,
           expires_at: lapsedIso()
+        },
+        {
+          // Hostinger omitted the unit entirely: no cycle length can be read,
+          // so there is nothing to compare the billing date against.
+          id: "hsub-no-unit",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 1,
+          renewal_price: 2449,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
+  });
+
+  it("ignores non-VPS products, which were never in the cost snapshot", async () => {
+    // The billing list carries the whole Hostinger account. This finding's
+    // text asserts that the cost sync dropped a BOX's monthly price and that
+    // margin now shows an SKU estimate; neither is true of a domain, which
+    // buildHostingerSnapshot filters out before it ever reaches the snapshot.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-domain",
+          status: "active",
+          name: "newcoworker.com domain",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1499,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
         }
       ])
     });

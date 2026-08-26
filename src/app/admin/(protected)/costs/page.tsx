@@ -14,6 +14,7 @@ import {
   buildTelnyxDailySeries,
   buildTelnyxTenantWindowBreakdown,
   buildUnattributedSenders,
+  fleetMonthlyTotal,
   resolveTelnyxUsageWindowKey,
   telnyxDirectionSummary,
   telnyxMonthlyTrend,
@@ -157,10 +158,10 @@ export default async function AdminCostsPage({
   });
   // Hostinger fleet monthly total: every non-cancelled subscription's
   // effective monthly price (assigned + pooled; cancelled rows are gone
-  // money, not recurring spend).
-  const hostingerMonthlyTotal = hostingerRows
-    .filter((r) => r.status !== "cancelled")
-    .reduce((sum, r) => sum + (r.monthly_price_cents ?? 0), 0);
+  // money, not recurring spend). A box whose price the sync withheld falls
+  // back to its SKU estimate rather than counting as zero, and the card says
+  // how many did, so the headline is never read as fully synced.
+  const hostingerTotal = fleetMonthlyTotal(hostingerRows);
 
   // Gemini: top current-period chat spenders vs their tier cap.
   const tierById = new Map(margins.businesses.map((b) => [b.id, b.tier]));
@@ -253,9 +254,15 @@ export default async function AdminCostsPage({
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
             Hostinger Fleet / Mo
           </p>
-          <p className="text-3xl font-bold text-parchment">{money(hostingerMonthlyTotal)}</p>
+          <p className="text-3xl font-bold text-parchment">{money(hostingerTotal.cents)}</p>
           <p className="text-xs text-parchment/30 mt-1">
             {hostingerRows.length} billing subs · {money(poolBurnMonthlyCents)} idle-pool burn
+            {hostingerTotal.estimatedRows > 0
+              ? ` · ${hostingerTotal.estimatedRows} at SKU estimate`
+              : ""}
+            {hostingerTotal.unpricedRows > 0
+              ? ` · ${hostingerTotal.unpricedRows} unpriced`
+              : ""}
           </p>
         </Card>
       </div>
