@@ -115,7 +115,14 @@ describe("email-log vps reads", () => {
         archived_at: null,
         folder: null,
         labels: [],
-        importance: null
+        importance: null,
+        // A box on an image older than the receipts migration returns rows
+        // without these columns; undefined would read as "not null" to a
+        // truthiness check, so they are pinned here.
+        delivery_status: null,
+        delivery_error_code: null,
+        delivery_error_message: null,
+        delivery_updated_at: null
       }
     ]);
     expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
@@ -140,6 +147,21 @@ describe("email-log vps reads", () => {
       order: [{ column: "created_at", ascending: false }],
       limit: 10
     });
+  });
+
+  it("asks the box to drop alert mail, negated rather than enumerated", async () => {
+    // The box compiles a negated `in` to NOT (source IN (...)), matching what
+    // PostgREST does centrally. Expressing this as "every source EXCEPT" would
+    // silently hide any source added later.
+    await listEmailLog(BIZ, { excludeSources: ["notification"] }, centralDb({}));
+    expect(readMovedRows).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        filters: expect.arrayContaining([
+          { column: "source", op: "in", value: ["notification"], negate: true }
+        ])
+      })
+    );
   });
 
   it("listEmailLogForAddress asks the box ONE OR query, and still exact-matches in JS", async () => {

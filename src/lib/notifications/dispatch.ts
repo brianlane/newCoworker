@@ -33,6 +33,7 @@ import {
   type NotificationStatus
 } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { recordNotificationEmail } from "@/lib/db/email-log";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
@@ -739,10 +740,24 @@ export async function dispatchUrgentNotification(
       recipientEmail: targets.email
     });
     try {
-      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", targets.email, subject, {
-        text: body,
-        html,
-        unsubscribeUrl
+      // The returned id is the ONLY handle a delivery receipt has on this
+      // message. Discarding it (which this call did until 2026-08-26) is what
+      // made a bounced alert and a delivered one identical in our records.
+      const providerMessageId = await sendOwnerEmail(
+        process.env.RESEND_API_KEY ?? "",
+        targets.email,
+        subject,
+        { text: body, html, unsubscribeUrl }
+      );
+      // Never throws; the mail is already gone, so a logging failure must not
+      // turn a successful alert into a recorded failure.
+      await recordNotificationEmail({
+        businessId: input.businessId,
+        toEmail: targets.email,
+        subject,
+        bodyText: body,
+        providerMessageId,
+        fromEmail: process.env.MAILER_EMAIL ?? null
       });
       results.push(
         await recordRow(input.businessId, "email", "sent", summary, kind, {

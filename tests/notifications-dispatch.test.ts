@@ -74,6 +74,7 @@ vi.mock("../supabase/functions/_shared/contact_owner_target.ts", async (importOr
 });
 
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/email-log", () => ({ recordNotificationEmail: vi.fn() }));
 
 import { recordSystemLog } from "@/lib/db/system-logs";
 import {
@@ -90,6 +91,7 @@ import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-aler
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { listRecentAlertsAbout, insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { recordNotificationEmail } from "@/lib/db/email-log";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
@@ -349,6 +351,49 @@ describe("notifications/dispatch", () => {
       expect.arrayContaining(["dashboard:sent", "email:sent", "sms:sent"])
     );
     expect(result.results.find((r) => r.channel === "email")?.status).toBe("sent");
+  });
+
+  it("logs the alert email with the id a delivery receipt needs", async () => {
+    // The notifications row says we DECIDED to alert and that the send call
+    // returned. Neither is a claim that the mail arrived, and without the
+    // provider id no receipt could ever correct it: that gap is why a tenant
+    // whose owner had stopped receiving mail still looked healthy.
+    vi.mocked(sendOwnerEmail).mockResolvedValue("re_abc" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    expect(recordNotificationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        toEmail: "owner@example.com",
+        providerMessageId: "re_abc"
+      })
+    );
+  });
+
+  it("still logs the alert when the provider returned no id", async () => {
+    vi.mocked(sendOwnerEmail).mockResolvedValue(null as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    expect(recordNotificationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ providerMessageId: null })
+    );
+  });
+
+  it("does not log a row for an email that never went out", async () => {
+    vi.mocked(sendOwnerEmail).mockRejectedValue(new Error("resend down"));
+    const result = await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    expect(recordNotificationEmail).not.toHaveBeenCalled();
+    expect(result.results.find((r) => r.channel === "email")?.status).toBe("failed");
   });
 
   it("stores one identical summary on every channel row of a dispatch", async () => {

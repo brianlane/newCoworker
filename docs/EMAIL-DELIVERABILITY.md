@@ -98,3 +98,53 @@ dig +short TXT default._bimi.newcoworker.com # BIMI (empty until eligible)
 
 For a live send, use Gmail's "Show original" on the received message: it
 prints SPF, DKIM (with the signing domain), and DMARC verdicts.
+
+## Did it actually arrive? (delivery receipts)
+
+Everything above is about whether our mail is *authenticated*. It says
+nothing about whether any particular message *landed*, and until 2026-08-26
+neither did anything else: `sendOwnerEmail` returning an id meant Resend had
+ACCEPTED the message, we discarded that id, and no Resend webhook was
+handled anywhere. A bounced alert and a delivered one were byte-identical in
+our data.
+
+That gap mattered most for platform alert emails, which had no `email_log`
+row at all. The `notifications` table recorded that we DECIDED to alert and
+that the send call returned. Neither is a claim that the owner received
+anything, and for a tenant whose SMS does not deliver and whose WhatsApp
+billing is blocked, email is the only channel left.
+
+**How it works now.** Outbound sends store Resend's message id on their
+`email_log` row (alerts get a row with `source: 'notification'`, filtered out
+of the dashboard Emails page). `POST /api/webhooks/resend` verifies the Svix
+signature against `RESEND_WEBHOOK_SECRET` and writes the receipt onto that
+row: `delivery_status` plus the bounce classification and reason. A failure
+(`bounced`, `complained`, `failed`) also raises a `system_logs` row at
+`level: error`, `source: email`, `event: email_delivery_failed`, which is
+what surfaces it on the admin System Errors view.
+
+`delivery_status` is null for inbound rows, for anything sent before this
+shipped, and for callers that log no provider id. **Null means UNKNOWN, never
+delivered.**
+
+A failure we cannot attribute to a tenant still raises a log, as
+`email_delivery_failed_unattributed` with a null `business_id`. Plenty of
+Resend traffic writes no `email_log` row at all (email verification, the
+password set, provisioning notices), and on the alert path an instant
+rejection can beat our own insert, so a bounce must not vanish down either
+hole just because we cannot name the tenant. Routine unattributed receipts
+stay silent: Resend fires for every message on the account.
+
+**Setup** (once per environment): create the endpoint at
+[resend.com/webhooks](https://resend.com/webhooks) pointing at
+`<app>/api/webhooks/resend`, subscribe it to the `email.sent`,
+`email.delivered`, `email.delivery_delayed`, `email.bounced`,
+`email.complained` and `email.failed` events, and put its signing secret in
+`RESEND_WEBHOOK_SECRET`. Until that variable is set the receiver refuses
+every delivery: unconfigured must not mean "trust anyone", since a forged
+receipt could mark a delivered alert as bounced.
+
+```bash
+npx tsx debug/email-delivery-report.ts --since 7d
+npx tsx debug/email-delivery-report.ts --alerts-only --failed-only
+```

@@ -75,7 +75,10 @@ const SOURCE_META: Record<EmailLogSource, SourceMeta> = {
   // "Chat" (owner asked for it) and "You" (owner typed it).
   email_coworker: { label: "Coworker", tagClass: "text-signal-teal" },
   // Booking confirmation or reminder for a public-page booking.
-  booking_reminder: { label: "Booking", tagClass: "text-parchment/45" }
+  booking_reminder: { label: "Booking", tagClass: "text-parchment/45" },
+  // Platform alert mail. Filtered out of the list on the Emails page, but a
+  // deep link opens one row by id, so it still needs a label.
+  notification: { label: "Alert", tagClass: "text-parchment/45" }
 };
 
 function sourceMeta(source: EmailLogSource): SourceMeta {

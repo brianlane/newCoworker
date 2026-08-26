@@ -19,12 +19,21 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { escapeLikeLiteral, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import type { DataApiFilter } from "@/lib/residency/contract";
+import type { EmailDeliveryStatus } from "@/lib/email/delivery";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-// Column projection for residency (box) reads, mirrors EMAIL_LOG_SELECT.
-const EMAIL_LOG_COLUMNS = [
+/**
+ * Column projection for residency (box) reads, mirrors EMAIL_LOG_SELECT.
+ *
+ * Exported so tests/residency-box-schema-columns.test.ts can DERIVE the
+ * columns vps/data-api/schema.sql must declare, rather than hand-listing them
+ * (which is how `importance`, `thread_id` and `message_ref` all went missing
+ * from the box unnoticed). The data-api interpolates column names into SQL, so
+ * a missing one fails the whole statement rather than returning blanks.
+ */
+export const EMAIL_LOG_BOX_COLUMNS = [
   "id",
   "business_id",
   "direction",
@@ -43,7 +52,11 @@ const EMAIL_LOG_COLUMNS = [
   "archived_at",
   "folder",
   "labels",
-  "importance"
+  "importance",
+  "delivery_status",
+  "delivery_error_code",
+  "delivery_error_message",
+  "delivery_updated_at"
 ];
 
 export type EmailLogSource =
@@ -66,7 +79,13 @@ export type EmailLogSource =
   | "email_coworker"
   // Booking confirmation or reminder for a public-page booking
   // (src/lib/booking-page/reminders.ts).
-  | "booking_reminder";
+  | "booking_reminder"
+  // A platform alert email (src/lib/notifications/dispatch.ts). Logged so the
+  // one class of mail an owner cannot fall back from has a record of the
+  // message and its delivery receipt; EXCLUDED from the dashboard Emails
+  // page, which is the coworker's correspondence with customers rather than
+  // the platform's mail to the owner.
+  | "notification";
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
@@ -123,6 +142,16 @@ export type EmailLogRow = {
    * `classify` categories, which are prose a human can edit when they misfire.
    */
   importance: number | null;
+  /**
+   * Provider delivery receipt for an outbound row, keyed by
+   * provider_message_id (src/lib/email/delivery.ts). Null on inbound rows,
+   * on sends predating 2026-08-26, and on sends whose provider returned no
+   * id: null therefore means UNKNOWN, never "delivered".
+   */
+  delivery_status: EmailDeliveryStatus | null;
+  delivery_error_code: string | null;
+  delivery_error_message: string | null;
+  delivery_updated_at: string | null;
 };
 
 // The list query intentionally omits `body_full`: it loads up to 200 rows and
@@ -130,7 +159,7 @@ export type EmailLogRow = {
 // fetched on demand via getEmailBody when a message is opened in the reading
 // pane, see /api/dashboard/emails/[id].
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels, importance";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels, importance, delivery_status, delivery_error_code, delivery_error_message, delivery_updated_at";
 
 /** Join a recipient list into the stored CSV form, or null when empty. */
 function recipientsToCsv(recipients?: string[] | null): string | null {
@@ -156,6 +185,12 @@ export type ListEmailLogFilters = {
   label?: string | null;
   /** Restrict to these email_log.source values. */
   sources?: EmailLogSource[];
+  /**
+   * Drop these email_log.source values. An exclusion rather than widening
+   * `sources` to "everything else", so a source added later shows up on the
+   * Emails page by default instead of silently vanishing from it.
+   */
+  excludeSources?: EmailLogSource[];
 };
 
 function normalizeEmailLogRow(row: EmailLogRow): EmailLogRow {
@@ -165,7 +200,14 @@ function normalizeEmailLogRow(row: EmailLogRow): EmailLogRow {
     archived_at: row.archived_at ?? null,
     folder: row.folder ?? null,
     labels: Array.isArray(row.labels) ? row.labels : [],
-    importance: typeof row.importance === "number" ? row.importance : null
+    importance: typeof row.importance === "number" ? row.importance : null,
+    // A box running an image older than the receipts migration returns rows
+    // without these columns at all. Undefined would read as "not null" to a
+    // truthiness check downstream, so they are pinned to null here.
+    delivery_status: row.delivery_status ?? null,
+    delivery_error_code: row.delivery_error_code ?? null,
+    delivery_error_message: row.delivery_error_message ?? null,
+    delivery_updated_at: row.delivery_updated_at ?? null
   };
 }
 
@@ -209,12 +251,20 @@ export async function listEmailLog(
     if (options.sources?.length) {
       filters.push({ column: "source", op: "in", value: options.sources });
     }
+    if (options.excludeSources?.length) {
+      filters.push({
+        column: "source",
+        op: "in",
+        value: options.excludeSources,
+        negate: true
+      });
+    }
     if (options.label) {
       filters.push({ column: "labels", op: "contains", value: [options.label] });
     }
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       filters,
       order: [{ column: "created_at", ascending: false }],
       limit
@@ -235,6 +285,11 @@ export async function listEmailLog(
   if (options.unreadOnly) q = q.eq("is_read", false);
   if (options.folder) q = q.eq("folder", options.folder);
   if (options.sources?.length) q = q.in("source", options.sources);
+  if (options.excludeSources?.length) {
+    // `source` is NOT NULL, so PostgREST's NOT-IN excluding NULLs (which the
+    // box mirrors deliberately) cannot drop rows here.
+    q = q.not("source", "in", `(${options.excludeSources.join(",")})`);
+  }
   if (options.label) q = q.contains("labels", [options.label]);
   const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listEmailLog: ${error.message}`);
@@ -310,7 +365,7 @@ export async function getEmailLogRow(
   if (vpsReadMode) {
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       filters: [
         { column: "business_id", op: "eq", value: businessId },
         { column: "deleted_at", op: "is", value: null },
@@ -374,7 +429,7 @@ export async function listEmailLogForAddress(
     const likeValue = escapeLikeLiteral(normalized);
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       order: [{ column: "created_at", ascending: false }],
       limit,
       filters: [
@@ -722,6 +777,60 @@ export async function recordOutboundAssistantEmail(
     if (error) console.error("recordOutboundAssistantEmail", error.message);
   } catch (err) {
     console.error("recordOutboundAssistantEmail", err instanceof Error ? err.message : err);
+  }
+}
+
+export type RecordNotificationEmailInput = {
+  businessId: string;
+  toEmail: string;
+  subject: string;
+  bodyText: string;
+  /** The Resend id, so a delivery receipt can find this row later. */
+  providerMessageId: string | null;
+  /** The verified sending address the alert went out from. */
+  fromEmail: string | null;
+};
+
+/**
+ * Record a platform alert email so its delivery receipt has somewhere to
+ * land.
+ *
+ * Alerts were the only outbound mail with no row anywhere: the notifications
+ * table records that we DECIDED to alert and that the send call returned, and
+ * that is not the same claim as "the message arrived". For an owner whose SMS
+ * does not deliver and whose WhatsApp is blocked, email is the last channel
+ * standing, and it was the one we could say least about.
+ *
+ * Best-effort by design, matching recordOutboundAssistantEmail: the email is
+ * already gone, so a logging failure must not fail the dispatch that sent it.
+ */
+export async function recordNotificationEmail(
+  input: RecordNotificationEmailInput,
+  client?: SupabaseClient
+): Promise<void> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { error } = await db.from("email_log").insert({
+      business_id: input.businessId,
+      direction: "outbound",
+      to_email: input.toEmail,
+      from_email: input.fromEmail,
+      subject: input.subject,
+      body_preview: input.bodyText.slice(0, 500),
+      body_full: input.bodyText,
+      source: "notification",
+      run_id: null,
+      flow_id: null,
+      provider_message_id: input.providerMessageId,
+      // Never an inbox item: nobody triages the platform's own mail.
+      is_read: true,
+      // The send returned, which is all `sent` has ever meant. A receipt
+      // upgrades it to delivered, or replaces it with the bounce.
+      delivery_status: input.providerMessageId ? "sent" : null
+    });
+    if (error) console.error("recordNotificationEmail", error.message);
+  } catch (err) {
+    console.error("recordNotificationEmail", err instanceof Error ? err.message : err);
   }
 }
 

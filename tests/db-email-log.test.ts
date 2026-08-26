@@ -26,6 +26,7 @@ import {
   listEmailLog,
   listEmailLogForAddress,
   recordInboundTriggerEmail,
+  recordNotificationEmail,
   recordOutboundAssistantEmail,
   linkTenantMailboxInboundRun,
   recordTenantMailboxInbound,
@@ -102,6 +103,25 @@ describe("email_log importance normalization", () => {
 });
 
 describe("listEmailLog", () => {
+  it("excludes alert mail with NOT IN rather than an allowlist", async () => {
+    // An allowlist of "every other source" would silently drop any source
+    // added later from the Emails page; excluding is the direction that fails
+    // safe. `source` is NOT NULL, so PostgREST's NOT-IN dropping NULLs (which
+    // the box mirrors) cannot lose rows here.
+    const limit = vi.fn().mockResolvedValue({ data: [], error: null });
+    const order = vi.fn(() => ({ limit }));
+    const not = vi.fn(() => ({ order }));
+    const is = vi.fn(() => ({ not }));
+    const eq = vi.fn(() => ({ is }));
+    const select = vi.fn(() => ({ eq }));
+    await listEmailLog(
+      "biz",
+      { excludeSources: ["notification"] },
+      makeDb({ select }) as never
+    );
+    expect(not).toHaveBeenCalledWith("source", "in", "(notification)");
+  });
+
   it("returns rows newest-first with the default limit", async () => {
     const c = listChain({ data: [ROW], error: null });
     const rows = await listEmailLog("biz", {}, makeDb(c) as never);
@@ -112,7 +132,13 @@ describe("listEmailLog", () => {
         archived_at: null,
         folder: null,
         labels: [],
-        importance: null
+        importance: null,
+        // Null means UNKNOWN delivery, not delivered: every row predating the
+        // receipts migration carries these as null.
+        delivery_status: null,
+        delivery_error_code: null,
+        delivery_error_message: null,
+        delivery_updated_at: null
       }
     ]);
     expect(c.eq).toHaveBeenCalledWith("business_id", "biz");
@@ -331,7 +357,11 @@ describe("getEmailLogRow", () => {
       archived_at: null,
       folder: null,
       labels: [],
-      importance: null
+      importance: null,
+      delivery_status: null,
+      delivery_error_code: null,
+      delivery_error_message: null,
+      delivery_updated_at: null
     });
     // Scoped by business AND excluding soft-deleted rows: a guessed uuid must
     // never read another tenant's mail.
@@ -608,6 +638,75 @@ describe("linkTenantMailboxInboundRun", () => {
     defaultClientSpy.mockResolvedValueOnce(db);
     await linkTenantMailboxInboundRun("biz", "log-1", linkage);
     expect(update).toHaveBeenCalled();
+  });
+});
+
+describe("recordNotificationEmail", () => {
+  const input = {
+    businessId: "biz",
+    toEmail: "owner@biz.com",
+    subject: "Urgent: new lead",
+    bodyText: "z".repeat(600),
+    providerMessageId: "re_1",
+    fromEmail: "New Coworker <contact@newcoworker.com>"
+  };
+
+  it("gives an alert email a row so its delivery receipt has somewhere to land", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordNotificationEmail(input, db as never);
+    expect(db.from).toHaveBeenCalledWith("email_log");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz",
+        direction: "outbound",
+        source: "notification",
+        to_email: "owner@biz.com",
+        from_email: "New Coworker <contact@newcoworker.com>",
+        subject: "Urgent: new lead",
+        body_preview: "z".repeat(500),
+        provider_message_id: "re_1",
+        // Nobody triages the platform's own mail.
+        is_read: true,
+        // What "sent" has always meant: the send call returned. A receipt
+        // upgrades it to delivered, or replaces it with the bounce.
+        delivery_status: "sent"
+      })
+    );
+  });
+
+  it("leaves delivery UNKNOWN when the provider returned no id", async () => {
+    // Without an id no receipt can ever find this row, so claiming `sent`
+    // would assert something we will never be able to correct.
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordNotificationEmail({ ...input, providerMessageId: null }, db as never);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ provider_message_id: null, delivery_status: null })
+    );
+  });
+
+  it("only logs on failure, so a logging error never fails a sent alert", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const insert = vi.fn().mockResolvedValue({ error: { message: "down" } });
+    await recordNotificationEmail(input, { from: vi.fn(() => ({ insert })) } as never);
+    expect(errSpy).toHaveBeenCalledWith("recordNotificationEmail", "down");
+
+    const thrower = { from: vi.fn(() => { throw new Error("boom"); }) };
+    await recordNotificationEmail(input, thrower as never);
+    expect(errSpy).toHaveBeenCalledWith("recordNotificationEmail", "boom");
+
+    const nonError = { from: vi.fn(() => { throw "nope"; }) };
+    await recordNotificationEmail(input, nonError as never);
+    expect(errSpy).toHaveBeenCalledWith("recordNotificationEmail", "nope");
+    errSpy.mockRestore();
+  });
+
+  it("falls back to the service client when none is injected", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => ({ insert })) });
+    await recordNotificationEmail(input);
+    expect(insert).toHaveBeenCalled();
   });
 });
 

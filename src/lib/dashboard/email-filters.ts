@@ -77,7 +77,13 @@ export function emailListFiltersFromView(input: {
   const folder = (input.folder ?? "").trim();
   const label = (input.label ?? "").trim();
   const filters: ListEmailLogFilters = {
-    limit: input.limit ?? 100
+    limit: input.limit ?? 100,
+    // Platform alert mail is logged (so its delivery receipt has a home) but
+    // is not correspondence: this page is the coworker's mail with customers,
+    // and burying that under "Urgent: new lead" alerts would make it useless.
+    // Applied to every view, including the source-pinned ones, where it is
+    // simply redundant.
+    excludeSources: ["notification"]
   };
   if (label) filters.label = label;
 
