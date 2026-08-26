@@ -195,6 +195,39 @@ alter table email_log add column if not exists is_read boolean not null default 
 alter table email_log add column if not exists archived_at timestamp with time zone;
 alter table email_log add column if not exists folder text;
 alter table email_log add column if not exists labels text[] not null default '{}'::text[];
+-- Hand-patched ahead of the next regeneration. Everything below landed
+-- centrally AFTER the 2026-07-07 snapshot this file was generated from, and a
+-- box missing any of them does not answer with blanks: the data-api
+-- interpolates column names into SQL, so the whole statement fails. That
+-- breaks BOTH directions. A routed read (the Emails page) errors instead of
+-- rendering, and worse, the journal replay of a row carrying the column fails
+-- and replay stops on the first failure, so every later residency write for
+-- that tenant queues behind it.
+--
+--   importance                20260812000000_email_organize_importance
+--   thread_id / message_ref   20260822083502_email_log_thread_identity
+--   delivery_*                20260826043953_email_delivery_receipts
+--
+-- The first three are pre-existing drift, found while adding the fourth.
+-- tests/residency-box-schema-columns.test.ts now derives the required set
+-- from EMAIL_LOG_COLUMNS so the next one cannot slip through the same way.
+alter table email_log add column if not exists importance integer;
+alter table email_log add column if not exists thread_id text;
+alter table email_log add column if not exists message_ref text;
+alter table email_log add column if not exists delivery_status text;
+alter table email_log add column if not exists delivery_error_code text;
+alter table email_log add column if not exists delivery_error_message text;
+alter table email_log add column if not exists delivery_updated_at timestamp with time zone;
+
+-- `create table if not exists` never refreshes a constraint on an existing
+-- box, so drop/re-add explicitly (same reason as sms_outbound_log above).
+-- This box list was four sources behind central even before this PR:
+-- email_coworker, booking_reminder and slack_assistant were all rejected
+-- here, which would wedge the replayer on the first such row.
+alter table email_log
+  drop constraint if exists email_log_source_check;
+alter table email_log
+  add constraint email_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'owner_mailbox'::text, 'email_trigger'::text, 'dashboard_chat'::text, 'sms_assistant'::text, 'voice_assistant'::text, 'slack_assistant'::text, 'tenant_mailbox_inbound'::text, 'tenant_mailbox_outbound'::text, 'owner_manual'::text, 'email_coworker'::text, 'booking_reminder'::text, 'notification'::text])));
 
 create index if not exists email_log_business_created_idx ON public.email_log USING btree (business_id, created_at DESC);
 create index if not exists email_log_organize_inbox_idx

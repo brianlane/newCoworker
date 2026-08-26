@@ -24,8 +24,16 @@ import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-// Column projection for residency (box) reads, mirrors EMAIL_LOG_SELECT.
-const EMAIL_LOG_COLUMNS = [
+/**
+ * Column projection for residency (box) reads, mirrors EMAIL_LOG_SELECT.
+ *
+ * Exported so tests/residency-box-schema-columns.test.ts can DERIVE the
+ * columns vps/data-api/schema.sql must declare, rather than hand-listing them
+ * (which is how `importance`, `thread_id` and `message_ref` all went missing
+ * from the box unnoticed). The data-api interpolates column names into SQL, so
+ * a missing one fails the whole statement rather than returning blanks.
+ */
+export const EMAIL_LOG_BOX_COLUMNS = [
   "id",
   "business_id",
   "direction",
@@ -256,7 +264,7 @@ export async function listEmailLog(
     }
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       filters,
       order: [{ column: "created_at", ascending: false }],
       limit
@@ -357,7 +365,7 @@ export async function getEmailLogRow(
   if (vpsReadMode) {
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       filters: [
         { column: "business_id", op: "eq", value: businessId },
         { column: "deleted_at", op: "is", value: null },
@@ -421,7 +429,7 @@ export async function listEmailLogForAddress(
     const likeValue = escapeLikeLiteral(normalized);
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
-      columns: EMAIL_LOG_COLUMNS,
+      columns: EMAIL_LOG_BOX_COLUMNS,
       order: [{ column: "created_at", ascending: false }],
       limit,
       filters: [
