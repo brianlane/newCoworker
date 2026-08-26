@@ -48,8 +48,14 @@ export type MessengerStaffTurnOutcome =
   /** Staff, but the owner turned this surface off. Say nothing. */
   | { kind: "silent"; reason: string }
   | { kind: "reply"; reply: string }
-  /** Staff, but the turn failed. The caller retries; it must NOT fall back. */
-  | { kind: "failed"; detail: string };
+  /**
+   * Staff, but the turn did not produce a reply. The caller must NOT fall
+   * back to the customer engine. `terminal` says whether retrying could
+   * ever change the answer: "there is nothing to answer" and "over the
+   * spend cap" cannot, and burning three attempts on them just dead-letters
+   * the job under a misleading code.
+   */
+  | { kind: "failed"; detail: string; terminal?: boolean };
 
 export type MessengerStaffTurnDeps = {
   resolveSpeaker?: typeof resolveSurfaceSpeaker;
@@ -94,14 +100,20 @@ export async function runMessengerStaffTurn(
     return { kind: "silent", reason: "staff_mode_off" };
   }
 
-  // The newest user message is what we answer; everything before it is
-  // replayed as context. Answering it AND replaying it would show the model
-  // the same question twice.
+  // The LAST row has to be theirs, which is the same guard
+  // buildMessengerContents applies on the customer path. A trailing
+  // assistant or owner row means the turn is already closed, usually
+  // because a human answered by hand from the Meta inbox or Business
+  // Suite, and following up on top of them talks over a colleague.
   const window = history.slice(-STAFF_TAIL_MESSAGES);
-  const lastUserIndex = window.map((m) => m.role).lastIndexOf("user");
-  if (lastUserIndex === -1) return { kind: "failed", detail: "no_input" };
+  const lastUserIndex = window.length - 1;
+  if (lastUserIndex < 0 || window[lastUserIndex].role !== "user") {
+    return { kind: "failed", detail: "no_input", terminal: true };
+  }
+  // What we answer; everything before it is replayed as context. Answering
+  // it AND replaying it would show the model the same question twice.
   const text = window[lastUserIndex].content.trim();
-  if (!text) return { kind: "failed", detail: "no_input" };
+  if (!text) return { kind: "failed", detail: "no_input", terminal: true };
   const transcript = window
     .slice(0, lastUserIndex)
     .map(
@@ -121,7 +133,7 @@ export async function runMessengerStaffTurn(
   }
   // Same fuse posture as the other owner surfaces: over the shared AI cap
   // this surface declines rather than degrading.
-  if (context.overCap) return { kind: "failed", detail: "over_cap" };
+  if (context.overCap) return { kind: "failed", detail: "over_cap", terminal: true };
 
   const inline = await runTurn({
     businessId,

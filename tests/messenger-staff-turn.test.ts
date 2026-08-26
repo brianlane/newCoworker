@@ -276,6 +276,28 @@ describe("the turn itself", () => {
     expect(args.userMessage).toContain("what did Dana book today?");
   });
 
+  it("never talks over a human who already answered by hand", async () => {
+    // A teammate replying from the Meta inbox or Business Suite closes the
+    // turn. The customer engine refuses this case too; the staff path has
+    // to agree, or the AI follows up on top of a colleague.
+    for (const closingRole of ["assistant", "owner"] as const) {
+      const d = deps();
+      const out = await runMessengerStaffTurn(
+        {
+          businessId: BIZ,
+          conversation: conversation(),
+          history: [
+            { id: 1, role: "user", content: "what did Dana book today?" } as MessengerMessageRow,
+            { id: 2, role: closingRole, content: "answered by hand" } as MessengerMessageRow
+          ]
+        },
+        d
+      );
+      expect(out, closingRole).toEqual({ kind: "failed", detail: "no_input", terminal: true });
+      expect(d.runTurn).not.toHaveBeenCalled();
+    }
+  });
+
   it("reports a failed turn instead of silently answering as a customer", async () => {
     // The worker retries a failure. Falling back to the customer engine
     // would pitch the owner, which is worse than saying nothing yet.
@@ -320,7 +342,7 @@ describe("the turn itself", () => {
       },
       d
     );
-    expect(out).toMatchObject({ kind: "failed", detail: "no_input" });
+    expect(out).toMatchObject({ kind: "failed", detail: "no_input", terminal: true });
     expect(d.runTurn).not.toHaveBeenCalled();
   });
 });
@@ -338,7 +360,7 @@ describe("things that stop a staff turn before it starts", () => {
       { businessId: BIZ, conversation: conversation(), history: history() },
       d
     );
-    expect(out).toEqual({ kind: "failed", detail: "over_cap" });
+    expect(out).toEqual({ kind: "failed", detail: "over_cap", terminal: true });
     expect(d.runTurn).not.toHaveBeenCalled();
   });
 
@@ -378,7 +400,7 @@ describe("things that stop a staff turn before it starts", () => {
       },
       d
     );
-    expect(out).toEqual({ kind: "failed", detail: "no_input" });
+    expect(out).toEqual({ kind: "failed", detail: "no_input", terminal: true });
   });
 
   it("labels the speaker even when no name is known", async () => {

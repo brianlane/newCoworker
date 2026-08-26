@@ -292,8 +292,15 @@ export async function processMessengerJobs(
         continue;
       }
       if (staff.kind === "failed") {
-        // Thrown so the existing retry/dead-letter logic below owns it. A
+        // Terminal outcomes ("nothing to answer", "over the spend cap")
+        // cannot be changed by retrying, so they must not burn three
+        // attempts and then dead-letter under a misleading turn_failed.
+        // Everything else is thrown so the existing retry ladder owns it. A
         // failed staff turn must never degrade into a customer reply.
+        if (staff.terminal) {
+          await failJob(staff.detail, staff.detail);
+          continue;
+        }
         throw new Error(staff.detail);
       }
 
