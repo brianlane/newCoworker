@@ -26,6 +26,7 @@ re-derive a known answer.
 - [Prove prompt fixes against the deployed prompt](feedback_prove_prompt_fixes_against_deployed.md) - one-line reverts false-negative; rules jointly load-bearing
 - [A failing old test is evidence](feedback_a_failing_old_test_is_evidence.md) - read why it exists first; it may describe the bug you just wrote
 - [Verify the column is actually written](feedback_verify_the_column_is_written.md) - confirm the write LANDS and a CALLER exists
+- [Verify the constant, not the comment](feedback_verify_the_constant_not_the_comment.md) - docblocks drift and "historical" means superseded; resolve the exported record that executes
 - [Assert the producer, not the fixture](feedback_assert_the_producer_not_the_fixture.md) - hand-fed values prove nothing; an under-built fixture fails a GOOD patch, so validate the fixture first
 - [Check for a shared mechanism first](feedback_check_for_a_shared_mechanism_first.md) - grep scripts/oneshot for the task's noun; an UNRUN one-shot leaves no trace in live data
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
@@ -64,7 +65,7 @@ re-derive a known answer.
 - [Residency read rules](project_residency_read_rules.md) - 8 of 15 moved tables purge: route via residency/read; kept-table central reads CORRECT; 72h floor; dual/vps flip gated on replay cron (off)
 - [Ask AI companion architecture](project_ask_ai_companion_architecture.md) - MCP-to-Gemini bridge seams, partitions, gate groups, self-serve tools
 - [route_to_team rotation vs broadcast](project_route_to_team_rotation_vs_broadcast.md) - rotation = whole roster; lead_auto_assign hardens it
-- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - signups buy 1m boxes; term waits out refund window; Hostinger billing_period can LAG a term change, derive runway from the date
+- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - signups buy 1m boxes; term waits out refund window; Hostinger billing_period LAGS a term change and the real price is UNOBTAINABLE from the API (#1636 withholds it, margin falls to labeled SKU estimate)
 - [Provisioning input is rebuilt field by field](project_orchestrate_input_rebuilt_field_by_field.md) - 5 wrappers drop new fields silently; grep all
 - [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - #1397 team rung before owner; root tsc misses supabase/functions
 - [Reachability-gated vars are not lead types](project_reachability_gated_vars_are_not_lead_type.md) - they answer "none" by contact channel
@@ -123,3 +124,4 @@ re-derive a known answer.
 - [Stripe discounts: "" clears, [] does not](project_stripe_discounts_empty_string_clears.md) - removal via empty array is a silent no-op; coupons immutable; delete never revokes; webhooks cannot expand
 - [Owner surface registry](project_owner_surface_registry.md) - add a surface = 1 registry entry; speaker fails CLOSED, staff mode fails OPEN; OFF means silent not customer
 - [c8 ignore fails on awaited defaults](feedback_c8_ignore_fails_on_awaited_default.md) - `client ?? (await createServiceClient())` stays uncovered; mock the module and test it
+- [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Space Grotesk rejected; Geist+Inter; restrained beats distinctive
