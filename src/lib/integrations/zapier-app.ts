@@ -12,9 +12,11 @@
  *
  * Tenants who accepted the old invite keep their connection. Nothing to migrate.
  *
- * The integration sits in Zapier's 90 day Beta. Zapier can revert an app to
- * Private during Beta if it draws a lot of support requests; if that ever
- * happens, restore the invite constant from git history rather than
- * hand-writing a new one.
+ * The integration sits in Zapier's 90 day Beta: approved 2026-08-04, so the
+ * window ends around 2026-11-02 (.github/workflows/zapier-beta-reminder.yml
+ * opens an issue ahead of that date). Zapier can revert an app to Private
+ * during Beta if it draws a lot of support requests; if that ever happens,
+ * restore the invite constant from git history rather than hand-writing a
+ * new one.
  */
 export const ZAPIER_APP_URL = "https://zapier.com/apps/new-coworker/integrations";
