@@ -204,6 +204,7 @@ const PAGE_TITLE_KEYS = [
   "marketing.integrationsPage.metaTitle",
   "marketing.onboard.metaTitle",
   "marketing.pricing.metaTitle",
+  "marketing.securityPage.metaTitle",
   "marketing.slackPage.metaTitle",
   "marketing.zoomPage.metaTitle"
 ];

@@ -27,7 +27,8 @@ const COMPANY_LINKS: FooterLink[] = [
 
 const LEGAL_LINKS: FooterLink[] = [
   { href: "/privacy", labelKey: "privacy" },
-  { href: "/terms", labelKey: "terms" }
+  { href: "/terms", labelKey: "terms" },
+  { href: "/security", labelKey: "security" }
 ];
 
 function FooterColumn({
