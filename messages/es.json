@@ -187,6 +187,7 @@
       "rowOutboundCalls": "Llamadas de IA salientes a tus leads",
       "rowScheduledCampaigns": "Campañas de correo e Instagram programadas",
       "rowWebhooks": "Webhooks: anuncios de leads de Meta, DMs de Instagram y REST API",
+      "rowSlack": "Slack: chat con el coworker y aprobaciones",
       "rowTranslator": "Traductor en vivo tras transferir una llamada",
       "rowDesignatedModels": "Modelos de razonamiento designados",
       "rowVoices": "Elección de voces profesionales",

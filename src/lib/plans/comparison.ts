@@ -183,7 +183,8 @@ export function buildComparisonGroups(locale: PlanCopyLocale = "en"): Comparison
       headingKey: "groupConnect",
       rows: [
         standardUpRow("rowZapier", { standard: [5] }),
-        standardUpRow("rowWebhooks", { standard: [6] })
+        standardUpRow("rowWebhooks", { standard: [6] }),
+        standardUpRow("rowSlack", { standard: [24] })
       ]
     },
     {
