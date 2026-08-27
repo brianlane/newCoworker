@@ -77,23 +77,26 @@ serve(async (req: Request) => {
     return json(200, { ok: true, enabled: true, candidates: 0, acted: 0 });
   }
 
-  // Candidates: ENROLLED businesses' live outbound AI legs with a machine
-  // stamp, oldest first. Two deliberate scoping choices close the page-
-  // starvation hole (Bugbot, PR #1674) without jsonb-null filter gymnastics:
+  // Candidates: enrolled businesses' live outbound AI legs whose machine
+  // stamp is still UNRESOLVED, oldest first. The page can only starve if
+  // non-actionable rows can occupy it (Bugbot, PR #1674, twice over), so
+  // every exclusion is a query filter, each a SINGLE unambiguous PostgREST
+  // param (no chained `or` groups):
   //
-  //   - Enrollment is filtered IN THE QUERY (`.in` on business_ids), so
-  //     other tenants' legs can never occupy the page. Within one enrolled
-  //     tenant, 50 simultaneous machine-stamped live calls is impossible
-  //     (per-tenant channel caps are an order of magnitude smaller).
-  //   - Oldest-first ordering means even a pathologically full page serves
-  //     the longest-waiting call first.
+  //   - resolved-state keys use `isdistinct` (IS DISTINCT FROM), which is
+  //     TRUE for both an absent key (NULL) and any value other than 'true',
+  //     exactly the absent-or-not-true semantics `neq` cannot express.
+  //     Verified against the production PostgREST before shipping.
+  //   - a speak already in flight is excluded by the started_at key being
+  //     absent (`is.null` on the ->> extraction).
+  //   - enrollment is filtered with `.in` unless all_businesses, so other
+  //     tenants' legs never compete for the page.
   //
-  // Resolved-state keys (claim, speak start, hangup marker) are deliberately
-  // NOT query filters: expressing absent-or-not-true needs chained `or`
-  // params whose PostgREST composition Bugbot flagged as ambiguous, and the
-  // pure decision skips those rows anyway, where every reason is unit-tested.
-  // The pg_cron EXISTS guard keeps idle ticks from firing HTTP at all.
-  // The 30-minute window matches AMD_RESOLUTION_MAX_AGE_MS and the guard:
+  // Oldest-first then serves the longest-waiting actionable call even if
+  // the page somehow fills. The pure decision re-checks everything (its
+  // skip reasons are the unit-tested authority on ACTING); these filters
+  // exist only so pagination cannot hide an overdue call. The 30-minute
+  // window matches AMD_RESOLUTION_MAX_AGE_MS and the pg_cron EXISTS guard:
   // anything older is a stale session, not a live call.
   const sinceIso = new Date(Date.now() - AMD_RESOLUTION_MAX_AGE_MS).toISOString();
   let query = supabase
@@ -102,6 +105,9 @@ serve(async (req: Request) => {
     .eq("status", "ai_intake")
     .gte("created_at", sinceIso)
     .eq("context->>machine_detected", "true")
+    .filter("context->>voicemail_claimed", "isdistinct", "true")
+    .filter("context->>amd_resolution_hung_up", "isdistinct", "true")
+    .is("context->>voicemail_speak_started_at", null)
     .order("created_at", { ascending: true })
     .limit(50);
   if (!config.allBusinesses) {
