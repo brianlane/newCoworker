@@ -1083,13 +1083,21 @@ describe("runTermRenewalSweep", () => {
     expect(result.checked).toBe(1);
   });
 
-  it("skips subscriptions without a billing_period", async () => {
+  it("reports (never silently skips) a subscription without a billing_period", async () => {
+    // HQ's real shape: active sub, billing_period null. The old bare
+    // `continue` made the daily report indistinguishable from "nothing to
+    // do"; the typed finding names who was never evaluated.
     const deps = makeDeps({
       listSubscriptionsByBusinessIds: vi.fn(
         async () => new Map([[BIZ, sub({ billing_period: null })]])
       )
     });
-    expect((await runTermRenewalSweep(deps, { now: NOW })).checked).toBe(0);
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.checked).toBe(0);
+    const skipped = result.findings.filter((f) => f.kind === "skipped_no_billing_period");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0].businessId).toBe(BIZ);
+    expect(skipped[0].detail).toContain("no billing_period");
   });
 
   it("skips when no billing subscription resolves for the VM", async () => {

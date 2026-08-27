@@ -42,7 +42,14 @@ export function BillingControlsPanel({
   nextChargeAt: string | null;
 }) {
   const router = useRouter();
-  const minDate = tomorrowUtcDate();
+  // The server (buildNextBillingDateParams, the M2 guard) rejects any date
+  // before the paid-through, so the picker's floor mirrors it: the day after
+  // the next charge when known, else tomorrow. Cosmetic, the server decides.
+  const paidThroughFloor = nextChargeAt
+    ? new Date(Date.parse(nextChargeAt) + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : null;
+  const tomorrow = tomorrowUtcDate();
+  const minDate = paidThroughFloor && paidThroughFloor > tomorrow ? paidThroughFloor : tomorrow;
 
   // Pause / resume
   const [resumeOn, setResumeOn] = useState(initialResumesAt?.slice(0, 10) ?? "");

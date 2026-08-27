@@ -92,6 +92,14 @@ export type TermRenewalSweepFinding = {
   kind:
     | "skipped_economics"
     | "skipped_guard"
+    /**
+     * Active subscription with no billing_period: the sweep cannot reason
+     * about its renewal, so the tenant is dropped BEFORE evaluation. Typed
+     * so the daily report distinguishes "nobody needed action" from "N
+     * tenants were never looked at" (HQ's null-period row sat in this blind
+     * spot silently).
+     */
+    | "skipped_no_billing_period"
     | "skipped_in_flight"
     | "skipped_cooldown"
     | "migrated"
@@ -406,7 +414,19 @@ export async function runTermRenewalSweep(
   for (const { business, vmId } of stripeBacked) {
     const subscription = subByBusiness.get(business.id);
     if (!subscription || subscription.status !== "active") continue;
-    if (!subscription.billing_period) continue;
+    if (!subscription.billing_period) {
+      findings.push({
+        kind: "skipped_no_billing_period",
+        businessId: business.id,
+        businessName: business.name,
+        vmId,
+        nextBillingAt: null,
+        detail:
+          "active subscription has no billing_period; the sweep cannot evaluate its renewal " +
+          "(set the period, or record why this tenant is exempt)"
+      });
+      continue;
+    }
 
     let vm: VirtualMachine;
     try {

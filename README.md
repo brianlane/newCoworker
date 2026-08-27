@@ -5289,6 +5289,13 @@ team@newcoworker.com — production has not updated until that run is green.
   box's `vps/aiflow-render` sidecar (per box, and it deliberately preserves
   that box's `.env`), and voice-bridge has its own redeploy. A render change
   shipped via `update-all-vps.ts` silently does nothing.
+- `cloudflare/email-worker/` redeploys the same way (merged is not live):
+  `cd cloudflare/email-worker && npx wrangler deploy`, then verify with a
+  probe mail to an unclaimed `@newcoworker.com` address, which must arrive at
+  `FALLBACK_FORWARD_ADDRESS`. All inbound tenant mail routes through this
+  worker, and it has NO deploy step in CI; on 2026-08-27 the deployed copy
+  was three weeks behind main, including a postal-mime MAJOR bump in the
+  parser it depends on.
 - Seeds / one-shot scripts (`scripts/oneshot/`, ledger-recorded).
 - `tsx debug/read-cron-jobs.ts` when the change touched any `cron.schedule` /
   `cron.unschedule`. The green main run proves the migration executed, not
