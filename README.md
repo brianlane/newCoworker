@@ -22,18 +22,24 @@ See `src/lib/plans/tier.ts` for pricing logic.
 
 Billing model (Hostinger-consistent): **12/24-month plans are charged in full
 at checkout** (e.g. Standard 24mo = $2,376 today) because the tenant's VPS is
-prepaid for the whole contract — the Stripe prices use `interval=month` with
+prepaid for the whole contract: the Stripe prices use `interval=month` with
 `interval_count=12|24` (`scripts/oneshot/create-term-prices.ts`). Included
-usage (voice minutes, shared AI budget, SMS) still resets **monthly** via
-`deriveMonthlyQuotaWindow` (`supabase/functions/_shared/billing_period_window.ts`;
-inline copies in `vps/chat-worker/worker.mjs` and `vps/voice-bridge/src/index.ts`
-must stay in lockstep). After the term, service rolls month-to-month at the
+usage (voice minutes, shared AI budget, texts) still resets **monthly**, and
+since Aug 2026 all three reset on ONE date, anchored to the tenant's Stripe
+billing period rather than the calendar month. Voice and the AI budget
+derive the window in TypeScript via `deriveMonthlyQuotaWindow`
+(`supabase/functions/_shared/billing_period_window.ts`; inline copies in
+`vps/chat-worker/worker.mjs` and `vps/voice-bridge/src/index.ts` must stay
+in lockstep); texts derive it in SQL via
+`sms_billing_window_start(business_id)`, the single definition every SMS
+meter, gate, and billing-page display reads (see "Budget enforcement").
+After the term, service rolls month-to-month at the
 higher renewal rate (`*_RENEWAL_PRICE_ID` via `ensureCommitmentSchedule`)
 unless auto-renew is on or the owner starts a new contract at the contract
 rate. Membership Checkout (signup and plan change) may optionally include
 discounted recurring usage packs (voice / SMS / chat) that renew with the
 membership: 5% month-to-month, 10% on 12-month, 20% on 24-month. Quantities
-are allowed per pack. Usage packs are non-refundable to customers: a New
+up to 20 per pack are allowed (`MEMBERSHIP_PACK_MAX_QTY`). Usage packs are non-refundable to customers: a New
 Coworker money-back or admin force refund carves the pack line dollars out of
 the refunded invoice, voids the matching grants, and excludes pack-funded
 usage from the at-cost usage carve-out so those units are never charged
@@ -69,6 +75,29 @@ without counting as a decline. A dispute claws the grant back, disables every
 rule, and revokes the card. Fail-closed on
 `USAGE_PACK_AUTO_RELOAD_ENABLED`; the pg_cron sweep runs every 15 minutes and
 is a no-op until that is set.
+
+**Support offerings ride beside the membership, never inside it.** Baseline
+Starter/Standard support is email-only. **Priority call/video support** is a
+sellable **$400/month** add-on
+([src/lib/plans/priority-support.ts](src/lib/plans/priority-support.ts)):
+its own month-to-month Stripe subscription on the tenant's existing
+customer, stamped `metadata.subscriptionKind = "priority_support"`, which
+every membership webhook handler must gate on so a support invoice never
+runs the membership logic. Stripe would actually accept a monthly line item
+on a 12/24-month subscription (each item's period need only be a multiple
+of the shortest; verified against the live API, Aug 2026), but a line item
+would be destroyed by change-plan's cancel-and-rebuild, could not be added
+mid-term (change-plan 409s on `plan_unchanged`), and would sit inside the
+30-day membership refund carve-out, so the separate subscription is a
+lifecycle decision, not a Stripe workaround. It renews on its own purchase
+anniversary (a second bill date, stated in the billing copy) and cancels
+any month. One-time **white-glove packages**
+([src/lib/plans/white-glove.ts](src/lib/plans/white-glove.ts)) are
+`mode=payment` Checkouts with inline `price_data`: **setup $750** (guided
+setup, number porting, live training call) and **buildout $2,000** (full
+AiFlow buildout); each purchase also flips
+`businesses.priority_support_until` on for 30 days. Enterprise has priority
+support permanently (`hasPrioritySupportForTier`).
 
 **RCS is Enterprise-only** (Jul 2026): each tenant needs their own branded
 Telnyx RCS agent ($600 + $100/mo carrier fees, priced cost-plus per deal) —
