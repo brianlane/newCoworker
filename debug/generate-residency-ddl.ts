@@ -250,6 +250,42 @@ for (const table of tables) {
   }
   lines.push("");
 
+  // CHECK refresh for EXISTING volumes, same gap as the catch-up ALTERs
+  // above and a nastier one. `create table if not exists` never touches a
+  // table that already exists, so a CHECK that central WIDENED (a new
+  // `source`, a new `last_channel`, a new `delivery_channel`) keeps its old,
+  // narrower definition on the box and REJECTS the row. The residency
+  // replayer stops on its first failure, so one rejected row queues every
+  // later write for that tenant behind it, and nothing about the box looks
+  // broken until someone asks why replication is hours behind.
+  //
+  // Dropping every CHECK first, rather than only the names re-added below,
+  // also retires one central has since REMOVED: a constraint that outlives
+  // its central original fails in exactly the same direction (the box
+  // refuses a row central accepts).
+  //
+  // PRIMARY KEY and UNIQUE are deliberately NOT refreshed. Re-adding either
+  // can fail on data rather than on definition (duplicate rows), and neither
+  // has ever been the failure mode here: a key is chosen when the table is
+  // designed, while a CHECK's value list grows with the product.
+  //
+  // Re-adding a CHECK validates every existing row, so this is a scan per
+  // table per deploy. These are single-tenant volumes, which is what makes
+  // that affordable.
+  const checks = constraints.filter(
+    (k) => k.table_name === table && k.constraint_type === "CHECK"
+  );
+  lines.push("do $$ declare c record; begin");
+  lines.push("  for c in select conname from pg_constraint");
+  lines.push(`            where conrelid = '${table}'::regclass and contype = 'c' loop`);
+  lines.push(`    execute format('alter table ${table} drop constraint %I', c.conname);`);
+  lines.push("  end loop;");
+  lines.push("end $$;");
+  for (const k of checks) {
+    lines.push(`alter table ${table} add constraint ${k.constraint_name} ${k.definition};`);
+  }
+  lines.push("");
+
   for (const idx of indexes.filter((i) => i.tablename === table)) {
     // Primary-key/unique-constraint indexes are created by the constraint.
     if (constraints.some((k) => k.table_name === table && k.constraint_name === idx.indexname)) {

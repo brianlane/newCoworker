@@ -280,8 +280,14 @@ export type DayDetailCall = {
   voicemailLeft: boolean;
 };
 
-/** Full transcript projection behind every drill-down call list. */
-const DETAIL_CALL_COLUMNS = [
+/**
+ * Full transcript projection behind every drill-down call list.
+ *
+ * Exported for tests/residency-box-schema-columns.test.ts: a residency box
+ * missing any name here fails the whole select rather than blanking a field,
+ * so the guard reads the projection instead of restating it.
+ */
+export const DETAIL_CALL_COLUMNS = [
   "id",
   "caller_e164",
   "started_at",

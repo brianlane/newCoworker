@@ -2,6 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { stripSqlComments } from "./helpers/sql-ddl";
+
 /**
  * Privacy coverage guard: every table that carries a business_id column must
  * be an explicit decision. Either the erasure/retention modules handle it
@@ -65,71 +67,6 @@ function splitNameList(raw: string): string[] {
     .split(",")
     .map((part) => part.trim().replace(/^"?public"?\./i, "").replace(/"/g, "").toLowerCase())
     .filter((part) => /^[a-z_][a-z0-9_]*$/.test(part));
-}
-
-/**
- * Blank out SQL comments so DDL prose cannot register a phantom create or
- * drop, WITHOUT touching string literals.
- *
- * The literal-awareness is not academic. 20260711002041_spend_velocity_alerts
- * carries a comment string ending in a slash-star at :38 (an /api/admin route
- * glob) and an every-ten-minutes cron literal at :161 that begins with a
- * star-slash. A naive block-comment regex reads the first as an opening
- * delimiter and the second as its close, silently eating the 120 lines between
- * them, two CREATE TABLEs included. That failure is why this scanner tracks
- * single-quoted strings and dollar-quoted bodies and only recognises a comment
- * outside them.
- *
- * Comments are replaced with spaces rather than removed, so every surviving
- * statement keeps its original offset and the in-file ordering the ledger
- * relies on stays exact.
- */
-function stripSqlComments(sql: string): string {
-  const out = sql.split("");
-  let i = 0;
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " ";
-  };
-  while (i < sql.length) {
-    const two = sql.slice(i, i + 2);
-    if (sql[i] === "'") {
-      i++;
-      while (i < sql.length) {
-        if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
-        else if (sql[i] === "'") { i++; break; }
-        else i++;
-      }
-      continue;
-    }
-    const dollar = /^\$[a-z_]*\$/i.exec(sql.slice(i));
-    if (dollar) {
-      const tag = dollar[0];
-      const end = sql.indexOf(tag, i + tag.length);
-      i = end === -1 ? sql.length : end + tag.length;
-      continue;
-    }
-    if (two === "--") {
-      const nl = sql.indexOf("\n", i);
-      const stop = nl === -1 ? sql.length : nl;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (two === "/*") {
-      let depth = 1;
-      let j = i + 2;
-      while (j < sql.length && depth > 0) {
-        if (sql.slice(j, j + 2) === "/*") { depth++; j += 2; }
-        else if (sql.slice(j, j + 2) === "*/") { depth--; j += 2; }
-        else j++;
-      }
-      blank(i, j);
-      i = j;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
 }
 
 /** Tables with a business_id column, keyed to the migration that created them. */

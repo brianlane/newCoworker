@@ -2,27 +2,40 @@
  * The box datastore must carry every column the dashboard reads through the
  * residency layer, for every table that layer routes.
  *
- * Why this exists: vps/data-api/schema.sql is GENERATED from a central
- * schema snapshot (2026-07-07) and then hand-patched, so a column added
- * centrally after that date silently does not exist on a tenant's box.
- * `tags` and `owner_employee_id` (20260709213842_contact_tags_ownership) and
- * `lead_source` (20260822035302_lead_source_and_lifecycle_stages) all landed
- * after the snapshot. A projection naming a missing column does not return
- * blanks, it fails the whole SELECT, so the lead-source, quote-funnel and
- * deals cards would have gone dark for the first data-residency tenant, and
- * the journal replay of a contacts row carrying those columns would have
- * failed too. This test turns the drift into a red check.
+ * Why this exists: vps/data-api/schema.sql is GENERATED from a snapshot of
+ * the central schema, so every column added centrally after that snapshot is
+ * missing from a tenant's box until someone re-runs the generator. From the
+ * 2026-07-07 snapshot onward that gap was closed by hand, one patch per
+ * column, and a hand patch only ever covers the column somebody happened to
+ * notice: on 2026-08-26 the box was twelve columns and seven CHECK
+ * constraints behind central.
  *
- * It guards the columns our code actually asks for, not full parity with
- * central: a column nothing reads or replicates can stay absent.
+ * A missing column does not answer with blanks. The data-api interpolates
+ * column names into SQL, so a projection naming one fails the WHOLE select
+ * and the card goes dark; a journal replay carrying one fails and replay
+ * stops on its first failure, queueing every later write for that tenant.
+ * This test turns both into a red check.
+ *
+ * Two layers, because they fail differently. The per-table lists below name
+ * the columns a specific reader projects, so a failure says WHICH card goes
+ * dark. The migration-derived block at the bottom demands FULL parity with
+ * central for every moved table, because the journal replays whole rows and
+ * a replay that hits a missing column stops, queueing every later write for
+ * that tenant behind it. Parity is the real contract; the named lists are
+ * the readable half of it.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { DETAIL_CALL_COLUMNS } from "@/lib/analytics/dashboard-analytics";
 import { EMAIL_LOG_BOX_COLUMNS } from "@/lib/db/email-log";
+import { RESIDENCY_MOVED_TABLES } from "@/lib/residency/tables";
+
+import { balancedBody, splitTopLevel, stripSqlComments } from "./helpers/sql-ddl";
 
 const SCHEMA_PATH = join(process.cwd(), "vps", "data-api", "schema.sql");
+const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
 
 /**
  * Column names the box schema declares for one table, from both forms the
@@ -194,4 +207,193 @@ describe("vps/data-api/schema.sql covers the email_log columns the dashboard rea
       expect([...boxSources]).toContain(source);
     }
   });
+});
+
+/**
+ * `voice_call_transcripts` columns the box must carry, DERIVED from the
+ * projection the call drill-down actually sends. Two of them,
+ * `answering_machine_result` and `voicemail_left`, were missing from the box
+ * between 20260822100237_voice_transcript_amd_columns and 2026-08-26, so the
+ * analytics day-detail call list would have failed outright for the first
+ * residency tenant instead of showing calls without an AMD verdict.
+ */
+describe("vps/data-api/schema.sql covers the voice_call_transcripts columns the dashboard reads", () => {
+  const columns = boxColumns(readFileSync(SCHEMA_PATH, "utf8"), "voice_call_transcripts");
+
+  it("parses the generated DDL (guards the parser itself, not just the columns)", () => {
+    expect(columns.size).toBeGreaterThan(10);
+    expect([...columns]).toContain("business_id");
+  });
+
+  it.each(DETAIL_CALL_COLUMNS.map((column) => ({ column })))(
+    "declares $column (projected by the call drill-down)",
+    ({ column }) => {
+      expect([...columns].includes(column)).toBe(true);
+    }
+  );
+});
+
+/**
+ * Tables whose central history is not all filed under their current name.
+ * `contacts` was created as `customer_memories` and renamed in
+ * 20260704000000_contacts_unify.sql, so every column it grew before that
+ * date is recorded against the old name. Without the alias the scan below
+ * would see a 6-column table and pass on a box missing most of it.
+ */
+const CENTRAL_NAME_HISTORY: Partial<Record<(typeof RESIDENCY_MOVED_TABLES)[number], string[]>> = {
+  contacts: ["contacts", "customer_memories"]
+};
+
+const QUALIFIED = String.raw`(?:"?public"?\.)?"?([a-z_][a-z0-9_]*)"?`;
+
+/**
+ * Every column name the migration corpus ever adds to each table, from the
+ * two statements that add one: a `create table` body and
+ * `alter table ... add column`.
+ *
+ * Additive on purpose. A column central later DROPPED is still reported as
+ * required here, and that is the safe direction: an extra column on the box
+ * costs a few bytes, while a missing one fails a whole statement. Being
+ * additive is also what keeps the scan honest without a rename/drop ledger
+ * to maintain, which is the part that rots.
+ *
+ * Validated against the live central schema on 2026-08-26: the sets this
+ * produces matched information_schema exactly, name for name, for all 15
+ * moved tables (189 columns). It is a derivation, not an approximation.
+ */
+function centralColumnsByTable(): Map<string, Map<string, string>> {
+  const byTable = new Map<string, Map<string, string>>();
+  const record = (table: string, column: string, file: string): void => {
+    let columns = byTable.get(table);
+    if (!columns) byTable.set(table, (columns = new Map()));
+    if (!columns.has(column)) columns.set(column, file);
+  };
+
+  for (const file of readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()) {
+    const sql = stripSqlComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+
+    const createRe = new RegExp(
+      String.raw`create\s+table\s+(?:if\s+not\s+exists\s+)?${QUALIFIED}\s*\(`,
+      "gi"
+    );
+    for (const match of sql.matchAll(createRe)) {
+      const open = match.index + match[0].length - 1;
+      const body = balancedBody(sql, open);
+      if (body === null) continue;
+      for (const part of splitTopLevel(body)) {
+        const first = /^\s*"?([a-z_][a-z0-9_]*)"?\s+/i.exec(part);
+        if (!first) continue;
+        const word = first[1].toLowerCase();
+        // Table-level constraint clauses, not columns.
+        if (["constraint", "primary", "unique", "foreign", "check", "exclude", "like"].includes(word)) {
+          continue;
+        }
+        record(match[1].toLowerCase(), word, file);
+      }
+    }
+
+    // One statement can carry several `add column` clauses, hence the inner
+    // scan over the whole statement rather than a single capture.
+    const alterRe = new RegExp(
+      String.raw`alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?${QUALIFIED}([\s\S]*?);`,
+      "gi"
+    );
+    for (const match of sql.matchAll(alterRe)) {
+      for (const added of match[2].matchAll(
+        /\badd\s+column\s+(?:if\s+not\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?/gi
+      )) {
+        record(match[1].toLowerCase(), added[1].toLowerCase(), file);
+      }
+    }
+  }
+  return byTable;
+}
+
+describe("vps/data-api/schema.sql carries every column central gave a moved table", () => {
+  const sql = readFileSync(SCHEMA_PATH, "utf8");
+  const central = centralColumnsByTable();
+
+  /**
+   * The scan is the thing that can silently stop working: a regex that
+   * matches nothing turns this whole block into a no-op that passes forever.
+   * Pin a column that only exists because each branch of the scan works: a
+   * create-table body under the pre-rename name, and a much later
+   * `add column` under the current one.
+   */
+  it("derives central columns from the migrations (guards the scan, not just the schema)", () => {
+    expect(central.get("customer_memories")?.has("customer_e164")).toBe(true);
+    expect(central.get("contacts")?.get("lead_source")).toBe(
+      "20260822035302_lead_source_and_lifecycle_stages.sql"
+    );
+    expect(central.get("email_log")?.size).toBeGreaterThan(20);
+  });
+
+  it.each(RESIDENCY_MOVED_TABLES.map((table) => ({ table })))(
+    "$table has no column central added that the box lacks",
+    ({ table }) => {
+      const box = boxColumns(sql, table);
+      expect(box.size).toBeGreaterThan(2);
+
+      const required = new Map<string, string>();
+      for (const name of CENTRAL_NAME_HISTORY[table] ?? [table]) {
+        for (const [column, file] of central.get(name) ?? []) {
+          if (!required.has(column)) required.set(column, file);
+        }
+      }
+      expect(required.size).toBeGreaterThan(2);
+
+      const missing = [...required].filter(([column]) => !box.has(column));
+      // Name the migration that added each one AND the remedy, so a failure
+      // is a command to run rather than an archaeology dig.
+      expect(
+        missing.map(([column, file]) => `${table}.${column} (added by ${file})`),
+        `${table} is behind central. Re-run: npx tsx debug/generate-residency-ddl.ts ` +
+          "(needs SUPABASE_DB_URL; it reads the live catalog and rewrites " +
+          "vps/data-api/schema.sql for every moved table)"
+      ).toEqual([]);
+    }
+  );
+});
+
+/**
+ * `create table if not exists` is a no-op on a box that already has the
+ * table, so a CHECK declared only in the create body never reaches an
+ * existing volume. When central WIDENS one (a new `source`, a new
+ * `last_channel`), the box keeps the narrow version and REJECTS the row, and
+ * the replayer stops on its first failure. The generator therefore re-emits
+ * every CHECK as a drop/add pair after the column ALTERs; this asserts the
+ * pair is actually there, for every table, so a future generator edit cannot
+ * quietly drop the repair the way the hand-patched era did.
+ */
+describe("vps/data-api/schema.sql refreshes its CHECK constraints for an existing box", () => {
+  const sql = readFileSync(SCHEMA_PATH, "utf8");
+
+  it.each(RESIDENCY_MOVED_TABLES.map((table) => ({ table })))(
+    "$table drops its stale CHECKs before re-adding them",
+    ({ table }) => {
+      expect(sql).toContain(
+        `where conrelid = '${table}'::regclass and contype = 'c' loop`
+      );
+    }
+  );
+
+  it.each(RESIDENCY_MOVED_TABLES.map((table) => ({ table })))(
+    "$table re-adds every CHECK its create body declares",
+    ({ table }) => {
+      const create = new RegExp(
+        `create table if not exists ${table} \\(([\\s\\S]*?)\\n\\);`,
+        "i"
+      ).exec(sql);
+      expect(create).not.toBeNull();
+      const declared = [
+        ...(create?.[1] ?? "").matchAll(/constraint ([a-z_][a-z0-9_]*) CHECK/gi)
+      ].map((m) => m[1]);
+      const unrefreshed = declared.filter(
+        (name) => !sql.includes(`alter table ${table} add constraint ${name} CHECK`)
+      );
+      expect(unrefreshed).toEqual([]);
+    }
+  );
 });

@@ -368,6 +368,28 @@ construction, which is why
 [20260804000000_residency_write_journal.sql](supabase/migrations/20260804000000_residency_write_journal.sql)
 chose triggers over call-site wrappers.
 
+**The box schema is generated, never hand-patched.**
+[vps/data-api/schema.sql](vps/data-api/schema.sql) is written by
+`npx tsx debug/generate-residency-ddl.ts` (needs `SUPABASE_DB_URL`; read-only
+against central, rewrites the file for all 15 moved tables). **Any migration
+that adds a column or widens a CHECK on a moved table needs that command
+re-run**, because the box does not follow central automatically. Both halves
+of the file matter: the `create table if not exists` block builds a NEW box,
+and the `add column if not exists` plus CHECK drop/re-add lines below it are
+what upgrade an EXISTING one, since `if not exists` is a no-op on a table
+that is already there.
+
+Neither failure is graceful. The data-api interpolates column names into SQL,
+so a projection naming a column the box lacks fails the whole SELECT and the
+card goes dark; a CHECK that central widened but the box did not REJECTS the
+row, and the replayer stops on its first failure, queueing every later write
+for that tenant. Both are red checks now
+([tests/residency-box-schema-columns.test.ts](tests/residency-box-schema-columns.test.ts)):
+one test derives every column central ever gave a moved table from the
+migration corpus and fails if the box lacks it, another requires each CHECK
+to be re-added, not merely declared. Before that guard existed the box was
+12 columns and 7 constraints behind central.
+
 **The engine reads the box too, on the inbound text path.** The Deno workers
 cannot import `@/lib/*`, so `supabase/functions/_shared/residency.ts` mirrors
 the routing layer (pinned by `tests/residency-edge-lockstep.test.ts`). What a
