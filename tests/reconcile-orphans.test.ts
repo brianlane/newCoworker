@@ -77,7 +77,7 @@ describe("reconcileOrphanedPurchases", () => {
       businessId: "biz-orphan-1",
       listVirtualMachines: vi.fn().mockResolvedValue([]),
       listInventory: vi.fn().mockResolvedValue([]),
-      release: vi.fn().mockResolvedValue(undefined),
+      release: vi.fn().mockResolvedValue("pooled" as const),
       now: () => NOW,
       ...overrides
     };
@@ -109,6 +109,94 @@ describe("reconcileOrphanedPurchases", () => {
         notes: expect.stringContaining("orphaned purchase reconciled for biz-orphan-1")
       })
     );
+  });
+
+  it("disables auto-renew BEFORE pooling, and passes the claim guard", async () => {
+    // Mirrors the scheduled sweep: pooling a still-renewing box means a
+    // later failed adopt retires it with the subscription alive, invisible
+    // to every posture check.
+    const calls: string[] = [];
+    const disableAutoRenew = vi.fn(async () => {
+      calls.push("disable");
+    });
+    const release = vi.fn(async () => {
+      calls.push("release");
+      return "pooled" as const;
+    });
+    const args = makeArgs({
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([vm({ id: 1815606, subscription_id: "hsub-orphan" })]),
+      disableAutoRenew,
+      release
+    });
+    const result = await reconcileOrphanedPurchases(args);
+    expect(result).toHaveLength(1);
+    expect(calls).toEqual(["disable", "release"]);
+    expect(disableAutoRenew).toHaveBeenCalledWith("hsub-orphan");
+    // The snapshot race guard: a concurrently pooled-and-claimed row must
+    // never be flipped back to available by this release.
+    expect(release).toHaveBeenCalledWith(expect.objectContaining({ skipIfClaimed: true }));
+  });
+
+  it("skips pooling when the auto-renew disable fails (daily sweep rescues it)", async () => {
+    const release = vi.fn();
+    const args = makeArgs({
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([vm({ id: 1815606, subscription_id: "hsub-orphan" })]),
+      disableAutoRenew: vi.fn(async () => {
+        throw new Error("hostinger 5xx");
+      }),
+      release
+    });
+    const result = await reconcileOrphanedPurchases(args);
+    expect(result).toEqual([]);
+    expect(release).not.toHaveBeenCalled();
+
+    // Non-Error throw stringifies the same way.
+    const release2 = vi.fn();
+    const result2 = await reconcileOrphanedPurchases(
+      makeArgs({
+        listVirtualMachines: vi
+          .fn()
+          .mockResolvedValue([vm({ id: 1815607, subscription_id: "hsub-orphan-2" })]),
+        disableAutoRenew: vi.fn(async () => {
+          throw "string 5xx";
+        }),
+        release: release2
+      })
+    );
+    expect(result2).toEqual([]);
+    expect(release2).not.toHaveBeenCalled();
+  });
+
+  it("does NOT count a VM whose release was skipped as claimed elsewhere", async () => {
+    // Bugbot on the first cut: a skipped release still pushed the VM onto
+    // the reconciled list, so reconcileUntilSizeMatch treated an
+    // already-claimed box as this attempt's size match and stopped waiting
+    // for the real one.
+    const release = vi.fn(async () => "skipped" as const);
+    const args = makeArgs({
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([vm({ id: 1815606, subscription_id: "hsub-orphan" })]),
+      release
+    });
+    const result = await reconcileOrphanedPurchases(args);
+    expect(release).toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
+
+  it("still pools without a disable when no billing id resolves (nothing to disable)", async () => {
+    const disableAutoRenew = vi.fn();
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 1815606 })]),
+      disableAutoRenew
+    });
+    const result = await reconcileOrphanedPurchases(args);
+    expect(result).toHaveLength(1);
+    expect(disableAutoRenew).not.toHaveBeenCalled();
   });
 
   it("looks up billing id via listBillingSubscriptions when the VM omits subscription_id", async () => {
@@ -312,6 +400,22 @@ describe("reconcileOrphanedPurchases", () => {
 });
 
 describe("orphanMatchesPurchaseAttempt", () => {
+  it("rejects an orphan created AFTER the attempt failed (the forward ceiling)", () => {
+    // The retry loop scans for up to 5 minutes; without a ceiling, a
+    // same-size fail-but-charge from a DIFFERENT concurrent attempt that
+    // materializes later passes the floor and gets stolen.
+    const orphan = { vmId: 1, plan: "kvm2" as const, createdAtMs: 10_000 };
+    expect(orphanMatchesPurchaseAttempt(orphan, "kvm2", 0, 9_000)).toBe(false);
+    expect(orphanMatchesPurchaseAttempt(orphan, "kvm2", 0, 10_000)).toBe(true);
+    // Ceiling alone (no floor) still binds.
+    expect(orphanMatchesPurchaseAttempt(orphan, "kvm2", undefined, 9_000)).toBe(false);
+    // No timestamp on the orphan: bounded matching requires one.
+    expect(
+      orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2", undefined, 9_000)
+    ).toBe(false);
+  });
+
+
   it("matches any size when minCreatedAtMs is omitted", () => {
     expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2")).toBe(true);
     expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm1" }, "kvm2")).toBe(false);

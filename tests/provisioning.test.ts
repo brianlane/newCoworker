@@ -3495,7 +3495,26 @@ describe("provisioning/orchestrate", () => {
       expect(pool.retire).not.toHaveBeenCalled();
     });
 
-    it("purchases when the pool is empty and records the new box as assigned", async () => {
+    it("keeps the pool row's billing id when adopt's own lookup came back null", async () => {
+      // A transient failure in adoptVps's best-effort sub-id lookup must not
+      // ERASE the id the pool row already carries: recordVpsAssigned writes
+      // `?? null`, the daily expiry refresh skips null-id rows forever, and
+      // the runway floor then hides a paid box from every future claim.
+      const claimedWithSub = { ...claimedRow, hostinger_billing_subscription_id: "hsub-pool-known" };
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedWithSub) });
+      const adopted = { ...makeVpsStub("1800985"), hostingerBillingSubscriptionId: null };
+      const vpsAdopter = vi.fn().mockResolvedValue(adopted);
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-1", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({ hostingerBillingSubscriptionId: "hsub-pool-known" })
+      );
+    });
+
+  it("purchases when the pool is empty and records the new box as assigned", async () => {
       const pool = makePool();
       const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));

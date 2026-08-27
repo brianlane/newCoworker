@@ -221,7 +221,7 @@ function makeDeps(
     }),
     markProvisioningJobOutcome: vi.fn(async () => undefined),
     tryRecoverDeployCompleteNewBox: vi.fn(async () => null),
-    releaseVpsToPool: vi.fn(async () => undefined),
+    releaseVpsToPool: vi.fn(async () => "pooled" as const),
     markVpsNeverRenew: vi.fn(async () => undefined),
     retireVpsSshKeysForVps: vi.fn(async () => 1),
     sendOpsEmail: vi.fn(async () => undefined),

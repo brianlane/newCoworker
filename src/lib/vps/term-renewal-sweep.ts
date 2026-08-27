@@ -202,7 +202,7 @@ export type TermRenewalSweepDeps = {
     /** Hostinger paid-through, so the pool knows this box's runway immediately. */
     expiresAt?: string | null;
     notes?: string | null;
-  }) => Promise<void>;
+  }) => Promise<unknown>;
   markVpsNeverRenew: (vmId: number) => Promise<void>;
   sendOpsEmail: (input: Omit<OpsHardwareMigrationInput, "siteUrl">) => Promise<void>;
 };

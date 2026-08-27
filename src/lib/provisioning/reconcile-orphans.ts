@@ -122,6 +122,17 @@ export async function reconcileOrphanedPurchases(args: {
   listBillingSubscriptions?: () => Promise<
     Array<Pick<BillingSubscription, "id" | "resource_id">>
   >;
+  /**
+   * `HostingerClient.disableBillingAutoRenewal` (or a stub). Auto-renew is
+   * turned off BEFORE pooling, mirroring the scheduled orphan sweep: a
+   * pooled box is documented as lapsing at period end, and the failure mode
+   * this closes is an adopt that fails AFTER pooling, retiring the row with
+   * the subscription still renewing, which no monitor can see (retired rows
+   * are invisible to the pool posture check, the reaper, untracked_vm, and
+   * stale_assigned_row alike). On a disable failure the VM is left for the
+   * daily sweep rather than pooled still-billing.
+   */
+  disableAutoRenew?: (billingSubscriptionId: string) => Promise<unknown>;
   /** Injectable clock for tests. */
   now?: () => number;
   /** Recency window; defaults to {@link ORPHAN_MAX_AGE_MS}. */
@@ -168,10 +179,33 @@ export async function reconcileOrphanedPurchases(args: {
 
     const hostingerBillingSubscriptionId = resolveOrphanBillingSubscriptionId(vm, billingSubs);
 
+    // Auto-renew off FIRST (same order and reasoning as the orphan sweep):
+    // pooling a still-renewing box means a later failed adopt retires it
+    // with the subscription alive, invisible to every posture check. When
+    // the disable fails, skip pooling; the daily sweep disables and pools
+    // it instead, and this attempt falls through to its original error.
+    if (hostingerBillingSubscriptionId && args.disableAutoRenew) {
+      try {
+        await args.disableAutoRenew(hostingerBillingSubscriptionId);
+      } catch (err) {
+        logger.error("orphan reconcile: auto-renew disable failed; not pooling", {
+          businessId: args.businessId,
+          virtualMachineId: vm.id,
+          billingSubscriptionId: hostingerBillingSubscriptionId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        continue;
+      }
+    }
+
     // Pool it. `releaseVpsToPool` inserts when no row exists and refuses to
     // resurrect retired rows (we already skip known ids above, so this is
-    // belt-and-braces against a concurrent writer).
-    await args.release({
+    // belt-and-braces against a concurrent writer). `skipIfClaimed` guards
+    // the snapshot race: a concurrent reconciler may have pooled this VM
+    // after our inventory read, and a signup may already have CLAIMED it;
+    // un-assigning that row mid-adopt would double-adopt one physical box.
+    const released = await args.release({
+      skipIfClaimed: true,
       vmId: vm.id,
       plan,
       hostname: vm.hostname ?? null,
@@ -180,6 +214,17 @@ export async function reconcileOrphanedPurchases(args: {
         `orphaned purchase reconciled for ${args.businessId}: Hostinger purchase API ` +
         `failed after creating the VM (fail-but-charge). Pooled for adopt-first reuse.`
     });
+    if (released !== "pooled") {
+      // A concurrent reconciler pooled it and a claim already landed. It is
+      // NOT this attempt's adoptable orphan: pushing it would let
+      // reconcileUntilSizeMatch call it a size match, stop waiting, and
+      // abandon this business's own box when it materializes a pass later.
+      logger.warn("orphan reconcile: VM already pooled-and-claimed elsewhere; not counting it", {
+        businessId: args.businessId,
+        virtualMachineId: vm.id
+      });
+      continue;
+    }
     logger.warn("Pooled orphaned Hostinger VM after failed purchase", {
       businessId: args.businessId,
       virtualMachineId: vm.id,
@@ -207,11 +252,24 @@ export async function reconcileOrphanedPurchases(args: {
 export function orphanMatchesPurchaseAttempt(
   orphan: ReconciledOrphan,
   vpsSize: VpsSize,
-  minCreatedAtMs?: number
+  minCreatedAtMs?: number,
+  /**
+   * Upper bound on the orphan's created_at. The VM a fail-but-charge
+   * creates is stamped during the failed purchase CALL, so anything created
+   * after that call returned belongs to a different (possibly concurrent)
+   * attempt. Without this ceiling the retry loop turned the 5s backward
+   * slack into a forward-unbounded window: a same-size fail-but-charge
+   * from ANOTHER business, materializing minutes later, passed the floor
+   * and was adopted as this attempt's box.
+   */
+  maxCreatedAtMs?: number
 ): boolean {
   if (orphan.plan !== vpsSize) return false;
-  if (minCreatedAtMs === undefined) return true;
-  return typeof orphan.createdAtMs === "number" && orphan.createdAtMs >= minCreatedAtMs;
+  if (minCreatedAtMs === undefined && maxCreatedAtMs === undefined) return true;
+  if (typeof orphan.createdAtMs !== "number") return false;
+  if (minCreatedAtMs !== undefined && orphan.createdAtMs < minCreatedAtMs) return false;
+  if (maxCreatedAtMs !== undefined && orphan.createdAtMs > maxCreatedAtMs) return false;
+  return true;
 }
 
 /**
@@ -236,6 +294,8 @@ export async function reconcileUntilSizeMatch(args: {
   budgetMs?: number;
   /** Only count size matches created at/after this epoch ms. */
   minCreatedAtMs?: number;
+  /** See {@link orphanMatchesPurchaseAttempt}; bounds attribution forward. */
+  maxCreatedAtMs?: number;
 }): Promise<ReconciledOrphan[]> {
   const nowFn = args.now ?? Date.now;
   const intervalMs = args.intervalMs ?? ORPHAN_RECONCILE_RETRY_INTERVAL_MS;
@@ -275,7 +335,7 @@ export async function reconcileUntilSizeMatch(args: {
     const pooled = [...byId.values()];
     if (
       pooled.some((orphan) =>
-        orphanMatchesPurchaseAttempt(orphan, args.vpsSize, args.minCreatedAtMs)
+        orphanMatchesPurchaseAttempt(orphan, args.vpsSize, args.minCreatedAtMs, args.maxCreatedAtMs)
       )
     ) {
       return pooled;

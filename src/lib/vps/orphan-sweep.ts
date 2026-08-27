@@ -111,7 +111,7 @@ export type OrphanSweepDeps = {
     hostingerBillingSubscriptionId?: string | null;
     expiresAt?: string | null;
     notes?: string | null;
-  }) => Promise<void>;
+  }) => Promise<unknown>;
   sendOpsEmail: (input: Omit<OpsOrphanSweepInput, "siteUrl">) => Promise<void>;
 };
 

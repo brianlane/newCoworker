@@ -1290,7 +1290,12 @@ async function tryAdoptFromPool(args: {
         vmId: claimed.vm_id,
         plan: vpsSize,
         businessId,
-        hostingerBillingSubscriptionId: adopted.hostingerBillingSubscriptionId,
+        // Same fallback chain as tryAdoptSpecificVm: a transient failure in
+        // adopt's best-effort sub-id lookup must not ERASE the id the pool
+        // row already carries, or the daily expiry refresh skips the row
+        // forever and the runway floor hides a paid box from every claim.
+        hostingerBillingSubscriptionId:
+          adopted.hostingerBillingSubscriptionId ?? claimed.hostinger_billing_subscription_id,
         notes: `adopted from pool for ${businessId}`
       });
     } catch (err) {
@@ -1589,16 +1594,24 @@ async function acquireVps(args: {
     // Reconciliation is best-effort: any failure inside it must never mask
     // the original purchase error.
     if (vpsPool && hostingerManaged && args.reconcileOrphans && isHostingerPurchaseFailure(err)) {
+      // Ceiling stamped when the purchase call FAILED: the fail-but-charge
+      // VM was created during that call, so anything newer belongs to a
+      // different attempt. Without it, the scan retries turned the 5s
+      // backward slack into a forward-unbounded window and could adopt a
+      // concurrent business's same-size fail-but-charge box (30s slack for
+      // Hostinger-side clock skew, generous next to the 5s floor's).
+      const orphanMaxCreatedAtMs = now() + 30_000;
       try {
         const pooled = await reconcileUntilSizeMatch({
           reconcile: args.reconcileOrphans,
           vpsSize,
           sleep,
           now,
-          minCreatedAtMs: orphanMinCreatedAtMs
+          minCreatedAtMs: orphanMinCreatedAtMs,
+          maxCreatedAtMs: orphanMaxCreatedAtMs
         });
         const sizeMatches = pooled.filter((orphan) =>
-          orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs)
+          orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs, orphanMaxCreatedAtMs)
         );
         // Prefer the OLDEST matching orphan after the purchase stamp.
         // Concurrent same-size fail-but-charges: the earlier materialization
@@ -1796,6 +1809,7 @@ async function runOrchestrator(
         listVirtualMachines: () => hostinger.listVirtualMachines(),
         listInventory: () => listVpsInventory(),
         listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),
+        disableAutoRenew: (id) => hostinger.disableBillingAutoRenewal(id),
         release: releaseVpsToPool
       });
     /* c8 ignore stop */

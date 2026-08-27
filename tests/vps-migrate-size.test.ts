@@ -236,7 +236,7 @@ describe("migrateBusinessVpsSize, guards", () => {
     // longer points at it. That shape is invisible to every monitor: billing
     // posture direction 1 checks the pointed-at box, direction 2 and the
     // reaper walk `available` only, and untracked_vm needs NO row at all.
-    const releaseVpsToPool = vi.fn(async () => undefined);
+    const releaseVpsToPool = vi.fn(async () => "pooled" as const);
     const markVpsNeverRenew = vi.fn(async () => undefined);
     const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew });
     // The billing list carries the OLD sub too, so the pool row gets its
@@ -278,7 +278,7 @@ describe("migrateBusinessVpsSize, guards", () => {
   });
 
   it("still completes when the never_renew mark fails after a successful pool return", async () => {
-    const releaseVpsToPool = vi.fn(async () => undefined);
+    const releaseVpsToPool = vi.fn(async () => "pooled" as const);
     const markVpsNeverRenew = vi.fn(async () => {
       throw new Error("flag write down");
     });
@@ -292,7 +292,7 @@ describe("migrateBusinessVpsSize, guards", () => {
   });
 
   it("pools without an expiry stamp when the billing list is unavailable", async () => {
-    const releaseVpsToPool = vi.fn(async () => undefined);
+    const releaseVpsToPool = vi.fn(async () => "pooled" as const);
     const markVpsNeverRenew = vi.fn(async () => undefined);
     const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew });
     (deps.hostinger.listBillingSubscriptions as ReturnType<typeof vi.fn>).mockRejectedValue(
