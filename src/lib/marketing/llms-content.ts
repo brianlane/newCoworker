@@ -129,6 +129,7 @@ const PAGES: { path: string; label: string; note: string }[] = [
   },
   { path: "/blog", label: "Blog", note: "product updates, tutorials, and small-business advice" },
   { path: "/faq", label: "FAQ", note: "product, setup, privacy, and billing questions" },
+  { path: "/security", label: "Security", note: "buyer-facing security posture: isolation, encryption, and privacy lifecycle" },
   { path: "/about", label: "About", note: "mission and principles" },
   { path: "/contact", label: "Contact", note: "sales, support, and partnerships" },
   { path: "/onboard", label: "Get started", note: "self-serve signup" }
