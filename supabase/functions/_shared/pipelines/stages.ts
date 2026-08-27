@@ -221,7 +221,7 @@ export type LifecycleStagePlan = {
  *   2. FORWARD ONLY. A contact already at or past the target position is left
  *      alone, so a re-filed lead is never dragged back from Booked to New
  *      Lead and a repeating trigger (every inbound text fires `replied`)
- *      transitions exactly once. This bounds the platform to three forward
+ *      transitions exactly once. This bounds the platform to four forward
  *      moves per contact per pipeline, ever.
  *
  *   3. CAP IS ALL OR NOTHING. When `computeStageMove` reports `droppedAtCap`

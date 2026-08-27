@@ -132,7 +132,7 @@ admin business page ("Messaging channel (RCS)" card).
 - KVM2 / KVM4 local fallback model: `llama3.2:3b` (KVM1 ships no local model)
 - KVM8 local fallback model: `qwen3:4b-instruct`
 
-Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) which forwards `gemini-*` traffic to Google's OpenAI-compatible endpoint and everything else to Ollama's `/v1` API. The SMS `dispatcher` agent stays on Ollama; the voice `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default `gemini-3.7-flash`). No Bifrost layer.
+Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) which forwards `gemini-*` traffic to Google's OpenAI-compatible endpoint and everything else to Ollama's `/v1` API. The SMS `dispatcher` agent runs `SMS_CHAT_MODEL` (default `gemini-3.5-flash-lite`, `vps/scripts/deploy-client.sh`) through that router, degrading to its local Ollama twin `CoworkerLocal` when the combined spend cap trips or the box has no Gemini key; the voice `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default `gemini-3.7-flash`). No Bifrost layer.
 
 ### The voice callers hear (per tenant, live)
 
@@ -172,8 +172,8 @@ together, so widening the set cannot half-land.
 
 ### Voice knowledge + tools
 
-- The voice bridge loads `/opt/rowboat/vault/{soul,identity,memory,website}.md` (mounted read-only from Rowboat's vault) and injects them into Gemini Live's system prompt on every call. Owners set the website URL during onboarding; `/api/onboard/website-ingest` crawls once (SSRF-guarded, robots-respecting) and stores a summary in `business_configs.website_md`, which is editable from `/dashboard/memory` → "Website Knowledge".
-- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*` — `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`. Calendar + email proxy through `src/lib/workspace/proxy.ts`, which dispatches on the connection row's `transport` column: **Google Workspace is first-party** (our own verified OAuth client, Aug 2026), Microsoft 365 is still Nango-brokered while it migrates, plus **Calendly** as a calendar provider: slot search uses the event type's available times, and "booking" returns a **single-use scheduling link** — detail `booking_link_created` — that the agent texts to the customer, since Calendly cannot create bookings on the invitee's behalf). Calendly also connects **directly** without Nango: the owner pastes a Personal Access Token on `/dashboard/integrations` (`calendly_connections`, token encrypted at rest; transport in `src/lib/calendly/client.ts`, resolver key `calendly-direct`) — same tool behavior, zero OAuth-app setup. Bookings completed on Calendly fire the `appointment_booked` AiFlow goal event two ways: the ~1/min booking-goal sweep (`src/lib/ai-flows/calendly-booking-goals.ts`, works on every Calendly plan) and — when the tenant's paid Calendly plan allows it — a real-time `invitee.created` webhook the sweep auto-subscribes lazily (`calendly_webhook_subscriptions`, platform-minted signing key encrypted at rest; signed receiver at `/api/webhooks/calendly`). Bookings that PREDATE a run are covered too (the booked-then-enrolled gap, Jul 19 2026): the ai-flow-worker calls `/api/internal/aiflow-booking-precheck` (core `src/lib/ai-flows/booking-precheck.ts`) synchronously before a run's first communication step in a flow watching `appointment_booked` — a lead with an active future-start booking gets ZERO texts, greeting included — and the sweep widens its firing set to active future-start bookings whenever a jumpable run was created inside the young-run window (~15 min), so a failed-open precheck is caught within a minute, long before any nudge. Both are pinned by `tests/worker-integration/calendly-booking-goal-gap.itest.ts`. Two notes from the 2026-07 feature audit: (1) **the direct PAT is the only Calendly transport** — production had zero Nango `calendly` rows in `workspace_oauth_connections`, and the dead Nango branches (`calendlyRequest`'s proxy arm, the thrown-403 plan-gating arm, the `"calendly"` entry in the calendar resolver's fallback keys) were REMOVED in the Jul 2026 dead-code sweep: `calendlyRequest` now returns null (= not connected) for any non-direct key, and a legacy Nango `calendly` row can no longer resolve as a calendar connection; (2) **key-rotation soft spot**: rotating `INTEGRATIONS_ENCRYPTION_KEY` without re-encrypting `calendly_webhook_subscriptions.signing_key_encrypted` makes the webhook receiver 500 and the ensure path warn every sweep tick (that failure shape bypasses the retry cooldown) — the polling sweep keeps working throughout, so the impact is latency only, but re-encrypt the rows as part of any rotation. SMS uses the metered Telnyx path; capture writes to `coworker_logs`.
+- The voice bridge loads `/opt/rowboat/vault/{soul,identity,memory,website,profile,documents}.md` (mounted read-only from Rowboat's vault; the last two are optional, see `vps/voice-bridge/src/vault-loader.ts`) and injects them into Gemini Live's system prompt on every call. Owners set the website URL during onboarding; `/api/onboard/website-ingest` crawls once (SSRF-guarded, robots-respecting) and stores a summary in `business_configs.website_md`, which is editable from `/dashboard/memory` → "Website Knowledge".
+- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*`: `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`, and nine more (waitlist join, team notify, document share, `run_aiflow`, customer lookup/rename/pinned-note, translator start/stop); [vps/voice-bridge/src/tool-declarations.ts](vps/voice-bridge/src/tool-declarations.ts) is the authoritative list. Calendar + email proxy through `src/lib/workspace/proxy.ts`, which dispatches on the connection row's `transport` column: **Google Workspace and Microsoft 365 are both first-party** (our own OAuth clients: Google verified Aug 2026, Microsoft since PR #1289, with the row's `transport` column keeping un-migrated legacy Nango rows working), plus **Calendly** as a calendar provider: slot search uses the event type's available times, and "booking" returns a **single-use scheduling link** (detail `booking_link_created`) that the agent texts to the customer, since Calendly cannot create bookings on the invitee's behalf). Calendly also connects **directly** without Nango: the owner pastes a Personal Access Token on `/dashboard/integrations` (`calendly_connections`, token encrypted at rest; transport in `src/lib/calendly/client.ts`, resolver key `calendly-direct`): same tool behavior, zero OAuth-app setup. Bookings completed on Calendly fire the `appointment_booked` AiFlow goal event two ways: the ~1/min booking-goal sweep (`src/lib/ai-flows/calendly-booking-goals.ts`, works on every Calendly plan) and, when the tenant's paid Calendly plan allows it, a real-time `invitee.created` webhook the sweep auto-subscribes lazily (`calendly_webhook_subscriptions`, platform-minted signing key encrypted at rest; signed receiver at `/api/webhooks/calendly`). Bookings that PREDATE a run are covered too (the booked-then-enrolled gap, Jul 19 2026): the ai-flow-worker calls `/api/internal/aiflow-booking-precheck` (core `src/lib/ai-flows/booking-precheck.ts`) synchronously before a run's first communication step in a flow watching `appointment_booked` (a lead with an active future-start booking gets ZERO texts, greeting included), and the sweep widens its firing set to active future-start bookings whenever a jumpable run was created inside the young-run window (~15 min), so a failed-open precheck is caught within a minute, long before any nudge. Both are pinned by `tests/worker-integration/calendly-booking-goal-gap.itest.ts`. Two notes from the 2026-07 feature audit: (1) **the direct PAT is the only Calendly transport**: production had zero Nango `calendly` rows in `workspace_oauth_connections`, and the dead Nango branches (`calendlyRequest`'s proxy arm, the thrown-403 plan-gating arm, the `"calendly"` entry in the calendar resolver's fallback keys) were REMOVED in the Jul 2026 dead-code sweep: `calendlyRequest` now returns null (= not connected) for any non-direct key, and a legacy Nango `calendly` row can no longer resolve as a calendar connection; (2) **key-rotation soft spot**: rotating `INTEGRATIONS_ENCRYPTION_KEY` without re-encrypting `calendly_webhook_subscriptions.signing_key_encrypted` makes the webhook receiver 500 and the ensure path warn every sweep tick (that failure shape bypasses the retry cooldown); the polling sweep keeps working throughout, so the impact is latency only, but re-encrypt the rows as part of any rotation. SMS uses the metered Telnyx path; capture writes to `coworker_logs`.
 - **Vagaro** connects directly (no Nango, no Zapier): the owner pastes their merchant Client ID/Secret on `/dashboard/integrations` (`vagaro_connections`, secret encrypted at rest; client-credentials token manager in `src/lib/vagaro/client.ts`). When connected, Vagaro **wins calendar-provider resolution** — `calendar_find_slots` runs a real availability search and `calendar_book_appointment` creates the appointment on the merchant's book (owner-picked default service, else closest duration match). Inbound Vagaro webhooks land on `/api/webhooks/vagaro?business=…&token=…` (per-tenant verification token), start `webhook`-channel AiFlows with `source: "vagaro"`, and sync customer events into contacts. Requires the merchant's Vagaro APIs & Webhooks access (Vagaro-gated approval). Authentication is a **per-tenant gateway token** (see [Per-tenant gateway tokens](#security-per-tenant-gateway-tokens)); the shared `ROWBOAT_GATEWAY_TOKEN` remains a fallback during the transition. **Booking-intelligence parity with Calendly (Jul 2026)** — appointments booked OFF-platform (the merchant's own Vagaro page, front desk) get the full Calendly-stack treatment: an `appointment` **created** webhook event fires the shared `appointment_booked` goal machinery in real time (`src/lib/ai-flows/booking-goal-fire.ts` — the provider-neutral fan-out both providers now use), the pre-send precheck (`src/lib/ai-flows/booking-precheck.ts`) matches the run's lead against upcoming Vagaro appointments so an already-booked lead gets zero nurture texts, and the SMS/voice/Messenger booking-status preamble (`src/lib/ai-flows/contact-booking-context.ts`) reports upcoming/canceled Vagaro appointments (no reschedule lineage on Vagaro — a moved appointment reads as booked at its new time). **Calendar triggers** work for Vagaro-only tenants: the ~1/min poller lists appointments through `src/lib/ai-flows/vagaro-poll.ts` (all four modes; customer name/phone/email land in the trigger window text), and the webhook receiver fires `event_created` / `event_canceled` in real time through the poller's own enqueue core — shared `cal:` dedupe keys make poll/webhook double-observation a no-op. Webhook appointment events also **sync the booking ledger** (created → record external claim, updated → move it, deleted/canceled → drop it), so `calendar_reschedule_appointment` / `calendar_cancel_appointment` can locate off-platform bookings (Vagaro resolution is ledger-only). All of it parses the approval-gated v3 API shapes defensively and fails open to the pre-parity behavior.
 - **Acuity Scheduling (Squarespace)** connects directly too, and is the lowest-friction of the dedicated booking providers: the owner pastes their **User ID and API Key** from Acuity's own Integrations → API page (`acuity_connections`, key encrypted at rest). No OAuth client, no approval from Squarespace, no add-on to buy. When connected, Acuity **wins calendar-provider resolution** over every workspace calendar but sits BEHIND Vagaro: a tenant with both keeps resolving to Vagaro, because silently moving a live tenant's bookings to a different book is the one unacceptable outcome. `calendar_find_slots`, `calendar_book_appointment`, `calendar_reschedule_appointment` and `calendar_cancel_appointment` all operate on the merchant's real Acuity book. Four API traits shape the implementation and are worth knowing before touching `src/lib/acuity/client.ts`: **availability is DATE-scoped**, not range-scoped, so `findAcuitySlots` fans out day by day behind a month prefilter, a 7-day cap and an early exit at 3 slots; the **rate limit is per egress IP** (10 req/s) and therefore shared by the whole fleet, so the budget is enforced globally through the durable Postgres limiter keyed `acuity:global` and an exhausted budget REFUSES rather than calling; there is **no last-modified field**, so `event_canceled` gating is driven by our own observation shadow (`acuity_appointment_state`) which stamps the first sighting of a transition and re-emits that same value forever after; and **cancel is irreversible**, so the cancel core verifies the appointment's start against the booking ledger and refuses rather than guessing. Calendar triggers work through `src/lib/ai-flows/acuity-poll.ts` (all four modes, windows rounded outward to whole local days because the listing is date-granular, windows run sequentially to respect the shared budget). Acuity merchants keep their own public booking site, so the native self-serve booking page is deliberately skipped for them, exactly as for Vagaro and Calendly. **Booking-intelligence parity with Calendly and Vagaro (Aug 2026)**: appointments booked OFF-platform (the merchant's own Acuity page, front desk) get the same stack: an appointment `scheduled` webhook fires the shared `appointment_booked` goal machinery in real time (`src/lib/ai-flows/booking-goal-fire.ts`), the pre-send precheck (`src/lib/ai-flows/booking-precheck.ts`) matches the run's lead against upcoming Acuity appointments so an already-booked lead gets zero nurture texts, and the SMS/voice/Messenger booking-status preamble (`src/lib/ai-flows/contact-booking-context.ts`) reports upcoming and canceled Acuity appointments (no reschedule lineage on Acuity: a move edits the appointment in place, so it reads as booked at its new time; canceled state comes from the canceled-only listing). The ~1/min booking-goal sweep and its young-run widening remain Calendly-only, so for Acuity, as for Vagaro, webhook-at-booking plus precheck-at-first-send are the whole booking-goal surface.
 - See [docs/VOICE-ROLLOUT.md §9](docs/VOICE-ROLLOUT.md) for the Phase 2 rollout runbook.
@@ -240,7 +240,8 @@ shadow-first: backtest offline, let shadow accumulate, review the verdict
 split, then flip tenants to `active` (a human decision, never automatic).
 
 **On-box projection.** The vault sync ships the graph to each tenant's VPS as
-Obsidian-style entity notes plus `graph.jsonl` under `/opt/rowboat/memory/graph/`;
+Obsidian-style entity-note folders plus `graph.jsonl` directly under
+`/opt/rowboat/memory/`;
 the chat-worker compiles `graph.jsonl` into a local SQLite `graph.db`
 (`vps/chat-worker/graph-db-build.mjs`, content-hash freshness). Off-mode
 tenants get the wipe on every sync.
@@ -251,7 +252,7 @@ one daily per-tenant fuse covers every extraction path:
 today's call count back from the spend ledger). `MEMORY_GRAPH_EXTRACT_MODEL`
 overrides the extractor model (default `gemini-3.5-flash-lite`).
 
-**Ops (read-only, engineering key, no sends):**
+**Ops (engineering key, no sends; dry-run by default, `--apply` writes):**
 
 ```bash
 tsx debug/kg-backfill.ts --business <uuid>                    # dry-run memory_md backfill
@@ -331,7 +332,9 @@ business page (Data residency card) or `POST /api/admin/data-residency`:
 > internal route, journal table, and triggers all remain deployed. **Step 0
 > of the runbook below re-schedules it** — `dual` mode does NOT replicate
 > without this cron, so never flip a tenant to `dual` before completing
-> step 0.
+> step 0. Since migration `20260822233041` the flip is enforced, not just
+> advised: the admin route throws a typed `ResidencyReplayCronError` while
+> `residency_replay_cron_active()` reports the cron missing.
 
 Per-tenant enablement runbook (one deal at a time, no fleet rollout):
 0. **re-schedule the replay cron** — run the `cron.schedule(
@@ -345,15 +348,19 @@ Per-tenant enablement runbook (one deal at a time, no fleet rollout):
    + stack via the same orchestrator/redeploy env gates)
 4. purge central history: `npx tsx debug/residency-purge.ts --business <id> --apply`
    (parity-gated, journal-must-be-empty, trigger-muted so the purge never
-   replicates as deletes; live engine state — contacts, threads, chat, flows —
-   deliberately stays central until the engine's own reads are residency-routed)
+   replicates as deletes; `--keep-hours` floors at 72, matching the engine's
+   `CONTACT_TIMELINE_LOOKBACK_HOURS`, so central always keeps the trailing
+   72h of purged-table rows; live engine state (contacts, threads, chat,
+   flows) deliberately stays central until the engine's own reads are
+   residency-routed)
 
 **Which reads must be routed, and which must not.** The purge deliberately
 splits the moved tables, and the two halves have opposite rules:
 
-- **Purged (8)**: `email_log`, `sms_outbound_log`, `voice_call_transcripts`
-  (+turns), `voice_outbound_dial_log`, read `notifications`, terminal
-  `scheduled_sms`, answered `sms_owner_reply_prompts`. Central loses these, so
+- **Purged (8)**: `email_log`, `sms_outbound_log`, terminal
+  `voice_call_transcripts` (+turns), `voice_outbound_dial_log`, read
+  `notifications`, terminal `scheduled_sms`, answered
+  `sms_owner_reply_prompts`. Central loses these past the 72h keep window, so
   a central read is silently incomplete for a `vps` tenant: an empty list, not
   an error. These must go through
   [src/lib/residency/read.ts](src/lib/residency/read.ts).
@@ -690,7 +697,10 @@ these standards:
   caps on Telnyx Edge webhooks (`TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE` /
   `TELNYX_WEBHOOK_RATE_WINDOW_SEC`).
 - **Cron / Edge auth**: scheduled Edge functions require `INTERNAL_CRON_SECRET`
-  via `assertCronAuth`; `CRON_ALLOW_SERVICE_ROLE_BEARER` is dev-only and must stay
+  via `assertCronAuth`; the service role is never accepted as the cron bearer
+  (the old `CRON_ALLOW_SERVICE_ROLE_BEARER` escape hatch is gone from the code
+  and tests pin the env var as ignored), so the legacy advice stays true by
+  construction: it must stay
   **unset** in production.
 - **Dependency hygiene**: Dependabot alerts are tracked to zero. Transitive
   vulnerabilities are pinned via root `package.json` `overrides` (e.g. `postcss`)
@@ -868,7 +878,7 @@ box (written by `deploy-client.sh`):
 
 - the box's `ROWBOAT_GATEWAY_TOKEN` in `/opt/rowboat/.env` and `/opt/chat-worker/.env`,
 - the Rowboat project **`secret`** (the HMAC key it signs tool-call JWTs with) and its
-  `api_keys` row (the bearer it accepts on VPS → app calls),
+  `api_keys` row (the bearer Rowboat accepts on app → Rowboat calls),
 - the `AIFLOW_GATEWAY_TOKEN` for the render sidecar.
 
 The plaintext + `token_sha256` live in `vps_gateway_tokens` (service-role-only). To talk
@@ -1073,7 +1083,12 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   `contact_created` / `tag_changed` / `owner_assigned` automation hooks as
   dashboard edits), AiFlow CRUD + `trigger_flow` (definitions validated by
   `parseAiFlowDefinition` + binding checks; `get_flow_schema` returns the
-  authoring vocabulary), and agent CRUD (tier-capped).
+  authoring vocabulary), agent CRUD (tier-capped), `send_whatsapp` (same
+  window/template policy as every other WhatsApp surface), employee
+  list/create/update, notification-preference get/update, and custom-table
+  CRUD (create/list/get-rows/update/delete/restore).
+  [src/lib/mcp/registry.ts](src/lib/mcp/registry.ts) (`allMcpTools`) is the
+  authoritative inventory.
 - Owner self-serve tools (added Aug 2026, the one-shot ask classes):
   `update_business_profile` (hours + timezone through the same core as
   Settings, with the profile_md refresh + vault sync; deliberately refuses
@@ -1403,7 +1418,7 @@ stamped. See "What the owner is told when a booking lands" below.
 Owner management lives on the **Bookings** sidebar page
 (`/dashboard/bookings`, below Employees). The page auto-provisions, enabled,
 the first time the owner opens Bookings (safe because the token is
-unguessable until shared; Vagaro/Calendly tenants are skipped since booking
+unguessable until shared; Vagaro/Acuity/Calendly tenants are skipped since booking
 lives on the provider's own page).
 
 The page reads as Calendly does, because the alternative confused owners:
@@ -1592,7 +1607,7 @@ page.
 
   | State | When | What it says |
   | --- | --- | --- |
-  | `solo` | no ACTIVE `ai_flow_team_members` row | just the booking. No "owner", "assign", or "teammate" anywhere: there is nobody to assign to and the owner is on the hook by definition |
+  | `solo` | no ACTIVE `ai_flow_team_members` row, or the only active one is the owner themselves | just the booking. No "owner", "assign", or "teammate" anywhere: there is nobody to assign to and the owner is on the hook by definition |
   | `covered` | the booking's `assignee_member_id`, else `contacts.owner_employee_id` | names that person, and drops the warning |
   | `unowned` | a roster exists and nobody holds this lead | the original warning, plus the one action that fixes it |
 
@@ -1649,9 +1664,9 @@ page.
   is named outright, several are listed as the choice the visitor gets),
   resolved by the same provider order the calendar tools use: Calendly
   tenants get their
-  Calendly event type's scheduling URL, Vagaro tenants get NO link (their
-  site's URL is not held by the platform, and no link beats an invented
-  one), and everyone else gets the native booking page, PROVISIONED on
+  Calendly event type's scheduling URL, Vagaro and Acuity tenants get NO
+  link (their sites' URLs are not held by the platform, and no link beats an
+  invented one), and everyone else gets the native booking page, PROVISIONED on
   first need when the owner has never opened the Bookings dashboard (same
   rule as the dashboard's first view: created enabled, token unguessable
   until shared; a page the owner disabled stays off). The
@@ -1664,9 +1679,9 @@ page.
   by live-model scenarios in `tests/e2e/beth-delegation.e2e.test.ts`,
   including the bare ask (6/6 hammer runs) with the exact URL asserted in
   the composed email.
-- Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
-  has its own booking site; link-mode Calendly cannot book on the invitee's
-  behalf); the Bookings page explains this and calendar resolution order is
+- Vagaro/Acuity/Calendly-resolved tenants deliberately do NOT get the page
+  (Vagaro and Acuity have their own booking sites; link-mode Calendly cannot
+  book on the invitee's behalf); the Bookings page explains this and calendar resolution order is
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
   routing forms, embeds; payment COLLECTION (the schema hooks are in).
 
@@ -1765,11 +1780,12 @@ What this means channel by channel:
 - **Voice: works internationally.** The shared outbound voice profile
   whitelists the same 223 countries, so forwarding legs, warm transfers,
   and owner-notify calls reach international owner phones (for example a
-  +852 forwarding number behind a +1 DID). Guardrail: the profile
-  carries a fleet-wide **$25/day spend limit** (raised from $10 in Aug
-  2026); one marathon international call can exhaust it and block every
-  tenant's outbound legs until midnight UTC, so raise it deliberately,
-  not reactively, if international forwarding becomes routine.
+  +852 forwarding number behind a +1 DID). Guardrail: each tenant's
+  dedicated profile carries a **$25/day spend limit** (raised from $10 in
+  Aug 2026, and per-tenant since the dedicated-profile migration); one
+  marathon international call can exhaust it and block that tenant's
+  outbound legs until midnight UTC, so raise it deliberately, not
+  reactively, if international forwarding becomes routine.
 - **Email, WhatsApp, dashboard: unaffected** by any of this.
 
 The UI keeps owners out of the trap: `src/lib/phone/deliverability.ts`
@@ -1799,8 +1815,9 @@ EARLIER than what they hold, and they expire when that booking starts.
   vacated old start, the calendar poll's observed off-platform
   cancellations (a callback wired in `/api/internal/aiflow-calendar-poll`;
   the canceled customer's identity is derived from the event's
-  `Phone:`/`Email:` marker lines), and the Vagaro webhook's cancels and
-  moves (the union of the payload start and the ledger-recorded starts).
+  `Phone:`/`Email:` marker lines), the Vagaro webhook's cancels and
+  moves (the union of the payload start and the ledger-recorded starts), and
+  the Acuity webhook's cancels.
 - **Offer mechanics**: the slot is re-verified against LIVE provider
   availability (fail closed), then the oldest eligible candidate gets ONE
   metered SMS (STOP list fail-closed, `sms_outbound_log` source
@@ -1902,7 +1919,7 @@ tsx debug/aeo-crawler-probe.ts https://…  # any other origin
 >   origin robots.txt of its own. Nothing disallowed `/dashboard`, `/admin`,
 >   or `/api` there, and there was no `Sitemap:` line at all.
 >
-> Its policy (`search=yes, ai-train=no`) is preserved verbatim in
+> Its policy (`search=yes,ai-input=yes,ai-train=no`) is preserved verbatim in
 > [robots-txt.ts](src/lib/marketing/robots-txt.ts), Content-Signal included,
 > so turning it off cost nothing and bought one reviewable, tested source of
 > truth. **Change the training posture by flipping a token's `kind` in the
@@ -2028,8 +2045,9 @@ job's conclusion).
   drift shape from the section above, where a new page needs a registry entry
   nobody remembers. The changed-file list decides IF we ping, not WHICH URLs,
   because shared marketing components and the shared copy catalogs genuinely
-  can change any page. At ~29 URLs on a handful of deploys a week that is far
-  inside the protocol's limits (10,000 per request).
+  can change any page. At roughly 70 URLs today (the sitemap grows with each
+  published blog post) on a handful of deploys a week, that is far inside
+  the protocol's limits (10,000 per request).
 - **Fail CLOSED** (`deployTouchesPublicPages` in
   [src/lib/marketing/indexnow-deploy.ts](src/lib/marketing/indexnow-deploy.ts)):
   no changed-file list, or nothing public in it, means no ping. Deliberately
@@ -2554,9 +2572,10 @@ carries no send step at all, and a test pins that.
 ### The follow-up asks three questions, not one
 
 The nudge is scheduled off SILENCE, and for a while the only thing that
-counted as noise was `replied_at`, which is written in exactly one place
-(`noteProspectReply`) when inbound mail lands on an owned thread. Nothing else
-set it: not a booking, not a call, not a meeting.
+counted as noise was `replied_at`, which was then written in exactly one
+place (`noteProspectReply`) when inbound mail lands on an owned thread; the
+engagement retirement described below now stamps it too. Nothing else set
+it: not a booking, not a call, not a meeting.
 
 That was a gap rather than a corner case, because the pitch itself carries a
 booking-page link. "Clicks the link, books, never replies by email" is the
@@ -2697,8 +2716,9 @@ Discovery runs once per business per UTC day and buys a tier-bounded number
 of Places queries, stamped before they are bought:
 `placesQueriesPerDayForTier` (src/lib/plans/prospecting.ts) gives Standard the
 base budget of 6 and Enterprise double that, so the fleet-wide worst case is
-always a small known number (today's whole fleet at full adoption is 36
-queries a day). The rotation interleaves round-robin across search terms and
+always a small known number (6 queries per standard tenant per day, 12 per
+enterprise tenant: `QUERIES_PER_RUN` in `src/lib/outreach/discover.ts` times
+the tier multiplier in `src/lib/plans/prospecting.ts`). The rotation interleaves round-robin across search terms and
 advances a full run per day; the honedtech version grouped by vertical and
 slid one query at a time, which served a single trade for weeks and read like
 a market signal. The optional Gemini tone pass is
@@ -2801,7 +2821,7 @@ are RLS-on/no-policies (service-role only); core logic lives in
 - **Env**: `GITHUB_DIGEST_REPO` (`owner/name`) + `GITHUB_DIGEST_TOKEN`
   (repo-read PAT) for the digest's PR listing; `BLOG_DIGEST_TEXT_MODEL` /
   `BLOG_DIGEST_IMAGE_MODEL` override the Gemini models (defaults
-  `gemini-3.5-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
+  `gemini-3.7-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
   gates subscriber email (unset = publish still works, email skipped).
 
 ## Lead pipeline: stage tags the platform writes itself
@@ -2814,7 +2834,7 @@ heaviest tenant had 21 flows and exactly ONE tag-writing step, so her board
 was empty while the engine knew every lead's state perfectly well, and the
 Data view's SOURCE column was a dash on every row.
 
-So the platform writes lead state itself, at six moments it was already
+So the platform writes lead state itself, at seven moments it was already
 instrumented for (each is a sibling call beside an existing `GoalEventKind`
 site, not new instrumentation):
 
@@ -2822,6 +2842,7 @@ site, not new instrumentation):
 | --- | --- | --- |
 | lead filed | `enrichCustomerProfile` (ai-flow-worker) | New Lead |
 | teammate claimed | `assignContactOwnerOnClaim` | Contacted |
+| prospect emailed | outreach sweep's contacted-reconcile | Contacted |
 | customer replied | inbound SMS webhook | Engaged |
 | booking landed | every `appointment_booked` goal | Booked |
 | meeting happened | meeting-minutes classifier (`follow_up`) | Engaged |
@@ -2850,7 +2871,8 @@ looping or surprising a tenant, and all five matter:
    re-filed lead is never dragged back from Booked and a repeating trigger
    (every inbound text fires `replied`) transitions exactly ONCE per contact,
    ever. This is what makes the `replied` hook safe.
-3. **A hard bound** of three forward moves per contact per pipeline.
+3. **A hard bound** of four forward moves per contact per pipeline
+   (forward-only across New Lead → Contacted → Engaged → Booked → Won).
 4. **Stage-must-exist.** Nothing is written unless a stage with that name
    already exists for the business. A tenant with no pipeline gets nothing and
    pays one indexed select; a tenant who renamed "Contacted" to "Working" gets
@@ -3163,7 +3185,7 @@ reports per action: `ready`, `blocked` (there but not yet clickable),
 a screenshot and whatever the page reported about itself.
 
 **Teach it by doing it once** (`BrowseActionDemoPanel`,
-`POST /api/aiflows/demo/{start,act,stop}`, engine in
+`POST /api/aiflows/demo/{start,act,stop,suggest}`, engine in
 `vps/aiflow-render/demo.mjs`). The one surface that ACTS, which is its whole
 point: the picker and the dry run judge a page AS LOADED, so a wizard's later
 pages are out of their reach. The owner performs the workflow once on a
@@ -3275,8 +3297,11 @@ the source of the edit that REPLACED it, so the newest row's source is the
 provenance of the definition that is live right now.
 
 Current sources: `dashboard`, `dashboard_restore`, `ai_edit_dashboard`,
-`ai_edit_sms`, `ai_edit_slack`, `ai_edit_email`, `mcp`, `mcp_restore`,
-`white_glove`. An unstamped writer lands in the history with a null source,
+`ai_edit_sms`, `ai_edit_slack`, `ai_edit_email`, `ai_edit_whatsapp`, `mcp`,
+`mcp_restore`, `white_glove` (the `ai_edit_<key>` set is registry-derived,
+so a new owner surface joins it automatically; a legacy bare `ai_edit` is
+still recognized on old rows). An unstamped writer lands in the history
+with a null source,
 which reads as "nobody said", never as a surface.
 
 ### Undoing
@@ -3349,7 +3374,7 @@ the two flattened id lists disagree and compares it against the furthest
 reuses `CANCELABLE_RUN_STATUSES` rather than re-listing the non-terminal
 states).
 
-| Risk | What it means | Text surfaces (SMS, email) | Rich surfaces |
+| Risk | What it means | Text surfaces (SMS, email, WhatsApp) | Rich surfaces |
 | --- | --- | --- | --- |
 | `none` | the instruction changed nothing | refused, nothing staged | refused |
 | `wording` | same steps in the same order, different field values | staged, confirm normally | staged |
@@ -3446,8 +3471,10 @@ send.
 looking at the automation when they edit it in the builder, and we are
 already in the loop on a white-glove change. An alert for something you just
 watched yourself do is the kind of noise that teaches people to ignore
-alerts. The announced sources are exactly the AI ones: `ai_edit_sms`,
-`ai_edit_email`, `ai_edit_slack`, `ai_edit_dashboard`, `mcp`, `mcp_restore`.
+alerts. The announced sources are exactly the AI ones, derived from the
+owner-surface registry plus the two MCP sources (`shouldAnnounceFlowChange`):
+today `ai_edit_sms`, `ai_edit_email`, `ai_edit_slack`, `ai_edit_dashboard`,
+`ai_edit_whatsapp`, `mcp`, `mcp_restore`.
 
 ## AiFlow team routing: claim notices (SMS + optional email)
 
@@ -3595,7 +3622,7 @@ Pinned by `tests/worker-integration/roster-lead-availability.itest.ts`.
 
 Roster edits happen away from a laptop ("Sandy starts today, her cell is 602
 555 0134"), so the roster is editable by the coworker: add, update (name,
-number, email, hours), deactivate, reactivate, and set the three availability
+number, email, hours), deactivate, reactivate, and set the four availability
 flags. One core, `src/lib/employees/manage-tool.ts`, over the same db helpers
 the Employees page uses, so the AI path and the page cannot drift.
 
@@ -3875,7 +3902,7 @@ on `graph.instagram.com` and 400s here. Permissions:
 `instagram_manage_comments` for both, plus `pages_messaging` for private.
 
 Same bridge shape as `send_whatsapp`: the Deno worker cannot call Graph, so
-it POSTs `/api/internal/instagram-comment-reply` with the cron bearer. That
+it POSTs `/api/internal/comment-reply` with the cron bearer. That
 route owns the **failure taxonomy**, which is the load-bearing part. Because
 a private reply is single-use, a refusal is reported as a SKIP
 (`reason: "refused"`, carrying Meta's own words into `actions_taken`) and a
@@ -4174,7 +4201,7 @@ button already does.
   following what it actually hears), and tells the AI to **wait quietly through
   the dialing and hold tones** instead of narrating them.
 - **Staff only, enforced twice.** The declaration is withheld from customer
-  callers (`CUSTOMER_EXCLUDED_TOOLS`, the mirror of the existing
+  callers (`STAFF_ONLY_TOOLS`, the mirror of the existing
   `STAFF_EXCLUDED_TOOLS`) and the handler refuses a non-staff requester again,
   because asking the receptionist to start interpreting silences it for the rest
   of the call. Staff identity is the v2-signed caller number
@@ -4292,12 +4319,16 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
   unanswered legs. Like operational SMS, this meter counts but NEVER refuses:
   the call already happened; once the pool is spent the reserve gate and the
   safe-mode pre-check refuse the NEXT call.
-- **Voice, carrier-side backstop:** the shared outbound voice profile also
-  carries a Telnyx-side **$25/day fleet-wide spend limit** (raised from $10
-  Aug 2026 for international forwarding). It is an account-protection fuse,
-  not a tenant meter: when it trips, EVERY tenant's outbound leg fails until
-  midnight UTC. If it ever trips organically, raise it deliberately rather
-  than treating the failures as a code bug.
+- **Voice, carrier-side backstop:** each tenant's DEDICATED outbound voice
+  profile carries a Telnyx-side **$25/day spend limit**
+  (`TENANT_PROFILE_DAILY_SPEND_LIMIT_USD` in
+  [src/lib/telnyx/tenant-voice-infra.ts](src/lib/telnyx/tenant-voice-infra.ts),
+  mirroring the old fleet-wide fuse). It is an account-protection fuse, not
+  a tenant meter, and since the dedicated-profile migration a trip fails
+  only that one tenant's outbound legs until midnight UTC, instead of the
+  whole fleet's as the shared profile once did. If it ever trips
+  organically, raise it deliberately rather than treating the failures as a
+  code bug.
 - **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). The same RPC applies the destination gate and per-destination text-unit multipliers (see "International reachability"), so a blocked or unknown destination refuses here too. This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
   - Node: `sendTelnyxSms(..., { meterBusinessId })` — `app/api/dashboard/messages/send`, `app/api/voice/tools/sms`, `app/api/rowboat/tool-call`.
   - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.
@@ -4314,10 +4345,11 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
     Stripe anchor, or an anchor in the future, falls back to the calendar
     month. The metering RPCs return `window_start` so the once-per-period cap
     alert is keyed to the window that refused the send. Auto-reload's monthly
-    SPEND limit deliberately stays on the calendar month: it caps how much we
-    may charge a card without asking, which is a guardrail rather than a plan
-    allowance.
-- **AI chat spend (graceful degrade, NOT a hard stop):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. The SMS SEND that carries that reply is still hard-gated by the SMS cap above.
+    SPEND ceiling is anchored to the same billing window too (migration
+    `20260823173331`, through the canonical `billing_usage_window_start`
+    alias): it briefly stayed on the calendar month, which let one allowance
+    window span two spend windows and authorize double the stated ceiling.
+- **AI chat spend (graceful degrade where a local model exists):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. On KVM1 hardware there is no local model at all, so an over-cap turn REFUSES outright (`pickSmsTurn` returns `refuse: true`; the fuse-trip owner alert has already fired). The SMS SEND that carries a degraded reply is still hard-gated by the SMS cap above.
 
 **NOTHING is exempt from metering** (policy set Jul 14 2026 — the previous
 "operational exemptions" list is gone). Every outbound SMS counts against the
@@ -4421,7 +4453,8 @@ surfaces: the model emits an `EMAIL_SEND` sentinel block (taught by
 the shared `fulfillOwnerEmailBlocks`
 ([src/lib/dashboard-chat/email-blocks.ts](src/lib/dashboard-chat/email-blocks.ts)),
 which re-checks the Settings toggle per send and files the result on the
-Emails page. Dashboard chat and the **owner-over-SMS operator turn** both
+Emails page. Dashboard chat, the **owner-over-SMS operator turn**, and the
+**Slack assistant** all
 run it, so "schedule Liz through her assistant Beth" texted to the business
 line can reach a delegate who works by email (the Jul 2026 Beth delegation:
 before this, that surface could only offer to TEXT her). Because the
@@ -4567,10 +4600,13 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
   ledger owns, and ownership is never inferred. `email_coworker_threads` gets
   a row only when the assistant itself put a message into the conversation:
   an owner surface sending through the EMAIL_SEND protocol, a cold-outreach
-  pitch, or a flow's `send_email` reply that the owner APPROVED at an
-  approval gate. That last case is the only one where somebody else opened
-  the conversation, and it is still not a widening: a human read the draft
-  and said send. Receipts, newsletters, and the owner's real correspondence
+  pitch, or a flow's `send_email` sent from the owner's connected mailbox.
+  That last case is the only one where somebody else opened the
+  conversation. In the tenant flows we author that send sits behind an
+  approval gate, so a human read the draft; note the seeding itself keys on
+  the send (`rememberSentThread` runs whenever a thread id is known), not on
+  an enforced approval check, so a flow that skips the gate seeds ownership
+  too. Receipts, newsletters, and the owner's real correspondence
   are never candidates and there is no allowlist to curate. Deleting a row
   ends its involvement.
 - **Narrow tools**: a new `email` surface in
@@ -4606,9 +4642,13 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
   Gmail sets `In-Reply-To`/`References` AND the `threadId` (headers alone
   let Gmail split the conversation); Graph has no raw-MIME send, so a
   threaded answer rides the message's own `/reply` action.
-- **Gmail-first, honestly**: Graph's `sendMail` returns no body, so a
-  Microsoft mailbox cannot report the conversation id that seeds ownership.
-  Those tenants send fine and get no autonomous follow-ups yet.
+- **Gmail-first, honestly**: Graph's `sendMail` returns no body, so a FRESH
+  Microsoft send (EMAIL_SEND, cold outreach, voice follow-up) cannot report
+  the conversation id that seeds ownership; those sends work fine and get no
+  autonomous follow-ups. A THREADED flow reply rides the message's own
+  `/reply` action and falls back to the conversation id it replied into, so
+  those Microsoft threads DO seed ownership and the poll reads Graph
+  mailboxes like Gmail ones.
 - **One answer per email**: both polls read the same inbox, so the AiFlow
   email-trigger poll skips messages the coworker has already claimed
   (`email_coworker_seen`), or a tenant with a broad email-trigger flow would
@@ -4708,8 +4748,8 @@ fails CI if `messages/en.json` and `messages/es.json` ever diverge.
 - **Edge functions (voice IVR, SMS compliance):** `messages/edge-en.json` /
   `edge-es.json` via `edgeMessage` / `voiceMessageForLocale`; TTS language via
   `telnyxTtsLanguage`.
-- **Plan/pricing copy helpers in `src/lib`** (`usage-copy.ts`, `tier-display.ts`,
-  `white-glove.ts`, `password.ts`): locale-parameterized functions with an
+- **Plan/pricing copy helpers in `src/lib/plans`** (`usage-copy.ts`,
+  `tier-display.ts`, `white-glove.ts`; plus `src/lib/password.ts`): locale-parameterized functions with an
   `"en"` default so existing callers are byte-identical. New helper copy
   follows the same pattern — and the 100% coverage gate means every `es`
   branch needs a test (see `tests/plan-copy-es.test.ts`,
@@ -4719,8 +4759,10 @@ fails CI if `messages/en.json` and `messages/es.json` ever diverge.
   `messenger_conversations.preferred_language`
   (owner override from the contact Language dropdown is authoritative), and
   the prompt line via `customerLanguageLine`. WhatsApp out-of-window templates
-  register `en_US` **and** `es_US` variants (state keyed `name` /
-  `name:es_US` — see `whatsappTemplateStateKey`).
+  register `en_US` **and** `es` variants (state keyed `name` / `name:es`,
+  see `whatsappTemplateStateKey`; `es_US` is NOT a valid WhatsApp template
+  language, and using it silently failed every Spanish registration until
+  Aug 2026).
 - **Legal pages (`/terms`, `/privacy`)** stay English-only by policy (the
   binding text), with a localized notice; do not machine-translate contractual
   language.
@@ -4733,7 +4775,7 @@ English URLs and metadata stay canonical. Metadata is translated via
 ## Start every session from the context pack
 
 Almost every session on this repo used to open the same way: read this
-1,700-line README, review the application code, review the last two weeks of
+5,000-plus-line README, review the application code, review the last two weeks of
 conversations, skim the last two weeks of pull requests. That is the same
 orientation re-derived from scratch every time, paid for in tokens, arriving
 at the same answer. It is generated once instead, mechanically:
@@ -4822,7 +4864,7 @@ This is not a new policy so much as a name for what the repo already does.
 `scripts/new-migration.sh` exists because stamps were being hand-invented.
 The migration stamp guard, the KG source-coverage registry, the coworker-tool
 parity contract, and the no-em-dash test each pin a problem that was solved
-once and must not be re-solved. `debug/` holds ~100 procedures that used to be
+once and must not be re-solved. `debug/` holds ~150 procedures that used to be
 ad-hoc SSH sessions.
 
 Recent captures, and what each replaced:
@@ -4906,24 +4948,23 @@ bash scripts/new-migration.sh add_booking_reminder_window
 ```
 
 Never hand-write the version. A stamp must sort after every applied
-migration AND be unique against branches you cannot see, and plain
-`date -u +%Y%m%d%H%M%S` currently satisfies only the second: this repo's
-applied stamps run about 26 days ahead of the wall clock (the head is in
-late August 2026, the clock reads late July), so a true timestamp sorts
-BEHIND the head, which makes `supabase db push` refuse the order and makes a
-fresh `supabase start` run the file before the migration creating the objects
-it touches. That gap is exactly why stamps get hand-invented, and
-hand-invented stamps broke main three times on 2026-07-26 (#932/#934,
-#938/#939) and twice on 2026-07-14 (#600/#601).
+migration AND be unique against branches you cannot see. Through most of
+Jul and Aug 2026 plain `date -u +%Y%m%d%H%M%S` satisfied only the second:
+the applied stamps ran about 26 days ahead of the wall clock, so a true
+timestamp sorted BEHIND the head, which made `supabase db push` refuse the
+order and made a fresh `supabase start` run the file before the migration
+creating the objects it touches. That gap is exactly why stamps got
+hand-invented, and hand-invented stamps broke main three times on
+2026-07-26 (#932/#934, #938/#939) and twice on 2026-07-14 (#600/#601).
 
 The helper emits `max(real UTC, head + a small random offset)`, reading the
 head from your tree AND origin/main so a branch cut before someone else's
-migration merged still stamps above it. **It converges with no cleanup
-event**: the head gains minutes a day while real time gains a full day, and
-once the clock passes the head (around 2026-08-21) the helper starts emitting
-true timestamps on its own. Do not schedule a mass re-stamp to get there
-sooner; that would be ~196 `supabase migration repair` operations against the
-production ledger to buy a state that arrives by itself.
+migration merged still stamps above it. **It converged with no cleanup
+event**, exactly as designed: the head gained minutes a day while real time
+gained a full day, the clock passed the head in late Aug 2026, and the
+helper now emits true UTC timestamps on its own. It stays mandatory anyway,
+because the your-tree-AND-origin/main head check is what keeps two
+concurrent branches from stamping below each other.
 
 A collision is caught at review time by the `Supabase Drift Check` job
 ([.github/scripts/migration-stamp-guard.sh](.github/scripts/migration-stamp-guard.sh),
@@ -4980,12 +5021,14 @@ Consequences worth knowing before you touch any of them:
 - **A route may legitimately declare more than 150s.** When the bridge 504s,
   Vercel keeps running the route to completion in the background, so the work
   still finishes. What is lost is the *result*: pg_cron records a 504 instead
-  of the route's own outcome. Six routes are in this position today, recorded
-  with their reasons in `KNOWN_ABOVE_EDGE_CEILING` in
+  of the route's own outcome. Seven routes are in this position today,
+  recorded with their reasons in `KNOWN_ABOVE_EDGE_CEILING` in
   `tests/cron-timeout-parity.test.ts`: two batch workers whose webhooks also
   call them directly (on that path maxDuration genuinely governs), two
-  vendor-latency sweeps sized for slow days, and the two 1800s backlog-wave
-  budgets from PR #1014. Thirteen more sweeps used to sit here at 300s; the
+  vendor-latency sweeps sized for slow days, and the three 1800s
+  backlog-wave budgets (the two from PR #1014 plus
+  `vps-contract-upgrade-sweep`, which inherits the same migration-path
+  budget). Thirteen more sweeps used to sit here at 300s; the
   first full week of `cron_sweep_runs` showed their worst run was 17s, so
   they were clipped to 150 with the measured number cited at each route's
   `maxDuration`. The bar for clipping is a measured worst case with a wide

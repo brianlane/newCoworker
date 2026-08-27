@@ -6,7 +6,7 @@ alwaysApply: true
 # Start from the context pack
 
 Almost every session on this repo used to open the same way: read the
-1,700-line README, review the application code, review the last two weeks of
+5,000-plus-line README, review the application code, review the last two weeks of
 conversations, skim the last two weeks of pull requests. That is the same
 orientation re-derived from scratch every time, paid for in tokens, arriving
 at the same answer. It is now generated once, mechanically.

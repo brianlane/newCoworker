@@ -328,7 +328,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     },
     {
       // STAFF ONLY. The bridge withholds this declaration from customer callers
-      // (CUSTOMER_EXCLUDED_TOOLS in gemini-telnyx-bridge.ts) and the handler
+      // (STAFF_ONLY_TOOLS in gemini-telnyx-bridge.ts) and the handler
       // refuses it a second time, because "start interpreting" from a customer
       // would let anyone silence the receptionist.
       name: "start_translator_mode",
