@@ -204,7 +204,7 @@ export async function reconcileOrphanedPurchases(args: {
     // the snapshot race: a concurrent reconciler may have pooled this VM
     // after our inventory read, and a signup may already have CLAIMED it;
     // un-assigning that row mid-adopt would double-adopt one physical box.
-    await args.release({
+    const released = await args.release({
       skipIfClaimed: true,
       vmId: vm.id,
       plan,
@@ -214,6 +214,17 @@ export async function reconcileOrphanedPurchases(args: {
         `orphaned purchase reconciled for ${args.businessId}: Hostinger purchase API ` +
         `failed after creating the VM (fail-but-charge). Pooled for adopt-first reuse.`
     });
+    if (released !== "pooled") {
+      // A concurrent reconciler pooled it and a claim already landed. It is
+      // NOT this attempt's adoptable orphan: pushing it would let
+      // reconcileUntilSizeMatch call it a size match, stop waiting, and
+      // abandon this business's own box when it materializes a pass later.
+      logger.warn("orphan reconcile: VM already pooled-and-claimed elsewhere; not counting it", {
+        businessId: args.businessId,
+        virtualMachineId: vm.id
+      });
+      continue;
+    }
     logger.warn("Pooled orphaned Hostinger VM after failed purchase", {
       businessId: args.businessId,
       virtualMachineId: vm.id,

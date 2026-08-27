@@ -58,7 +58,7 @@ function makeDeps(overrides: Partial<OrphanSweepDeps> = {}): OrphanSweepDeps {
     listBillingSubscriptions: vi.fn(async () => [billingSub()]),
     getVirtualMachine: vi.fn(async () => vm()),
     disableBillingAutoRenewal: vi.fn(async () => ({})),
-    releaseVpsToPool: vi.fn(async () => undefined),
+    releaseVpsToPool: vi.fn(async () => "pooled" as const),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides
   } as OrphanSweepDeps;

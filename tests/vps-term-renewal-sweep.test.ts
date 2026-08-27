@@ -178,7 +178,7 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
       };
     }),
     markProvisioningJobOutcome: vi.fn(async () => undefined),
-    releaseVpsToPool: vi.fn(async () => undefined),
+    releaseVpsToPool: vi.fn(async () => "pooled" as const),
     markVpsNeverRenew: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides

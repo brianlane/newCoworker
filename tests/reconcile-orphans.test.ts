@@ -77,7 +77,7 @@ describe("reconcileOrphanedPurchases", () => {
       businessId: "biz-orphan-1",
       listVirtualMachines: vi.fn().mockResolvedValue([]),
       listInventory: vi.fn().mockResolvedValue([]),
-      release: vi.fn().mockResolvedValue(undefined),
+      release: vi.fn().mockResolvedValue("pooled" as const),
       now: () => NOW,
       ...overrides
     };
@@ -121,6 +121,7 @@ describe("reconcileOrphanedPurchases", () => {
     });
     const release = vi.fn(async () => {
       calls.push("release");
+      return "pooled" as const;
     });
     const args = makeArgs({
       listVirtualMachines: vi
@@ -168,6 +169,23 @@ describe("reconcileOrphanedPurchases", () => {
     );
     expect(result2).toEqual([]);
     expect(release2).not.toHaveBeenCalled();
+  });
+
+  it("does NOT count a VM whose release was skipped as claimed elsewhere", async () => {
+    // Bugbot on the first cut: a skipped release still pushed the VM onto
+    // the reconciled list, so reconcileUntilSizeMatch treated an
+    // already-claimed box as this attempt's size match and stopped waiting
+    // for the real one.
+    const release = vi.fn(async () => "skipped" as const);
+    const args = makeArgs({
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([vm({ id: 1815606, subscription_id: "hsub-orphan" })]),
+      release
+    });
+    const result = await reconcileOrphanedPurchases(args);
+    expect(release).toHaveBeenCalled();
+    expect(result).toEqual([]);
   });
 
   it("still pools without a disable when no billing id resolves (nothing to disable)", async () => {

@@ -60,7 +60,7 @@ function makeChain(): MockQB {
     insert: vi.fn(),
     upsert: vi.fn(),
     eq: vi.fn(() => qb),
-    neq: vi.fn(),
+    neq: vi.fn(() => qb),
     or: vi.fn(() => qb),
     order: vi.fn(() => qb),
     limit: vi.fn(),
@@ -501,9 +501,29 @@ describe("vps_inventory DB layer", () => {
         error: null
       });
       const db = makeDb(chain);
-      await releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never);
+      await expect(
+        releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never)
+      ).resolves.toBe("skipped");
       expect(chain.update).not.toHaveBeenCalled();
       expect(chain.insert).not.toHaveBeenCalled();
+    });
+
+    it("skipIfClaimed is enforced in the WRITE predicate, not just the pre-read", async () => {
+      // A claim can land between the pre-read (available) and the update;
+      // PostgREST reports the zero-row match as success, so the guard adds
+      // state != assigned to the predicate and reads the outcome back.
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 42, state: "available" },
+        error: null
+      });
+      // The guarded update matched nothing: the row was claimed mid-race.
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      const db = makeDb(chain);
+      await expect(
+        releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never)
+      ).resolves.toBe("skipped");
+      expect(chain.neq).toHaveBeenCalledWith("state", "assigned");
     });
 
     it("skipIfClaimed still pools an available or absent row", async () => {
@@ -512,9 +532,11 @@ describe("vps_inventory DB layer", () => {
         data: { vm_id: 42, state: "available" },
         error: null
       });
-      chain.neq.mockResolvedValueOnce({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
       const db = makeDb(chain);
-      await releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never);
+      await expect(
+        releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never)
+      ).resolves.toBe("pooled");
       expect(chain.update).toHaveBeenCalled();
     });
 
@@ -524,7 +546,7 @@ describe("vps_inventory DB layer", () => {
         data: { vm_id: 42, state: "assigned" },
         error: null
       });
-      chain.neq.mockResolvedValueOnce({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
       const db = makeDb(chain);
       await releaseVpsToPool(
         {
@@ -556,7 +578,7 @@ describe("vps_inventory DB layer", () => {
         error: null
       });
       // The write chain is .update(...).eq(...).neq(...), neq is terminal.
-      chain.neq.mockResolvedValueOnce({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
       const db = makeDb(chain);
       await releaseVpsToPool(
         { vmId: 42, plan: "kvm2", hostingerBillingSubscriptionId: "sub-9", notes: "canceled" },
@@ -627,7 +649,7 @@ describe("vps_inventory DB layer", () => {
         data: { vm_id: 7, state: "assigned" },
         error: null
       });
-      chain.neq.mockResolvedValueOnce({ error: { message: "update boom" } });
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "update boom" } });
       const db = makeDb(chain);
       await expect(releaseVpsToPool({ vmId: 7, plan: "kvm2" }, db as never)).rejects.toThrow(
         /releaseVpsToPool: update boom/

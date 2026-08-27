@@ -77,7 +77,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     vi.mocked(getSubscription).mockResolvedValue(null);
     vi.mocked(listBusinessIdsWithStripeLinkedSubscription).mockResolvedValue(new Set());
     vi.mocked(cancelSubscriptionIfStripeless).mockResolvedValue(true);
-    vi.mocked(releaseVpsToPool).mockResolvedValue(undefined);
+    vi.mocked(releaseVpsToPool).mockResolvedValue("pooled");
     getVirtualMachineMock.mockResolvedValue({ id: 1806114, subscription_id: "hsub-vm" });
     disableAutoRenewalMock.mockResolvedValue(undefined);
   });

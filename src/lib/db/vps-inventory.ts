@@ -292,14 +292,16 @@ export async function releaseVpsToPool(
      * The orphan reconciler sets this: its inventory snapshot is read at
      * pass start, so a VM another reconciler pooled and a signup already
      * claimed can reach its release call, and flipping that row back to
-     * available would let two provisions adopt one physical box. Lifecycle
-     * releases (cancel/wipe) keep the default: re-pooling the tenant's own
-     * assigned box is their whole purpose.
+     * available would let two provisions adopt one physical box. The guard
+     * is enforced in the WRITE predicate, not just the pre-read, so a claim
+     * landing between read and write is also safe. Lifecycle releases
+     * (cancel/wipe) keep the default: re-pooling the tenant's own assigned
+     * box is their whole purpose.
      */
     skipIfClaimed?: boolean;
   },
   client?: SupabaseClient
-): Promise<void> {
+): Promise<"pooled" | "skipped"> {
   const db = client ?? (await createSupabaseServiceClient());
   const nowIso = new Date().toISOString();
 
@@ -315,9 +317,9 @@ export async function releaseVpsToPool(
     // failed adopt). A later lifecycle release for the same vm_id (e.g. the
     // grace-expired wipe re-running after the cancel already pooled and a
     // failed adopt retired it) must not resurrect it into the adopt pool.
-    if ((existing as { state: string }).state === "retired") return;
+    if ((existing as { state: string }).state === "retired") return "skipped";
     if (input.skipIfClaimed && (existing as { state: string }).state === "assigned") {
-      return;
+      return "skipped";
     }
     const patch: Record<string, unknown> = {
       state: "available",
@@ -328,14 +330,26 @@ export async function releaseVpsToPool(
       updated_at: nowIso
     };
     if (input.expiresAt !== undefined) patch.expires_at = input.expiresAt;
-    const { error } = await db
+    let update = db
       .from("vps_inventory")
       .update(patch)
       .eq("vm_id", input.vmId)
       // Guard against a retire racing between our read and this write.
       .neq("state", "retired");
+    if (input.skipIfClaimed) {
+      // The pre-read is only a fast path: a claim can land between it and
+      // this write, and PostgREST reports a zero-row match as SUCCESS, so
+      // the guard must live in the predicate and the outcome must be read
+      // back from the matched rows.
+      update = update.neq("state", "assigned");
+    }
+    // vm_id matches at most one row, so maybeSingle is the exact read-back:
+    // null means the guarded predicate matched nothing (claimed or retired
+    // mid-race), which PostgREST otherwise reports as plain success.
+    const { data: touched, error } = await update.select("vm_id").maybeSingle();
     if (error) throw new Error(`releaseVpsToPool: ${error.message}`);
-    return;
+    if (input.skipIfClaimed && touched == null) return "skipped";
+    return "pooled";
   }
 
   const { error } = await db.from("vps_inventory").insert({
@@ -351,6 +365,7 @@ export async function releaseVpsToPool(
     updated_at: nowIso
   });
   if (error) throw new Error(`releaseVpsToPool: ${error.message}`);
+  return "pooled";
 }
 
 /**
