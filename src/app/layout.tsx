@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Space_Grotesk } from "next/font/google";
+import { Geist, Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { NextIntlClientProvider } from "next-intl";
@@ -15,18 +15,21 @@ import { SITE_URL } from "@/lib/marketing/site-url";
 /**
  * Brand faces, self-hosted at build by next/font (zero runtime requests,
  * metric-adjusted fallbacks so text does not shift when they load). Inter
- * carries body text; Space Grotesk is the display face for headings via the
- * `font-display` utility. globals.css maps both variables into the Tailwind
- * theme, and the system stack stays as the fallback throughout.
+ * carries body text; Geist is the display face for headings via the
+ * `font-display` utility (it replaced Space Grotesk, whose quirky letterforms
+ * read off-brand: Geist is the neutral, premium grotesque designed for dark
+ * interfaces, and pairs with Inter's near-identical metrics). globals.css
+ * maps both variables into the Tailwind theme, and the system stack stays as
+ * the fallback throughout.
  */
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
   display: "swap"
 });
-const spaceGrotesk = Space_Grotesk({
+const geist = Geist({
   subsets: ["latin"],
-  variable: "--font-space-grotesk",
+  variable: "--font-geist",
   display: "swap"
 });
 
@@ -121,7 +124,7 @@ export default async function RootLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale} className={`${inter.variable} ${spaceGrotesk.variable}`}>
+    <html lang={locale} className={`${inter.variable} ${geist.variable}`}>
       <body>
         {/*
           Only the global client subset (~465 bytes) ships from here. Handing
