@@ -50,8 +50,11 @@ export function MarketingNav() {
   }, []);
 
   // Open-menu affordances: Escape closes (returning focus to the toggle),
-  // a press outside the header closes, and the page behind stops scrolling.
-  // All scoped to the open state so the closed nav adds zero listeners.
+  // a press outside the header closes, the page behind stops scrolling, and
+  // crossing the md breakpoint closes too (the panel hides via md:hidden, so
+  // without this a rotate/resize would strand the scroll lock with no visible
+  // control to release it). All scoped to the open state so the closed nav
+  // adds zero listeners.
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -65,13 +68,19 @@ export function MarketingNav() {
         setOpen(false);
       }
     };
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const onBreakpoint = (e: MediaQueryListEvent) => {
+      if (e.matches) setOpen(false);
+    };
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("pointerdown", onPointerDown);
+    desktop.addEventListener("change", onBreakpoint);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
+      desktop.removeEventListener("change", onBreakpoint);
       document.body.style.overflow = prevOverflow;
     };
   }, [open]);
