@@ -875,19 +875,19 @@
           "description": "El tráfico de open house del domingo y quien navega Zillow a las 9pm reciben una conversación en vivo, no una fila de devolución de llamadas."
         },
         "u4": {
-          "title": "Seguimiento por texto al instante",
-          "description": "¿Perdiste una transferencia durante una visita? Quien llamó recibe un texto inmediato y la conversación continúa por SMS."
+          "title": "Velocidad al lead, en equipo",
+          "description": "Un lead nuevo puede recibir una llamada del AI en segundos, y tus compañeros compiten por él: el primero que responde 1 lo reclama, y una transferencia cálida mantiene al comprador conversando mientras suenan los teléfonos."
         },
         "u5": {
           "title": "Reglas de Fair Housing",
           "description": "Las normas de cumplimiento FHA se aplican en cada conversación, protegiendo tu licencia de un desliz costoso."
         },
         "u6": {
-          "title": "Seguimientos de transacción",
-          "description": "Los AiFlows cubren el trecho entre contrato y cierre: recordatorios de documentos, avances de hitos y revisiones corren solos."
+          "title": "Negocios, tareas y tu CRM anterior",
+          "description": "Registra valor del negocio, fecha de cierre y comisión de abierto a ganado, asigna tareas con fecha límite y trae tus contactos de Follow Up Boss desde un CSV. Los AiFlows siguen persiguiendo el papeleo de contrato a cierre por ti."
         },
         "day1": "Un vendedor llama para listar su casa. Tu coworker califica el lead, captura la dirección y reserva una consulta de listado para el jueves.",
-        "day2": "Estás en una visita. Entran dos llamadas de compradores a la vez. Ambas contestadas, ambas calificadas, una visita reservada.",
+        "day2": "Estás en una visita. Entra un lead comprador nuevo, el AI le devuelve la llamada en segundos y tu agente de compradores responde 1 para reclamarlo antes de que salgas.",
         "day3": "Un comprador pregunta por texto sobre la HOA de una propiedad. Tu coworker responde con el conocimiento de tu sitio y ofrece un horario de visita.",
         "day4": "Una familia que se muda llama después de la cena. Tu coworker le explica tu servicio, captura sus criterios y te envía un resumen con sentimiento.",
         "complianceNote": "Las reglas de bienes raíces de New Coworker incluyen cumplimiento de la Fair Housing Act en cada conversación de voz y texto."
