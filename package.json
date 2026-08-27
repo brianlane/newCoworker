@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "knip": "knip --dependencies",
+    "knip:exports": "node scripts/knip-exports-ratchet.mjs",
     "tsc": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:fast": "vitest run",

@@ -52,6 +52,16 @@ jobs:
       - name: Dependency hygiene (knip)
         run: npm run knip
 
+      # Dead-export ratchet: knip again in --production mode, where an export
+      # whose only caller is a test counts as UNUSED. That class is how dead
+      # money-code stayed "alive" through the 100% coverage pin twice in 2026
+      # (a test written to cover a dead export makes it look used). Fails on
+      # any finding not in .github/knip-exports-baseline.txt; the baseline
+      # self-destructs when too many entries go stale. Details in
+      # scripts/knip-exports-ratchet.mjs.
+      - name: Dead-export ratchet (knip --production)
+        run: npm run knip:exports
+
       - name: Build
         run: npm run build
 
