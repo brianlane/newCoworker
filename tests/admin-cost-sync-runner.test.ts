@@ -16,11 +16,16 @@ vi.mock("@/lib/hostinger/client", async (importOriginal) => {
             hostname: "srv1800980.hstgr.cloud",
             state: "running"
           }
-        ])
+        ]),
+        listCatalog: vi.fn(async () => [])
       };
     })
   };
 });
+vi.mock("@/lib/db/hostinger-billing-terms", () => ({
+  listHostingerBillingTerms: vi.fn(async () => []),
+  upsertHostingerBillingTerms: vi.fn(async () => {})
+}));
 vi.mock("@/lib/db/platform-costs", () => ({
   listTenantDids: vi.fn(async () => []),
   listBusinessVpsAssignments: vi.fn(async () => [{ businessId: "biz-1", vmId: 1800980 }]),
@@ -63,6 +68,10 @@ import {
   replaceTelnyxCostWindow
 } from "@/lib/db/platform-costs";
 import { upsertAdminPlatformSetting } from "@/lib/admin/platform-settings";
+import {
+  listHostingerBillingTerms,
+  upsertHostingerBillingTerms
+} from "@/lib/db/hostinger-billing-terms";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -145,5 +154,18 @@ describe("runProductionPlatformCostSync", () => {
     const status = await runProductionPlatformCostSync();
     expect(status.stripeError).toContain("STRIPE_SECRET_KEY not set");
     expect(replaceStripeFeeWindow).not.toHaveBeenCalled();
+  });
+});
+
+describe("runProductionPlatformCostSync, term inference wiring", () => {
+  it("reads and writes the stored term rows through the real db helpers", () => {
+    // The runner's job is wiring. Without this the two arrow functions it
+    // defines are never invoked, so a typo in either would ship unnoticed.
+    return runProductionPlatformCostSync().then(() => {
+      expect(listHostingerBillingTerms).toHaveBeenCalled();
+      expect(upsertHostingerBillingTerms).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ subscription_id: "sub-1" })])
+      );
+    });
   });
 });

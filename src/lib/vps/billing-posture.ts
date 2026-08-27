@@ -169,6 +169,15 @@ export type BillingPostureDeps = {
    * vps_inventory at all.
    */
   retireLapsedPoolVps: (vmId: number, reason: string) => Promise<boolean>;
+  /**
+   * Stored term facts, so a box whose real price the cost sync already
+   * RECOVERED is not reported as needing a human. Optional: without it every
+   * stale-cycle box is reported, which is the pre-recovery behavior and errs
+   * toward telling someone rather than staying quiet.
+   */
+  listBillingTerms?: () => Promise<
+    Array<{ subscription_id: string; monthly_cents: number | null }>
+  >;
 };
 
 /**
@@ -638,7 +647,23 @@ export async function checkVpsBillingPosture(
       .map((vm) => [vm.subscription_id as string, vm])
   );
   const nowDate = new Date(nowMs);
+  // Subscriptions whose true monthly cost the cost sync already recovered
+  // from the catalog (see term-inference.ts). Hostinger is still
+  // misreporting these, but nothing is wrong on our side and there is no
+  // hPanel invoice for anyone to go read, so reporting them would be a daily
+  // email asking for work that is already done. A read failure leaves the set
+  // empty, which reports everything: over-telling beats silence here.
+  let recovered: Set<string>;
+  try {
+    const terms = deps.listBillingTerms ? await deps.listBillingTerms() : [];
+    recovered = new Set(
+      terms.filter((t) => t.monthly_cents !== null).map((t) => t.subscription_id)
+    );
+  } catch {
+    recovered = new Set<string>();
+  }
   for (const sub of subscriptions) {
+    if (recovered.has(sub.id)) continue;
     // Boxes only. The billing list carries the whole Hostinger account, and
     // this finding's text asserts that the COST SYNC dropped a box's monthly
     // price and that margin now shows an SKU estimate. Neither is true of a

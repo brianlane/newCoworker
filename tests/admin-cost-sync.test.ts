@@ -719,6 +719,7 @@ describe("parsePlatformCostSyncStatus", () => {
       telnyxError: "boom",
       hostingerRows: 3,
       hostingerError: "bang",
+      termInferenceError: null,
       stripeMonths: 12,
       stripeRows: 5,
       stripeError: "kaboom"
@@ -729,6 +730,14 @@ describe("parsePlatformCostSyncStatus", () => {
     );
   });
 
+  it("keeps a recorded term-inference error", () => {
+    const parsed = parsePlatformCostSyncStatus({
+      lastSyncAt: "2026-07-12T18:00:00.000Z",
+      termInferenceError: "catalog down"
+    });
+    expect(parsed?.termInferenceError).toBe("catalog down");
+  });
+
   it("defaults unusable fields", () => {
     const parsed = parsePlatformCostSyncStatus({ lastSyncAt: "2026-07-12T18:00:00.000Z" });
     expect(parsed).toEqual({
@@ -736,6 +745,7 @@ describe("parsePlatformCostSyncStatus", () => {
       ok: false,
       telnyxRange: "last_7_days",
       telnyxRows: 0,
+      termInferenceError: null,
       telnyxError: null,
       hostingerRows: 0,
       hostingerError: null,
@@ -828,6 +838,127 @@ describe("runPlatformCostSync", () => {
     expect(status.hostingerError).toBeNull();
     expect(status.hostingerRows).toBe(1);
     expect(deps.replaceTelnyxCostWindow).not.toHaveBeenCalled();
+  });
+
+  it("recovers the real price for a stale-cycle box instead of withholding it", async () => {
+    // End to end: HQ's shape, an empty terms table, and the live catalog.
+    // The runway bootstrap names the year term and the catalog prices it.
+    const upserted: unknown[] = [];
+    const deps = baseDeps({
+      listBillingSubscriptions: vi.fn(async () => [
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          total_price: 1949,
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: new Date(NOW.getTime() + 374 * 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: null
+        } as BillingSubscription
+      ]),
+      listVpsCatalog: vi.fn(async () => [
+        {
+          id: "hostingercom-vps-kvm1",
+          name: "KVM 1",
+          category: "VPS",
+          prices: [
+            {
+              id: "hostingercom-vps-kvm1-usd-1y",
+              name: "KVM 1 (billed every year)",
+              currency: "USD",
+              price: 15588,
+              first_period_price: 8388,
+              period: 1,
+              period_unit: "year"
+            }
+          ]
+        }
+      ]),
+      listBillingTerms: vi.fn(async () => []),
+      upsertBillingTerms: vi.fn(async (rows: unknown[]) => {
+        upserted.push(...rows);
+      })
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.termInferenceError).toBeNull();
+    const written = vi.mocked(deps.replaceHostingerVpsCosts).mock.calls[0][0];
+    expect(written[0].monthly_price_cents).toBe(1299);
+    expect(upserted[0]).toMatchObject({ term_months: 12, monthly_cents: 1299 });
+  });
+
+  it("keeps the withheld price when term inference fails, and does not fail the sync", async () => {
+    // Losing the inference degrades precision, never correctness, so it must
+    // not flip ok=false the way a vendor pull failure does.
+    const deps = baseDeps({
+      listBillingSubscriptions: vi.fn(async () => [
+        {
+          id: "sub-stale",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: new Date(NOW.getTime() + 374 * 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: null
+        } as BillingSubscription
+      ]),
+      listVpsCatalog: vi.fn(async () => {
+        throw new Error("catalog down");
+      }),
+      listBillingTerms: vi.fn(async () => []),
+      upsertBillingTerms: vi.fn(async () => {})
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.termInferenceError).toBe("catalog down");
+    expect(status.ok).toBe(true);
+    const written = vi.mocked(deps.replaceHostingerVpsCosts).mock.calls[0][0];
+    expect(written[0].monthly_price_cents).toBeNull();
+  });
+
+  it("tolerates a subscription carrying none of the billing fields", async () => {
+    // Hostinger omits billing_period_unit and next_billing_at on some rows.
+    // The inference must record what it can rather than throwing.
+    const upserted: unknown[] = [];
+    const deps = baseDeps({
+      listBillingSubscriptions: vi.fn(async () => [
+        { id: "sub-bare", status: "active", name: "KVM 1" } as BillingSubscription
+      ]),
+      listVpsCatalog: vi.fn(async () => []),
+      listBillingTerms: vi.fn(async () => []),
+      upsertBillingTerms: vi.fn(async (rows: unknown[]) => {
+        upserted.push(...rows);
+      })
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.termInferenceError).toBeNull();
+    expect(upserted[0]).toMatchObject({
+      subscription_id: "sub-bare",
+      observed_next_billing_at: null,
+      term_months: null
+    });
+  });
+
+  it("records a non-Error thrown by the inference rather than crashing", async () => {
+    const deps = baseDeps({
+      listVpsCatalog: vi.fn(async () => {
+        throw "catalog exploded";
+      }),
+      listBillingTerms: vi.fn(async () => []),
+      upsertBillingTerms: vi.fn(async () => {})
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.termInferenceError).toBe("catalog exploded");
+    expect(status.ok).toBe(true);
+  });
+
+  it("says so when the inference deps are not wired at all", async () => {
+    const status = await runPlatformCostSync(baseDeps());
+    expect(status.termInferenceError).toMatch(/not wired/);
+    expect(status.ok).toBe(true);
   });
 
   it("records a Hostinger failure without losing the Telnyx sync", async () => {

@@ -24,6 +24,7 @@ import {
 } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
+import { listHostingerBillingTerms } from "@/lib/db/hostinger-billing-terms";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
 
 // Vercel Pro ceiling (mirrors delete-client / migrate-size). The check does
@@ -72,7 +73,8 @@ async function runSweep(request: Request): Promise<Response> {
       listVirtualMachines: () => hostinger.listVirtualMachines(),
       listBillingSubscriptions: async () => billingSubs,
       enableAutoRenewal: (subscriptionId) => hostinger.enableBillingAutoRenewal(subscriptionId),
-      retireLapsedPoolVps: (vmId, reason) => retireLapsedPoolVps(vmId, reason)
+      retireLapsedPoolVps: (vmId, reason) => retireLapsedPoolVps(vmId, reason),
+      listBillingTerms: () => listHostingerBillingTerms()
     });
 
     if (result.findings.length > 0) {
