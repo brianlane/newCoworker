@@ -13,23 +13,32 @@ export function PageHero({
   eyebrow,
   title,
   subtitle,
-  children
+  children,
+  glow = false
 }: {
   eyebrow?: string;
   title: ReactNode;
   subtitle?: ReactNode;
   children?: ReactNode;
+  /** Faint radial brand glow behind the hero (the homepage turns this on). */
+  glow?: boolean;
 }) {
   return (
-    <section className="mx-auto max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-20">
+    <section className="relative isolate mx-auto max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-20">
+      {glow && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -top-16 -z-10 h-[26rem] bg-[radial-gradient(60%_60%_at_50%_0%,rgba(27,217,106,0.09),transparent_70%)]"
+        />
+      )}
       {eyebrow && (
-        <p className="mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">{eyebrow}</p>
+        <p className="animate-fade-slide-up mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">{eyebrow}</p>
       )}
-      <h1 className="font-display text-4xl font-bold leading-tight tracking-tight text-parchment text-balance sm:text-5xl">{title}</h1>
+      <h1 className="animate-fade-slide-up stagger-1 font-display text-4xl font-bold leading-tight tracking-tight text-parchment text-balance sm:text-5xl">{title}</h1>
       {subtitle && (
-        <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-parchment/60">{subtitle}</p>
+        <p className="animate-fade-slide-up stagger-2 mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-parchment/60">{subtitle}</p>
       )}
-      {children && <div className="mt-9">{children}</div>}
+      {children && <div className="animate-fade-slide-up stagger-3 mt-9">{children}</div>}
     </section>
   );
 }
@@ -64,7 +73,7 @@ export type Feature = {
 
 export function FeatureCard({ feature }: { feature: Feature }) {
   const card = (
-    <div className="h-full rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-[border-color,background-color,transform,box-shadow] duration-200 hover:border-signal-teal/40 hover:bg-parchment/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)] motion-safe:hover:-translate-y-0.5">
+    <div className="marketing-reveal h-full rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-[border-color,background-color,transform,box-shadow] duration-200 hover:border-signal-teal/40 hover:bg-parchment/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)] motion-safe:hover:-translate-y-0.5">
       <div className="mb-2 flex items-center gap-2">
         <feature.Icon className="h-5 w-5 shrink-0 text-claw-green" />
         <h3 className="font-semibold text-parchment">{feature.title}</h3>

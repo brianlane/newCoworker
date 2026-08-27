@@ -120,6 +120,7 @@ export default async function HomePage() {
       <MarketingNav />
 
       <PageHero
+        glow
         title={
           <>
             {t("home.heroTitle")}
@@ -185,31 +186,35 @@ export default async function HomePage() {
         <FeatureGrid features={features} />
       </section>
 
-      <section className="mx-auto max-w-6xl px-6 pb-24">
-        <SectionHeading
-          eyebrow={t("home.howEyebrow")}
-          title={t("home.howTitle")}
-          subtitle={t("home.howSubtitle")}
-        />
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-          {STEP_KEYS.map((key, index) => (
-            <div
-              key={key}
-              className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6"
-            >
-              <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-full bg-claw-green/15 text-sm font-bold text-claw-green">
-                {index + 1}
+      {/* Full-bleed tinted band: breaks the run of boxed sections so the
+          page reads as alternating rhythm rather than a stack of cards. */}
+      <div className="border-y border-parchment/10 bg-parchment/[0.02]">
+        <section className="mx-auto max-w-6xl px-6 py-20">
+          <SectionHeading
+            eyebrow={t("home.howEyebrow")}
+            title={t("home.howTitle")}
+            subtitle={t("home.howSubtitle")}
+          />
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            {STEP_KEYS.map((key, index) => (
+              <div
+                key={key}
+                className="marketing-reveal rounded-xl border border-parchment/10 bg-deep-ink/60 p-6"
+              >
+                <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-full bg-claw-green/15 text-sm font-bold text-claw-green">
+                  {index + 1}
+                </div>
+                <h3 className="font-semibold text-parchment">{t(`steps.${key}.title`)}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-parchment/50">
+                  {t(`steps.${key}.description`)}
+                </p>
               </div>
-              <h3 className="font-semibold text-parchment">{t(`steps.${key}.title`)}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-                {t(`steps.${key}.description`)}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      </div>
 
-      <section className="mx-auto max-w-6xl px-6 pb-24">
+      <section className="mx-auto max-w-6xl px-6 pb-24 pt-24">
         <div className="rounded-2xl border border-signal-teal/20 bg-signal-teal/[0.04] p-8 sm:p-10">
           <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-2">
             <div>
