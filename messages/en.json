@@ -522,7 +522,7 @@
       "automation": {
         "eyebrow": "Automation",
         "title": "Workflows that run your follow-up for you",
-        "subtitle": "AiFlows connect triggers to actions across calls, texts, email, and ad leads, plus real browser skills for everything else.",
+        "subtitle": "AiFlows connect triggers to actions across calls, texts, email, and ad leads: your coworker can even call a new lead back in seconds, plus real browser skills for everything else.",
         "metaLeads": {
           "title": "Instant Meta Lead Capture",
           "description": "Facebook and Instagram lead ads flow straight to your coworker: the lead is texted back within seconds, filed as a customer, and you get the summary."
@@ -535,13 +535,21 @@
           "title": "Outbound Calls",
           "description": "Your coworker can place scheduled outbound calls (reminders, confirmations, and follow-ups) on your behalf."
         },
+        "speedToLead": {
+          "title": "Speed to Lead",
+          "description": "A brand-new lead can get an AI call back within seconds, not just a text. Teammates race for the lead (claim it by replying 1 or with a name), and a warm transfer keeps the lead talking while your coworker rings the team, with every offer and acceptance tracked."
+        },
+        "prospecting": {
+          "title": "Prospecting",
+          "description": "Your coworker finds local businesses that fit your customer profile and emails them for you, with drafts you can review, edit, or rewrite before anything sends. Standard plan and up."
+        },
+        "emailLeads": {
+          "title": "Email-Only Leads",
+          "description": "A lead who arrives with just an email address still gets worked: filed as a contact, followed up by email on a paced cadence, and booked without ever needing a phone number."
+        },
         "browser": {
           "title": "Browser Skills",
-          "description": "It can operate real websites: updating CRMs, checking portals, and completing forms, even behind logins."
-        },
-        "routing": {
-          "title": "Team Routing",
-          "description": "Offers and tasks route to the right teammate by SMS, with acceptance tracking built in."
+          "description": "It operates real websites: updating CRMs, checking portals, and completing forms, even behind logins. Teach it a new task by doing the task once yourself; it records the steps and repeats them."
         },
         "notifications": {
           "title": "Owner Notifications",
@@ -1794,7 +1802,7 @@
       },
       "automatedWorkflows": {
         "title": "Automated Workflows",
-        "description": "AiFlows capture leads from Meta (Facebook & Instagram) ads and text them back in seconds, follow up on schedule, place outbound calls, and hand each lead to a named teammate to claim."
+        "description": "AiFlows capture leads from Meta (Facebook & Instagram) ads, text them back in seconds or call them back with AI, follow up on schedule, and hand each lead to a named teammate to claim."
       },
       "appIntegrations": {
         "title": "8,000+ App Integrations",

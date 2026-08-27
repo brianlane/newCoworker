@@ -21,7 +21,9 @@ import {
   Phone,
   PhoneForwarded,
   PhoneIncoming,
+  PhoneOutgoing,
   Rocket,
+  Search,
   Server,
   ShieldCheck,
   Smartphone,
@@ -108,10 +110,12 @@ const GROUP_DEFS: GroupDef[] = [
     key: "automation",
     features: [
       { key: "metaLeads", Icon: Zap },
+      { key: "speedToLead", Icon: PhoneOutgoing },
       { key: "aiflows", Icon: Workflow },
       { key: "outbound", Icon: Phone },
+      { key: "prospecting", Icon: Search },
+      { key: "emailLeads", Icon: Mail },
       { key: "browser", Icon: Globe },
-      { key: "routing", Icon: Users },
       { key: "notifications", Icon: Bell }
     ]
   },
