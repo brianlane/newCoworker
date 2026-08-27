@@ -540,6 +540,40 @@ describe("arming is off by default and read from the tenant column", () => {
     );
   });
 
+  it("the STAFF-REQUEST path carries the tier conjunct (the G1 fix, #1085)", () => {
+    // #1028 gated only the post-transfer path; the staff-request translator
+    // was a separate flag on a separate path, and a Starter owner could run
+    // full-duplex Gemini Live interpretation with the session cap deferred.
+    // #1085 added this conjunct as a one-line fix WITH NO TEST: deleting
+    // `tenantSettings.translatorTierAllowed &&` left every suite green,
+    // and neither the root tsc nor the bridge's own tsc would object. This
+    // pin is what makes that deletion red.
+    const idx = readFileSync(INDEX, "utf8");
+    expect(idx).toContain(
+      "const translatorOnRequestEnabled = callerIsStaff && tenantSettings.translatorTierAllowed"
+    );
+    // And the flag it reads is fed from the tier predicate, not from a
+    // settings row.
+    expect(idx).toContain("translatorTierAllowed: translatorTierOk");
+  });
+
+  it("the bridge's hand-copied tier predicate matches the canonical one", () => {
+    // vps/voice-bridge cannot import supabase/functions/_shared (its own
+    // package, bundled for the box), so index.ts re-implements the predicate
+    // inline. That lockstep copy is WHY the staff-request flag was missed in
+    // the first place (#1085's root cause). Derive the expected expression
+    // from the canonical module so a change there forces the copy to move
+    // in the same PR.
+    const canonical = readFileSync(
+      join(__dirname, "../supabase/functions/_shared/translator_tier.ts"),
+      "utf8"
+    );
+    const expr = /return (.+);/.exec(canonical)?.[1];
+    expect(expr).toBeTruthy();
+    const idx = readFileSync(INDEX, "utf8");
+    expect(idx).toContain(`const translatorTierOk = ${expr};`);
+  });
+
   it("the bridge passes the tenant setting into the transfer capability", () => {
     const src = readFileSync(INDEX, "utf8");
     expect(src).toContain("translatorMode: tenantSettings.translatorModeEnabled");
