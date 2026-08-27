@@ -932,19 +932,31 @@ async function handleSpeakEnded(
   // across the deploy boundary, when the old code stamped spoken at accept.
   const oursStarted = typeof ctx.voicemail_speak_started_at === "string";
   if (!oursStarted && ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
-  // Playout finished: THIS is the moment the message has actually been
-  // delivered, so the honest `voicemail_spoken` stamp lands here, before the
-  // hangup, so the hangup webhook's outcome derivation reads it. Stamping at
-  // command-accept overstated: a leg that died mid-playout still recorded a
-  // left voicemail (the same accepted-vs-delivered lie PR #1672 removed from
-  // the bridge-spoken path).
-  const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
-    p_call_control_id: callControlId,
-    p_patch: { voicemail_spoken: true }
-  });
-  if (spokenErr) console.error("speak-ended: voicemail_spoken stamp failed", spokenErr);
+  // Playout FINISHED is the only speak.ended that proves delivery: Telnyx
+  // reports interrupted playout through this same event with a non-completed
+  // status (cancelled, call_hangup), and stamping those would record a
+  // mid-message drop as a left voicemail, the exact accepted-vs-delivered
+  // lie this path exists to remove (Bugbot, PR #1674). A non-completed or
+  // missing status stamps nothing: if the message did in fact play long
+  // enough, the hangup path's wall-clock fallback promotes it honestly.
+  const status =
+    typeof payload["status"] === "string" ? payload["status"].trim().toLowerCase() : "";
+  if (status === "completed") {
+    // The stamp lands BEFORE the hangup so the hangup webhook's outcome
+    // derivation reads it. Stamping at command-accept overstated: a leg that
+    // died mid-playout still recorded a left voicemail (the same lie PR
+    // #1672 removed from the bridge-spoken path).
+    const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
+      p_call_control_id: callControlId,
+      p_patch: { voicemail_spoken: true }
+    });
+    if (spokenErr) console.error("speak-ended: voicemail_spoken stamp failed", spokenErr);
+  }
+  // End the leg regardless: our voicemail speak is the last thing this leg
+  // does, and on an interrupted status the hangup is a harmless no-op
+  // against a call that is already ending.
   await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
-  return jsonOk("voicemail_left_hangup");
+  return jsonOk(status === "completed" ? "voicemail_left_hangup" : "voicemail_speak_interrupted");
 }
 
 /**
