@@ -302,8 +302,8 @@ describe("migrateBusinessVpsSize, guards", () => {
     expect(res.ok).toBe(true);
     // releaseVpsToPool preserves the row's existing expires_at when the key
     // is omitted, so the daily posture refresh backfills it.
-    const arg = releaseVpsToPool.mock.calls[0][0] as Record<string, unknown>;
-    expect("expiresAt" in arg).toBe(false);
+    const calls = releaseVpsToPool.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect("expiresAt" in calls[0][0]).toBe(false);
     expect(markVpsNeverRenew).toHaveBeenCalledWith(1800985);
   });
 
