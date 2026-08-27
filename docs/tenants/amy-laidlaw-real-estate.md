@@ -705,8 +705,9 @@ verdict stamped the session, `Lead: <name> (<number>)` plus
 `Lead email:` / `Lead source:` from the central contacts row for the dialed
 number (signed caller only), and `Call briefing:` with the flow's
 `contextTemplate` note verbatim, which is where buyer/seller intent and the
-source site live (the cadence note reads "They enquired through
-{{vars.lead_site}} about {{vars.lead_intent}} in {{vars.lead_city}}").
+source site live (the cadence note reads "They enquired about
+{{vars.lead_intent}} in {{vars.lead_city}} (source: {{vars.lead_site}})"
+since the Aug 27 2026 fallback-composition fix).
 Inbound live-transfer alerts are byte-identical to before.
 
 Two limits, both deliberate: price appears only when the flow's briefing
@@ -1004,6 +1005,46 @@ The write is a compare-and-swap on `ai_flow_runs.revision`, so a worker that
 resumed the run since the read wins and the script reports a skip. First
 applied Aug 24 2026 to two runs: Sandy Baldwin (seller -> buyer) and Frank
 Demarco (seller -> both).
+
+**`amy-heal-parked-cadence-lead-site.ts` + cadence re-seed (Aug 27 2026):**
+the cadence's fallback copy composed into gibberish on live calls. Its
+templates said "your enquiry through {{vars.lead_site}} about
+{{vars.lead_intent}} in {{vars.lead_city}}", and when extraction knew nothing
+the written fallbacks filled that in as "your enquiry through your recent
+enquiry about your move in the area", which is what the AI actually opened
+with on call 68ca8cdb (Sandy Baldwin, Aug 26 2026,
+`voice_handoff_sessions.context`). The fallback case is the COMMON one:
+`lead_city` fell back on 14 of 14 in-flight runs that day.
+
+The fix splits the site into two vars, because its two audiences need
+different grammar and different fallbacks. `lead_site` stays the bare network
+name for team-facing copy ("source: Clever"), now falling back to "unknown"
+instead of a sentence fragment; the new `lead_site_ref` is the phrase spoken
+TO the lead ("your enquiry through Clever"), falling back to "your recent
+enquiry", so the sentence survives an unknown source. Spoken surfaces
+(persona, round-1 voicemail and text) read the phrase var; team surfaces
+(`contextTemplate`, which the outbound call summary quotes as "Call
+briefing", the FOLLOW-UP REPLY notice, the promote offer and owner fallback)
+read the label. Two dormant copy entries that composed "The the area market"
+and "recent the area sales" were reworded in passing (unreachable at
+ROUNDS=3, live again the day ROUNDS grows). Step ids and count are unchanged,
+so parked runs keep their `current_step`; the flatten-live-vs-new check still
+ran before the apply, per the standing rule. A composition test now renders
+every template against the full fallback scope and fails on "through your
+recent enquiry", double spaces, or a `vars.*` placeholder nothing produces.
+
+Apply order matters: `amy-heal-parked-cadence-lead-site.ts --apply` FIRST,
+then `seed-amy-needs-follow-up-aiflow.ts --apply`. The heal seeds
+`lead_site_ref` on parked `awaiting_reply` runs (nothing in the OLD
+definition reads it, so healing first is invisible; the other order leaves a
+window where the new persona reads a var parked runs never extracted) and
+fills a fallen-back `lead_site` from `contacts.lead_source`, which the
+platform stamps from the filing flow and which all twelve parked runs'
+contacts carried, so Sandy's remaining round names ReferralExchange instead
+of reading naturally but vaguely. Evidence first, fallback second: a run
+whose extraction produced a real site keeps it, the contact row only fills
+gaps. Revision-CAS like the lead-type heal above; idempotent, dry-run by
+default, ledger-recorded.
 
 **`amy-clever-lead-type.ts` (Aug 24 2026):** "Clever Lead - Accept" could not
 tell a buyer from a seller, and that is structural rather than careless: Clever

@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { parseAiFlowDefinition, validateDefinitionSemantics } from "@/lib/ai-flows/schema";
 import { flattenSteps } from "../supabase/functions/_shared/ai_flows/branching";
+import { renderTemplate } from "../supabase/functions/_shared/ai_flows/engine";
 import {
   AUTO_TAG_NOTE,
   FOLLOW_UP_TAG,
+  READ_FIELDS,
   ROUNDS,
   ROUND_GAP_MINUTES,
   buildNeedsFollowUpDefinition
 } from "../scripts/oneshot/amy-needs-follow-up-definition";
+import {
+  OLD_SITE_FALLBACK,
+  UNKNOWN_SITE,
+  UNKNOWN_SITE_REF,
+  siteRefFor
+} from "../scripts/oneshot/amy-heal-parked-cadence-lead-site";
 import {
   AUTO_TAG_NOTE as RE_AUTO_TAG_NOTE,
   buildAiFirstContactSteps
@@ -278,7 +286,11 @@ describe("copy", () => {
   });
 
   it("references the lead's source site, city and intent as Amy asked", () => {
-    expect(spoken[0]).toContain("{{vars.lead_site}}");
+    // The SPOKEN surfaces use the phrase var, never the bare site name: the
+    // bare name is what composed "your enquiry through your recent enquiry"
+    // on live calls (68ca8cdb, Sandy Baldwin, Aug 26 2026).
+    expect(spoken[0]).toContain("{{vars.lead_site_ref}}");
+    expect(spoken[0]).not.toContain("{{vars.lead_site}}");
     expect(spoken[0]).toContain("{{vars.lead_city}}");
     expect(spoken[0]).toContain("{{vars.lead_intent}}");
   });
@@ -508,5 +520,175 @@ describe("the email arm for a lead with no phone", () => {
 
   it("still validates as a whole flow", () => {
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+});
+
+/**
+ * Fallback composition: what the AI actually says when extraction knows
+ * nothing. This is the regression guard for call 68ca8cdb (Sandy Baldwin,
+ * Aug 26 2026), where every field fell back and the persona rendered
+ * "following up on your enquiry through your recent enquiry about your move
+ * in the area". Live runs show the fallback case is the COMMON one: lead_city
+ * fell back on 14 of 14 in-flight runs the day this was fixed.
+ */
+describe("fallback composition", () => {
+  /** Every var the flow produces, at its written fallback. */
+  const FALLBACK_SCOPE = {
+    vars: {
+      lead_name: "Sandy Baldwin",
+      lead_phone: "+15005550006",
+      lead_site: UNKNOWN_SITE,
+      lead_site_ref: UNKNOWN_SITE_REF,
+      lead_city: "the area",
+      lead_intent: "your move",
+      lead_type: "seller",
+      lead_email: "none",
+      tag_auto: "no",
+      call_outcome: "no_answer",
+      lead_reply: "I already spoke with someone",
+      reply_intent: "not_ready"
+    },
+    offer: { deadline: "3:45 PM" },
+    agent: { name: "Gabrielle Mota" }
+  };
+  const KNOWN_SCOPE = {
+    ...FALLBACK_SCOPE,
+    vars: {
+      ...FALLBACK_SCOPE.vars,
+      lead_site: "Clever",
+      lead_site_ref: siteRefFor("Clever"),
+      lead_city: "Mesa",
+      lead_intent: "selling your home"
+    }
+  };
+
+  /** Every template string in the definition, deep, labelled by step and key. */
+  function allTemplates(): Array<{ where: string; template: string }> {
+    const out: Array<{ where: string; template: string }> = [];
+    const visit = (node: unknown, path: string): void => {
+      if (typeof node === "string") {
+        if (node.includes("{{")) out.push({ where: path, template: node });
+        return;
+      }
+      if (Array.isArray(node)) {
+        node.forEach((v, i) => visit(v, `${path}[${i}]`));
+        return;
+      }
+      if (node && typeof node === "object") {
+        for (const [k, v] of Object.entries(node)) visit(v, path ? `${path}.${k}` : k);
+      }
+    };
+    visit(def.steps, "steps");
+    return out;
+  }
+
+  it("speaks a grammatical sentence when nothing is known, on every surface", () => {
+    // All vars in the scope are non-empty, so collapseEmpty and plain
+    // rendering agree; plain rendering also covers the route_to_team
+    // templates, which the worker renders without collapseEmpty.
+    for (const { where, template } of allTemplates()) {
+      const rendered = renderTemplate(template, FALLBACK_SCOPE);
+      expect(rendered, where).not.toContain(`through ${OLD_SITE_FALLBACK}`);
+      expect(rendered, where).not.toContain("through unknown");
+      expect(rendered, where).not.toMatch(/\bthe the\b/i);
+      expect(rendered, where).not.toContain("  ");
+      expect(rendered, where).not.toContain("{{");
+    }
+  });
+
+  it("renders the persona naturally in both the unknown and the known case", () => {
+    const persona = String(byId("r1_call").personaTemplate);
+    expect(renderTemplate(persona, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
+      "We're following up on your recent enquiry about your move in the area. Is now a good moment?"
+    );
+    expect(renderTemplate(persona, KNOWN_SCOPE, { collapseEmpty: true })).toContain(
+      "We're following up on your enquiry through Clever about selling your home in Mesa. Is now a good moment?"
+    );
+  });
+
+  it("renders round 1's voicemail and text naturally in both cases", () => {
+    const vm = String(byId("r1_call").voicemailTemplate);
+    const text = String(byId("r1_text").body);
+    expect(renderTemplate(vm, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
+      "following up on your recent enquiry about your move in the area."
+    );
+    expect(renderTemplate(vm, KNOWN_SCOPE, { collapseEmpty: true })).toContain(
+      "following up on your enquiry through Clever about selling your home in Mesa."
+    );
+    expect(renderTemplate(text, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
+      "voicemail about your recent enquiry regarding your move in the area."
+    );
+  });
+
+  it("labels the source for the team instead of speaking the phrase at them", () => {
+    // Team-facing copy wants a source LABEL: "(source: unknown)" reads as a
+    // fact, where the old fallback read as a sentence fragment.
+    for (const id of ["r1_call", "r1_tell_owner"]) {
+      const step = byId(id) as Record<string, unknown>;
+      const template = String(step.contextTemplate ?? step.message);
+      expect(renderTemplate(template, FALLBACK_SCOPE)).toContain(`(source: ${UNKNOWN_SITE})`);
+      expect(renderTemplate(template, KNOWN_SCOPE)).toContain("(source: Clever)");
+    }
+    expect(renderTemplate(String(byId("r1_route_seller").offerTemplate), FALLBACK_SCOPE)).toContain(
+      `(source: ${UNKNOWN_SITE})`
+    );
+  });
+
+  it("keeps the extraction fallbacks in lockstep with the heal script", () => {
+    const field = (name: string): string =>
+      String(READ_FIELDS.find((f) => f.name === name)?.description);
+    expect(field("lead_site").endsWith(`answer exactly: ${UNKNOWN_SITE}`)).toBe(true);
+    expect(field("lead_site_ref").endsWith(`answer exactly: ${UNKNOWN_SITE_REF}`)).toBe(true);
+    // The example the extraction is shown IS the phrase the heal derives, so
+    // a healed parked run and a fresh extraction can never disagree in form.
+    expect(field("lead_site_ref")).toContain(siteRefFor("Clever"));
+  });
+
+  it("keeps every field description inside the schema's 300-character cap", () => {
+    // The cap surfaces only as "Invalid AiFlow definition" naming no field
+    // (the Clever buyer price-range patch hit exactly this), so pin it here.
+    for (const f of READ_FIELDS) {
+      expect(f.description.length, f.name).toBeLessThanOrEqual(300);
+    }
+  });
+
+  it("names every produced var and no other in vars placeholders", () => {
+    // A template reading a var no step writes renders as silence, which on a
+    // voice call is a hole mid-sentence. Derive the produced set from the
+    // definition itself so the audit cannot go stale.
+    const produced = new Set<string>(READ_FIELDS.map((f) => f.name));
+    const collect = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(collect);
+        return;
+      }
+      if (!node || typeof node !== "object") return;
+      const step = node as Record<string, unknown>;
+      if (typeof step.saveAs === "string") produced.add(step.saveAs);
+      if (Array.isArray(step.fields)) {
+        for (const f of step.fields as Array<{ name?: unknown }>) {
+          if (typeof f.name === "string") produced.add(f.name);
+        }
+      }
+      for (const v of Object.values(step)) collect(v);
+    };
+    collect(def.steps);
+    for (const { where, template } of allTemplates()) {
+      for (const m of template.matchAll(/\{\{\s*vars\.([A-Za-z0-9_]+)/g)) {
+        expect(produced.has(m[1]), `${where} reads {{vars.${m[1]}}}`).toBe(true);
+      }
+    }
+  });
+
+  it("writes the callback number with separators wherever it is said", () => {
+    // The daily call-integrity sweep's allowlist (PR #1671) reads numbers out
+    // of flow definitions only as E.164 or separated 3-3-4. A bare 10-digit
+    // callback here would make the sweep flag the AI for speaking its own
+    // number.
+    for (const { where, template } of allTemplates()) {
+      if (template.includes("602")) {
+        expect(template, where).toContain("602-695-1142");
+      }
+    }
   });
 });

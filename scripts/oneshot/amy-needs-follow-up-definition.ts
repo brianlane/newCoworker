@@ -29,10 +29,27 @@
  * something a little different, and the last says it is the last.
  *
  * WHAT THE MESSAGES REFERENCE. Amy asked for the lead's source site and city
- * plus whether they are buying or selling. All three are extracted from the
- * contact event, and all three carry an explicit "none" fallback, because SMS
- * bodies render with collapseEmpty but the voicemail script does not: an
- * absent var would otherwise be spoken as a gap mid-sentence.
+ * plus whether they are buying or selling. All are extracted from the contact
+ * event (whose source line has carried contacts.lead_source since 2026-08-24),
+ * and every field carries an explicit NON-EMPTY fallback. Not because of
+ * rendering gaps: persona, voicemail, context and SMS bodies all render with
+ * collapseEmpty (steps.ts, verified 2026-08-27). Three real reasons remain:
+ * route_to_team offer/fallback templates render WITHOUT collapseEmpty (an
+ * empty site would leave a bare "source:" in team copy), a `when` guard
+ * cannot test emptiness, and collapsing a placeholder cannot remove the words
+ * around it ("through" would dangle with no site after it).
+ *
+ * THE SITE IS TWO VARS, NOT ONE, because its two audiences need different
+ * grammar and different fallbacks. The one-var version composed the fallback
+ * into gibberish on live calls (call 68ca8cdb, Sandy Baldwin, 2026-08-26:
+ * "following up on your enquiry through your recent enquiry about your move
+ * in the area"). `lead_site` is the bare network name for team-facing copy
+ * ("source: Clever", fallback "source: unknown"); `lead_site_ref` is the
+ * phrase spoken TO the lead ("your enquiry through Clever", fallback "your
+ * recent enquiry"), so the sentence stays grammatical when nothing is known.
+ * The intent and city fallbacks ("your move", "the area") already compose in
+ * place, and the fallback case is the COMMON one, not the edge: lead_city
+ * fell back on 14 of 14 in-flight runs on 2026-08-27.
  *
  * Pure: no I/O, no Supabase. The applier owns reading, validating and writing.
  */
@@ -199,7 +216,7 @@ function persona(round: number): string {
       ? "Hi, is this {{vars.lead_name.first}}? I'm calling from Amy Laidlaw's office at HomeSmart."
       : "Hi {{vars.lead_name.first}}, Amy Laidlaw's office at HomeSmart again.";
   return (
-    `${opener} We're following up on your enquiry through {{vars.lead_site}} about ` +
+    `${opener} We're following up on {{vars.lead_site_ref}} about ` +
     "{{vars.lead_intent}} in {{vars.lead_city}}. Is now a good moment? " +
     "If they are still interested, find out what they need next and offer to connect them with " +
     "Amy or one of her agents. If they are not interested any more, thank them warmly and say " +
@@ -212,7 +229,7 @@ function persona(round: number): string {
  * cut off, and varied, because eight identical ones read as a fault.
  */
 const VOICEMAILS: readonly string[] = [
-  "Hi {{vars.lead_name.first}}, this is Amy Laidlaw's office at HomeSmart, following up on your enquiry through {{vars.lead_site}} about {{vars.lead_intent}} in {{vars.lead_city}}. " +
+  "Hi {{vars.lead_name.first}}, this is Amy Laidlaw's office at HomeSmart, following up on {{vars.lead_site_ref}} about {{vars.lead_intent}} in {{vars.lead_city}}. " +
     `We'd love to help. Give us a call back at ${CALLBACK}.`,
   "Hi {{vars.lead_name.first}}, Amy Laidlaw's office at HomeSmart again about {{vars.lead_intent}} in {{vars.lead_city}}. " +
     `Amy has worked this market since 1989 and is happy to answer a question or two with no obligation. ${CALLBACK}.`,
@@ -221,7 +238,7 @@ const VOICEMAILS: readonly string[] = [
   "Hi {{vars.lead_name.first}}, checking in from Amy Laidlaw's office at HomeSmart about {{vars.lead_intent}}. " +
     `We have an appraiser on the team, so the numbers we give you are real ones. ${CALLBACK}.`,
   "Hi {{vars.lead_name.first}}, Amy Laidlaw's team at HomeSmart. " +
-    `The {{vars.lead_city}} market moves, so whatever you were told a few weeks ago may not hold today. Happy to bring you current at ${CALLBACK}.`,
+    `Prices in {{vars.lead_city}} keep moving, so whatever you were told a few weeks ago may not hold today. Happy to bring you current at ${CALLBACK}.`,
   "Hi {{vars.lead_name.first}}, Amy Laidlaw's office at HomeSmart. " +
     `Still here whenever {{vars.lead_intent}} is back on your mind. ${CALLBACK}.`,
   "Hi {{vars.lead_name.first}}, Amy Laidlaw's team at HomeSmart. " +
@@ -232,11 +249,11 @@ const VOICEMAILS: readonly string[] = [
 
 /** The text that follows a voicemail, per round. Mirrors it without repeating it. */
 const TEXTS: readonly string[] = [
-  "Hi {{vars.lead_name.first}}, Amy Laidlaw's office at HomeSmart. We just left you a voicemail about your enquiry through {{vars.lead_site}} regarding {{vars.lead_intent}} in {{vars.lead_city}}. " +
+  "Hi {{vars.lead_name.first}}, Amy Laidlaw's office at HomeSmart. We just left you a voicemail about {{vars.lead_site_ref}} regarding {{vars.lead_intent}} in {{vars.lead_city}}. " +
     `Reply here any time, or call ${CALLBACK}.`,
   "Hi {{vars.lead_name.first}}, following up again on {{vars.lead_intent}} in {{vars.lead_city}}. " +
     "Even if you are months away, we can tell you what to expect. Just reply here.",
-  "Hi {{vars.lead_name.first}}, Amy Laidlaw's team. Want us to send recent {{vars.lead_city}} sales so you can see where prices are? Reply yes and we will send them over.",
+  "Hi {{vars.lead_name.first}}, Amy Laidlaw's team. Want us to send recent sales in {{vars.lead_city}} so you can see where prices are? Reply yes and we will send them over.",
   "Hi {{vars.lead_name.first}}, still happy to help with {{vars.lead_intent}} whenever you are ready. We have an appraiser on the team, so our numbers are real ones.",
   "Hi {{vars.lead_name.first}}, quick check in from Amy Laidlaw's office. Has anything changed with your plans in {{vars.lead_city}}?",
   "Hi {{vars.lead_name.first}}, Amy Laidlaw's team at HomeSmart. Still here whenever {{vars.lead_intent}} is back on your mind.",
@@ -255,7 +272,14 @@ export const READ_FIELDS = [
       "Which site or service this lead came from. Prefer the source line when there is " +
       "one, it is the platform's own record of the network; otherwise use the tags or " +
       "text (e.g. Clever, HomeLight, Realtor.com, RealEstateAgents.com). If nothing says, " +
-      "answer exactly: your recent enquiry"
+      "answer exactly: unknown"
+  },
+  {
+    name: "lead_site_ref",
+    description:
+      "How to refer to the enquiry when speaking with the lead: the words 'your enquiry " +
+      "through' followed by the same site as lead_site (e.g. your enquiry through Clever). " +
+      "When lead_site is unknown, answer exactly: your recent enquiry"
   },
   {
     name: "lead_city",
@@ -326,8 +350,8 @@ function roundSteps(n: number): Step[] {
       toVar: "lead_phone",
       personaTemplate: persona(n),
       contextTemplate:
-        "Their name: {{vars.lead_name}}. They enquired through {{vars.lead_site}} about " +
-        "{{vars.lead_intent}} in {{vars.lead_city}}. Do not ask them for details we already have.",
+        "Their name: {{vars.lead_name}}. They enquired about {{vars.lead_intent}} in " +
+        "{{vars.lead_city}} (source: {{vars.lead_site}}). Do not ask them for details we already have.",
       voicemailTemplate: copyForRound(VOICEMAILS, n),
       notifyOwner: true,
       callWindow: CALL_WINDOW,
@@ -462,8 +486,8 @@ function roundSteps(n: number): Step[] {
           nameVar: "lead_name",
           message:
             "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
-            "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
-            'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
+            "follow-up sequence. They enquired about {{vars.lead_intent}} in {{vars.lead_city}} " +
+            '(source: {{vars.lead_site}}). They said: "{{vars.lead_reply}}"',
           // Nobody owns this lead, so the TEAM hears it rather than Amy. Her
           // roster row already says team_broadcast_enabled false, so she is
           // excluded without naming anyone: she is the backstop for an unowned
