@@ -98,12 +98,51 @@ export function FeatureCard({ feature }: { feature: Feature }) {
   return card;
 }
 
-export function FeatureGrid({ features, columns = 3 }: { features: Feature[]; columns?: 2 | 3 }) {
-  const cols = columns === 3 ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2";
+export function FeatureGrid({
+  features,
+  columns = 3,
+  centerLastRow = false
+}: {
+  features: Feature[];
+  columns?: 2 | 3;
+  /** Centers a short final row instead of stranding it bottom-left (the features page turns this on). */
+  centerLastRow?: boolean;
+}) {
+  if (!centerLastRow) {
+    const cols = columns === 3 ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2";
+    return (
+      <div className={`grid grid-cols-1 gap-6 ${cols}`}>
+        {features.map((f) => (
+          <FeatureCard key={f.title} feature={f} />
+        ))}
+      </div>
+    );
+  }
+
+  // Half-width tracks (4 = two visual columns at sm, 6 = three at lg) so a
+  // leftover card can start mid-grid; two tracks plus the inner gap equal one
+  // plain-grid column, so card sizes match the un-centered variant exactly.
+  const n = features.length;
+  const cols = columns === 3 ? "sm:grid-cols-4 lg:grid-cols-6" : "sm:grid-cols-4";
+  const lastCard = [
+    n % 2 === 1 ? "sm:col-start-2" : "",
+    columns === 3 && n % 3 === 1 ? "lg:col-start-3" : "",
+    // The sm offset bleeds into lg (min-width media), so reset it when the lg
+    // rows already divide evenly.
+    columns === 3 && n % 3 !== 1 && n % 2 === 1 ? "lg:col-start-auto" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const secondToLastCard = columns === 3 && n % 3 === 2 ? "lg:col-start-2" : "";
+  const placement = (index: number) =>
+    index === n - 1 ? lastCard : index === n - 2 ? secondToLastCard : "";
+
   return (
     <div className={`grid grid-cols-1 gap-6 ${cols}`}>
-      {features.map((f) => (
-        <FeatureCard key={f.title} feature={f} />
+      {features.map((f, index) => (
+        <div key={f.title} className={`sm:col-span-2 ${placement(index)}`.trim()}>
+          <FeatureCard feature={f} />
+        </div>
       ))}
     </div>
   );
