@@ -9,8 +9,10 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
+  FileText,
   Globe,
   Handshake,
+  Languages,
   LayoutDashboard,
   ListChecks,
   ListFilter,
@@ -30,6 +32,7 @@ import {
   Sparkles,
   UserCheck,
   Users,
+  Voicemail,
   Workflow,
   Zap
 } from "lucide-react";
@@ -73,7 +76,9 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "concurrent", Icon: PhoneIncoming },
       { key: "transfers", Icon: PhoneForwarded },
       { key: "qualification", Icon: Users },
-      { key: "byon", Icon: Smartphone }
+      { key: "byon", Icon: Smartphone },
+      { key: "voicemail", Icon: Voicemail },
+      { key: "translator", Icon: Languages }
     ]
   },
   {
@@ -83,6 +88,7 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "rcs", Icon: MessagesSquare },
       { key: "duringCalls", Icon: Zap },
       { key: "missedCall", Icon: PhoneForwarded },
+      { key: "social", Icon: MessagesSquare },
       { key: "scheduled", Icon: AlarmClockCheck },
       { key: "email", Icon: Mail }
     ]
@@ -99,7 +105,7 @@ const GROUP_DEFS: GroupDef[] = [
     key: "intelligence",
     features: [
       { key: "summaries", Icon: Sparkles },
-      { key: "sentiment", Icon: Users },
+      { key: "minutes", Icon: FileText },
       { key: "analytics", Icon: BarChart3 },
       { key: "alerts", Icon: Bell },
       { key: "memory", Icon: Brain },

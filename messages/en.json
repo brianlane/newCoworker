@@ -412,9 +412,9 @@
     },
     "featuresPage": {
       "metaTitle": "Features",
-      "metaDescription": "Everything your AI coworker does: 24/7 call answering, appointment booking, SMS & RCS messaging, instant Meta lead capture, AI call summaries, analytics, automated workflows, and 8,000+ integrations.",
+      "metaDescription": "Everything your AI coworker does: 24/7 call answering, speed-to-lead callbacks, booking on your real calendar, SMS & RCS, WhatsApp & social DMs, prospecting, meeting minutes that act, deals and to-dos, and 8,000+ integrations.",
       "ogTitle": "Features | New Coworker",
-      "ogDescription": "24/7 call answering, appointment booking, SMS & RCS, Meta lead capture, AI summaries, analytics, workflows, and 8,000+ integrations.",
+      "ogDescription": "24/7 answering, speed-to-lead callbacks, booking, SMS & RCS, WhatsApp & social, prospecting, meeting minutes, pipeline, and 8,000+ integrations.",
       "heroEyebrow": "Features",
       "heroTitle": "One coworker.",
       "heroHighlight": "Every job handled.",
@@ -442,6 +442,14 @@
         "byon": {
           "title": "Bring Your Own Number",
           "description": "Port your existing business number in, or use the dedicated number."
+        },
+        "voicemail": {
+          "title": "Voicemail Smarts",
+          "description": "Your coworker knows when a voicemail picked up instead of a person, leaves a natural message with a real callback number, and the call record says which one happened."
+        },
+        "translator": {
+          "title": "Live Translator & Language Choice",
+          "description": "It replies in whatever language a customer uses and remembers the preference, you pick the language it opens with, and it can stay on a transferred call to interpret for your team in real time (live interpretation: Standard plan and up)."
         }
       },
       "messaging": {
@@ -450,7 +458,7 @@
         "subtitle": "Two-way SMS and RCS messaging, handled by the same coworker that knows every caller.",
         "sms": {
           "title": "Two-Way SMS",
-          "description": "Customers text your business number and get useful, on-brand replies immediately, day or night."
+          "description": "Customers text your business number and get useful, on-brand replies immediately, day or night. It can even text a payment link when you ask."
         },
         "rcs": {
           "title": "RCS Messaging",
@@ -464,9 +472,13 @@
           "title": "Missed-Call Auto-Text",
           "description": "If you fail to answer a warm transfer, the caller instantly gets a text so the lead never goes cold."
         },
+        "social": {
+          "title": "Social DMs & Comments",
+          "description": "The same coworker answers Messenger, Instagram DMs, and WhatsApp, and can reply to comments on your Instagram and Facebook posts, publicly or in a private DM. Standard plan and up."
+        },
         "scheduled": {
-          "title": "Scheduled Texts & Templates",
-          "description": "Queue texts for the right moment and keep your best messages as reusable saved templates."
+          "title": "Campaigns, Segments & Scheduled Sends",
+          "description": "Queue texts for the right moment, keep your best messages as reusable templates, and send email campaigns to saved audience segments that keep themselves up to date."
         },
         "email": {
           "title": "Email Handling",
@@ -495,12 +507,12 @@
         "title": "Know what happened without listening to every call",
         "subtitle": "Summaries, sentiment, analytics, and a permanent memory that compounds with every conversation.",
         "summaries": {
-          "title": "AI Call Summaries",
-          "description": "Every call lands on your dashboard with a concise AI summary: what the caller wanted and what happened."
+          "title": "AI Call Summaries & Sentiment",
+          "description": "Every call lands on your dashboard with a concise AI summary and the caller's sentiment: what they wanted, what happened, and how they left."
         },
-        "sentiment": {
-          "title": "Caller Sentiment",
-          "description": "See at a glance whether callers left happy, neutral, or frustrated, so you know where to step in."
+        "minutes": {
+          "title": "Meeting Minutes That Act",
+          "description": "Zoom recordings come back as minutes in your document library, and the coworker classifies how the meeting went and moves the lead's pipeline stage to match."
         },
         "analytics": {
           "title": "Analytics Dashboard",

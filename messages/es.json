@@ -412,9 +412,9 @@
     },
     "featuresPage": {
       "metaTitle": "Funciones",
-      "metaDescription": "Todo lo que hace tu coworker de IA: contestación de llamadas 24/7, reserva de citas, mensajería SMS y RCS, captura instantánea de leads de Meta, resúmenes de llamadas con IA, analítica, flujos automatizados y 8,000+ integraciones.",
+      "metaDescription": "Todo lo que hace tu coworker de IA: contestación 24/7, llamadas de vuelta al lead en segundos, reservas en tu calendario real, SMS y RCS, WhatsApp y DMs sociales, prospección, minutas que actúan, negocios y tareas, y 8,000+ integraciones.",
       "ogTitle": "Funciones | New Coworker",
-      "ogDescription": "Contestación 24/7, reserva de citas, SMS y RCS, captura de leads de Meta, resúmenes con IA, analítica, flujos y 8,000+ integraciones.",
+      "ogDescription": "Contestación 24/7, llamadas de vuelta en segundos, reservas, SMS y RCS, WhatsApp y redes, prospección, minutas, pipeline y 8,000+ integraciones.",
       "heroEyebrow": "Funciones",
       "heroTitle": "Un coworker.",
       "heroHighlight": "Cada tarea resuelta.",
@@ -442,6 +442,14 @@
         "byon": {
           "title": "Trae tu propio número",
           "description": "Porta tu número de negocio existente, o usa el número dedicado."
+        },
+        "voicemail": {
+          "title": "Inteligencia ante buzones de voz",
+          "description": "Tu coworker sabe cuando contestó un buzón de voz en lugar de una persona, deja un mensaje natural con un número real para devolver la llamada, y el registro de la llamada dice cuál de los dos ocurrió."
+        },
+        "translator": {
+          "title": "Traductor en vivo y elección de idioma",
+          "description": "Responde en el idioma que use cada cliente y recuerda esa preferencia, tú eliges el idioma con el que abre, y puede quedarse en una llamada transferida para interpretar para tu equipo en tiempo real (interpretación en vivo: plan Standard y superiores)."
         }
       },
       "messaging": {
@@ -450,7 +458,7 @@
         "subtitle": "Mensajería SMS y RCS bidireccional, atendida por el mismo coworker que conoce a cada cliente.",
         "sms": {
           "title": "SMS bidireccional",
-          "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche."
+          "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche. Incluso puede enviar un enlace de pago por texto cuando se lo pides."
         },
         "rcs": {
           "title": "Mensajería RCS",
@@ -464,9 +472,13 @@
           "title": "Auto-texto de llamada perdida",
           "description": "Si no contestas una transferencia, quien llamó recibe un texto al instante para que el lead nunca se enfríe."
         },
+        "social": {
+          "title": "DMs y comentarios en redes",
+          "description": "El mismo coworker responde Messenger, DMs de Instagram y WhatsApp, y puede contestar comentarios en tus publicaciones de Instagram y Facebook, en público o por DM privado. Plan Standard y superiores."
+        },
         "scheduled": {
-          "title": "Textos programados y plantillas",
-          "description": "Programa textos para el momento justo y guarda tus mejores mensajes como plantillas reutilizables."
+          "title": "Campañas, segmentos y envíos programados",
+          "description": "Programa textos para el momento justo, guarda tus mejores mensajes como plantillas y envía campañas de correo a segmentos de audiencia guardados que se mantienen al día solos."
         },
         "email": {
           "title": "Gestión de correo",
@@ -495,12 +507,12 @@
         "title": "Sabe qué pasó sin escuchar cada llamada",
         "subtitle": "Resúmenes, sentimiento, analítica y una memoria permanente que crece con cada conversación.",
         "summaries": {
-          "title": "Resúmenes de llamadas con IA",
-          "description": "Cada llamada llega a tu panel con un resumen conciso de IA: qué quería la persona y qué pasó."
+          "title": "Resúmenes de llamadas y sentimiento",
+          "description": "Cada llamada llega a tu panel con un resumen conciso de IA y el sentimiento de quien llamó: qué quería, qué pasó y cómo quedó."
         },
-        "sentiment": {
-          "title": "Sentimiento del cliente",
-          "description": "Ve de un vistazo si quienes llamaron quedaron contentos, neutrales o frustrados, para saber dónde intervenir."
+        "minutes": {
+          "title": "Minutas de reunión que actúan",
+          "description": "Las grabaciones de Zoom regresan como minutas en tu biblioteca de documentos, y el coworker clasifica cómo fue la reunión y mueve la etapa del lead en el pipeline para reflejarlo."
         },
         "analytics": {
           "title": "Panel de analítica",

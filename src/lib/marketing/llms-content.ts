@@ -75,10 +75,12 @@ function pricingLines(): string[] {
 
 const CAPABILITY_LINES = [
   "- Voice: answers inbound calls in real time, transfers warmly to a human, takes messages, " +
+    "knows when a voicemail answered instead of a person and can leave one, " +
     "follows up by text, and can interpret live between a caller and a staff member " +
     "who do not share a language (live interpretation: Standard plan and up).",
   "- Messaging: two-way SMS and a dedicated email address per business on every plan; " +
-    "AI replies on Messenger, Instagram DM, WhatsApp, and website chat on Standard and up.",
+    "AI replies on Messenger, Instagram DM, WhatsApp, website chat, and comments on " +
+    "Instagram and Facebook posts (publicly or by private DM) on Standard and up.",
   "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly (multiple accounts), Vagaro, or Acuity Scheduling, " +
     "adds a Zoom or Google Meet link to video bookings, " +
     "plus a public self-serve booking page with confirmations, reminders, and a cancellation waitlist for businesses with no calendar tool at all, " +
@@ -96,7 +98,8 @@ const CAPABILITY_LINES = [
     "Zapier or Make.com bridges still work), a public REST API, and webhooks " +
     "(Zapier, Meta lead ads, lead webhooks, the REST API: Standard plan and up), " +
     "plus a Claude connector (remote MCP) and a ChatGPT app so an owner's assistant can act on the business's behalf.",
-  "- Languages: the owner dashboard is English or Spanish, and the coworker replies to each customer in the customer's own language."
+  "- Languages: the owner dashboard is English or Spanish, the owner picks the language the coworker opens with, " +
+    "and the coworker replies to each customer in the customer's own language."
 ];
 
 const DIFFERENTIATOR_LINES = [
