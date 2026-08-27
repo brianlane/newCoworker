@@ -491,6 +491,33 @@ describe("vps_inventory DB layer", () => {
   });
 
   describe("releaseVpsToPool", () => {
+    it("skipIfClaimed leaves an existing assigned row untouched (reconciler race guard)", async () => {
+      // A concurrent reconciler pooled this VM after our snapshot and a
+      // signup already claimed it; un-assigning it here would let two
+      // provisions adopt one physical box.
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 42, state: "assigned" },
+        error: null
+      });
+      const db = makeDb(chain);
+      await releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never);
+      expect(chain.update).not.toHaveBeenCalled();
+      expect(chain.insert).not.toHaveBeenCalled();
+    });
+
+    it("skipIfClaimed still pools an available or absent row", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 42, state: "available" },
+        error: null
+      });
+      chain.neq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await releaseVpsToPool({ vmId: 42, plan: "kvm2", skipIfClaimed: true }, db as never);
+      expect(chain.update).toHaveBeenCalled();
+    });
+
     it("stores expiresAt on update when provided, preserves it when omitted", async () => {
       const chain = makeChain();
       chain.maybeSingle.mockResolvedValueOnce({

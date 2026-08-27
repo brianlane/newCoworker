@@ -287,6 +287,16 @@ export async function releaseVpsToPool(
     /** Hostinger paid-through; when omitted the existing value is preserved on update. */
     expiresAt?: string | null;
     notes?: string | null;
+    /**
+     * Leave an existing `assigned` row alone instead of un-assigning it.
+     * The orphan reconciler sets this: its inventory snapshot is read at
+     * pass start, so a VM another reconciler pooled and a signup already
+     * claimed can reach its release call, and flipping that row back to
+     * available would let two provisions adopt one physical box. Lifecycle
+     * releases (cancel/wipe) keep the default: re-pooling the tenant's own
+     * assigned box is their whole purpose.
+     */
+    skipIfClaimed?: boolean;
   },
   client?: SupabaseClient
 ): Promise<void> {
@@ -306,6 +316,9 @@ export async function releaseVpsToPool(
     // grace-expired wipe re-running after the cancel already pooled and a
     // failed adopt retired it) must not resurrect it into the adopt pool.
     if ((existing as { state: string }).state === "retired") return;
+    if (input.skipIfClaimed && (existing as { state: string }).state === "assigned") {
+      return;
+    }
     const patch: Record<string, unknown> = {
       state: "available",
       assigned_business_id: null,
