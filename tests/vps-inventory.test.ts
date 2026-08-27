@@ -15,6 +15,7 @@ import {
   getLastAcquiredAtForBusiness,
   getVpsInventoryByVmId,
   listVpsInventory,
+  clearVpsNeverRenew,
   markVpsNeverRenew,
   refreshVpsInventoryExpiresAt,
   paidThroughFromBillingSub,
@@ -807,6 +808,37 @@ describe("vps_inventory DB layer", () => {
       chain.eq.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await markVpsNeverRenew(1800985);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("clearVpsNeverRenew", () => {
+    it("clears never_renew on the inventory row", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await clearVpsNeverRenew(1864812, db as never);
+      expect(db.from).toHaveBeenCalledWith("vps_inventory");
+      expect(chain.update).toHaveBeenCalledWith(
+        expect.objectContaining({ never_renew: false })
+      );
+      expect(chain.eq).toHaveBeenCalledWith("vm_id", 1864812);
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: { message: "clear boom" } });
+      const db = makeDb(chain);
+      await expect(clearVpsNeverRenew(1864812, db as never)).rejects.toThrow(
+        /clearVpsNeverRenew: clear boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await clearVpsNeverRenew(1864812);
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

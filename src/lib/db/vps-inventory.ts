@@ -418,6 +418,23 @@ export async function markVpsNeverRenew(vmId: number, client?: SupabaseClient): 
 }
 
 /**
+ * Clear `never_renew` on a box whose flag no longer applies: the adopt path
+ * calls this when the box's PHYSICAL Hostinger plan matches the size being
+ * adopted, so the sunk-cost rationale (mislabeled hardware whose renewal the
+ * tenant's price doesn't cover) is void and renewal must come back ON for
+ * the live tenant. Live precedent: vm 1864812, adopted for a paying tenant
+ * on 2026-08-24 with renewal OFF and repaired by hand the next day.
+ */
+export async function clearVpsNeverRenew(vmId: number, client?: SupabaseClient): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("vps_inventory")
+    .update({ never_renew: false, updated_at: new Date().toISOString() })
+    .eq("vm_id", vmId);
+  if (error) throw new Error(`clearVpsNeverRenew: ${error.message}`);
+}
+
+/**
  * When we most recently acquired a box that is still assigned to this
  * business, or null when none is.
  *

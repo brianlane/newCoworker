@@ -50,14 +50,14 @@ import {
   updateVpsSshKeyHostKeyFingerprint,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
-import { getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
+import { clearVpsNeverRenew, getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
 import {
   buildDefaultPostInstallScript,
   DEFAULT_TEMPLATE_ID,
   DEFAULT_US_DATA_CENTER_ID,
   type ProvisionVpsForBusinessResult
 } from "./provision";
-import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
+import { resolveVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 
 export type AdoptVpsForBusinessInput = {
   businessId: string;
@@ -86,6 +86,7 @@ export type AdoptVpsDeps = {
     rotateVpsSshKey?: typeof rotateVpsSshKey;
     updateVpsSshKeyHostKeyFingerprint?: typeof updateVpsSshKeyHostKeyFingerprint;
     getVpsInventoryByVmId?: typeof getVpsInventoryByVmId;
+    clearVpsNeverRenew?: typeof clearVpsNeverRenew;
   };
   /**
    * SSH auth probe: true when the key authenticates on the host. Production
@@ -151,7 +152,7 @@ export async function adoptVpsForBusiness(
     /* c8 ignore next -- production default; tests inject a fake probe */
     pisQuiescentProbe = defaultPisQuiescentProbe
   } = deps;
-  /* c8 ignore next 6 -- production defaults; tests inject db overrides */
+  /* c8 ignore next 7 -- production defaults; tests inject db overrides */
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
   const dbGetKey = deps.db?.getActiveVpsSshKey ?? getActiveVpsSshKey;
   const dbReassign = deps.db?.reassignVpsSshKeyBusiness ?? reassignVpsSshKeyBusiness;
@@ -159,6 +160,7 @@ export async function adoptVpsForBusiness(
   const dbClearHostKeyPin =
     deps.db?.updateVpsSshKeyHostKeyFingerprint ?? updateVpsSshKeyHostKeyFingerprint;
   const dbGetInventory = deps.db?.getVpsInventoryByVmId ?? getVpsInventoryByVmId;
+  const dbClearNeverRenew = deps.db?.clearVpsNeverRenew ?? clearVpsNeverRenew;
 
   const vmId = input.virtualMachineId;
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
@@ -362,11 +364,16 @@ export async function adoptVpsForBusiness(
   // against the live API Jul 2026), so the historical find-by-resource_id is
   // kept only as a fallback for older API surfaces that still populate it.
   let hostingerBillingSubscriptionId: string | null = null;
+  // The VM detail's plan label is the PHYSICAL hardware truth (inventory
+  // rows can carry a mislabel, which is what never_renew exists for), so
+  // capture it here for the never_renew decision below.
+  let physicalPlan: VpsSize | null = null;
   try {
     const vm = await client.getVirtualMachine(vmId);
     if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
       hostingerBillingSubscriptionId = vm.subscription_id;
     }
+    physicalPlan = vpsSizeFromHostingerPlan(vm.plan);
   } catch (err) {
     logger.warn("adoptVps: VM detail lookup for billing subscription failed", {
       virtualMachineId: vmId,
@@ -397,6 +404,16 @@ export async function adoptVpsForBusiness(
   // billing the platform for hardware the tenant's price doesn't cover. The
   // daily billing-posture cron nags ops to migrate the tenant to its correct
   // size (debug/migrate-vps-size.ts) before the paid period ends.
+  //
+  // CARVE-OUT (V9, reopens #1044's decision): the flag also lands on
+  // ORDINARY boxes, e.g. a same-size box stranded in the pool by a
+  // migration. When the VM detail's physical plan matches the size being
+  // adopted, the sunk-cost rationale is void: renewal bills exactly what
+  // this adoption's price covers, and leaving it OFF lapses the box under
+  // the tenant. Live precedent: vm 1864812 claimed for a NEW paying tenant
+  // on 2026-08-24 with renewal OFF, repaired by hand the next day. Clear the
+  // flag FIRST, then fall through to the normal re-enable; on a mismatched
+  // or unreadable physical plan the flag stands and the cron keeps nagging.
   let neverRenew = false;
   try {
     neverRenew = (await dbGetInventory(vmId))?.never_renew === true;
@@ -409,10 +426,35 @@ export async function adoptVpsForBusiness(
       error: err instanceof Error ? err.message : String(err)
     });
   }
+  if (neverRenew && physicalPlan === vpsSize) {
+    try {
+      // Order matters: clear the flag BEFORE enabling renewal, otherwise a
+      // posture-cron pass could see never_renew + auto-renew ON and nag ops
+      // to disable renewal again. If the clear fails, keep the consistent
+      // (flag on, renew off) state and its existing daily nag.
+      await dbClearNeverRenew(vmId);
+      neverRenew = false;
+      logger.info(
+        "adoptVps: cleared never_renew on plan-matched box, proceeding with auto-renew re-enable",
+        { virtualMachineId: vmId, physicalPlan, vpsSize, hostingerBillingSubscriptionId }
+      );
+    } catch (err) {
+      logger.error(
+        "adoptVps: FAILED to clear never_renew on plan-matched box, auto-renew stays OFF; clear the flag and enable renewal manually (the billing-posture cron will nag daily)",
+        {
+          virtualMachineId: vmId,
+          physicalPlan,
+          vpsSize,
+          hostingerBillingSubscriptionId,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      );
+    }
+  }
   if (neverRenew) {
     logger.warn(
       "adoptVps: box is flagged never_renew, auto-renew stays OFF; migrate this tenant to its correct size before the paid period ends (the billing-posture cron will nag daily)",
-      { virtualMachineId: vmId, hostingerBillingSubscriptionId }
+      { virtualMachineId: vmId, physicalPlan, vpsSize, hostingerBillingSubscriptionId }
     );
   } else if (hostingerBillingSubscriptionId) {
     try {
