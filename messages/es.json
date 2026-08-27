@@ -205,7 +205,7 @@
       "addOnPacksBody": "Compra paquetes únicos de minutos de voz, SMS o IA desde Panel → Facturación cuando los necesites, o agrega paquetes recurrentes con descuento al iniciar o cambiar una membresía. La recarga automática opcional compra un paquete cuando te queda poco, con un tope de gasto que tú controlas.",
       "faqTitle": "Preguntas de precios, respondidas",
       "faqBillingQ": "¿Cómo funciona la facturación en planes de 12 y 24 meses?",
-      "faqBillingA": "El término completo se factura una sola vez al pagar, a la tarifa mensual efectiva con descuento. Así aseguramos tu servidor dedicado durante todo el contrato. El uso incluido (minutos de voz, SMS, presupuesto de IA) se reinicia cada mes.",
+      "faqBillingA": "El término completo se factura una sola vez al pagar, a la tarifa mensual efectiva con descuento. Así aseguramos tu servidor dedicado durante todo el contrato. El uso incluido (minutos de voz, SMS, presupuesto de IA) se recarga cada mes, todo junto en tu fecha de facturación.",
       "faqTermEndQ": "¿Qué pasa cuando termina mi contrato?",
       "faqTermEndA": "El servicio continúa mes a mes a la tarifa de renovación mostrada en tu plan (por ejemplo, {starterRenewal} para Starter o {standardRenewal} para Standard después de un término de 24 meses), a menos que inicies un nuevo contrato a la tarifa de contrato.",
       "faqCarrierFeeQ": "¿Qué es la tarifa única de registro de operador de {carrierFee}?",
@@ -221,7 +221,7 @@
       "faqExtraNumbersQ": "¿Puedo tener más de un número telefónico?",
       "faqExtraNumbersA": "Todos los planes incluyen un número dedicado. Los números extra cuestan $5/mes cada uno. Contacta a <email>{contactEmail}</email> para agregar uno a tu cuenta.",
       "faqUsageCapsQ": "¿Qué pasa si agoto mis minutos de voz o SMS incluidos?",
-      "faqUsageCapsA": "Tu coworker deja de hacer llamadas de voz medidas o enviar textos a clientes al alcanzar el límite mensual, y recibes una alerta mucho antes. Los límites se reinician cada mes y puedes mejorar tu plan en cualquier momento desde el panel. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, o agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan). Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde.",
+      "faqUsageCapsA": "Tu coworker deja de hacer llamadas de voz medidas o enviar textos a clientes al alcanzar el límite mensual, y recibes una alerta mucho antes. Los límites se recargan juntos en tu fecha de facturación cada mes y puedes mejorar tu plan en cualquier momento desde el panel. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan), o activar la recarga automática para que se compre un paquete cuando te queda poco, nunca por encima del límite mensual de gasto que tú fijas. Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde.",
       "faqPrioritySupportQ": "¿Qué es el complemento de soporte prioritario?",
       "faqPrioritySupportA": "Soporte prioritario por teléfono y video con un especialista, además del soporte por correo que incluye tu plan. En Starter y Standard cuesta {prioritySupportPrice}/mes, se cobra por separado de tu plan en su propia fecha mensual y puedes cancelar cuando quieras; conservas los días ya pagados. Enterprise incluye el soporte prioritario de forma permanente, y los paquetes de onboarding white-glove incluyen 30 días.",
       "faqWhiteGloveQ": "¿Qué incluye el onboarding white-glove?",
@@ -534,7 +534,7 @@
       "pipeline": {
         "eyebrow": "Pipeline",
         "title": "El prospecto, el negocio y quién lo tiene",
-        "subtitle": "Un lugar donde aterriza el trabajo que empieza tu coworker: negocios, tareas, notas y reclamo de prospectos. Nuevo en agosto de 2026.",
+        "subtitle": "Un lugar donde aterriza el trabajo que empieza tu coworker: negocios, tareas, notas y reclamo de prospectos.",
         "deals": {
           "title": "Negocios sobre un prospecto",
           "description": "Ponle un valor, una fecha de cierre y una comisión a un prospecto, muévelo de abierto a bajo contrato y a ganado o perdido, y ve qué cerró realmente cada responsable."
@@ -690,7 +690,7 @@
       "cancelQ": "¿Puedo cancelar?",
       "cancelA": "Sí. Los planes tienen una ventana de devolución de 30 días desde la fecha de compra inicial (la tarifa única de registro de operador se excluye, los cargos de uso ya incurridos, textos enviados y recibidos, minutos de llamada, uso de IA, se descuentan al costo, y los paquetes de uso adicionales no son reembolsables y se excluyen). Las implementaciones Enterprise en infraestructura de región canadiense o provista por el cliente se rigen por su acuerdo enterprise. Después del término, el servicio continúa mes a mes a la tarifa de renovación a menos que inicies un nuevo contrato.",
       "capsQ": "¿Qué pasa si alcanzo mis límites de uso mensuales?",
-      "capsA": "El uso incluido se reinicia cada mes: por ejemplo, Standard incluye {standardVoice} y {standardSms} textos por mes (un mensaje largo cuenta como varios textos, uno por cada 160 caracteres). Recibes alertas antes de agotarlo; al llegar al límite, las llamadas de voz medidas y los textos a clientes se pausan hasta el próximo ciclo o una mejora de plan. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, o agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan). Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde. Los mensajes de cumplimiento nunca se bloquean.",
+      "capsA": "El uso incluido se recarga cada mes en tu fecha de facturación: por ejemplo, Standard incluye {standardVoice} y {standardSms} textos por mes (un mensaje largo cuenta como varios textos, uno por cada 160 caracteres, o uno por cada 70 si usa emojis o caracteres especiales, y un mensaje con imagen cuenta como 2.2). Recibes alertas antes de agotarlo; al llegar al límite, las llamadas de voz medidas y los textos a clientes se pausan hasta la próxima recarga o una mejora de plan. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan), o activar la recarga automática para comprar un paquete cuando te queda poco, nunca por encima del límite mensual de gasto que tú fijas. Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde. Los mensajes de cumplimiento nunca se bloquean.",
       "supportQ": "¿Qué soporte está incluido?",
       "supportA": "Starter incluye soporte por correo; Standard incluye soporte prioritario por correo; Enterprise incluye un SLA con soporte dedicado y línea prioritaria de teléfono y video de forma permanente. En Starter y Standard puedes agregar soporte prioritario por teléfono y video con un especialista por {prioritySupportPrice}/mes desde Panel → Facturación: se cobra por separado de tu plan y puedes cancelar cuando quieras. Los paquetes de onboarding white-glove también incluyen 30 días.",
       "ctaTitle": "¿Aún con dudas? Pruébalo sin riesgo",
@@ -1707,7 +1707,7 @@
     },
     "comparePage": {
       "metaTitle": "Compara New Coworker",
-      "metaDescription": "Comparaciones honestas y documentadas de New Coworker frente a GoHighLevel, Zinng, Marblism y los servicios tradicionales de contestación telefónica, incluyendo cuándo son la mejor opción.",
+      "metaDescription": "Comparaciones honestas y documentadas de New Coworker frente a GoHighLevel, Follow Up Boss, Smith.ai, Zinng, Marblism y los servicios tradicionales de contestación telefónica, incluyendo cuándo son la mejor opción.",
       "ogTitle": "Compara New Coworker | Las alternativas, lado a lado",
       "ogDescription": "Cómo se compara New Coworker con las alternativas, incluyendo dónde ellas ganan.",
       "heroEyebrow": "Comparar",

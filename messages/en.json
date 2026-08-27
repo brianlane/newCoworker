@@ -205,7 +205,7 @@
       "addOnPacksBody": "Buy one-time voice minute, SMS, or AI top-up packs from Dashboard → Billing whenever you need them, or add discounted recurring packs when you start or change a membership. Optional auto-reload buys a top-up automatically when you run low, with a spend ceiling you control.",
       "faqTitle": "Pricing questions, answered",
       "faqBillingQ": "How does billing work for 12 and 24-month plans?",
-      "faqBillingA": "The full term is billed once at checkout at the discounted effective monthly rate. That is how we lock in your dedicated server for the whole contract. Included usage (voice minutes, SMS, AI budget) still resets every month.",
+      "faqBillingA": "The full term is billed once at checkout at the discounted effective monthly rate. That is how we lock in your dedicated server for the whole contract. Included usage (voice minutes, SMS, AI budget) still refills every month, all together on your billing date.",
       "faqTermEndQ": "What happens when my term ends?",
       "faqTermEndA": "Service continues month-to-month at the renewal rate shown on your plan card (for example, {starterRenewal} for Starter or {standardRenewal} for Standard after a 24-month term), unless you start a new contract at the contract rate.",
       "faqCarrierFeeQ": "What is the one-time {carrierFee} carrier registration fee?",
@@ -221,7 +221,7 @@
       "faqExtraNumbersQ": "Can I get more than one phone number?",
       "faqExtraNumbersA": "Every plan includes one dedicated number. Extra numbers are $5/mo each. Contact <email>{contactEmail}</email> to add one to your account.",
       "faqUsageCapsQ": "What happens if I use up my included voice minutes or SMS?",
-      "faqUsageCapsA": "Your coworker stops placing metered voice calls or sending customer texts once the monthly cap is reached, and you get an alert well before that happens. Caps reset every month, and you can upgrade your plan at any time from the dashboard. You can also buy one-time voice minute, SMS, or AI chat top-up packs from Dashboard → Billing without upgrading, or add discounted recurring packs when you start or change a membership (5% month-to-month, 10% on 12-month, 20% on 24-month; they renew with your plan). Usage packs are non-refundable. Bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later.",
+      "faqUsageCapsA": "Your coworker stops placing metered voice calls or sending customer texts once the monthly cap is reached, and you get an alert well before that happens. Caps refill together on your billing date each month, and you can upgrade your plan at any time from the dashboard. You can also buy one-time voice minute, SMS, or AI chat top-up packs from Dashboard → Billing without upgrading, add discounted recurring packs when you start or change a membership (5% month-to-month, 10% on 12-month, 20% on 24-month; they renew with your plan), or turn on auto-reload so a top-up is bought automatically when you run low, never past the monthly spending limit you set. Usage packs are non-refundable. Bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later.",
       "faqPrioritySupportQ": "What is the priority support add-on?",
       "faqPrioritySupportA": "Priority phone & video support with a specialist, on top of the email support your plan includes. On Starter and Standard it costs {prioritySupportPrice}/month, billed separately from your plan on its own monthly date, and you can cancel any time; you keep the days you already paid for. Enterprise includes priority support permanently, and white-glove onboarding packages include 30 days of it.",
       "faqWhiteGloveQ": "What does white-glove onboarding include?",
@@ -534,7 +534,7 @@
       "pipeline": {
         "eyebrow": "Pipeline",
         "title": "The lead, the deal, and who owns it",
-        "subtitle": "Somewhere for the work your coworker starts to land: deals, to-dos, notes, and claiming. New in August 2026.",
+        "subtitle": "Somewhere for the work your coworker starts to land: deals, to-dos, notes, and claiming.",
         "deals": {
           "title": "Deals on a Lead",
           "description": "Put a value, a close date, and a commission on a lead, move it from open to under contract to won or lost, and see what each owner actually closed."
@@ -690,7 +690,7 @@
       "cancelQ": "Can I cancel?",
       "cancelA": "Yes. Plans have a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded, usage charges already incurred, such as texts sent and received, call minutes, and AI usage, are deducted at cost, and usage pack add-ons are non-refundable and excluded). Enterprise deployments on Canadian-region or customer-supplied infrastructure are covered by their enterprise agreement instead. After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
       "capsQ": "What happens if I hit my monthly usage caps?",
-      "capsA": "Included usage resets monthly: for example, Standard includes {standardVoice} and {standardSms} texts per month (a long message counts as several texts, one per 160 characters). You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. You can also buy one-time voice minute, SMS, or AI chat top-up packs from Dashboard → Billing without upgrading, or add discounted recurring packs when you start or change a membership (5% month-to-month, 10% on 12-month, 20% on 24-month; they renew with your plan). Usage packs are non-refundable. Bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later. Compliance messages are never blocked.",
+      "capsA": "Included usage refills every month on your billing date: for example, Standard includes {standardVoice} and {standardSms} texts per month (a long message counts as several texts, one per 160 characters, or one per 70 when it uses emoji or special characters, and a picture message counts as 2.2). You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next refill or an upgrade. You can also buy one-time voice minute, SMS, or AI chat top-up packs from Dashboard → Billing without upgrading, add discounted recurring packs when you start or change a membership (5% month-to-month, 10% on 12-month, 20% on 24-month; they renew with your plan), or turn on auto-reload to buy a top-up automatically when you run low, never past the monthly spending limit you set. Usage packs are non-refundable. Bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later. Compliance messages are never blocked.",
       "supportQ": "What support is included?",
       "supportA": "Starter includes email support; Standard includes priority email support; Enterprise includes an SLA with dedicated support and priority phone & video permanently. On Starter and Standard, you can add priority phone & video support with a specialist for {prioritySupportPrice}/month from Dashboard → Billing: billed separately from your plan, cancel any time. White-glove onboarding packages also include 30 days of it.",
       "ctaTitle": "Still curious? Try it risk-free",
@@ -1707,7 +1707,7 @@
     },
     "comparePage": {
       "metaTitle": "Compare New Coworker",
-      "metaDescription": "Honest, sourced comparisons of New Coworker against GoHighLevel, Zinng, Marblism, and traditional phone answering services, including where they are the better buy.",
+      "metaDescription": "Honest, sourced comparisons of New Coworker against GoHighLevel, Follow Up Boss, Smith.ai, Zinng, Marblism, and traditional phone answering services, including where they are the better buy.",
       "ogTitle": "Compare New Coworker | The alternatives, side by side",
       "ogDescription": "How New Coworker stacks up against the alternatives, including where they win.",
       "heroEyebrow": "Compare",

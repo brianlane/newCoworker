@@ -65,7 +65,7 @@ function pricingLines(): string[] {
       "SLAs, physical data residency (including Canada and bring-your-own-server), and branded RCS messaging.",
     "- Every paid plan carries a 30-day money-back guarantee. 12 and 24-month terms are charged " +
       "in full at checkout because the dedicated server is prepaid for the whole term; included " +
-      "usage still resets monthly.",
+      "usage still refills every month, together on the billing date.",
     `- Priority phone & video support: a ${formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS)} per month add-on ` +
       "on Starter and Standard, billed separately from the plan and cancelable any time; " +
       "included permanently on Enterprise.",
@@ -113,7 +113,7 @@ const PAGES: { path: string; label: string; note: string }[] = [
   {
     path: "/compare",
     label: "Comparisons",
-    note: "New Coworker against GoHighLevel, Zinng, Marblism, and phone answering services, with sourced figures and where each one wins"
+    note: "New Coworker against GoHighLevel, Follow Up Boss, Smith.ai, Zinng, Marblism, and phone answering services, with sourced figures and where each one wins"
   },
   { path: "/blog", label: "Blog", note: "product updates, tutorials, and small-business advice" },
   { path: "/faq", label: "FAQ", note: "product, setup, privacy, and billing questions" },
