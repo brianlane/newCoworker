@@ -335,11 +335,18 @@ export type BridgeMeterClient = {
  */
 export async function meterBridgeOperationalSms(
   supabase: BridgeMeterClient,
-  businessId: string
+  businessId: string,
+  /**
+   * Billable carrier parts for the send, from smsTextUnits on the FINAL
+   * body. #1189 denominated the ledger in parts; a flat 1 undercounted a
+   * long intake summary by ~20x.
+   */
+  textUnits: number
 ): Promise<void> {
   try {
     const { error } = await supabase.rpc("meter_sms_operational_send", {
-      p_business_id: businessId
+      p_business_id: businessId,
+      p_text_units: textUnits
     });
     if (error) {
       console.warn(`voice-bridge: sms meter rpc failed (${businessId}): ${error.message}`);

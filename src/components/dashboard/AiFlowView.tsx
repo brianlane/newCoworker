@@ -901,7 +901,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             <Row
               label="Presses"
               value={`${step.acceptOnPrompt.digit} when the recording asks (or after ${
-                step.acceptOnPrompt.fallbackSeconds ?? 12
+                step.acceptOnPrompt.fallbackSeconds ?? 20
               }s regardless)`}
             />
           )}

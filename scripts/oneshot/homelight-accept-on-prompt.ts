@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     process.env.AIFLOW_HOMELIGHT_VOICE_FLOW_NAME ?? "HomeLight Live Transfer (AI takes the call)";
   const digit = process.env.AIFLOW_HOMELIGHT_ACCEPT_DIGIT ?? "1";
   const fallbackRaw = Number(process.env.AIFLOW_HOMELIGHT_ACCEPT_FALLBACK ?? "12");
-  const fallbackSeconds = Number.isFinite(fallbackRaw) ? Math.round(fallbackRaw) : 12;
+  const fallbackSeconds = Number.isFinite(fallbackRaw) ? Math.round(fallbackRaw) : 20;
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   const { data: row, error } = await db

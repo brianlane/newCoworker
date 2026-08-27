@@ -20,6 +20,7 @@ import {
   type GeminiLiveUsage
 } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
+import { smsTextUnits } from "./sms-text-units.js";
 import {
   telnyxDialCall,
   telnyxBridgeCall,
@@ -579,7 +580,7 @@ async function sendMissedCallSms(params: {
   if (!res.ok) {
     console.error("voice-bridge: fallback SMS failed", res.status, res.body);
   } else {
-    await meterBridgeOperationalSms(supabase, businessId);
+    await meterBridgeOperationalSms(supabase, businessId, smsTextUnits(text));
   }
 }
 
@@ -836,7 +837,7 @@ async function sendIntakeLeadSms(params: {
     console.error("voice-bridge: intake SMS failed", res.status, res.body);
   } else {
     console.log("voice-bridge: intake lead SMS sent", { callControlId, to: notifyE164 });
-    await meterBridgeOperationalSms(supabase, businessId);
+    await meterBridgeOperationalSms(supabase, businessId, smsTextUnits(text));
   }
 }
 
@@ -872,7 +873,7 @@ async function sendTransferPreAlertSms(params: {
       console.error("voice-bridge: transfer pre-alert SMS failed", res.status, res.body);
     } else {
       console.log("voice-bridge: transfer pre-alert SMS sent", { callControlId, to: toE164 });
-      await meterBridgeOperationalSms(supabase, businessId);
+      await meterBridgeOperationalSms(supabase, businessId, smsTextUnits(body));
     }
   } catch (err) {
     console.error("voice-bridge: transfer pre-alert SMS threw", err);

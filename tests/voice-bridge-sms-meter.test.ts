@@ -12,10 +12,16 @@ import { meterBridgeOperationalSms } from "../vps/voice-bridge/src/telnyx-call-a
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
 describe("meterBridgeOperationalSms", () => {
-  it("counts one send through meter_sms_operational_send", async () => {
+  it("passes the send's billable text units, never a flat 1", async () => {
+    // #1189 re-denominated the enforced ledger in carrier parts; the bridge
+    // was the last sender still metering every send as one unit, so a
+    // 3000-char intake transcript SMS (about 20 GSM parts) recorded as 1.
     const rpc = vi.fn(async () => ({ data: { counted: true }, error: null }));
-    await meterBridgeOperationalSms({ rpc }, BIZ);
-    expect(rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: BIZ });
+    await meterBridgeOperationalSms({ rpc }, BIZ, 9);
+    expect(rpc).toHaveBeenCalledWith("meter_sms_operational_send", {
+      p_business_id: BIZ,
+      p_text_units: 9
+    });
   });
 
   it("never throws: an rpc error or a thrown client only warns", async () => {
@@ -24,7 +30,8 @@ describe("meterBridgeOperationalSms", () => {
       await expect(
         meterBridgeOperationalSms(
           { rpc: vi.fn(async () => ({ data: null, error: { message: "rls" } })) },
-          BIZ
+          BIZ,
+          1
         )
       ).resolves.toBeUndefined();
 
@@ -35,7 +42,8 @@ describe("meterBridgeOperationalSms", () => {
               throw new Error("socket hang up");
             }) as never
           },
-          BIZ
+          BIZ,
+          1
         )
       ).resolves.toBeUndefined();
 
@@ -46,7 +54,8 @@ describe("meterBridgeOperationalSms", () => {
               throw "string blast";
             }) as never
           },
-          BIZ
+          BIZ,
+          1
         )
       ).resolves.toBeUndefined();
       expect(warn).toHaveBeenCalled();

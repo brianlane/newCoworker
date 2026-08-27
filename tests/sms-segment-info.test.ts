@@ -4,6 +4,10 @@ import {
   smsTextUnits as edgeSmsTextUnits,
   MMS_TEXT_UNITS as EDGE_MMS_TEXT_UNITS
 } from "../supabase/functions/_shared/sms_text_units";
+import {
+  smsTextUnits as bridgeSmsTextUnits,
+  MMS_TEXT_UNITS as BRIDGE_MMS_TEXT_UNITS
+} from "../vps/voice-bridge/src/sms-text-units";
 
 describe("smsSegmentInfo", () => {
   it("treats plain ASCII as GSM", () => {
@@ -116,7 +120,7 @@ describe("smsTextUnits", () => {
     expect(MMS_TEXT_UNITS).toBeCloseTo(2.2);
   });
 
-  it("stays in lockstep with the Edge copy across a boundary matrix", () => {
+  it("stays in lockstep with the Edge AND voice-bridge copies across a boundary matrix", () => {
     const cases: Array<[string, number]> = [
       ["", 0],
       ["hi", 0],
@@ -129,7 +133,9 @@ describe("smsTextUnits", () => {
     ];
     for (const [text, mediaCount] of cases) {
       expect(edgeSmsTextUnits(text, { mediaCount })).toBe(smsTextUnits(text, { mediaCount }));
+      expect(bridgeSmsTextUnits(text, { mediaCount })).toBe(smsTextUnits(text, { mediaCount }));
     }
     expect(EDGE_MMS_TEXT_UNITS).toBe(MMS_TEXT_UNITS);
+    expect(BRIDGE_MMS_TEXT_UNITS).toBe(MMS_TEXT_UNITS);
   });
 });

@@ -6503,7 +6503,7 @@ function StepFields({
                   />
                   <Field
                     label="Press it anyway after this long (seconds)"
-                    value={String(step.acceptOnPrompt.fallbackSeconds ?? 12)}
+                    value={String(step.acceptOnPrompt.fallbackSeconds ?? 20)}
                     onChange={(v) => {
                       const n = Number(v);
                       patchStep(index, {

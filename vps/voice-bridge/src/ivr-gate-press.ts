@@ -32,9 +32,12 @@ export const IVR_REPRESS_COOLDOWN_MS = 2500;
 export const IVR_REFALLBACK_MS = 9000;
 
 /**
- * Hard cap on Telnyx-OK accept presses per call. Stops unbounded pressing if the
- * partner never connects a person; does NOT use assistant downlink as a proxy
- * for "human heard" (the model can emit accidental audio while still on IVR).
+ * Hard cap on accept-press ATTEMPTS per call. Counting attempts, not
+ * Telnyx-OK presses: with a partner endpoint rejecting every send_dtmf the
+ * OK count stays zero and a success-keyed cap never binds, so the failing
+ * path retried without bound. Does NOT use assistant downlink as a proxy
+ * for "human heard" (the model can emit accidental audio while still on
+ * IVR).
  */
 export const IVR_MAX_ACCEPT_PRESSES = 5;
 
@@ -46,6 +49,8 @@ export function decideIvrPress(args: {
   acceptPressed: boolean;
   /** How many Telnyx-OK accept presses have already landed. */
   acceptPressCount: number;
+  /** How many accept presses have been ATTEMPTED (execute called), OK or not. */
+  attemptCount: number;
   lastPressAtMs: number;
   nowMs: number;
   cooldownMs?: number;
@@ -57,7 +62,7 @@ export function decideIvrPress(args: {
   if (args.inFlight) return { action: "deny", reason: "in_flight" };
 
   const max = args.maxPresses ?? IVR_MAX_ACCEPT_PRESSES;
-  if (args.acceptPressCount >= max) {
+  if (args.attemptCount >= max) {
     return { action: "deny", reason: "max_presses" };
   }
 
