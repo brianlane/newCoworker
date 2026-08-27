@@ -776,7 +776,7 @@ async function sendIntakeLeadSms(params: {
   /** The flow's briefing note for the call, rendered under "Call briefing:". */
   flowContextNote?: string;
   /** Machine verdict stamps read off the session context. */
-  voicemail?: { detected: boolean; messageLeft: boolean };
+  voicemail?: { detected: boolean; messageLeft: boolean; messageBeingLeft?: boolean };
 }): Promise<void> {
   const { supabase, businessId, settings, notifyE164, callControlId, transferFromE164, businessName, lead } =
     params;
@@ -2242,7 +2242,11 @@ function main(): void {
           // The same read also feeds the finished-call alert below: the LIVE
           // context note (voice_brief rewrites land there mid-call) and the
           // voicemail stamps. A failed read degrades to an unenriched alert.
-          let alertCtx: IntakeAlertContext = { machineDetected: false, voicemailSpoken: false };
+          let alertCtx: IntakeAlertContext = {
+            machineDetected: false,
+            voicemailSpoken: false,
+            voicemailBeingLeft: false
+          };
           if (intake) {
             try {
               // Re-read rather than reuse the context parsed at attach. Two
@@ -2336,7 +2340,8 @@ function main(): void {
                   flowContextNote: alertCtx.contextNote ?? intake.contextNote ?? "",
                   voicemail: {
                     detected: alertCtx.machineDetected,
-                    messageLeft: alertCtx.voicemailSpoken
+                    messageLeft: alertCtx.voicemailSpoken,
+                    messageBeingLeft: alertCtx.voicemailBeingLeft
                   }
                 });
               } catch (err) {

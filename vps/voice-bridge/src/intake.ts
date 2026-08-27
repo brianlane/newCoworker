@@ -362,6 +362,15 @@ export interface IntakeAlertContext {
   contextNote?: string;
   machineDetected: boolean;
   voicemailSpoken: boolean;
+  /**
+   * Someone holds the voicemail speak claim but the delivered stamp has not
+   * landed yet. At alert time this is the honest in-between: the edge/sweep
+   * speak plays AFTER the stream stops (so the stamp arrives at
+   * call.speak.ended, well after this alert), and the model path's
+   * confirmSpoken merge is fire-and-forget (the alert read can race it).
+   * Rendered as "being left" rather than the flatly wrong "no message left".
+   */
+  voicemailBeingLeft: boolean;
 }
 
 /** Parse `IntakeAlertContext` out of a raw `voice_handoff_sessions.context`. */
@@ -372,10 +381,12 @@ export function extractIntakeAlertContext(ctx: unknown): IntakeAlertContext {
     unknown
   >;
   const note = typeof ai.context_note === "string" ? ai.context_note.trim() : "";
+  const spoken = c.voicemail_spoken === true;
   return {
     ...(note ? { contextNote: note } : {}),
     machineDetected: c.machine_detected === true,
-    voicemailSpoken: c.voicemail_spoken === true
+    voicemailSpoken: spoken,
+    voicemailBeingLeft: !spoken && c.voicemail_claimed === true
   };
 }
 
@@ -427,7 +438,7 @@ export function composeIntakeLeadSms(input: {
   /** The flow's briefing for this call, rendered verbatim under "Call briefing:". */
   flowContextNote?: string;
   /** The model's own machine verdict for the call, and whether a scripted message was left. */
-  voicemail?: { detected: boolean; messageLeft: boolean };
+  voicemail?: { detected: boolean; messageLeft: boolean; messageBeingLeft?: boolean };
 }): string {
   const outbound = input.callDirection === "outbound";
   const lines: string[] = [
@@ -439,7 +450,11 @@ export function composeIntakeLeadSms(input: {
     lines.push(
       input.voicemail.messageLeft
         ? "Outcome: reached voicemail, left the scripted message."
-        : "Outcome: reached voicemail, no message left."
+        : input.voicemail.messageBeingLeft === true
+          ? // The platform speaks the script AFTER the media stream (and so
+            // this alert) is torn down; the call page shows the final result.
+            "Outcome: reached voicemail, the scripted message is being left."
+          : "Outcome: reached voicemail, no message left."
     );
   }
   // What the platform already knew, before anything the conversation added.
