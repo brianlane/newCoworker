@@ -33,6 +33,10 @@ import {
   buildNextBillingDateParams,
   describeBillingDateStripeError
 } from "@/lib/billing/admin-billing-controls";
+import {
+  introEndsAtMatchesPeriodEnd,
+  isFirstBillingCycle
+} from "@/lib/billing/monthly-intro-nudge";
 import { logAdminAction } from "@/lib/admin/audit";
 import { logger } from "@/lib/logger";
 
@@ -99,9 +103,28 @@ export async function POST(request: Request) {
     // Refresh the cached period bounds from Stripe's response so the owner's
     // billing page shows the new date without waiting on the webhook (and
     // without a live Stripe lookup, per src/lib/billing/renewal.ts).
+    //
+    // This comp EXTENDS the current cycle, and re-anchoring period_start is
+    // exactly what breaks the intro nudge's derived first-cycle signal
+    // (isFirstBillingCycle reads a comped first-cycle tenant as renewed, and
+    // the "your intro price is ending" email silently never sends, audit
+    // M3). So when the cycle being extended IS the intro cycle, by either
+    // signal, stamp its new end; the nudge gate accepts the stamp.
+    const wasIntroCycle =
+      subscription.billing_period === "monthly" &&
+      (isFirstBillingCycle(
+        subscription.created_at,
+        subscription.stripe_current_period_start
+      ) ||
+        introEndsAtMatchesPeriodEnd(subscription));
     const periodCache = stripeSubscriptionPeriodCache(updated);
     if ("stripe_current_period_end" in periodCache) {
-      await updateSubscription(subscription.id, periodCache);
+      await updateSubscription(subscription.id, {
+        ...periodCache,
+        ...(wasIntroCycle
+          ? { monthly_intro_ends_at: periodCache.stripe_current_period_end }
+          : {})
+      });
     } else {
       logger.warn("admin.billing-date: Stripe response carried no period bounds", {
         adminEmail: admin.email,

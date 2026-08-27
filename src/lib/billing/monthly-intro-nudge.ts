@@ -55,11 +55,13 @@ export type MonthlyIntroNudgeCandidate = {
   stripe_current_period_end: string | null;
   created_at: string;
   monthly_intro_nudge_sent_at: string | null;
+  monthly_intro_ends_at: string | null;
 };
 
 const COLUMNS =
   "id,business_id,tier,status,billing_period,cancel_at_period_end,billing_paused," +
-  "stripe_current_period_start,stripe_current_period_end,created_at,monthly_intro_nudge_sent_at";
+  "stripe_current_period_start,stripe_current_period_end,created_at,monthly_intro_nudge_sent_at," +
+  "monthly_intro_ends_at";
 
 export type MonthlyIntroNudgeSweepDeps = {
   client?: SupabaseClient;
@@ -92,6 +94,26 @@ export function isFirstBillingCycle(
   // Period start must not be far in the future; a renewed sub has
   // period_start well after created_at.
   return startMs <= nowMs + FIRST_CYCLE_SLACK_MS;
+}
+
+/**
+ * Whether the row's stamped intro end IS its current period end (60s
+ * tolerance: both sides are ISO strings written from the same Stripe
+ * response, so they agree to the millisecond in practice). The stamp is
+ * written only by the admin billing-date comp, the one lever that
+ * re-anchors period_start and breaks the derived signal above; a real
+ * renewal moves period_end a full cycle past the stamp, so a stale stamp
+ * can never nudge a tenant whose intro genuinely ended (audit M3).
+ */
+export function introEndsAtMatchesPeriodEnd(row: {
+  monthly_intro_ends_at: string | null;
+  stripe_current_period_end: string | null;
+}): boolean {
+  if (!row.monthly_intro_ends_at || !row.stripe_current_period_end) return false;
+  const stampMs = Date.parse(row.monthly_intro_ends_at);
+  const endMs = Date.parse(row.stripe_current_period_end);
+  if (!Number.isFinite(stampMs) || !Number.isFinite(endMs)) return false;
+  return Math.abs(stampMs - endMs) <= 60_000;
 }
 
 /**
@@ -145,9 +167,13 @@ export function isMonthlyIntroNudgeCandidate(
   if (row.monthly_intro_nudge_sent_at) return false;
   if (row.tier !== "starter" && row.tier !== "standard") return false;
   if (!row.stripe_current_period_end) return false;
-  if (!isFirstBillingCycle(row.created_at, row.stripe_current_period_start, now.getTime())) {
-    return false;
-  }
+  // Two first-cycle signals: the derived one (created_at near period_start),
+  // and the comp stamp, which survives the re-anchor that kills the derived
+  // one. Either suffices.
+  const firstCycle =
+    isFirstBillingCycle(row.created_at, row.stripe_current_period_start, now.getTime()) ||
+    introEndsAtMatchesPeriodEnd(row);
+  if (!firstCycle) return false;
   return isMonthlyIntroNudgeDue(row.stripe_current_period_end, now);
 }
 
@@ -166,7 +192,10 @@ async function loadCandidates(
     .eq("billing_period", "monthly")
     .eq("status", "active")
     .is("monthly_intro_nudge_sent_at", null)
-    .gte("created_at", createdAfter)
+    // A comped tenant's row can be OLDER than the max-age fence (signup, then
+    // a long comp), so a non-null stamp bypasses the created_at cut. Stamped
+    // rows are rare (one per comp), so the batch limit is safe.
+    .or(`created_at.gte.${createdAfter},monthly_intro_ends_at.not.is.null`)
     .gt("stripe_current_period_end", nowIso)
     .lte("stripe_current_period_end", scanEnd.toISOString())
     .order("stripe_current_period_end", { ascending: true })

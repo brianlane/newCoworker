@@ -99,6 +99,13 @@ export type SubscriptionRow = {
    */
   monthly_intro_nudge_sent_at: string | null;
   /**
+   * The concrete end of the intro-priced first cycle, stamped ONLY by the
+   * admin billing-date comp (the lever that re-anchors period_start and
+   * breaks the derived isFirstBillingCycle signal). Null everywhere else;
+   * the nudge gate accepts either signal. Audit M3.
+   */
+  monthly_intro_ends_at: string | null;
+  /**
    * When the pre-term contract rollover nudge email was claimed/sent
    * (§ contract_term_nudge migration). Null until the daily sweep stamps it.
    */
@@ -468,6 +475,7 @@ export async function updateSubscription(
       | "contract_auto_renew"
       | "billing_paused"
       | "billing_pause_resumes_at"
+      | "monthly_intro_ends_at"
       | "discount_coupon_id"
       | "discount_name"
       | "discount_percent_off"
