@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: f92ec33f-e800-4569-9e1b-d63077b2e8c1
-  modified: 2026-08-25T19:44:49.587Z
+  modified: 2026-08-27T16:09:25.814Z
 ---
 
 Found 2026-08-25 from Amy's own question ("whose phone number is this? I
@@ -102,11 +102,47 @@ definitions matched as E.164 or separated 3-3-4 but deliberately NOT as bare
 10-digit runs (those are epochs in flow JSON). Plus, per call,
 `caller_e164` / `forwarded_to_e164`. Amy's allowlist: 12 numbers.
 
-**Still unverified in the wild as of 2026-08-25 21:00Z**: zero calls placed
-since the redeploy, and her cadence dials in the morning Arizona time. Re-run
-`npx tsx debug/voicemail-number-audit.ts --business 621a5b0d-c2ad-449f-9d74-9d50e7b27fa3 --since 2026-08-25T20:40:00Z`
-and read the CALL COUNT next to the verdict: zero calls is no evidence, not a
-pass.
+## VERIFIED 2026-08-27: the fix is NOT holding
+
+First two mornings of dialing after the redeploy: 9 calls, 8 reached a
+machine, and 2 of those 8 ad-libbed a FABRICATED callback number anyway,
+the same ~25% rate as before the fix:
+
+- Sandy Baldwin, 2026-08-26 15:36Z, call `68ca8cdb`: **480-269-7977** (the
+  call the first-ever call-integrity sweep email flagged).
+- Matt, 2026-08-27 15:30Z, call `5b335fc8`: **480-331-9100**.
+
+Do NOT dial either number. The box was verified running #1612 at the time
+(`/opt/newcoworker-repo` HEAD `9db041d`, container up since the redeploy),
+so this is the model disobeying a deployed rule, not a stale deploy. Per
+[[feedback_score_prompt_changes_against_outcomes]], the next fix must be
+deterministic, not a fourth prompt line.
+
+**Three structural facts learned from the same investigation:**
+
+1. **Telnyx premium AMD events mostly never arrive.** Across those 10
+   flow-placed outbound calls (Telnyx `webhook_deliveries` is the proof):
+   `detection.ended` on only 3 (one `machine`, two `not_sure`), and ZERO
+   greeting/beep events ever. So the Edge `speakVoicemail` path
+   (`telnyx-voice-call-end`), designed as the deterministic primary, never
+   fires; the model's `voicemail_reached` tool carries every voicemail.
+2. **`voicemail_left: true` overstates.** The `[Voicemail]` transcript turn
+   is a BADGE written when the tool hands the script over, and
+   `voicemail_spoken` is stamped by the `end_call` handler, so both land
+   even when the audio physically cannot have played: on Sandy's call OUR
+   leg hung up at :48.96, the mailbox had stopped recording at :45, badge
+   written :49.9. Her mailbox holds the AI's greeting plus ~3 minutes of
+   silence; the scripted message with the correct 602-695-1142 never went
+   out. Brett's call (13s answered-to-hangup) and Roger's (greeting still
+   playing at hangup) show the same impossible timing.
+3. **The daily call-integrity sweep misses the common shape.** It needs 3+
+   assistant turns with every caller turn machine-like; the typical
+   one-line ad-lib before the badge is 2 assistant turns, so Matt's
+   invented-number call will never be flagged. Only
+   `debug/voicemail-number-audit.ts` (manual) catches fabrications.
+
+Fleet check 2026-08-27: only 4 non-Amy calls in 7 days, none fabricated;
+this is an Amy-volume problem today.
 
 ## Original fix direction (superseded by the above)
 
