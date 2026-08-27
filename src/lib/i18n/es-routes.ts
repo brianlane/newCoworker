@@ -20,6 +20,7 @@ export const SPANISH_MARKETING_PREFIXES = [
   "/contact",
   "/terms",
   "/privacy",
+  "/security",
   "/login",
   "/onboard",
   "/signup"
