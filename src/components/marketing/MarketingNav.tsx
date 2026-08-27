@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { CtaLink } from "@/components/marketing/CtaLink";
@@ -24,6 +24,8 @@ export function MarketingNav() {
   const t = useTranslations("marketing.nav");
   const [open, setOpen] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const headerRef = useRef<HTMLElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Session presence resolves after hydration (the Supabase client reads
   // browser cookies), so the anonymous CTAs render first and only a signed-in
@@ -47,8 +49,47 @@ export function MarketingNav() {
     };
   }, []);
 
+  // Open-menu affordances: Escape closes (returning focus to the toggle),
+  // a press outside the header closes, the page behind stops scrolling, and
+  // crossing the md breakpoint closes too (the panel hides via md:hidden, so
+  // without this a rotate/resize would strand the scroll lock with no visible
+  // control to release it). All scoped to the open state so the closed nav
+  // adds zero listeners.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (headerRef.current && e.target instanceof Node && !headerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const onBreakpoint = (e: MediaQueryListEvent) => {
+      if (e.matches) setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    desktop.addEventListener("change", onBreakpoint);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+      desktop.removeEventListener("change", onBreakpoint);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open]);
+
   return (
-    <header className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md">
+    <header
+      ref={headerRef}
+      className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md"
+    >
       <nav className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-4">
         <Link href="/" className="flex items-center gap-3" onClick={() => setOpen(false)}>
           <Image src="/logo.png" alt={t("brand")} width={34} height={34} className="rounded-full" />
@@ -86,9 +127,11 @@ export function MarketingNav() {
         </div>
 
         <button
+          ref={menuButtonRef}
           type="button"
-          aria-label={open ? "Close menu" : "Open menu"}
+          aria-label={open ? t("closeMenu") : t("openMenu")}
           aria-expanded={open}
+          aria-controls="marketing-mobile-menu"
           onClick={() => setOpen((v) => !v)}
           className="rounded-lg border border-parchment/15 p-2 text-parchment md:hidden"
         >
@@ -97,7 +140,7 @@ export function MarketingNav() {
       </nav>
 
       {open && (
-        <div className="border-t border-parchment/10 px-6 pb-6 pt-3 md:hidden">
+        <div id="marketing-mobile-menu" className="border-t border-parchment/10 px-6 pb-6 pt-3 md:hidden">
           <div className="mb-3">
             <LanguageSwitcher />
           </div>
