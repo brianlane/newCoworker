@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   claimAvailableVps,
+  claimOwnAssignedVps,
   claimSpecificAvailableVps,
   recordVpsAssigned,
   releaseVpsToPool,
@@ -102,6 +103,34 @@ describe("vps_inventory DB layer", () => {
         false
       );
       expect(hasPoolRunway(new Date(now + VPS_POOL_MIN_RUNWAY_MS).toISOString(), now)).toBe(true);
+    });
+  });
+
+  describe("claimOwnAssignedVps", () => {
+    it("returns the box already assigned to this business", async () => {
+      const chain = makeChain();
+      const ownRow = { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" };
+      chain.limit.mockResolvedValueOnce({ data: [ownRow], error: null });
+      const db = makeDb(chain);
+      await expect(claimOwnAssignedVps("kvm2", "biz-1", db as never)).resolves.toEqual(ownRow);
+      expect(chain.eq).toHaveBeenCalledWith("state", "assigned");
+      expect(chain.eq).toHaveBeenCalledWith("assigned_business_id", "biz-1");
+      expect(chain.eq).toHaveBeenCalledWith("plan", "kvm2");
+    });
+
+    it("returns null when this business holds nothing", async () => {
+      const chain = makeChain();
+      chain.limit.mockResolvedValueOnce({ data: [], error: null });
+      const db = makeDb(chain);
+      await expect(claimOwnAssignedVps("kvm2", "biz-1", db as never)).resolves.toBeNull();
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.limit.mockResolvedValueOnce({ data: [], error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await claimOwnAssignedVps("kvm2", "biz-1");
+      expect(defaultClientSpy).toHaveBeenCalled();
     });
   });
 
@@ -206,8 +235,10 @@ describe("vps_inventory DB layer", () => {
       const chain = makeChain();
       chain.limit.mockResolvedValueOnce({ data: null, error: { message: "own scan down" } });
       const db = makeDb(chain);
+      // The own-box scan lives in claimOwnAssignedVps since the V1-residual
+      // fix; the error prefix names the function that actually ran the query.
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).rejects.toThrow(
-        "claimAvailableVps: own scan down"
+        "claimOwnAssignedVps: own scan down"
       );
     });
 

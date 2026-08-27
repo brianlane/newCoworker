@@ -100,13 +100,22 @@ export function hasPoolRunway(
  * manual pool-row reset. Now the watchdog's re-run lands back on the same
  * hardware automatically.
  */
-export async function claimAvailableVps(
+/**
+ * The box THIS business already holds from a prior (possibly dead) attempt,
+ * or null. Split out of {@link claimAvailableVps} so the skipPoolAdopt path
+ * can reuse already-paid hardware WITHOUT touching the available pool:
+ * skipPoolAdopt means "no arbitrary pooled box" (term-priced purchases must
+ * stay term-priced), and before this split it also meant "buy again past
+ * your own box", which is the V1-residual double purchase (a migration
+ * killed between percent 15 and 40 fell through to a full re-run and
+ * acquireVps purchased a second term-priced box).
+ */
+export async function claimOwnAssignedVps(
   plan: VpsSize,
   businessId: string,
   client?: SupabaseClient
 ): Promise<VpsInventoryRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
-
   const { data: own, error: ownErr } = await db
     .from("vps_inventory")
     .select("*")
@@ -115,8 +124,18 @@ export async function claimAvailableVps(
     .eq("plan", plan)
     .order("acquired_at", { ascending: true })
     .limit(1);
-  if (ownErr) throw new Error(`claimAvailableVps: ${ownErr.message}`);
-  const ownRow = ((own as VpsInventoryRow[] | null) ?? [])[0];
+  if (ownErr) throw new Error(`claimOwnAssignedVps: ${ownErr.message}`);
+  return ((own as VpsInventoryRow[] | null) ?? [])[0] ?? null;
+}
+
+export async function claimAvailableVps(
+  plan: VpsSize,
+  businessId: string,
+  client?: SupabaseClient
+): Promise<VpsInventoryRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+
+  const ownRow = await claimOwnAssignedVps(plan, businessId, db);
   if (ownRow) return ownRow;
 
   // Push the 72h runway floor into the query so short-runway boxes never
