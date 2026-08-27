@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
+import { checkVpsBillingPosture, isLapseRiskFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 
@@ -962,7 +962,11 @@ describe("checkVpsBillingPosture, lapsed pool reaper", () => {
 
     expect(deps.retireLapsedPoolVps).not.toHaveBeenCalled();
     expect(result.checkedPoolBoxes).toBe(0);
-    expect(result.findings).toEqual([]);
+    // The assigned row's business ("b-live") is absent from listBusinesses,
+    // so the stale_assigned_row consistency check now correctly reports it;
+    // this test's invariant is only that the REAPER never touches assigned
+    // or retired rows.
+    expect(result.findings.filter((f) => f.kind !== "stale_assigned_row")).toEqual([]);
   });
 
   it("does not resurface a row it just retired as an untracked VM", async () => {
@@ -1542,5 +1546,118 @@ describe("checkVpsBillingPosture, stale billing cycle", () => {
     });
     const result = await checkVpsBillingPosture(deps as never);
     expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
+  });
+});
+
+describe("stale assigned rows (fleet consistency)", () => {
+  it("reports an assigned row whose business points at a different box", async () => {
+    // The shape the admin migrate-size teardown used to produce every run:
+    // old row left `assigned` while the business moved to the new vm.
+    // Invisible to every other check (direction 1 reads the pointed-at box,
+    // direction 2 and the reaper walk `available`, untracked_vm needs NO
+    // row), so this is the one place it surfaces.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1", hostinger_vps_id: "1900001" })]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800985, state: "assigned", assigned_business_id: "b1" }),
+          poolRow({ vm_id: 1900001, state: "assigned", assigned_business_id: "b1" })
+        ])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    const stale = report.findings.filter((f) => f.kind === "stale_assigned_row");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].vmId).toBe(1800985);
+    expect(stale[0].businessId).toBe("b1");
+    expect(stale[0].autoHealed).toBe(false);
+    expect(stale[0].detail).toContain("srv1900001");
+  });
+
+  it("reports an assigned row whose business no longer exists", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([poolRow({ vm_id: 1800985, state: "assigned", assigned_business_id: "gone" })])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    const stale = report.findings.filter((f) => f.kind === "stale_assigned_row");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].detail).toContain("no business row");
+  });
+
+  it("names a wiped, boxless owner and tolerates null billing fields", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([
+          biz({ id: "b-wiped", status: "wiped", hostinger_vps_id: null as never })
+        ]),
+      listInventory: vi.fn().mockResolvedValue([
+        poolRow({
+          vm_id: 1800985,
+          state: "assigned",
+          assigned_business_id: "b-wiped",
+          hostinger_billing_subscription_id: null,
+          expires_at: null
+        })
+      ])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    const stale = report.findings.filter((f) => f.kind === "stale_assigned_row");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].detail).toContain("no box (wiped)");
+    expect(stale[0].hostingerBillingSubscriptionId).toBeNull();
+    expect(stale[0].expiresAt).toBeNull();
+  });
+
+  it("reports a live boxless owner without the wiped tag", async () => {
+    // V3's failure shape: the business row lost its box pointer while the
+    // inventory row stayed assigned. Owner is online, so no "(wiped)" tag.
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-boxless", hostinger_vps_id: null as never })]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800985, state: "assigned", assigned_business_id: "b-boxless" })
+        ])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    const stale = report.findings.filter((f) => f.kind === "stale_assigned_row");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].detail).toContain("that business has no box:");
+  });
+
+  it("skips an assigned row carrying no business id at all (malformed, not stale)", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800985, state: "assigned", assigned_business_id: null })
+        ])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    expect(report.findings.filter((f) => f.kind === "stale_assigned_row")).toHaveLength(0);
+  });
+
+  it("is advisory, never framed as a lapse risk in the ops digest", () => {
+    // The digest's lapse-risk framing tells ops to align the renewal toggle
+    // with the assigned state, which for a stale row would turn paid renewal
+    // back ON for hardware nobody uses. Bookkeeping, not a race.
+    expect(isLapseRiskFinding({ kind: "stale_assigned_row" })).toBe(false);
+  });
+
+  it("stays silent when every assigned row matches its business", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1", hostinger_vps_id: "1800985" })]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([poolRow({ vm_id: 1800985, state: "assigned", assigned_business_id: "b1" })])
+    });
+    const report = await checkVpsBillingPosture(deps as never);
+    expect(report.findings.filter((f) => f.kind === "stale_assigned_row")).toHaveLength(0);
   });
 });

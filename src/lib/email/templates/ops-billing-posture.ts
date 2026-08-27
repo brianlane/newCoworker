@@ -42,12 +42,17 @@ function findingLine(finding: BillingPostureFinding): string {
   // exists, which is the whole finding. A billing_cycle_price_stale row is
   // ownerless only when the Hostinger VM listing failed, so we genuinely do
   // not know who runs it; calling that "pool" asserts something false.
+  // A stale_assigned_row is ownerless only when the business row is GONE;
+  // the vm is still marked assigned, so "pool" would assert the opposite of
+  // the finding.
   const ownerless =
     finding.kind === "untracked_vm"
       ? "untracked"
       : finding.kind === "billing_cycle_price_stale"
         ? "unattributed"
-        : "pool";
+        : finding.kind === "stale_assigned_row"
+          ? `assigned to missing business ${finding.businessId ?? "(unknown)"}`
+          : "pool";
   const who = finding.businessName
     ? `${finding.businessName} (${finding.businessId})`
     : ownerless;

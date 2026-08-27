@@ -42,6 +42,11 @@ import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import { retireVpsSshKeysForVps, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import {
+  markVpsNeverRenew,
+  paidThroughFromBillingSub,
+  releaseVpsToPool
+} from "@/lib/db/vps-inventory";
+import {
   enqueueProvisioningJob,
   markProvisioningJobOutcome,
   runProvisioningJob,
@@ -100,6 +105,14 @@ export type MigrateVpsSizeDeps = {
    * into it. Injected so unit tests can assert the call without a database.
    */
   retireVpsSshKeysForVps?: (vpsId: string) => Promise<number>;
+  /**
+   * Pools the old box's vps_inventory row at teardown. Without this the row
+   * stays `assigned` to a business that no longer points at it, a shape no
+   * monitor covered until billing-posture's stale_assigned_row check.
+   */
+  releaseVpsToPool?: typeof releaseVpsToPool;
+  /** Flags the pooled old box to lapse, mirroring the term-renewal sweep. */
+  markVpsNeverRenew?: (vmId: number) => Promise<void>;
   hostinger: Pick<
     HostingerClient,
     | "getVirtualMachine"
@@ -573,11 +586,67 @@ export async function migrateBusinessVpsSize(
     });
   }
 
+  // Return the old box's inventory row to the pool and flag it to lapse,
+  // mirroring the term-renewal sweep's old-box bookkeeping. Skipping this
+  // left the row `assigned` to a business that no longer points at it, which
+  // no monitor covered: posture direction 1 checks the pointed-at box,
+  // direction 2 and the reaper walk `available` rows only, and untracked_vm
+  // needs NO row at all. Best-effort like the rest of this teardown (the
+  // cutover is DONE; a bookkeeping failure is a follow-up, not a migration
+  // failure), and the stale_assigned_row posture check backstops a miss.
+  /* c8 ignore next 2 -- production defaults; tests inject */
+  const poolRelease = deps.releaseVpsToPool ?? releaseVpsToPool;
+  const flagNeverRenew = deps.markVpsNeverRenew ?? markVpsNeverRenew;
+  let oldRowPooled = false;
+  let oldRowFlagged = false;
+  try {
+    let oldPaidThrough: string | null = null;
+    if (oldBillingId) {
+      try {
+        const subs = await deps.hostinger.listBillingSubscriptions();
+        const oldSub = subs.find((s) => s.id === oldBillingId);
+        if (oldSub) oldPaidThrough = paidThroughFromBillingSub(oldSub);
+      } catch {
+        /* expiry stamp is best-effort; releaseVpsToPool preserves the row's existing value when omitted */
+      }
+    }
+    await poolRelease({
+      vmId: oldVmId,
+      plan: currentSize,
+      hostingerBillingSubscriptionId: oldBillingId,
+      ...(oldPaidThrough ? { expiresAt: oldPaidThrough } : {}),
+      notes: `migrate-size ${currentSize}->${targetSize} of business ${businessId}; auto-renew off, never_renew`
+    });
+    oldRowPooled = true;
+  } catch (err) {
+    logger.error("migrate-size: old-box pool return failed", {
+      businessId,
+      oldVmId,
+      error: errMsg(err)
+    });
+  }
+  if (oldRowPooled) {
+    try {
+      await flagNeverRenew(oldVmId);
+      oldRowFlagged = true;
+    } catch (err) {
+      logger.error("migrate-size: old-box never_renew mark failed", {
+        businessId,
+        oldVmId,
+        error: errMsg(err)
+      });
+    }
+  }
+  const poolNote =
+    !oldRowPooled || !oldRowFlagged
+      ? ` FOLLOW-UP: old srv${oldVmId} vps_inventory bookkeeping incomplete (pooled=${oldRowPooled}, never_renew=${oldRowFlagged}); pool the row and set never_renew by hand or the daily posture report will flag it.`
+      : "";
+
   const followUp =
-    oldBillingHandling === "auto-renew-disable-FAILED" ||
+    (oldBillingHandling === "auto-renew-disable-FAILED" ||
     oldBillingHandling === "billing-id-unknown-still-renewing"
       ? ` FOLLOW-UP REQUIRED: the old subscription (${oldBillingId ?? "id unknown"}) is still renewing : disable it in hPanel.`
-      : "";
+      : "") + poolNote;
   await notify(
     "completed",
     `New box: srv${newVmId} (${newVmIp}). Old box srv${oldVmId}: stopped, billing=${oldBillingHandling}.` +
