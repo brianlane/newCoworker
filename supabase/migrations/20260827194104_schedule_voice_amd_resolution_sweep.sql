@@ -79,6 +79,7 @@ select cron.schedule(
        and coalesce(context->>'machine_detected', '') = 'true'
        and coalesce(context->>'voicemail_claimed', '') <> 'true'
        and coalesce(context->>'voicemail_speak_started_at', '') = ''
+       and coalesce(context->>'amd_resolution_hung_up', '') <> 'true'
   );
   $$
 );

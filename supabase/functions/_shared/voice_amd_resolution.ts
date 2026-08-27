@@ -157,8 +157,17 @@ export function decideAmdResolution(opts: {
   // the two writes; skipping is free and cutting a screened call is not.
   if (context.ios_screening === true) return { action: "skip", reason: "screening" };
   // Someone already owns the voicemail (greeting handler, the model's
-  // voicemail_reached, or a previous sweep tick), or a speak is in flight.
-  if (context.voicemail_claimed === true || typeof context.voicemail_speak_started_at === "string") {
+  // voicemail_reached, or a previous sweep tick), a speak is in flight, or a
+  // previous tick already hung this scriptless leg up. The hangup marker
+  // matters when the call.hangup webhook itself is lost (Telnyx drops event
+  // classes; that outage is why this module exists): without it the session
+  // would sit in ai_intake and every tick would re-issue a hangup against a
+  // dead leg for the full stale window.
+  if (
+    context.voicemail_claimed === true ||
+    typeof context.voicemail_speak_started_at === "string" ||
+    context.amd_resolution_hung_up === true
+  ) {
     return { action: "skip", reason: "already_resolved" };
   }
   const stamped = Date.parse(

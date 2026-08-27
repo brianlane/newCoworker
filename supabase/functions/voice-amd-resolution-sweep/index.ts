@@ -139,8 +139,15 @@ serve(async (req: Request) => {
       });
     } else {
       // Scriptless machine leg: end it, exactly as the pre-voicemail AMD
-      // path always did. Stream stop first so the bridge is not left
-      // narrating into a leg that is about to drop.
+      // path always did. The marker lands FIRST so a lost call.hangup
+      // webhook cannot leave the session re-eligible: the next tick's
+      // decision skips it as already_resolved. Stream stop before hangup so
+      // the bridge is not left narrating into a leg that is about to drop.
+      const { error: markErr } = await supabase.rpc("voice_session_context_merge", {
+        p_call_control_id: row.call_control_id,
+        p_patch: { amd_resolution_hung_up: true }
+      });
+      if (markErr) console.error("amd-resolution-sweep: hangup marker failed", markErr);
       await telnyxStreamingStop(apiKey, row.call_control_id);
       await telnyxHangupCall(apiKey, row.call_control_id);
       await telemetryRecord(supabase, "voice_amd_resolution_forced", {

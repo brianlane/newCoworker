@@ -155,6 +155,13 @@ describe("decideAmdResolution", () => {
     expect(
       decide(machineContext({ voicemail_speak_started_at: "2026-08-27T15:35:40.000Z" }))
     ).toEqual({ action: "skip", reason: "already_resolved" });
+    // A prior tick already hung this scriptless leg up; if the call.hangup
+    // webhook was lost the session stays ai_intake, and without this skip
+    // every tick would re-issue a hangup for the full stale window.
+    expect(decide(machineContext({ amd_resolution_hung_up: true }))).toEqual({
+      action: "skip",
+      reason: "already_resolved"
+    });
   });
 
   it("skips stamps with no usable timestamp (pre-sweep verdicts)", () => {
