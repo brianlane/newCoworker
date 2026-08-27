@@ -13,6 +13,7 @@ const PRODUCT_LINKS: FooterLink[] = [
   { href: "/integrations", labelKey: "integrations" },
   { href: "/industries", labelKey: "industries" },
   { href: "/compare", labelKey: "compare" },
+  { href: "/docs/api", labelKey: "developers" },
   { href: "/onboard", labelKey: "getStarted" },
   { href: "/login", labelKey: "signIn" }
 ];

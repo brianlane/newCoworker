@@ -87,6 +87,7 @@
       "contact": "Contacto",
       "privacy": "Política de privacidad",
       "terms": "Términos de servicio",
+      "developers": "Desarrolladores",
       "signIn": "Iniciar sesión",
       "getStarted": "Comenzar",
       "dashboard": "Panel",
@@ -1026,9 +1027,9 @@
     },
     "integrationsPage": {
       "metaTitle": "Integraciones",
-      "metaDescription": "Conecta New Coworker a anuncios de leads de Meta, Claude, 8,000+ apps vía Zapier, calendario y correo nativos de Google Workspace y Microsoft 365, una API REST pública y webhooks.",
+      "metaDescription": "Conecta New Coworker a anuncios de leads de Meta, Slack, Zoom, Claude, ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google Workspace y Microsoft 365, una API REST pública y webhooks.",
       "ogTitle": "Integraciones | New Coworker",
-      "ogDescription": "Anuncios de leads de Meta, conector de Claude, 8,000+ apps vía Zapier, calendario y correo nativos de Google y Microsoft, API pública y webhooks.",
+      "ogDescription": "Anuncios de leads de Meta, Slack, Zoom, conectores de Claude y ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google y Microsoft, API pública y webhooks.",
       "heroEyebrow": "Integraciones",
       "heroTitle": "Conecta tu coworker a",
       "heroHighlight": "8,000+ apps",
@@ -1081,8 +1082,8 @@
         "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas y gestionar AiFlows, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel."
       },
       "chatgpt": {
-        "title": "Aplicacion de ChatGPT",
-        "description": "Deja que ChatGPT trabaje con tu companero: consultar contactos, leer mensajes y resumenes de llamadas, enviar mensajes y agendar citas, todo autenticado como tu mediante OAuth, con permisos que coinciden con tu rol en el panel."
+        "title": "Aplicación de ChatGPT",
+        "description": "Deja que ChatGPT trabaje con tu coworker: consultar contactos, leer mensajes y resúmenes de llamadas, enviar mensajes y agendar citas, todo autenticado como tú mediante OAuth, con permisos que coinciden con tu rol en el panel."
       },
       "google": {
         "title": "Google Workspace",
@@ -1091,6 +1092,14 @@
       "microsoft": {
         "title": "Microsoft 365",
         "description": "Los mismos superpoderes de calendario y correo para negocios con Outlook y Microsoft 365."
+      },
+      "slack": {
+        "title": "Slack",
+        "description": "Tu coworker dentro de Slack: responde mensajes directos y @menciones, publica alertas de leads y reservas en el canal que elijas, y permite al dueño aprobar automatizaciones con un botón. Plan Standard y superiores."
+      },
+      "zoom": {
+        "title": "Zoom",
+        "description": "Las videollamadas agendadas crean una reunión de Zoom automáticamente, y las grabaciones en la nube regresan como minutas de reunión en tu biblioteca de documentos."
       },
       "zapier": {
         "title": "Zapier",

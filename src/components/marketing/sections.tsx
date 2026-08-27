@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import { CtaLink } from "./CtaLink";
 
@@ -56,18 +58,35 @@ export type Feature = {
   title: string;
   description: string;
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
+  /** When set, the whole card links there (a detail page or the docs). */
+  href?: string;
 };
 
 export function FeatureCard({ feature }: { feature: Feature }) {
-  return (
-    <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-[border-color,background-color,transform,box-shadow] duration-200 hover:border-signal-teal/40 hover:bg-parchment/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)] motion-safe:hover:-translate-y-0.5">
+  const card = (
+    <div className="h-full rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 transition-[border-color,background-color,transform,box-shadow] duration-200 hover:border-signal-teal/40 hover:bg-parchment/[0.04] hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)] motion-safe:hover:-translate-y-0.5">
       <div className="mb-2 flex items-center gap-2">
         <feature.Icon className="h-5 w-5 shrink-0 text-claw-green" />
         <h3 className="font-semibold text-parchment">{feature.title}</h3>
+        {feature.href && (
+          <ArrowUpRight aria-hidden className="ml-auto h-4 w-4 shrink-0 text-parchment/35" />
+        )}
       </div>
       <p className="text-sm leading-relaxed text-parchment/50">{feature.description}</p>
     </div>
   );
+
+  if (feature.href) {
+    return (
+      <Link
+        href={feature.href}
+        className="block h-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claw-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-deep-ink"
+      >
+        {card}
+      </Link>
+    );
+  }
+  return card;
 }
 
 export function FeatureGrid({ features, columns = 3 }: { features: Feature[]; columns?: 2 | 3 }) {

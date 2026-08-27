@@ -87,6 +87,7 @@
       "contact": "Contact",
       "privacy": "Privacy Policy",
       "terms": "Terms of Service",
+      "developers": "Developers",
       "signIn": "Sign in",
       "getStarted": "Get Started",
       "dashboard": "Dashboard",
@@ -1026,9 +1027,9 @@
     },
     "integrationsPage": {
       "metaTitle": "Integrations",
-      "metaDescription": "Connect New Coworker to Meta lead ads, Claude, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
+      "metaDescription": "Connect New Coworker to Meta lead ads, Slack, Zoom, Claude, ChatGPT, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
       "ogTitle": "Integrations | New Coworker",
-      "ogDescription": "Meta lead ads, Claude connector, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
+      "ogDescription": "Meta lead ads, Slack, Zoom, Claude and ChatGPT connectors, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
       "heroEyebrow": "Integrations",
       "heroTitle": "Connect your coworker to",
       "heroHighlight": "8,000+ apps",
@@ -1091,6 +1092,14 @@
       "microsoft": {
         "title": "Microsoft 365",
         "description": "The same calendar and email superpowers for Outlook and Microsoft 365 businesses."
+      },
+      "slack": {
+        "title": "Slack",
+        "description": "Your coworker inside Slack: it answers DMs and @mentions, posts lead and booking alerts to a channel you pick, and lets the owner approve automations with one button. Standard plan and up."
+      },
+      "zoom": {
+        "title": "Zoom",
+        "description": "Booked video calls get a scheduled Zoom meeting automatically, and cloud recordings come back as meeting minutes in your document library."
       },
       "zapier": {
         "title": "Zapier",
