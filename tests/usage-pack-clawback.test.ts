@@ -232,7 +232,10 @@ describe("usage-pack-clawback", () => {
     expect(computeUsagePackClawbackAmount(1000, 500, 1800)).toBe(900);
     expect(computeUsagePackClawbackAmount(1000, 1000, 1800)).toBeNull();
     expect(computeUsagePackClawbackAmount(null, 500, 1800)).toBeNull();
-    expect(computeUsagePackClawbackAmount(1000, 0, 1800)).toBeNull();
+    // Zero refunded is an explicit no-op, never the full-void sentinel: a
+    // malformed $0 charge.refunded must not erase the whole grant.
+    expect(computeUsagePackClawbackAmount(1000, 0, 1800)).toBe(0);
+    expect(computeUsagePackClawbackAmount(1000, -50, 1800)).toBe(0);
     expect(computeUsagePackClawbackAmount(1000, 500, null)).toBeNull();
     expect(computeUsagePackClawbackAmount(1000, 500, 0)).toBeNull();
     // tiny refund rounds to 0

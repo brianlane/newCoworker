@@ -203,6 +203,28 @@ describe("auto-reload fast path against real Postgres", () => {
       expect(await needsCheckAt(db, paused)).toBeNull();
     });
 
+    it("a stamped-but-paused-billing tenant never surfaces from the flagged claim (real SQL)", async () => {
+      // The consume-time stamp is pause-blind by design; the GATE is in the
+      // flagged-candidates SQL, which must mirror the full scan's
+      // billing_paused predicate or the every-minute path charges a comped
+      // tenant the 15-minute path just stopped charging.
+      const businessId = await seedTenant(db, "Fast path itest (billing paused)");
+      const { error: reserveErr } = await db.rpc("try_reserve_sms_outbound_slot", {
+        p_business_id: businessId
+      });
+      if (reserveErr) throw new Error(`reserve: ${reserveErr.message}`);
+      expect(await needsCheckAt(db, businessId)).not.toBeNull();
+
+      const { error: pauseErr } = await db
+        .from("subscriptions")
+        .update({ billing_paused: true })
+        .eq("business_id", businessId);
+      if (pauseErr) throw new Error(`pause: ${pauseErr.message}`);
+
+      const claimed = await listFlaggedAutoReloadCandidates(200, db as never);
+      expect(claimed.filter((c) => c.businessId === businessId)).toEqual([]);
+    });
+
     it("keeps the first stamp, so the queue stays FIFO", async () => {
       const businessId = await seedTenant(db, "Fast path itest (fifo)");
       await db.rpc("try_reserve_sms_outbound_slot", { p_business_id: businessId });

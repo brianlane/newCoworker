@@ -40,6 +40,18 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return errorResponse("INTERNAL_SERVER_ERROR", result.error, 500);
     }
+    // The RPCs report a miss in-band (jsonb ok:false), not as a PostgREST
+    // error, so without this check a typo'd sourceId or a voice id sent
+    // with kind:"sms" read as a completed clawback (HTTP 200). Operators
+    // and scripts gate on status; a miss must be loud.
+    const rpcOutcome = result.result as { ok?: boolean; reason?: string } | null;
+    if (rpcOutcome && rpcOutcome.ok === false) {
+      return errorResponse(
+        "NOT_FOUND",
+        `No ${body.kind} grant matches sourceId ${body.sourceId} (${rpcOutcome.reason ?? "unknown reason"}). Nothing was clawed back.`,
+        404
+      );
+    }
 
     await logAdminAction({
       adminEmail: admin.email ?? null,
