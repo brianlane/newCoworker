@@ -14,6 +14,7 @@ import { JsonLd } from "@/components/marketing/JsonLd";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { formatPricePerMonth } from "@/lib/pricing";
 import { COMPARE_ROW_COUNT, COMPARISONS, getComparison, type RowVerdict } from "../data";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
@@ -42,7 +43,7 @@ export async function generateMetadata({
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: `/compare/${entry.slug}` },
+    alternates: esAlternates(`/compare/${entry.slug}`),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

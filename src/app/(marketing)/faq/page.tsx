@@ -12,6 +12,7 @@ import {
   SectionHeading,
   type FaqItem
 } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getPeriodPricing } from "@/lib/plans/tier";
@@ -25,7 +26,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/faq" },
+    alternates: esAlternates("/faq"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

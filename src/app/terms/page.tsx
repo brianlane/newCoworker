@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { TERMS_EFFECTIVE_DATE } from "@/lib/legal/versions";
@@ -9,9 +10,7 @@ const EFFECTIVE_DATE = TERMS_EFFECTIVE_DATE;
 export const metadata: Metadata = {
   title: "Terms of Service",
   description: "The legal terms governing use of the New Coworker website, software, and related services.",
-  alternates: {
-    canonical: "/terms"
-  }
+  alternates: esAlternates("/terms")
 };
 
 export default function TermsPage() {

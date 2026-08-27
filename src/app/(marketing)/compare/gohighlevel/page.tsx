@@ -12,6 +12,7 @@ import {
   SectionHeading,
   StatBand
 } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { formatPricePerMonth } from "@/lib/pricing";
 
@@ -20,7 +21,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/compare/gohighlevel" },
+    alternates: esAlternates("/compare/gohighlevel"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

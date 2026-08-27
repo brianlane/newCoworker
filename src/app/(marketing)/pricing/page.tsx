@@ -12,6 +12,7 @@ import {
   type FaqItem
 } from "@/components/marketing/sections";
 import { PlanCards } from "@/components/pricing/PlanCards";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { buildComparisonGroups, type ComparisonCell } from "@/lib/plans/comparison";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
@@ -27,7 +28,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/pricing" },
+    alternates: esAlternates("/pricing"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 import { PRIVACY_EFFECTIVE_DATE } from "@/lib/legal/versions";
 
@@ -8,9 +9,7 @@ const EFFECTIVE_DATE = PRIVACY_EFFECTIVE_DATE;
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description: "How New Coworker collects, uses, shares, stores, and protects personal information.",
-  alternates: {
-    canonical: "/privacy"
-  }
+  alternates: esAlternates("/privacy")
 };
 
 export default function PrivacyPolicyPage() {

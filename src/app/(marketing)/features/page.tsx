@@ -39,6 +39,7 @@ import {
   SectionHeading,
   type Feature
 } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -46,7 +47,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/features" },
+    alternates: esAlternates("/features"),
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),

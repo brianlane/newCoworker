@@ -5,6 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero, SectionHeading } from "@/components/marketing/sections";
+import { esAlternates } from "@/lib/i18n/es-routes";
 
 /**
  * Public documentation for the "New Coworker" Slack app: how to add, use,
@@ -20,7 +21,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: { canonical: "/integrations/slack" },
+    alternates: esAlternates("/integrations/slack"),
     openGraph: {
       title: t("metaTitle"),
       description: t("metaDescription"),

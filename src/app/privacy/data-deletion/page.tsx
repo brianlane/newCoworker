@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { esAlternates } from "@/lib/i18n/es-routes";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 
 const EFFECTIVE_DATE = "August 1, 2026";
@@ -8,9 +9,7 @@ export const metadata: Metadata = {
   title: "Data Deletion Instructions",
   description:
     "How to request deletion of your personal data from New Coworker, including data received through Facebook and Instagram lead forms.",
-  alternates: {
-    canonical: "/privacy/data-deletion"
-  }
+  alternates: esAlternates("/privacy/data-deletion")
 };
 
 export default function DataDeletionPage() {
