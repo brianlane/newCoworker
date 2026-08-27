@@ -28,12 +28,28 @@ import {
   KYP_TIME_WINDOW
 } from "../scripts/oneshot/kyp-lead-flow-definition";
 import {
+  BOOKING_DETAILS_KNOWN_FIELD,
   buildKypBookingConfirmationDefinition,
   buildKypPreCallReminderDefinition,
-  INVITEE_LOCAL_TIME_FIELD
+  INVITEE_LOCAL_TIME_FIELD,
+  KYP_BOOKING_CONFIRMATION_EMAIL_BODY,
+  KYP_BOOKING_CONFIRMATION_EMAIL_BODY_MISSING,
+  KYP_BOOKING_CONFIRMATION_NOTIFY,
+  KYP_BOOKING_CONFIRMATION_SMS_BODY,
+  KYP_BOOKING_CONFIRMATION_SMS_BODY_MISSING,
+  KYP_BOOKING_CONFIRMATION_SUBJECT_MISSING,
+  KYP_REMINDER_SMS_BODY,
+  KYP_REMINDER_SMS_BODY_MISSING,
+  REMINDER_DETAILS_KNOWN_FIELD
 } from "../scripts/oneshot/kyp-reminder-flow-definition";
 import { addBadPhoneIntakeArm } from "../scripts/oneshot/patch-kyp-bad-phone-intake";
+import {
+  addBookingMissingDetails,
+  addReminderMissingDetails,
+  NOTIFY_PRE_FIX
+} from "../scripts/oneshot/patch-kyp-booking-missing-details";
 import { stripGuessedTimezone } from "../scripts/oneshot/patch-kyp-timezone-labels";
+import { renderTemplate } from "../supabase/functions/_shared/ai_flows/engine";
 import { customerFacingCancelSurfaces } from "../scripts/oneshot/patch-kyp-cancel-tool-policy";
 import {
   CURRENT_PREMIUM_TITLE,
@@ -245,15 +261,30 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
     }));
   };
 
-  /** Only what a CUSTOMER receives: send_sms and send_email copy. */
-  const customerFacingStrings = (def: { steps: StepJson[] }): string[] =>
-    def.steps
-      .filter((s) => s.type === "send_sms" || s.type === "send_email")
-      .flatMap((s) =>
-        [(s as { body?: string }).body, (s as { subject?: string }).subject].filter(
-          (v): v is string => typeof v === "string"
-        )
-      );
+  /**
+   * Only what a CUSTOMER receives: send_sms and send_email copy, however
+   * deeply nested. The confirmation SMS moved inside a branch on Aug 27
+   * 2026, and a top-level-only walk would silently drop it from these pins.
+   */
+  const customerFacingStrings = (def: { steps: StepJson[] }): string[] => {
+    const out: string[] = [];
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+      if (!node || typeof node !== "object") return;
+      const step = node as { type?: string; body?: string; subject?: string };
+      if (step.type === "send_sms" || step.type === "send_email") {
+        for (const v of [step.body, step.subject]) {
+          if (typeof v === "string") out.push(v);
+        }
+      }
+      for (const v of Object.values(step)) visit(v);
+    };
+    visit(def.steps);
+    return out;
+  };
 
   /** Any variable whose name suggests a timezone, however spelled. */
   const ZONE_VAR_RE = /\{\{vars\.[a-z_]*(tz|time_?zone)[a-z_]*\}\}/i;
@@ -334,19 +365,35 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
    * the tenant would end up in a third shape neither file describes. Same
    * guarantee the bad-phone patch carries above.
    */
-  it("the one-shot turns the real pre-fix live shape into the builder", () => {
-    const cases: Array<[string, unknown, Record<string, unknown>]> = [
-      ["pre-call reminder", KYP_PRE_CALL_REMINDER_PRE_FIX, buildKypPreCallReminderDefinition()],
+  it("the one-shot chain turns the real pre-fix live shape into the builder", () => {
+    // Two ledgered patches separate the Aug 5 live capture from today's
+    // builder: the timezone fix, then the missing-details fix (Aug 27). Each
+    // link must report a change, and the chain must land EXACTLY on the
+    // builder, or the appliers and the builder describe different tenants.
+    const cases: Array<
+      [string, unknown, (input: unknown) => { changed: boolean; definition: unknown }, Record<string, unknown>]
+    > = [
+      [
+        "pre-call reminder",
+        KYP_PRE_CALL_REMINDER_PRE_FIX,
+        addReminderMissingDetails,
+        buildKypPreCallReminderDefinition()
+      ],
       [
         "booking confirmation",
         KYP_BOOKING_CONFIRMATION_PRE_FIX,
+        addBookingMissingDetails,
         buildKypBookingConfirmationDefinition()
       ]
     ];
-    for (const [label, live, expected] of cases) {
-      const result = stripGuessedTimezone(live);
-      expect(result.changed, `${label}: the pre-fix shape must need patching`).toBe(true);
-      expect(result.definition, `${label}: patch output must equal the canonical builder`).toEqual(
+    for (const [label, preFix, missingDetails, expected] of cases) {
+      const mid = stripGuessedTimezone(preFix);
+      expect(mid.changed, `${label}: the pre-fix shape must need the timezone patch`).toBe(true);
+      const final = missingDetails(mid.definition);
+      expect(final.changed, `${label}: the mid shape must need the missing-details patch`).toBe(
+        true
+      );
+      expect(final.definition, `${label}: the chain must equal the canonical builder`).toEqual(
         expected
       );
     }
@@ -500,5 +547,186 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
       "an IANA zone is stated outright on the payload's 'invitee timezone:' line, so it must " +
         "be copied. The moment it is named or translated instead, it can be guessed wrong again."
     ).toBe(true);
+  });
+});
+
+/**
+ * Fleet fallback-composition audit, Aug 27 2026: several extraction fields
+ * fall back to the literal 'none', and both flows quoted them inside spoken
+ * sentences with NO guard, so the first Calendly payload missing its usual
+ * lines would have texted a LEAD "your free strategy call on none at none
+ * your time" (the class that fired live on Amy's cadence, PR #1673). Every
+ * customer send is now a guarded specific/generic pair behind a
+ * details-known gate, and the owner notify labels each fact.
+ */
+describe("KYP calendar flows: missing-details fallback (audit, Aug 27 2026)", () => {
+  const reminder = buildKypPreCallReminderDefinition() as { steps: StepJson[] };
+  const confirmation = buildKypBookingConfirmationDefinition() as { steps: StepJson[] };
+
+  /** Every var at its written fallback; the reachable/details gates vary per test. */
+  const fallbackVars = {
+    invitee_name: "Reem Example",
+    invitee_first_name: "Reem",
+    invitee_phone: "none",
+    invitee_email: "none",
+    invitee_local_time: "none",
+    invitee_timezone_iana: "none",
+    invitee_day_date: "none",
+    zoom_link: "none",
+    lead_reachable: "yes",
+    booking_details_known: "no",
+    reminder_details_known: "no"
+  };
+
+  it("each reminder send is an exhaustive pair on the details gate", () => {
+    const byId = (id: string): StepJson | undefined => reminder.steps.find((s) => s.id === id);
+    expect(byId("reminder_sms")?.when).toEqual({
+      var: REMINDER_DETAILS_KNOWN_FIELD.name,
+      equals: "yes"
+    });
+    expect(byId("reminder_sms_missing")?.when).toEqual({
+      var: REMINDER_DETAILS_KNOWN_FIELD.name,
+      notEquals: "yes"
+    });
+    const fields = (reminder.steps[0] as { fields?: Array<{ name?: string }> }).fields ?? [];
+    expect(fields.map((f) => f.name)).toContain(REMINDER_DETAILS_KNOWN_FIELD.name);
+  });
+
+  it("each confirmation send is an exhaustive pair, the SMS inside the reachable branch", () => {
+    const byId = (id: string): StepJson | undefined =>
+      confirmation.steps.find((s) => s.id === id);
+    expect(byId("confirm_email")?.when).toEqual({
+      var: BOOKING_DETAILS_KNOWN_FIELD.name,
+      equals: "yes"
+    });
+    expect(byId("confirm_email_missing")?.when).toEqual({
+      var: BOOKING_DETAILS_KNOWN_FIELD.name,
+      notEquals: "yes"
+    });
+    // A step carries ONE when; the SMS pair needs lead_reachable too, so it
+    // nests inside a branch that supplies the second condition.
+    const gate = byId("confirm_sms_gate") as unknown as {
+      branches: Array<{ condition: unknown; steps: Array<{ id?: string; when?: unknown }> }>;
+      else: unknown[];
+    };
+    expect(gate.branches).toHaveLength(1);
+    expect(gate.branches[0].condition).toEqual({ var: "lead_reachable", equals: "yes" });
+    expect(gate.branches[0].steps.map((s) => s.id)).toEqual(["confirm_sms", "confirm_sms_missing"]);
+    expect(gate.branches[0].steps[0].when).toEqual({
+      var: BOOKING_DETAILS_KNOWN_FIELD.name,
+      equals: "yes"
+    });
+    expect(gate.branches[0].steps[1].when).toEqual({
+      var: BOOKING_DETAILS_KNOWN_FIELD.name,
+      notEquals: "yes"
+    });
+    expect(gate.else, "an unreachable phone sends nothing, as before").toEqual([]);
+  });
+
+  it("the generic copy renders clean when every extraction fell back", () => {
+    const scope = { vars: fallbackVars };
+    const generics = [
+      KYP_REMINDER_SMS_BODY_MISSING,
+      KYP_BOOKING_CONFIRMATION_SMS_BODY_MISSING,
+      KYP_BOOKING_CONFIRMATION_EMAIL_BODY_MISSING,
+      KYP_BOOKING_CONFIRMATION_SUBJECT_MISSING
+    ];
+    for (const template of generics) {
+      const rendered = renderTemplate(template, scope);
+      expect(rendered).not.toMatch(/\b(on|at|for|by) none\b/i);
+      expect(rendered).not.toContain("none");
+      expect(rendered).not.toContain("{{");
+      expect(rendered).not.toContain("  ");
+    }
+    expect(renderTemplate(KYP_REMINDER_SMS_BODY_MISSING, scope)).toContain(
+      "coming up within the hour"
+    );
+    expect(renderTemplate(KYP_BOOKING_CONFIRMATION_EMAIL_BODY_MISSING, scope)).toContain(
+      "The exact day, time, and Zoom link are in your calendar invite."
+    );
+  });
+
+  it("the specific copy still reads exactly as approved when details are known", () => {
+    const known = {
+      vars: {
+        ...fallbackVars,
+        invitee_day_date: "Monday, July 28",
+        invitee_local_time: "10:00 AM",
+        zoom_link: "https://zoom.us/j/123",
+        booking_details_known: "yes",
+        reminder_details_known: "yes"
+      }
+    };
+    expect(renderTemplate(KYP_BOOKING_CONFIRMATION_SMS_BODY, known)).toContain(
+      "your free strategy call on Monday, July 28 at 10:00 AM your time"
+    );
+    expect(renderTemplate(KYP_REMINDER_SMS_BODY, known)).toContain(
+      "coming up today at 10:00 AM your time"
+    );
+    expect(renderTemplate(KYP_BOOKING_CONFIRMATION_EMAIL_BODY, known)).toContain(
+      "Here's your link to join when it's time: https://zoom.us/j/123"
+    );
+  });
+
+  it("the owner notify labels every fact, so a miss reads as a fact", () => {
+    const rendered = renderTemplate(KYP_BOOKING_CONFIRMATION_NOTIFY, { vars: fallbackVars });
+    expect(rendered).toContain("Day: none. Time: none invitee local time (none).");
+    expect(rendered).toContain("Email: none. Phone: none.");
+    expect(rendered).not.toMatch(/\bfor none\b/);
+    // James keeps the zone slot even on a miss; the pre-fix copy is retired.
+    expect(KYP_BOOKING_CONFIRMATION_NOTIFY).not.toBe(NOTIFY_PRE_FIX);
+  });
+
+  it("keeps the gate field descriptions inside the schema's 300-char cap", () => {
+    for (const field of [BOOKING_DETAILS_KNOWN_FIELD, REMINDER_DETAILS_KNOWN_FIELD]) {
+      expect(field.description.length, field.name).toBeLessThanOrEqual(300);
+      expect(field.description).toContain("Exactly 'yes'");
+    }
+  });
+
+  it("both missing-details transforms are idempotent on the builders", () => {
+    const reminderAgain = addReminderMissingDetails(buildKypPreCallReminderDefinition());
+    expect(reminderAgain.changed).toBe(false);
+    expect(reminderAgain.notes.join("\n")).toContain("already patched");
+    const bookingAgain = addBookingMissingDetails(buildKypBookingConfirmationDefinition());
+    expect(bookingAgain.changed).toBe(false);
+    expect(bookingAgain.notes.join("\n")).toContain("already patched");
+  });
+
+  it("never clobbers an unexpected when, and withholds the sibling that would double-send", () => {
+    const mid = stripGuessedTimezone(KYP_PRE_CALL_REMINDER_PRE_FIX).definition;
+    (mid.steps!.find((s) => s.id === "reminder_sms") as { when?: unknown }).when = {
+      var: "invitee_phone",
+      notEquals: "none"
+    };
+    const result = addReminderMissingDetails(mid);
+    const out = result.definition.steps as Array<{ id?: string; when?: unknown }>;
+    expect(out.find((s) => s.id === "reminder_sms")?.when).toEqual({
+      var: "invitee_phone",
+      notEquals: "none"
+    });
+    expect(result.notes.join("\n")).toContain("unexpected when");
+    // Without the gate on reminder_sms, adding the sibling would make BOTH
+    // texts fire on a known-details run.
+    expect(out.some((s) => s.id === "reminder_sms_missing")).toBe(false);
+  });
+
+  it("leaves drifted notify copy alone instead of overwriting it", () => {
+    const mid = stripGuessedTimezone(KYP_BOOKING_CONFIRMATION_PRE_FIX).definition;
+    mid.steps!.find((s) => s.id === "notify_james")!.message = "James's own hand-edited wording";
+    const result = addBookingMissingDetails(mid);
+    const out = result.definition.steps as Array<{ id?: string; message?: string }>;
+    expect(out.find((s) => s.id === "notify_james")?.message).toBe(
+      "James's own hand-edited wording"
+    );
+    expect(result.notes.join("\n")).toContain("notify_james: unexpected copy");
+  });
+
+  it("reports a wrong flow shape instead of transforming it", () => {
+    for (const transform of [addReminderMissingDetails, addBookingMissingDetails]) {
+      const result = transform({ steps: [{ id: "other", type: "send_sms" }] });
+      expect(result.changed).toBe(false);
+      expect(result.notes.join("\n")).toContain("wrong flow shape");
+    }
   });
 });

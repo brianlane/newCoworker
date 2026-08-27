@@ -36,6 +36,17 @@
  * goes to James and not to a customer, carries the zone verbatim from the
  * payload so he can tell whose 2:00 PM it is.
  *
+ * A SECOND RULE SINCE AUG 27 2026 (fleet fallback-composition audit): never
+ * quote a detail the extraction may have missed inside a spoken sentence.
+ * Several fields fall back to the literal word 'none', so the old
+ * single-template copy could read "your call on none at none your time" to a
+ * customer the moment a Calendly payload arrived without its usual lines
+ * (0 misses observed so far, but the send steps had no guard at all). Each
+ * customer send now comes as a guarded pair: the specific copy runs only when
+ * a details-known gate extracted 'yes', and a generic sibling that points at
+ * the calendar invite runs otherwise. The owner notify instead labels each
+ * fact ("Day: none" reads as a fact where "for none" read as gibberish).
+ *
  * Any change to these two flows belongs HERE, applied through a
  * ledger-recorded one-shot, so the builder and the tenant cannot drift.
  */
@@ -88,6 +99,24 @@ export const INVITEE_TIMEZONE_IANA_FIELD: FlowFieldJson = {
 };
 
 /**
+ * Details-known gates. A guard can test a var against a value but not test
+ * two vars at once, so each flow extracts ONE yes/no fact covering every
+ * detail its specific copy quotes. The fields the gates summarize fall back
+ * to 'none' individually; the gate is what keeps 'none' out of a sentence.
+ */
+export const BOOKING_DETAILS_KNOWN_FIELD: FlowFieldJson = {
+  name: "booking_details_known",
+  description:
+    "Exactly 'yes' when the message states all three of: the day/date of the call, the 'starts (invitee local time):' clock time, and a Zoom/video join link. Otherwise exactly 'no'."
+};
+
+export const REMINDER_DETAILS_KNOWN_FIELD: FlowFieldJson = {
+  name: "reminder_details_known",
+  description:
+    "Exactly 'yes' when the message states both the 'starts (invitee local time):' clock time and a Zoom/video join link. Otherwise exactly 'no'."
+};
+
+/**
  * Body of the 1-hour reminder text.
  *
  * "your time" rather than a named zone: `invitee_local_time` is already the
@@ -97,13 +126,40 @@ export const INVITEE_TIMEZONE_IANA_FIELD: FlowFieldJson = {
 export const KYP_REMINDER_SMS_BODY =
   "Hi {{vars.invitee_first_name}}, it's Samantha again, James's assistant at KYP Ads. Just a heads up that your call with James is coming up today at {{vars.invitee_local_time}} your time. \n\nCould you quickly confirm you're still good to hop on the Zoom? James has had a lot of demand lately so I want to make sure we hold your spot. Here's your link: {{vars.zoom_link}} \n\nJust reply and let me know, talk soon! \nSam";
 
+/**
+ * The reminder when the payload did not carry the time or the link. "within
+ * the hour" is always true for this flow (it fires on `leadMinutes: 60`), and
+ * the calendar invite the invitee already holds has both details.
+ */
+export const KYP_REMINDER_SMS_BODY_MISSING =
+  "Hi {{vars.invitee_first_name}}, it's Samantha again, James's assistant at KYP Ads. Just a heads up that your call with James is coming up within the hour. \n\nCould you quickly confirm you're still good to hop on the Zoom? James has had a lot of demand lately so I want to make sure we hold your spot. The link is in your calendar invite. \n\nJust reply and let me know, talk soon! \nSam";
+
 /** Body of the booking-confirmation text. */
 export const KYP_BOOKING_CONFIRMATION_SMS_BODY =
   "Hi {{vars.invitee_name.first}}, this is Samantha, James's assistant at KYP Ads. You're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} your time. It's a relaxed Zoom, James will get to know your business and map out how he'd bring you more leads, and you can see if it's a fit. Here's your link for when it's time: {{vars.zoom_link}} If anything comes up just reply here and I'll take care of it. Talk soon, Sam";
 
+/** The confirmation text when the payload was missing a detail the specific copy quotes. */
+export const KYP_BOOKING_CONFIRMATION_SMS_BODY_MISSING =
+  "Hi {{vars.invitee_name.first}}, this is Samantha, James's assistant at KYP Ads. You're all set for your free strategy call, the day, time, and Zoom link are in your calendar invite. It's a relaxed Zoom, James will get to know your business and map out how he'd bring you more leads, and you can see if it's a fit. If anything comes up just reply here and I'll take care of it. Talk soon, Sam";
+
 /** Body of the booking-confirmation email. */
 export const KYP_BOOKING_CONFIRMATION_EMAIL_BODY =
   "Hi {{vars.invitee_name.first}},\n\nThis is Samantha, James's assistant at KYP Ads. Just wanted to reach out personally and let you know you're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} your time.\n\nIt's a relaxed Zoom call. James will get to know your business, walk through how he'd bring you more leads, and you can get a feel for whether it's the right fit. No pressure at all.\n\nHere's your link to join when it's time: {{vars.zoom_link}}\n\nIf anything comes up or you need to move the time, just reply here or text the number that messaged you and I'll take care of it.\n\nLooking forward to having you on,\n\nSam\nKYP Ads\nkypads.com\n+14388035806";
+
+/**
+ * The confirmation email when the payload was missing a detail. Drops the
+ * day/time clause AND the join-link line (a missing link renders the literal
+ * 'none' as a link target); everything else stays byte-identical to the
+ * specific copy.
+ */
+export const KYP_BOOKING_CONFIRMATION_EMAIL_BODY_MISSING =
+  "Hi {{vars.invitee_name.first}},\n\nThis is Samantha, James's assistant at KYP Ads. Just wanted to reach out personally and let you know you're all set for your free strategy call. The exact day, time, and Zoom link are in your calendar invite.\n\nIt's a relaxed Zoom call. James will get to know your business, walk through how he'd bring you more leads, and you can get a feel for whether it's the right fit. No pressure at all.\n\nIf anything comes up or you need to move the time, just reply here or text the number that messaged you and I'll take care of it.\n\nLooking forward to having you on,\n\nSam\nKYP Ads\nkypads.com\n+14388035806";
+
+/** Specific subject quotes the day; the missing-details subject quotes nothing. */
+export const KYP_BOOKING_CONFIRMATION_SUBJECT =
+  "You're booked in, your KYP Ads strategy call on {{vars.invitee_day_date}}";
+export const KYP_BOOKING_CONFIRMATION_SUBJECT_MISSING =
+  "You're booked in, your KYP Ads strategy call";
 
 /**
  * Owner-notify line for a new booking.
@@ -112,9 +168,13 @@ export const KYP_BOOKING_CONFIRMATION_EMAIL_BODY =
  * invitee's wall clock, and "2:00 PM" with no zone is the ambiguity that
  * started this whole incident. The zone is the verbatim IANA identifier from
  * the payload, so it is copied rather than guessed.
+ *
+ * Labelled facts rather than a sentence: several of these fields fall back
+ * to 'none', and "Day: none" reads as a fact where the old "for none at
+ * none" read as gibberish (fleet fallback-composition audit, Aug 27 2026).
  */
 export const KYP_BOOKING_CONFIRMATION_NOTIFY =
-  "New booking: {{vars.invitee_name}} for {{vars.invitee_day_date}} at {{vars.invitee_local_time}} invitee local time ({{vars.invitee_timezone_iana}}). Email: {{vars.invitee_email}}. Phone: {{vars.invitee_phone}}.";
+  "New booking: {{vars.invitee_name}}. Day: {{vars.invitee_day_date}}. Time: {{vars.invitee_local_time}} invitee local time ({{vars.invitee_timezone_iana}}). Email: {{vars.invitee_email}}. Phone: {{vars.invitee_phone}}.";
 
 /**
  * "Pre-call reminder (1hr before) confirm attendance", flow `8e4e1c35`.
@@ -147,7 +207,8 @@ export function buildKypPreCallReminderDefinition(): Record<string, unknown> {
         {
           name: "invitee_email",
           description: "The invitee's email address from the 'invitee email:' line. 'none' when absent."
-        }
+        },
+        REMINDER_DETAILS_KNOWN_FIELD
       ]
     },
     {
@@ -158,11 +219,23 @@ export function buildKypPreCallReminderDefinition(): Record<string, unknown> {
       emailVar: "invitee_email",
       phoneVar: "invitee_phone"
     },
+    // equals / notEquals on the same var and value form an exhaustive
+    // either/or, so exactly one reminder goes out; a run started before the
+    // gate existed has no var, which reads as notEquals and takes the safe
+    // generic copy.
     {
       id: "reminder_sms",
       to: "{{vars.invitee_phone}}",
       body: KYP_REMINDER_SMS_BODY,
-      type: "send_sms"
+      type: "send_sms",
+      when: { var: REMINDER_DETAILS_KNOWN_FIELD.name, equals: "yes" }
+    },
+    {
+      id: "reminder_sms_missing",
+      to: "{{vars.invitee_phone}}",
+      body: KYP_REMINDER_SMS_BODY_MISSING,
+      type: "send_sms",
+      when: { var: REMINDER_DETAILS_KNOWN_FIELD.name, notEquals: "yes" }
     }
   ];
 
@@ -223,7 +296,8 @@ export function buildKypBookingConfirmationDefinition(): Record<string, unknown>
           name: "lead_reachable",
           description:
             "Exactly 'yes' if invitee_phone is a real usable number; 'no' if it is 'none' or missing."
-        }
+        },
+        BOOKING_DETAILS_KNOWN_FIELD
       ]
     },
     {
@@ -231,15 +305,50 @@ export function buildKypBookingConfirmationDefinition(): Record<string, unknown>
       to: "{{vars.invitee_email}}",
       body: KYP_BOOKING_CONFIRMATION_EMAIL_BODY,
       type: "send_email",
-      subject: "You're booked in, your KYP Ads strategy call on {{vars.invitee_day_date}}",
-      fromConnectionId: KYP_BOOKING_EMAIL_CONNECTION_ID
+      subject: KYP_BOOKING_CONFIRMATION_SUBJECT,
+      fromConnectionId: KYP_BOOKING_EMAIL_CONNECTION_ID,
+      when: { var: BOOKING_DETAILS_KNOWN_FIELD.name, equals: "yes" }
     },
     {
-      id: "confirm_sms",
-      to: "{{vars.invitee_phone}}",
-      body: KYP_BOOKING_CONFIRMATION_SMS_BODY,
-      type: "send_sms",
-      when: { var: "lead_reachable", equals: "yes" }
+      id: "confirm_email_missing",
+      to: "{{vars.invitee_email}}",
+      body: KYP_BOOKING_CONFIRMATION_EMAIL_BODY_MISSING,
+      type: "send_email",
+      subject: KYP_BOOKING_CONFIRMATION_SUBJECT_MISSING,
+      fromConnectionId: KYP_BOOKING_EMAIL_CONNECTION_ID,
+      when: { var: BOOKING_DETAILS_KNOWN_FIELD.name, notEquals: "yes" }
+    },
+    // A step carries ONE `when`, and this send needs lead_reachable AND the
+    // details gate; the branch supplies the second condition. `else` stays
+    // empty: an unreachable phone sends nothing, as before.
+    {
+      id: "confirm_sms_gate",
+      type: "branch",
+      question: "Does the invitee have a real phone to text?",
+      branches: [
+        {
+          id: "confirm_sms_reachable",
+          label: "Has a real phone",
+          condition: { var: "lead_reachable", equals: "yes" },
+          steps: [
+            {
+              id: "confirm_sms",
+              to: "{{vars.invitee_phone}}",
+              body: KYP_BOOKING_CONFIRMATION_SMS_BODY,
+              type: "send_sms",
+              when: { var: BOOKING_DETAILS_KNOWN_FIELD.name, equals: "yes" }
+            },
+            {
+              id: "confirm_sms_missing",
+              to: "{{vars.invitee_phone}}",
+              body: KYP_BOOKING_CONFIRMATION_SMS_BODY_MISSING,
+              type: "send_sms",
+              when: { var: BOOKING_DETAILS_KNOWN_FIELD.name, notEquals: "yes" }
+            }
+          ]
+        }
+      ],
+      else: []
     },
     {
       id: "file_contact",

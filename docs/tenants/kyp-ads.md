@@ -334,7 +334,23 @@ Patches: `patch-kyp-timezone-labels.ts`, `patch-kyp-noshow-event-title.ts`,
 `reenroll-kyp-canceled-runs.ts`, `backfill-calendly-booking-goals.ts`,
 `fix-kyp-kav-contact.ts`, `mark-lead-spam.ts`, `undo-spam-flag.ts`,
 `strip-em-dashes-flows.ts`, `rename-phone-named-gate-fields.ts`,
-`patch-kyp-bad-phone-intake.ts`.
+`patch-kyp-bad-phone-intake.ts`, `patch-kyp-booking-missing-details.ts`.
+
+`patch-kyp-booking-missing-details.ts` (Aug 27 2026, fleet
+fallback-composition audit): both calendar flows quoted extraction fields
+that fall back to the literal 'none' inside spoken sentences with no guard,
+so a malformed Calendly payload would have texted a lead "your free strategy
+call on none at none your time" (0 misses in 57 runs, but nothing stood in
+the way). Each customer send is now a guarded specific/generic pair behind a
+details-known gate field (`booking_details_known` / `reminder_details_known`);
+the generic copy points at the calendar invite. The confirmation SMS needs
+lead_reachable AND the gate, and a step carries one `when`, so `confirm_sms`
+now nests inside the `confirm_sms_gate` branch. The owner notify labels each
+fact ("Day: none" reads as a fact). This patch ADDS steps, so unlike the
+timezone patch it shifts flat step indices: the apply refuses while any
+non-terminal run sits at or past the first differing index (both flows finish
+in seconds). Transforms pinned by `tests/oneshot-kyp-definitions.test.ts`
+(the pre-fix fixture now chains through BOTH patches to reach the builder).
 
 `patch-kyp-bad-phone-intake.ts` is the Aug 1 2026 undialable-lead fix: a
 Facebook lead typed a `+1` number with three stray extra digits (13 national

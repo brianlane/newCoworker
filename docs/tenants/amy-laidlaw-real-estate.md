@@ -1279,6 +1279,13 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 `patch-clever-group-reply-second-intro.ts`,
 `patch-clever-accept-idempotent.ts` (Aug 4 2026: `continueWhenText` on the
 accept step, see Sharp edges),
+`patch-clever-accept-whisper-budget.ts` (Aug 27 2026, fleet
+fallback-composition audit: the buyer live-transfer whisper composed
+"looking around X at about {{vars.price}}" while `price` falls back to the
+literal 'none' on roughly a quarter of runs, so the teammate picking up a
+live call would read "at about none". The price is a labelled
+"Budget: {{vars.price}}" now; template-only, three whisper sites, pinned by
+`tests/oneshot-fallback-copy-patches.test.ts`),
 `clever-spoke-check-unclaimed-patch.ts` +
 `patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
 second trigger, see Sharp edges),

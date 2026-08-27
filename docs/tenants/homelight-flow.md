@@ -247,7 +247,18 @@ reveal-ladder regate, wider mailbox reads; `--revert --apply` restores the
 stored previous definition),
 `amy-homelight-integration-label.ts` (Aug 17 2026: the credential rename, see
 Sharp edges) over the pure builder
-`amy-homelight-integration-label-definition.ts`.
+`amy-homelight-integration-label-definition.ts`,
+`patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
+fallback-composition audit: the portal extraction misses so often that
+lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
+team copy composed the fields as a bare run-on. That FIRED: six emails to
+amy@amylaidlaw.com between Jul 31 and Aug 14 read "Lead: none ()  Address:
+Mesa", one with subject "none QT HL CC DAVE". Team copy and the two
+voice_brief notes now label each fact, "Name/Phone/Email:", so a miss reads
+"Phone: none". The QT subject itself is deliberately untouched: its tokens
+are Amy's filing convention and likely feed inbox rules. Template-only, so
+parked runs are safe; pinned by
+`tests/oneshot-fallback-copy-patches.test.ts`).
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
