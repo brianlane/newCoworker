@@ -77,14 +77,22 @@ serve(async (req: Request) => {
     return json(200, { ok: true, enabled: true, candidates: 0, acted: 0 });
   }
 
-  // Candidates: live outbound AI legs with an UNRESOLVED machine stamp, for
-  // enrolled businesses. The filters mirror the pg_cron EXISTS guard AND the
-  // enrollment gate so the 25-row page can only hold actionable rows: a
-  // looser query here could fill the page with other tenants' in-flight or
-  // already-resolved legs and starve the one enrolled call that is overdue
-  // (Bugbot, PR #1674). The pure decision then re-checks everything (claim,
-  // screening, stamp age, script) so every skip reason stays unit-tested,
-  // and remains the sole authority on ACTING.
+  // Candidates: ENROLLED businesses' live outbound AI legs with a machine
+  // stamp, oldest first. Two deliberate scoping choices close the page-
+  // starvation hole (Bugbot, PR #1674) without jsonb-null filter gymnastics:
+  //
+  //   - Enrollment is filtered IN THE QUERY (`.in` on business_ids), so
+  //     other tenants' legs can never occupy the page. Within one enrolled
+  //     tenant, 50 simultaneous machine-stamped live calls is impossible
+  //     (per-tenant channel caps are an order of magnitude smaller).
+  //   - Oldest-first ordering means even a pathologically full page serves
+  //     the longest-waiting call first.
+  //
+  // Resolved-state keys (claim, speak start, hangup marker) are deliberately
+  // NOT query filters: expressing absent-or-not-true needs chained `or`
+  // params whose PostgREST composition Bugbot flagged as ambiguous, and the
+  // pure decision skips those rows anyway, where every reason is unit-tested.
+  // The pg_cron EXISTS guard keeps idle ticks from firing HTTP at all.
   // The 30-minute window matches AMD_RESOLUTION_MAX_AGE_MS and the guard:
   // anything older is a stale session, not a live call.
   const sinceIso = new Date(Date.now() - AMD_RESOLUTION_MAX_AGE_MS).toISOString();
@@ -94,12 +102,8 @@ serve(async (req: Request) => {
     .eq("status", "ai_intake")
     .gte("created_at", sinceIso)
     .eq("context->>machine_detected", "true")
-    // ->> of an absent key is NULL, and NULL never satisfies neq, so each
-    // absent-or-not-true filter needs the explicit is.null arm.
-    .or("context->>voicemail_claimed.is.null,context->>voicemail_claimed.neq.true")
-    .is("context->>voicemail_speak_started_at", null)
-    .or("context->>amd_resolution_hung_up.is.null,context->>amd_resolution_hung_up.neq.true")
-    .limit(25);
+    .order("created_at", { ascending: true })
+    .limit(50);
   if (!config.allBusinesses) {
     query = query.in("business_id", [...config.businessIds]);
   }
