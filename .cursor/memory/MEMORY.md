@@ -1,127 +1,127 @@
-Project memory store. Read the matching linked file before acting; do not
-re-derive a known answer.
+Project memory store. Read the linked file before acting; do not re-derive a known answer.
 
 - [Full test coverage requirement](feedback_testing.md) - npx vitest run --coverage must pass at 100%
-- [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - runner .env + Vercel env override deploy defaults; 3.7-flash 400s on thinkingLevel minimal; billed ~4x metered
-- [Research before asking](feedback_research_before_asking.md) - don't hand me a choice, or flag something "open", that the codebase already answers
-- [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, stale/down Bugbot, wedged status, GitGuardian, cancel chains, skip-ci literal; watch push CI run by FULL sha
+- [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - env overrides deploy defaults; 3.7-flash 400s on minimal thinking; ~4x metered
+- [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers
+- [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
-- [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD; dossier is not evidence
-- [Migration heal traps](project_migration_heal_traps.md) - restamps can ship zero-byte files or rename APPLIED DDL (#1532); wc -c first; herestrings + 14-day guard
-- [Browser pane vs real Chrome for console work](feedback_browser_pane_console_work.md) - hidden pane = 0x0, input drops; form_input/JS or hand off
+- [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD
+- [Migration heal traps](project_migration_heal_traps.md) - restamps ship zero-byte files or rename APPLIED DDL; wc -c first
+- [Browser pane vs real Chrome for console work](feedback_browser_pane_console_work.md) - hidden pane = 0x0, input drops; form_input/JS
 - [Heredoc bodies via files](feedback_heredoc_file_flag.md) - inline heredocs mangle; git commit -F and gh --body-file
 - [Signed-in smoke recipe](project_signed_in_smoke_recipe.md) - TEST_USERNAME/PASSWORD stale; service-role throwaway user + authenticated curl
-- [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp, cost includes carrier fee, invoices via action=link
-- [Intl SMS state](project_intl_sms_state.md) - MX on US DIDs $9.99 but MX SMS never delivered; long codes can't originate non-NANP; non-US/CA send_sms skips (#1334)
-- [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2 (PRs 1122/1128/1130/1132); counsel items still open
-- [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5, 90-day Beta; trust zapier-platform history over CLI
-- [Self-reply loop: the send-as alias trap](project_self_reply_loop_alias_trap.md) - own mail arrives inbound; every source returns the account, not the alias
+- [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp; cost includes carrier fee
+- [Intl SMS state](project_intl_sms_state.md) - MX SMS never delivered; long codes can't originate non-NANP; non-US/CA skips
+- [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2; counsel items still open
+- [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5; trust zapier-platform history over CLI
+- [Self-reply loop: the send-as alias trap](project_self_reply_loop_alias_trap.md) - own mail arrives inbound; sources return the account, not the alias
 - [Email catch-all IS the product](project_email_routing_catchall_is_the_product.md) - never repoint Cloudflare's catch-all; plus-aliases vanish
-- [Fleet redeploy check](project_fleet_redeploy_check.md) - merged vps/ change isn't live until redeploy; read /opt/newcoworker-repo HEAD on the box
-- [Telnyx sends no call_duration](project_telnyx_no_call_duration.md) - hangup webhooks carry start/end only; use telnyx_call_duration helper
+- [Fleet redeploy check](project_fleet_redeploy_check.md) - vps/ change isn't live until redeploy; read /opt/newcoworker-repo HEAD on the box
+- [Telnyx sends no call_duration](project_telnyx_no_call_duration.md) - hangup carries start/end only; telnyx_call_duration helper
 - [Tool toggles are per channel](project_agent_tool_toggles_are_per_channel.md) - keys on agent_key; missing row = ENABLED; set every channel
-- [Cron timeout has three layers](project_cron_timeout_three_layers.md) - pg_cron, Edge REQUEST_TIMEOUT_MS, route maxDuration; parity guards two
+- [Cron timeout has three layers](project_cron_timeout_three_layers.md) - pg_cron, Edge REQUEST_TIMEOUT_MS, route maxDuration
 - [Worktree builds need real node_modules](project_worktree_build_needs_real_node_modules.md) - stale installs fake tsc/eslint errors; npm ci
 - [Squash merge breaks stacked rebase](project_squash_merge_breaks_stacked_rebase.md) - is-ancestor always no after squash; rebase --onto
-- [Prove prompt fixes against the deployed prompt](feedback_prove_prompt_fixes_against_deployed.md) - one-line reverts false-negative; rules jointly load-bearing
+- [Prove prompt fixes against the deployed prompt](feedback_prove_prompt_fixes_against_deployed.md) - one-line reverts false-negative
 - [A failing old test is evidence](feedback_a_failing_old_test_is_evidence.md) - read why it exists first; it may describe the bug you just wrote
 - [Verify the column is actually written](feedback_verify_the_column_is_written.md) - confirm the write LANDS and a CALLER exists
-- [Verify the constant, not the comment](feedback_verify_the_constant_not_the_comment.md) - docblocks drift and "historical" means superseded; resolve the exported record that executes
-- [Assert the producer, not the fixture](feedback_assert_the_producer_not_the_fixture.md) - hand-fed values prove nothing; an under-built fixture fails a GOOD patch, so validate the fixture first
-- [Check for a shared mechanism first](feedback_check_for_a_shared_mechanism_first.md) - grep scripts/oneshot for the task's noun; an UNRUN one-shot leaves no trace in live data
+- [Verify the constant, not the comment](feedback_verify_the_constant_not_the_comment.md) - docblocks drift; resolve the exported record
+- [Assert the producer, not the fixture](feedback_assert_the_producer_not_the_fixture.md) - hand-fed values prove nothing; validate the fixture first
+- [Check for a shared mechanism first](feedback_check_for_a_shared_mechanism_first.md) - grep scripts/oneshot for the task's noun
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
-- [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units (parts, MMS=2.2) since #1189; seed both usage columns in tests
+- [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units since #1189; seed both usage columns in tests
 - [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432
-- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; 3-round SMS + email cadences; Aug 23 notification-fields ask saved to memory but intake SMS ignores it; open findings Aug 11
-- [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or the send silently no-ops
-- [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - Liz Calendly live Aug 14; 5-touch ladder Aug 18; booking drafts DISABLED; James +852 untextable; never quote prices
-- [SMS send logging split](project_sms_send_logging_split.md) - generated replies live in sms_inbound_jobs.assistant_reply_text, NOT sms_outbound_log
+- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; Aug 23 fields ask unimplemented
+- [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
+- [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
+- [SMS send logging split](project_sms_send_logging_split.md) - replies live in sms_inbound_jobs.assistant_reply_text, NOT sms_outbound_log
 - [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - .github/audit-allowlist.json with expiry; stale ratchet self-destructs
-- [Cloudflare scraper rules 403 Googlebot](project_cloudflare_scraper_rules_block_googlebot.md) - probe with Accept-Language header; SSL token edits rulesets
+- [Cloudflare scraper rules 403 Googlebot](project_cloudflare_scraper_rules_block_googlebot.md) - probe with Accept-Language
 - [PostgREST 1000-row cap](project_postgrest_1000_row_cap.md) - un-limited selects silently truncate; .limit() or server-side RPC
-- [Ownership never binds to the sender](project_ownership_never_binds_to_sender.md) - extracted-but-empty lead_phone means UNKNOWN, not trigger.from
-- [Meta app review](project_meta_app_review.md) - approved Aug 11 exc instagram_content_publish; a call counts only if the TOKEN carries the scope; sandbox re-granted to 36 scopes Aug 19; tier window re-ground Aug 24, safe to ~Sep 8
-- [Claim by replying "1"](project_claim_by_reply_one.md) - claims parked offers + unowned-lead alerts + booking invites, LIFO by row TOUCH; late "1, name" ignores the name; teammates reply 1 too
+- [Ownership never binds to the sender](project_ownership_never_binds_to_sender.md) - empty lead_phone means UNKNOWN, not trigger.from
+- [Meta app review](project_meta_app_review.md) - approved exc instagram_content_publish; a call counts only if the TOKEN carries the scope
+- [Claim by replying "1"](project_claim_by_reply_one.md) - claims offers + alerts + invites, LIFO by row TOUCH; "1, name" ignores the name
 - [Edge functions auto-deploy on main](project_edge_functions_deploy_on_main.md) - inside the Vercel Deploy job; vps/ stays manual
-- [Stash is repo-global in worktrees](project_stash_is_repo_global_in_worktrees.md) - a no-op stash + pop grabs another session's entry; commit WIP
+- [Stash is repo-global in worktrees](project_stash_is_repo_global_in_worktrees.md) - a no-op stash + pop grabs another session's entry
 - [Nango proxy throws on non-2xx](project_nango_proxy_throws_on_non_2xx.md) - branch via nangoProxyStatusForBusiness; never normalize globally
-- [A ChatGPT app IS an MCP server](project_chatgpt_app_is_an_mcp_server.md) - resubmitted Aug 19 night; reviewer sandbox texts Brian's phone BY DESIGN; Submit step does not save
-- [Annotate what a call sets in motion](project_mcp_annotate_what_a_call_sets_in_motion.md) - create_contact fires automations that text customers
+- [A ChatGPT app IS an MCP server](project_chatgpt_app_is_an_mcp_server.md) - reviewer sandbox texts Brian BY DESIGN; Submit does not save
+- [Annotate what a call sets in motion](project_mcp_annotate_what_a_call_sets_in_motion.md) - create_contact fires automations that text
 - [Supabase as an OAuth server](project_supabase_oauth_server_capabilities.md) - userinfo yes, CIMD no, accepts resource; shared aud
 - [next build does not typecheck tests](project_next_build_skips_test_typecheck.md) - run npx tsc --noEmit after editing tests
-- [callWindow skip resolves to not_placed](project_call_window_skip_not_placed_trap.md) - no-answer gates no-op; use defer, stop ladders on REACHED
+- [callWindow skip resolves to not_placed](project_call_window_skip_not_placed_trap.md) - use defer, stop ladders on REACHED
 - [Roster member tags](project_roster_member_tags.md) - tags say what a teammate handles; fails safe to everyone
 - [Main checkout is stale, never copy files](project_main_checkout_is_stale_never_copy_files.md) - a whole-file copy silently deletes newer keys
-- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); claim_verify/retry; hapi cookie; templated click_text; ladder + skeleton fixes Aug 16-19
-- [PostgREST writes matching zero rows](project_postgrest_write_matching_zero_rows.md) - no-match update/delete returns no error; .select() and check
+- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); hapi cookie; templated click_text
+- [PostgREST writes matching zero rows](project_postgrest_write_matching_zero_rows.md) - no-match write returns no error; .select() and check
 - [Fixed future date is a time bomb](project_fixed_future_date_is_a_time_bomb.md) - a hardcoded booking instant took main red; anchor to now
-- [Run itest and live e2e locally](project_live_e2e_cannot_run_locally.md) - exact recipes (ITEST_SERVICE_ROLE_KEY, db reset); admin toggle nightly-only
-- [View-as is FULL access, except consent](project_view_as_leaks_user_scoped_reads.md) - #1422 kept ONE refusal (legal/accept); passkey enrollment impossible
-- [Removing a gate means auditing identities](feedback_removing_a_gate_means_auditing_identities.md) - classify every user.email/userId: subject, actor, session
+- [Run itest and live e2e locally](project_live_e2e_cannot_run_locally.md) - exact recipes; admin toggle nightly-only
+- [View-as is FULL access, except consent](project_view_as_leaks_user_scoped_reads.md) - ONE refusal kept (legal/accept); no passkey enrollment
+- [Removing a gate means auditing identities](feedback_removing_a_gate_means_auditing_identities.md) - classify each identity: subject, actor, session
 - [E2E judge question polarity](project_e2e_judge_question_polarity.md) - phrase judge questions TRUE=violation; lexical facts belong in a regex
 - [Pipe exit code masks failures](feedback_pipe_exit_code_masks_failures.md) - vitest | tail reports tail's exit 0; gate on PIPESTATUS[0]
-- [Sidecar containers cannot use loopback](project_sidecar_containers_cannot_use_loopback.md) - 127.0.0.1 is the container itself; use Docker DNS on rowboat_default
-- [VPS sidecars had no no-undef check](project_vps_sidecars_had_no_undef_check.md) - node --check and 100% tests both miss a deleted function; eslint no-undef now on
-- [Residency read rules](project_residency_read_rules.md) - 8 of 15 moved tables purge: route via residency/read; kept-table central reads CORRECT; 72h floor; dual/vps flip gated on replay cron (off)
-- [Ask AI companion architecture](project_ask_ai_companion_architecture.md) - MCP-to-Gemini bridge seams, partitions, gate groups, self-serve tools
+- [Sidecar containers cannot use loopback](project_sidecar_containers_cannot_use_loopback.md) - 127.0.0.1 is the container; Docker DNS on rowboat_default
+- [VPS sidecars had no no-undef check](project_vps_sidecars_had_no_undef_check.md) - node --check and 100% tests miss a deleted function
+- [Residency read rules](project_residency_read_rules.md) - 8 of 15 moved tables purge: route via residency/read; 72h floor
+- [Ask AI companion architecture](project_ask_ai_companion_architecture.md) - MCP-to-Gemini bridge seams, partitions, gate groups
 - [route_to_team rotation vs broadcast](project_route_to_team_rotation_vs_broadcast.md) - rotation = whole roster; lead_auto_assign hardens it
-- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - signups buy 1m boxes; term waits out refund window; Hostinger billing_period LAGS a term change and the real price is UNOBTAINABLE from the API (#1636 withholds it, margin falls to labeled SKU estimate)
-- [Provisioning input is rebuilt field by field](project_orchestrate_input_rebuilt_field_by_field.md) - 5 wrappers drop new fields silently; grep all
-- [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - #1397 team rung before owner; root tsc misses supabase/functions
+- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - term waits out refund window; Hostinger real price UNOBTAINABLE
+- [Provisioning input is rebuilt field by field](project_orchestrate_input_rebuilt_field_by_field.md) - 5 wrappers drop new fields; grep all
+- [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - team rung before owner; root tsc misses supabase/functions
 - [Reachability-gated vars are not lead types](project_reachability_gated_vars_are_not_lead_type.md) - they answer "none" by contact channel
 - [Voice flows leave no run rows](project_voice_flows_leave_no_run_rows.md) - voice AiFlows compile inline; check system_logs, never ai_flow_runs
-- [Telnyx capacity architecture](project_telnyx_capacity_architecture.md) - three stacked limits min-wins; knob TELNYX_ACCOUNT_CHANNEL_LIMIT; carrier 403 defers jittered, never burns rungs
-- [Booking ledger row can postdate the contact](project_booking_ledger_row_can_postdate_contact.md) - not reliably first; oldest bookings have none
+- [Telnyx capacity architecture](project_telnyx_capacity_architecture.md) - three stacked limits min-wins; carrier 403 defers, never burns rungs
+- [Booking ledger row can postdate the contact](project_booking_ledger_row_can_postdate_contact.md) - not reliably first
 - [Copy sweeps must scan rendered source](feedback_copy_sweeps_must_scan_rendered_source.md) - i18n catalogs miss hardcoded components
-- [Never squash via reset --soft main](feedback_never_squash_via_reset_soft_main.md) - reverts everything merged since branch; rebase --onto from base
-- [forEach cap is Cloudflare-bound](project_foreach_cap_is_cloudflare_bound.md) - ~6 items PER PASS; worker chains passes until drained, alert on measured vars
-- [An empty page reads as "nothing to do"](project_empty_page_reads_as_nothing_to_do.md) - locked-out portal renders 0 rows + 0 errors; leftover-only alerts go silent exactly then
-- [Load-state waits are once per document](project_playwright_load_state_once_per_document.md) - networkidle after a click is a NO-OP; the re-goto cancelled Clever logins for months
+- [Never squash via reset --soft main](feedback_never_squash_via_reset_soft_main.md) - reverts everything merged since branch; rebase --onto
+- [forEach cap is Cloudflare-bound](project_foreach_cap_is_cloudflare_bound.md) - ~6 items PER PASS; worker chains passes until drained
+- [An empty page reads as "nothing to do"](project_empty_page_reads_as_nothing_to_do.md) - locked-out portal renders 0 rows + 0 errors; leftover-only alerts go silent
+- [Load-state waits are once per document](project_playwright_load_state_once_per_document.md) - networkidle after a click is a NO-OP
 - [Priority support is a SECOND Stripe subscription](project_priority_support_second_stripe_subscription.md) - invoice.paid needs subscriptionKind gate
 - [Plan change fires subscription.deleted while row looks active](project_change_plan_deleted_webhook_ordering.md) - guard on the replacement row
 - [voice-bridge escapes root tsc](project_voice_bridge_excluded_from_root_tsc.md) - type errors pass CI, break the redeploy; run its own tsc
 - [AMD false negatives are routine](project_amd_false_negatives_and_prompt_ended.md) - human_residence on voicemail; prompt_ended not iOS-only
 - [Always babysit, never ask](feedback_always_babysit_never_ask.md) - carry every PR to green + merged + worktree gone, own fixes included
-- [Booking alerts fire on EVERY booking](project_booking_alert_audience.md) - misnamed table; dashboard bookings never alert; employees #1441
+- [Booking alerts fire on EVERY booking](project_booking_alert_audience.md) - misnamed table; dashboard bookings never alert
 - [A step `when` var must already exist](project_flow_when_var_must_be_produced.md) - borrow a real var, compare to an impossible value
 - [AI flow-edit hardening](project_ai_flow_edit_hardening.md) - 5 layers; edit_aiflow REGENERATES, opposite instruction never undoes it
 - [ok:true is not a commit](project_ok_true_is_not_a_commit.md) - side-effect pin lies for tools that succeed without writing
-- [Draft saves must surface disabled state](feedback_draft_saves_must_surface_disabled_state.md) - flows save OFF; "done" means read the enabled bit, never assume live
-- [New classify tier needs both neighbours](project_new_classify_tier_needs_both_neighbours.md) - #1433 silent swallow; name the terminal condition
+- [Draft saves must surface disabled state](feedback_draft_saves_must_surface_disabled_state.md) - flows save OFF; "done" means read the enabled bit
+- [New classify tier needs both neighbours](project_new_classify_tier_needs_both_neighbours.md) - name the terminal condition
 - [Injected client breaks v8 coverage](project_injected_client_breaks_v8_coverage.md) - test client skips the ?? await; rest reads uncovered
 - [The contact key is not a phone](project_contacts_are_phone_keyed.md) - customer_e164 may hold email:<addr>; gate on isDialableContactKey
 - [Em dash sweep is done](project_em_dash_sweep_complete.md) - Aug 18 (PRs 1474/1475/1487); ~118 left deliberate; guard NOT widened
 - [Lex, don't guess string edges](feedback_lex_dont_guess_string_edges.md) - a neighbouring quote can be CLOSING; use TS parser spans
 - [getBusiness swallows errors, returns null](project_getbusiness_swallows_errors_returns_null.md) - keep unknown distinct from false in gates
-- [Rebase before merging a slow PR](feedback_rebase_before_merging_a_slow_pr.md) - reasoning goes stale; mergeStateStatus is cached, not proof
-- [Onboarding intake model topology](project_onboarding_intake_model_topology.md) - gpt-nano is the FALLBACK behind DeepSeek; Luna is a downgrade
+- [Rebase before merging a slow PR](feedback_rebase_before_merging_a_slow_pr.md) - mergeStateStatus is cached, not proof
+- [Onboarding intake model topology](project_onboarding_intake_model_topology.md) - gpt-nano is the FALLBACK behind DeepSeek
 - [require_parameters empties the OpenRouter pool](project_openrouter_require_parameters_empties_pool.md) - undeclared params still honored
 - [Implicit owner for a one-person roster](project_implicit_contact_owner.md) - READ-time only; never fold derived values into echoed fields
 - [Clever's status list is forward-only](project_clever_status_list_is_forward_only.md) - post "No Status Change", drop the meeting select
-- [Unattributed Telnyx senders are known-platform](project_telnyx_unattributed_known_platform_senders.md) - retired intl gateway + RCS agent id; not leaks
-- [A sidecar mode is a PATH, not a flag](project_sidecar_flag_vs_path_deploy_gap.md) - app deploys on merge, boxes redeploy by hand; an old box ignores an unknown flag and performs the action
-- [Unicode escapes in tool JSON decode before the write](feedback_unicode_escapes_in_tool_json.md) - a typed backslash-u escape lands the literal control char; Read hides it, Edit cannot match
-- [Hiding a control strands its value](feedback_hiding_a_control_strands_its_value.md) - a conditionally-rendered picker traps a stale stored id; every save is then refused
-- [Busy-flag availability convention](project_busy_flag_convention_aug19.md) - flag decides; OOO always blocks; time-off mirror writes Busy since #1541
-- [Teach a browse step by demonstration](project_browse_demo_mode.md) - live on all 4 boxes; the surface that ACTS, verify-before-record, unknown_demo is 200 not 404
-- [Follow Up Boss API terms forbid migration](project_fub_api_terms_forbid_migration.md) - rebuilt on their CSV export #1573; notes/deals do not come across
-- [Advisor conflated plan limits with box limits](project_escalation_advisor_hardware_vs_usage.md) - rewritten #1577; hardware vs usage sections, per-core CPU, packs counted
-- [Ollama context length never left kvm8](project_ollama_context_length_fleet_gap.md) - whole fleet truncated at 4096; #1575 + debug/apply-ollama-context.ts
+- [Unattributed Telnyx senders are known-platform](project_telnyx_unattributed_known_platform_senders.md) - retired intl gateway + RCS id
+- [A sidecar mode is a PATH, not a flag](project_sidecar_flag_vs_path_deploy_gap.md) - an old box ignores an unknown flag and performs the action
+- [Unicode escapes in tool JSON decode before the write](feedback_unicode_escapes_in_tool_json.md) - the literal control char lands; Edit cannot match
+- [Hiding a control strands its value](feedback_hiding_a_control_strands_its_value.md) - a hidden picker traps a stale id; saves refused
+- [Busy-flag availability convention](project_busy_flag_convention_aug19.md) - flag decides; OOO always blocks; time-off mirror writes Busy
+- [Teach a browse step by demonstration](project_browse_demo_mode.md) - the surface that ACTS, verify-before-record, unknown_demo is 200 not 404
+- [Follow Up Boss API terms forbid migration](project_fub_api_terms_forbid_migration.md) - rebuilt on their CSV export; notes/deals lost
+- [Advisor conflated plan limits with box limits](project_escalation_advisor_hardware_vs_usage.md) - hardware vs usage sections; packs counted
+- [Ollama context length never left kvm8](project_ollama_context_length_fleet_gap.md) - fleet truncated at 4096; debug/apply-ollama-context.ts
 - [Measure the machine, not the plan](feedback_measure_the_machine_not_the_plan.md) - packs make spend self-healing; ask what happens at exhaustion
-- [SMS window follows the billing anchor](project_sms_window_anchored_to_billing_period.md) - not the calendar month; one SQL definition; changeover branch dies 2026-09-30
-- [gh merge --delete-branch worktree trap](project_gh_merge_delete_branch_worktree_trap.md) - aborts on local main, skips the REMOTE delete; ls-remote then push --delete
-- [Business deletes: what looks disposable but isn't](project_business_delete_looks_disposable_traps.md) - HQ is active with NULL Stripe ids; sandboxes have no box at all; 138 CASCADE / 9 orphan
-- [Vercel CLI for historical logs](feedback_vercel_cli_for_historical_logs.md) - vercel logs --since/--until/--query --json; the REST log endpoints 404 or hang
-- [Agent tool parity is four-way](project_agent_tool_parity_four_way.md) - registry + seed + gates + bridge, no apostrophes in the jq, then a fleet reseed that also repairs old drift
+- [SMS window follows the billing anchor](project_sms_window_anchored_to_billing_period.md) - one SQL definition; changeover branch dies 2026-09-30
+- [gh merge --delete-branch worktree trap](project_gh_merge_delete_branch_worktree_trap.md) - skips the REMOTE delete; ls-remote then push --delete
+- [Business deletes: what looks disposable but isn't](project_business_delete_looks_disposable_traps.md) - HQ active with NULL Stripe ids; 138 CASCADE / 9 orphan
+- [Vercel CLI for historical logs](feedback_vercel_cli_for_historical_logs.md) - vercel logs --since/--query --json; REST endpoints 404
+- [Agent tool parity is four-way](project_agent_tool_parity_four_way.md) - registry + seed + gates + bridge; fleet reseed repairs old drift
 - [Hiding is not refusing](feedback_hiding_is_not_refusing.md) - filtering the render path leaves the write path open; gate both
-- [Undoing a claim needs ownership cleared](project_undoing_a_claim_needs_ownership_cleared.md) - clearing routing.claimed_by alone lets route_to_team re-assign instantly; clear contacts.owner_employee_id first, alias-aware
-- [Owner asks that reach the flows](project_owner_ask_reaches_the_flows.md) - memory NEVER reaches AiFlows; owner SMS runs on the platform engine (box OwnerCoworker cannot see a flow); classify the ask to escalate thinking; flow tools gate on manage_aiflows, run/list deliberately do not; fallback to the box is counted + watchdog-paged (baseline ZERO)
-- [WhatsApp delivery truth](project_whatsapp_delivery_truth.md) - ok = ACCEPTED not delivered; receipts captured since #1609; KYP blocked by billing 131042, NOT verification
-- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - FIXED #1612 (live 5/5 boxes); prompt asked for "how to reach you" with no number; verify by transcript via debug/voicemail-number-audit.ts, allowlist is the hard part
-- [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; receipts since #1628; provider_message_id NOT unique; slack_assistant was rejected by the source check
-- [A truncated page is not uniqueness](feedback_truncated_page_is_not_uniqueness.md) - limit + post-query filter hides a real second match; put the test in SQL
-- [Score prompt changes against outcomes](feedback_score_prompt_changes_against_outcomes.md) - two well-argued fixes each scored WORSE; grade N runs per arm on cases with known real outcomes
-- [Stripe discounts: "" clears, [] does not](project_stripe_discounts_empty_string_clears.md) - removal via empty array is a silent no-op; coupons immutable; delete never revokes; webhooks cannot expand
-- [Owner surface registry](project_owner_surface_registry.md) - add a surface = 1 registry entry; speaker fails CLOSED, staff mode fails OPEN; OFF means silent not customer
-- [c8 ignore fails on awaited defaults](feedback_c8_ignore_fails_on_awaited_default.md) - `client ?? (await createServiceClient())` stays uncovered; mock the module and test it
-- [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Space Grotesk rejected; Geist+Inter; restrained beats distinctive
+- [Undoing a claim needs ownership cleared](project_undoing_a_claim_needs_ownership_cleared.md) - clear contacts.owner_employee_id first, alias-aware
+- [Owner asks that reach the flows](project_owner_ask_reaches_the_flows.md) - memory NEVER reaches AiFlows; owner SMS runs on the platform engine
+- [WhatsApp delivery truth](project_whatsapp_delivery_truth.md) - ok = ACCEPTED not delivered; receipts since #1609; KYP blocked by billing 131042
+- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - #1612 NOT holding (Aug 27); AMD events mostly absent; voicemail_left overstates
+- [Edge admin-alert email is stale](project_edge_admin_alert_email_stale.md) - Edge ADMIN_EMAIL is the personal gmail, no ADMIN_ALERT_EMAIL; recipient-only, safe to reset
+- [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; provider_message_id NOT unique
+- [A truncated page is not uniqueness](feedback_truncated_page_is_not_uniqueness.md) - a post-query filter hides a real second match; test in SQL
+- [Score prompt changes against outcomes](feedback_score_prompt_changes_against_outcomes.md) - grade N runs per arm on cases with known real outcomes
+- [Stripe discounts: "" clears, [] does not](project_stripe_discounts_empty_string_clears.md) - [] removal silently no-ops; delete never revokes
+- [Owner surface registry](project_owner_surface_registry.md) - a surface = 1 registry entry; speaker fails CLOSED, staff mode fails OPEN
+- [c8 ignore fails on awaited defaults](feedback_c8_ignore_fails_on_awaited_default.md) - `?? (await createServiceClient())` stays uncovered; mock the module
+- [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Geist+Inter; restrained beats distinctive

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MIN_ASSISTANT_TURNS,
+  collectAllowedNumbers,
   detectCallIntegrity,
   callIntegrityAlertSubject,
+  extractSpokenNumbers,
   formatCallIntegrityAlert,
   hasRoleLeak,
-  looksMachineGenerated
+  looksMachineGenerated,
+  spokenNumberForm
 } from "../supabase/functions/_shared/call_integrity.ts";
 
 /**
@@ -142,6 +145,146 @@ describe("detectCallIntegrity", () => {
 });
 
 /**
+ * The invented-number rule. Signature from real calls: on 2026-08-26 the AI
+ * told a lead to "give us a call back at 480-269-7977" and on 2026-08-27
+ * another to call 480-331-9100, numbers belonging to nobody on the account,
+ * with the prompt rule against exactly this (PR #1612) verified deployed.
+ * Detection replaced a fourth prompt attempt.
+ */
+describe("spokenNumberForm", () => {
+  it("normalises E.164, formatted, and bare forms to one spoken shape", () => {
+    expect(spokenNumberForm("+14802697977")).toBe("480-269-7977");
+    expect(spokenNumberForm("(480) 269-7977")).toBe("480-269-7977");
+    expect(spokenNumberForm("480.269.7977")).toBe("480-269-7977");
+    expect(spokenNumberForm("4802697977")).toBe("480-269-7977");
+  });
+
+  it("returns null for values that are not North American numbers", () => {
+    expect(spokenNumberForm("+85251234567")).toBe(null); // HK: 11 digits, no leading 1
+    expect(spokenNumberForm("12345")).toBe(null);
+    expect(spokenNumberForm("")).toBe(null);
+    expect(spokenNumberForm(null)).toBe(null);
+    expect(spokenNumberForm(undefined)).toBe(null);
+  });
+});
+
+describe("extractSpokenNumbers", () => {
+  it("finds numbers however speech transcribes them", () => {
+    expect(extractSpokenNumbers("call back at 480-269-7977.")).toEqual(["480-269-7977"]);
+    expect(extractSpokenNumbers("that's (602) 695 1142, any time")).toEqual(["602-695-1142"]);
+    expect(extractSpokenNumbers("dial +1 480.331.9100 today")).toEqual(["480-331-9100"]);
+  });
+
+  it("returns every number, in order, and nothing from plain text", () => {
+    expect(extractSpokenNumbers("602-695-1142 or 480-269-7977")).toEqual([
+      "602-695-1142",
+      "480-269-7977"
+    ]);
+    expect(extractSpokenNumbers("since 1989, about 500 thousand")).toEqual([]);
+    expect(extractSpokenNumbers("")).toEqual([]);
+  });
+});
+
+describe("collectAllowedNumbers", () => {
+  it("collects any phone/e164/did/number-named column from keyed rows", () => {
+    const allowed = collectAllowedNumbers({
+      phoneKeyedRows: [
+        { phone: "+16026951142", name: "Amy Laidlaw" },
+        { telnyx_sms_from_e164: "+16028053377", enabled: true },
+        { FORWARD_TO_E164: "+14807202013" },
+        null,
+        undefined
+      ]
+    });
+    expect(allowed).toEqual(new Set(["602-695-1142", "602-805-3377", "480-720-2013"]));
+  });
+
+  it("takes bare values and skips ones that do not normalise", () => {
+    const allowed = collectAllowedNumbers({ values: ["+16025245719", "not a phone", null] });
+    expect(allowed).toEqual(new Set(["602-524-5719"]));
+  });
+
+  it("reads flow definitions as E.164 or separated 3-3-4, never bare digit runs", () => {
+    const allowed = collectAllowedNumbers({
+      flowDefinitions: [
+        { voicemailTemplate: "Give us a call back at 602-695-1142." },
+        { notifyE164: "+14807039575" },
+        // An epoch timestamp is ten digits; matching it would quietly widen
+        // the allowlist until fabrications pass. Also covers a null
+        // definition, which a half-seeded flow row can hold.
+        { scheduledAtMs: 1756224984, raw: "1756224984123" },
+        null
+      ]
+    });
+    expect(allowed).toEqual(new Set(["602-695-1142", "480-703-9575"]));
+  });
+
+  it("returns an empty set for no sources at all", () => {
+    expect(collectAllowedNumbers({})).toEqual(new Set());
+  });
+});
+
+describe("detectCallIntegrity invented_contact_number", () => {
+  const allowed = new Set(["602-695-1142", "320-293-1236"]);
+
+  it("flags the incident's shape: a fabricated callback number in an ad-lib", () => {
+    const findings = detectCallIntegrity(
+      [t("caller", "may hang up or press one for more options."),
+       t("assistant", "If you're still interested, give us a call back at 480-269-7977.")],
+      { allowedNumbers: allowed }
+    );
+    const invented = findings.filter((f) => f.kind === "invented_contact_number");
+    expect(invented).toHaveLength(1);
+    expect(invented[0]!.detail).toContain("480-269-7977");
+    expect(invented[0]!.detail).toContain("give us a call back");
+  });
+
+  it("allows the business's own numbers and the parties on the call", () => {
+    // The caller's number joins `allowedNumbers` at the call site, so here it
+    // is simply part of the set: reading someone their own number back is
+    // correct behavior, not fabrication.
+    const findings = detectCallIntegrity(
+      [t("assistant", "Amy's number is 602-695-1142, and yours ends 320 293 1236, correct?")],
+      { allowedNumbers: allowed }
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("never blames the caller side: a mailbox reading its number is not our AI", () => {
+    const findings = detectCallIntegrity(
+      [t("caller", "5208586771 is not available. At the tone, please record your message.")],
+      { allowedNumbers: allowed }
+    );
+    expect(findings.map((f) => f.kind)).not.toContain("invented_contact_number");
+  });
+
+  it("reports each distinct number once, however often it is repeated", () => {
+    const findings = detectCallIntegrity(
+      [
+        t("assistant", "Call 480-269-7977. Again, that's 480-269-7977."),
+        t("assistant", "Or try 480-331-9100.")
+      ],
+      { allowedNumbers: allowed }
+    );
+    expect(findings.map((f) => f.detail.slice(6, 18))).toEqual(["480-269-7977", "480-331-9100"]);
+  });
+
+  it("does not run at all without an allowlist", () => {
+    // An allowlist a caller failed to build must fail toward silence: with no
+    // set supplied, a spoken number is not evidence of anything.
+    expect(detectCallIntegrity([t("assistant", "call me at 480-269-7977")])).toEqual([]);
+  });
+
+  it("clips the quoted turn so one long ramble cannot flood the alert", () => {
+    const findings = detectCallIntegrity(
+      [t("assistant", `call 480-269-7977 ${"x".repeat(500)}`)],
+      { allowedNumbers: allowed }
+    );
+    expect(findings[0]!.detail.length).toBeLessThan(220);
+  });
+});
+
+/**
  * Alerting. Findings used to land at `level: "warn"`, which keeps them off
  * the fleet dashboard entirely: `src/lib/db/system-logs.ts` states that feed
  * reads `level = 'error'` only. So a failure showed on one client's page and
@@ -173,11 +316,13 @@ describe("formatCallIntegrityAlert", () => {
   it("pluralises and names each distinct kind", () => {
     const text = formatCallIntegrityAlert([
       { ...call, kind: "role_leak", detail: "a" },
-      { ...call, transcriptId: "0f12d4ef", kind: "talked_to_recording", detail: "b" }
+      { ...call, transcriptId: "0f12d4ef", kind: "talked_to_recording", detail: "b" },
+      { ...call, transcriptId: "68ca8cdb", kind: "invented_contact_number", detail: "c" }
     ]);
-    expect(text).toContain("2 call-integrity failures");
+    expect(text).toContain("3 call-integrity failures");
     expect(text).toContain("spoke the caller's side");
     expect(text).toContain("talked to a recording");
+    expect(text).toContain("gave out a number it does not own");
   });
 
   it("caps the body so one bad day cannot post a wall of text", () => {

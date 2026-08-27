@@ -1,6 +1,7 @@
 /**
- * audit-call-integrity.ts: find calls where the AI voiced both sides, or held
- * a conversation with a recording.
+ * audit-call-integrity.ts: find calls where the AI voiced both sides, held a
+ * conversation with a recording, or gave out a phone number the business
+ * does not own.
  *
  * WHY A DETECTOR AND NOT A TEST. The Aug 14 2026 fix for this (PR #1377) is a
  * prompt change, and a prompt change cannot be proven the way code can. The
@@ -34,7 +35,9 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
 import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
 import {
+  collectAllowedNumbers,
   detectCallIntegrity,
+  spokenNumberForm,
   type CallIntegrityKind,
   type IntegrityTurn
 } from "../supabase/functions/_shared/call_integrity.ts";
@@ -64,6 +67,7 @@ type CallRow = {
   id: string;
   business_id: string;
   caller_e164: string | null;
+  forwarded_to_e164: string | null;
   started_at: string | null;
 };
 type Finding = {
@@ -75,6 +79,50 @@ type Finding = {
   kind: CallIntegrityKind;
   detail: string;
 };
+
+/**
+ * The numbers one business may legitimately speak, cached per business, or
+ * null when any source query failed. Null fails OPEN: detecting against a
+ * partial allowlist reports correct calls as fabrications, so a business
+ * whose sources cannot be read gets no invented-number detection rather than
+ * false findings. The sources and matching rules are the shared ones in
+ * `_shared/call_integrity.ts` (see `debug/voicemail-number-audit.ts` for why
+ * each table is in the set).
+ */
+const allowedCache = new Map<string, Set<string> | null>();
+async function allowedNumbersFor(db: SupabaseClient, businessId: string): Promise<Set<string> | null> {
+  const cached = allowedCache.get(businessId);
+  if (cached !== undefined) return cached;
+  type Rows = { data: Record<string, unknown>[] | null; error: { message: string } | null };
+  const [biz, telnyx, roster, prefs, routes, flows] = (await Promise.all([
+    db.from("businesses").select("*").eq("id", businessId),
+    db.from("business_telnyx_settings").select("*").eq("business_id", businessId),
+    db.from("ai_flow_team_members").select("*").eq("business_id", businessId),
+    db.from("notification_preferences").select("phone_number").eq("business_id", businessId),
+    db.from("telnyx_voice_routes").select("to_e164").eq("business_id", businessId),
+    db.from("ai_flows").select("definition").eq("business_id", businessId)
+  ])) as Rows[];
+  let result: Set<string> | null;
+  const failed = [biz, telnyx, roster, prefs, routes, flows].find((r) => r.error);
+  if (failed) {
+    console.error(
+      `WARNING: allowlist sources unreadable for ${businessId} (${failed.error!.message}); ` +
+        `invented-number detection skipped for its calls.`
+    );
+    result = null;
+  } else {
+    result = collectAllowedNumbers({
+      phoneKeyedRows: [...(biz.data ?? []), ...(telnyx.data ?? []), ...(roster.data ?? [])],
+      values: [
+        ...(prefs.data ?? []).map((r) => r.phone_number),
+        ...(routes.data ?? []).map((r) => r.to_e164)
+      ],
+      flowDefinitions: (flows.data ?? []).map((r) => r.definition)
+    });
+  }
+  allowedCache.set(businessId, result);
+  return result;
+}
 
 async function turnsFor(db: SupabaseClient, transcriptId: string): Promise<Turn[]> {
   const { rows } = await fetchAllPaged<Turn>(
@@ -107,7 +155,7 @@ async function main(): Promise<void> {
     (from, to) => {
       let q = db
         .from("voice_call_transcripts")
-        .select("id, business_id, caller_e164, started_at")
+        .select("id, business_id, caller_e164, forwarded_to_e164, started_at")
         // Terminal calls only, matching the sweep: a verdict taken mid-call
         // is unreliable, because an in-progress call can be sitting on an
         // IVR with a greeting or two behind it and complete normally.
@@ -149,7 +197,19 @@ async function main(): Promise<void> {
       startedAt: call.started_at
     };
 
-    for (const finding of detectCallIntegrity(turns)) {
+    // The parties on THIS call may be read their own numbers back, so they
+    // join the allowed set per call, never business-wide.
+    const own = await allowedNumbersFor(db, call.business_id);
+    let allowedNumbers: Set<string> | undefined;
+    if (own) {
+      allowedNumbers = new Set(own);
+      for (const v of [call.caller_e164, call.forwarded_to_e164]) {
+        const n = spokenNumberForm(v);
+        if (n) allowedNumbers.add(n);
+      }
+    }
+
+    for (const finding of detectCallIntegrity(turns, allowedNumbers ? { allowedNumbers } : {})) {
       findings.push({ ...base, kind: finding.kind, detail: finding.detail });
     }
   }
@@ -167,7 +227,8 @@ async function main(): Promise<void> {
     }
     console.log(
       `\n${findings.length} finding(s). A role_leak means the AI spoke the caller's side; ` +
-        `talked_to_recording means it ran its script at a machine. Read the full transcript ` +
+        `talked_to_recording means it ran its script at a machine; invented_contact_number ` +
+        `means it spoke a phone number the business does not own. Read the full transcript ` +
         `before acting: these are prompt-adherence failures, not code failures.`
     );
   }
