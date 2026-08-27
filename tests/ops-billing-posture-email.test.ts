@@ -110,6 +110,25 @@ describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
     });
     expect(email.text).toContain("assigned to missing business gone-biz-id");
     expect(email.text).not.toContain("/ pool");
+
+    // Defensive shape: the template's input type allows a null businessId
+    // even though the posture check always sets one on this kind.
+    const noId = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 0,
+      checkedPoolBoxes: 0,
+      findings: [
+        finding({
+          kind: "stale_assigned_row",
+          vmId: 1800985,
+          businessId: null,
+          businessName: null,
+          expiresAt: null,
+          detail: "inventory row srv1800985 is assigned but the id was lost"
+        })
+      ]
+    });
+    expect(noId.text).toContain("assigned to missing business (unknown)");
   });
 
   it("still labels a real pool finding as pool", () => {
