@@ -21,6 +21,7 @@ import {
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
+import { voicemailPlausiblyDelivered } from "./voicemail-timing.js";
 import { inputAudioTranscriptionConfig } from "./asr-language-hints.js";
 import {
   decideIvrPress,
@@ -714,10 +715,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let latestUsage: GeminiLiveUsage | null = null;
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
+  // The timestamp anchors the voicemail plausibility window: the line dies
+  // at FIRST end_call + grace, wherever later duplicates land.
   let endCallRequested = false;
+  let endCallRequestedAtMs = 0;
   // Set once `voicemail_reached` handed the model a message to read, so the
-  // end_call handler knows to confirm the delivery (see confirmSpoken).
+  // end_call handler knows to confirm the delivery (see confirmSpoken). The
+  // timestamp and length are what let that handler check the read PLAUSIBLY
+  // happened before stamping it delivered (see voicemail-timing.ts).
   let voicemailScriptGiven = false;
+  let voicemailScriptGivenAtMs = 0;
+  let voicemailScriptChars = 0;
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
@@ -1764,6 +1772,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   function handleModelToolCalls(message: LiveServerMessage): void {
     const calls = message.toolCall?.functionCalls;
     if (!calls || calls.length === 0) return;
+    // Whether THIS turn also asks to hang up. The loop below is synchronous
+    // but the capabilities it kicks off are not, so a same-turn
+    // `voicemail_reached` + `end_call` pair would otherwise start the
+    // voicemail claim before the end_call handler can set
+    // `endCallRequested`: the entry guard alone cannot see it (Bugbot,
+    // PR #1672).
+    const batchRequestsEndCall = calls.some((c) => c.name === "end_call");
     for (const call of calls) {
       const name = call.name ?? "unknown";
       // Debug: which tool the model invoked + its arg keys (not values, to
@@ -2103,6 +2118,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
 
       if (name === "voicemail_reached" && opts.voicemail) {
+        // A recording reported after `end_call` is a message nobody can hear:
+        // the hangup timer is already running, so a script handed over now
+        // would be read into a dead or dying line while the claim, the
+        // [Voicemail] badge and the spoken stamp all record a delivered
+        // voicemail. That exact sequence produced `voicemail_left: true` for
+        // a mailbox holding three minutes of silence (2026-08-26, call
+        // 68ca8cdb: the model greeted the greeting, sat through the maximum
+        // recording time, and only reported the recording as the leg
+        // dropped). Refuse BEFORE the capability runs so nothing is claimed
+        // or recorded. `batchRequestsEndCall` covers the same-turn pair: the
+        // capability starts synchronously here, before the loop reaches the
+        // batch's own end_call, so the flag alone would miss it.
+        if (endCallRequested || batchRequestsEndCall) {
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: "the call is already ending: leave no message and say nothing"
+          });
+          emitDiag("voice_bridge_voicemail_after_end_call", {});
+          continue;
+        }
         // Answered on its own task so the model's turn completes promptly: it
         // is waiting on this response to know whether to read a message, and
         // the mailbox is recording silence while it waits.
@@ -2127,7 +2162,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             : result.alreadyBeingLeft
               ? "a message is already being left on this recording: say nothing, and do NOT end the call"
               : "leave no message: say nothing and end the call now";
-          if (script) voicemailScriptGiven = true;
+          if (script) {
+            voicemailScriptGiven = true;
+            voicemailScriptGivenAtMs = Date.now();
+            voicemailScriptChars = script.length;
+          }
           sendToolResponse(call.id, name, {
             ok: result.ok,
             ...(script ? { script } : {}),
@@ -2155,15 +2194,46 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // and a mailbox hangs up on silence. Its own hangup would otherwise
         // reach the call-end webhook first and record a message that really
         // did go out as never left.
+        //
+        // ...but only when the read PLAUSIBLY happened. Playout is realtime,
+        // so an `end_call` seconds after the script handover means at most
+        // seconds of it reached the line, whatever the model generated:
+        // calls 06a44d56 (hung up 13s after answer) and e71b585d (mailbox
+        // greeting still playing at hangup) both recorded left voicemails
+        // that physically were not. A refused stamp resolves the call as
+        // no-voicemail, which understates once and is counted in the
+        // diagnostic below; the old unconditional stamp lied to the owner.
+        const graceMs = opts.hangup.graceMs ?? 3000;
         if (voicemailScriptGiven && opts.voicemail?.confirmSpoken) {
           voicemailScriptGiven = false;
-          void opts.voicemail.confirmSpoken().catch((err) => {
-            console.error("gemini-bridge: voicemail confirmSpoken threw", err);
-          });
+          // The audio window ends when the FIRST end_call's hangup timer
+          // fires, so a duplicate end_call arriving later must not re-credit
+          // a grace that is already burning, or has burned: on the first
+          // end_call the hangup is scheduled NOW (full grace ahead), on a
+          // repeat it was scheduled back then (Bugbot, PR #1672).
+          const hangupAtMs = (endCallRequested ? endCallRequestedAtMs : Date.now()) + graceMs;
+          const playableMs = hangupAtMs - voicemailScriptGivenAtMs;
+          if (
+            voicemailPlausiblyDelivered({ playableMs, scriptChars: voicemailScriptChars })
+          ) {
+            void opts.voicemail.confirmSpoken().catch((err) => {
+              console.error("gemini-bridge: voicemail confirmSpoken threw", err);
+            });
+          } else {
+            console.error(
+              "gemini-bridge: voicemail read cut short, not confirming",
+              JSON.stringify({ playableMs, graceMs, scriptChars: voicemailScriptChars })
+            );
+            emitDiag("voice_bridge_voicemail_cut_short", {
+              playable_ms: playableMs,
+              grace_ms: graceMs,
+              script_chars: voicemailScriptChars
+            });
+          }
         }
         if (!endCallRequested) {
           endCallRequested = true;
-          const graceMs = opts.hangup.graceMs ?? 3000;
+          endCallRequestedAtMs = Date.now();
           // Deliberately a STANDALONE timer, NOT pushed to `timers`. The PSTN
           // leg is still up during the goodbye grace, so the hangup MUST survive
           // a clearTimers() (which fires on Gemini Live `onclose` and on
