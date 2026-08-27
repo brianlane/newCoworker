@@ -76,6 +76,16 @@ If you are in plan mode, the plan should say so.
 
 ## Repo-specific traps worth knowing before you start
 
+- **A table name, a column name, a filter predicate, or a grant cannot be
+  proved by a unit test.** A mocked query builder happily "passes" a query
+  against a table that does not exist: the erasure path shipped a delete
+  against `contact_overrides` four weeks after that table was dropped, with
+  green unit tests mocking the same wrong name, and the chat clawback leg
+  did the identical thing against `chat_credit_grants` (real name
+  `chat_spend_credit_grants`). Any fix or finding whose truth depends on one
+  of those must ship a `tests/worker-integration/*.itest.ts` against the
+  local Supabase stack CI already boots (`npm run test:worker-integration`),
+  never a mocked builder. See `docs/AUDIT-2026-08.md`, Lesson 1.
 - **Migrations:** never hand-write the version stamp. `bash
   scripts/new-migration.sh <name>`. New tables need explicit Data API grants
   in the same file. Both rules are detailed in
