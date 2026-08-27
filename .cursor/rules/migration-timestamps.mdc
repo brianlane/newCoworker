@@ -27,11 +27,11 @@ A stamp has to satisfy two things at once:
 
 ### Why not plain `date -u +%Y%m%d%H%M%S`
 
-Real UTC time satisfies both requirements, normally. It does not today.
-
-This repo's applied stamps run roughly **26 days ahead of the wall clock**:
-the head is in late August 2026 while the clock reads late July. A literal
-`date -u` stamp therefore sorts BEHIND the head and violates requirement 1.
+Real UTC time satisfies both requirements, normally. Through most of Jul
+and Aug 2026 it did not: the applied stamps ran roughly **26 days ahead of
+the wall clock**, so a literal `date -u` stamp sorted BEHIND the head and
+violated requirement 1. The clock passed the head in late Aug 2026, so real
+time works again, but the helper stays mandatory (see below).
 That gap is precisely why people hand-invent stamps, and hand-invented stamps
 are what broke main three times on 2026-07-26 (PRs #932/#934, #938/#939) and
 twice on 2026-07-14 (PRs #600/#601).
@@ -41,10 +41,12 @@ offset)`, reading the head from the union of your working tree AND
 origin/main so a branch cut before someone else's migration merged still
 stamps above it.
 
-**This converges, and there is no cleanup event.** While the clock is behind,
-the head crawls forward by minutes a day while real time advances a full day,
-so the gap closes. Once real time passes the head (around 2026-08-21), the
-script starts emitting true timestamps by itself. No file is ever renamed and
+**This converged, with no cleanup event.** While the clock was behind, the
+head crawled forward by minutes a day while real time advanced a full day,
+so the gap closed; real time passed the head in late Aug 2026 and the
+script now emits true timestamps by itself. It stays mandatory because the
+your-tree-AND-origin/main head check keeps concurrent branches from
+stamping below each other. No file is ever renamed and
 the production ledger is never repaired. Do not schedule a mass re-stamp: 98
 of the current migrations are stamped ahead of real time, and renaming them
 would mean ~196 `supabase migration repair` operations against production to
