@@ -104,6 +104,14 @@ If you are in plan mode, the plan should say so.
   `edgeReadMovedRowsOrNull` when the read only suppresses something. Routing
   a KEPT table box-ward in isolation is still wrong on the engine side too:
   central is the write ingress, so the box copy only ever lags it.
+- **Residency box schema:** `vps/data-api/schema.sql` is GENERATED, never
+  hand-patched. A migration that adds a column or widens a CHECK on one of
+  the 15 moved tables must be followed by
+  `npx tsx debug/generate-residency-ddl.ts` (needs `SUPABASE_DB_URL`, reads
+  the live central catalog). The box does not follow central on its own, and
+  neither miss is graceful: a missing column fails the whole SELECT, and a
+  stale CHECK rejects the row and wedges the replayer.
+  `tests/residency-box-schema-columns.test.ts` is the red check.
 - **`package.json` overrides** each have a documented reason in
   `docs/DEPENDENCY-OVERRIDES.md`. Adding, changing, or removing an override
   means updating that file in the same PR.
