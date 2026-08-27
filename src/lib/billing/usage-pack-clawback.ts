@@ -67,14 +67,14 @@ export function computeUsagePackClawbackAmount(
   purchased: number | null
 ): number | null {
   if (purchased == null || purchased <= 0) return null;
-  if (
-    originalAmountCents == null ||
-    originalAmountCents <= 0 ||
-    refundedAmountCents == null ||
-    refundedAmountCents <= 0
-  ) {
+  if (originalAmountCents == null || originalAmountCents <= 0 || refundedAmountCents == null) {
     return null;
   }
+  // Nothing refunded means nothing to claw: return the explicit no-op, NOT
+  // null, because null is the FULL-VOID sentinel at the RPC and a malformed
+  // zero-refund event would otherwise void the entire grant (the sibling
+  // computeVoiceBonusClawbackSeconds already returns 0 here).
+  if (refundedAmountCents <= 0) return 0;
   if (refundedAmountCents >= originalAmountCents) return null;
   const clawback = Math.round((purchased * refundedAmountCents) / originalAmountCents);
   if (clawback <= 0) return 0;

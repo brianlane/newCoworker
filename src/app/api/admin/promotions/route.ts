@@ -137,6 +137,29 @@ function resolveDiscount(
 }
 
 /**
+ * A term (annual/biennial) plan is ONE prepaid invoice; its post-term
+ * pricing belongs to the commitment schedule. A repeating/forever coupon on
+ * a term plan therefore promises nothing the validation models, and whether
+ * Stripe's schedule phase-2 rewrite drops a redeemed coupon is pinned
+ * nowhere (schedule setup failure is explicitly non-fatal at checkout), so
+ * such a code could silently discount every future full-term renewal
+ * invoice. Refuse the combination at mint time.
+ */
+function termPeriodsForbidMultiCycle(
+  duration: "once" | "repeating" | "forever",
+  allowedPeriods: readonly string[]
+): string | null {
+  if (duration === "once") return null;
+  const term = allowedPeriods.filter((p) => p === "annual" || p === "biennial");
+  if (term.length === 0) return null;
+  return (
+    `A ${duration} discount cannot allow ${term.join("/")} plans: a term plan is one prepaid ` +
+    "invoice, and a multi-cycle coupon riding into the commitment schedule would silently " +
+    'discount full-term renewals. Use duration "once", or restrict the code to monthly.'
+  );
+}
+
+/**
  * True when the edit changes something the Stripe objects fix at creation: the
  * coupon's discount, duration, and product scope, or the promotion code's
  * `max_redemptions`. None of those can be updated in place, so they can only
@@ -188,6 +211,8 @@ export async function POST(request: Request) {
 
     const discount = resolveDiscount(body);
     if (!discount.ok) return errorResponse("VALIDATION_ERROR", discount.message);
+    const termClash = termPeriodsForbidMultiCycle(discount.discount.duration, body.allowedPeriods);
+    if (termClash) return errorResponse("VALIDATION_ERROR", termClash);
 
     const startsAt = body.startsAt ?? new Date().toISOString();
     const endsAt = body.endsAt ?? null;
@@ -315,6 +340,9 @@ export async function PATCH(request: Request) {
 
     const discount = resolveDiscount(body, current);
     if (!discount.ok) return errorResponse("VALIDATION_ERROR", discount.message);
+    const effectivePeriods = body.allowedPeriods ?? current.allowed_periods;
+    const termClash = termPeriodsForbidMultiCycle(discount.discount.duration, effectivePeriods);
+    if (termClash) return errorResponse("VALIDATION_ERROR", termClash);
 
     const allowedTiers = body.allowedTiers ?? current.allowed_tiers;
     const maxRedemptions =

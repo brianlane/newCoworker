@@ -496,6 +496,30 @@ describe("auto-reload sweep against real Postgres", () => {
       expect(charged).toBe(0);
     });
 
+    it("skips a tenant whose billing an operator paused (real SQL, the M2-class gate)", async () => {
+      // A paused sub deliberately KEEPS status 'active' so dunning and
+      // teardown never fire; the pause lever's promise is "not charged",
+      // and this sweep charges the card off-session. The gate lives in the
+      // candidates SQL, which a mocked builder cannot prove.
+      const businessId = await seedTenant(db, "Auto-reload sweep itest (paused)");
+      await db
+        .from("subscriptions")
+        .update({ billing_paused: true })
+        .eq("business_id", businessId);
+
+      let charged = 0;
+      await sweepUsagePackAutoReloads({
+        client: db as never,
+        resolvePrice: priceOk as never,
+        charge: async () => {
+          charged += 1;
+          return { ok: true as const, paymentIntentId: "pi_paused" };
+        },
+        listCandidates: onlyFor(businessId)
+      } as never);
+      expect(charged).toBe(0);
+    });
+
     it("skips a tenant whose subscription lapsed", async () => {
       const businessId = await seedTenant(db, "Auto-reload sweep itest (lapsed)");
       await db

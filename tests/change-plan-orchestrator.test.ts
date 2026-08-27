@@ -1714,7 +1714,11 @@ describe("runResubscribeFromCheckout", () => {
         grace_ends_at: null,
         cancel_reason: null,
         canceled_at: null,
-        cancel_at_period_end: false
+        cancel_at_period_end: false,
+        // A stale pause on the reused row would show a false badge and mute
+        // the term/intro nudges; the fresh Stripe sub is unpaused.
+        billing_paused: false,
+        billing_pause_resumes_at: null
       })
     );
     expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");

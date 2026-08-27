@@ -524,3 +524,64 @@ describe("api/admin/promotions route", () => {
     expect((await DELETE(del({ promotionId: PROMO_ID }))).status).toBe(403);
   });
 });
+
+
+describe("multi-cycle coupons cannot allow term plans (audit 983-F1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(requireAdmin).mockResolvedValue({
+      userId: "admin-1",
+      email: "admin@example.com",
+      isAdmin: true
+    } as never);
+    vi.mocked(getPromotionByCode).mockResolvedValue(null);
+    vi.mocked(getPromotion).mockResolvedValue(PROMO);
+    vi.mocked(countPromotionRedemptions).mockResolvedValue(0);
+  });
+
+  it("refuses to mint a forever code that allows biennial", async () => {
+    // A term plan is one prepaid invoice; whether Stripe's schedule phase
+    // rewrite drops a redeemed coupon is pinned nowhere, and schedule setup
+    // failure is non-fatal at checkout, so a multi-cycle coupon could
+    // silently discount every full-term renewal.
+    const res = await POST(
+      post({
+        ...VALID_CREATE,
+        duration: "forever",
+        allowedPeriods: ["monthly", "biennial"]
+      })
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.message).toContain("one prepaid");
+    expect(createPromotionCoupon).not.toHaveBeenCalled();
+  });
+
+  it("still mints a repeating code restricted to monthly", async () => {
+    vi.mocked(createPromotionCoupon).mockResolvedValue({
+      couponId: "coupon_1",
+      promotionCodeId: "promo_1"
+    });
+    vi.mocked(createPromotion).mockResolvedValue(PROMO);
+    const res = await POST(
+      post({
+        ...VALID_CREATE,
+        duration: "repeating",
+        durationInMonths: 3,
+        allowedPeriods: ["monthly"]
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a PATCH that makes an existing term-allowed code repeating", async () => {
+    vi.mocked(getPromotion).mockResolvedValue({
+      ...PROMO,
+      allowed_periods: ["annual"]
+    } as never);
+    const res = await PATCH(
+      patch({ promotionId: PROMO.id, duration: "repeating", durationInMonths: 6 })
+    );
+    expect(res.status).toBe(400);
+  });
+});

@@ -1214,6 +1214,12 @@ export async function runResubscribeFromCheckout(
     wiped_at: null,
     vps_stopped_at: null,
     cancel_at_period_end: false,
+    // The fresh Stripe subscription is unpaused by construction; leaving a
+    // stale billing_paused=true on the reused row would show a false badge,
+    // offer a no-op Resume, and mute the term/intro nudges until the next
+    // subscription.updated for the new sub happens to overwrite it.
+    billing_paused: false,
+    billing_pause_resumes_at: null,
     ...periodCache
   };
   const updated = await updateSubscriptionIfNotWiped(oldSub.id, writePatch);
