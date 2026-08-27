@@ -52,7 +52,7 @@ export function MarketingNav() {
       <nav className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-4">
         <Link href="/" className="flex items-center gap-3" onClick={() => setOpen(false)}>
           <Image src="/logo.png" alt={t("brand")} width={34} height={34} className="rounded-full" />
-          <span className="text-lg font-bold tracking-tight text-parchment">{t("brand")}</span>
+          <span className="font-display text-lg font-bold tracking-tight text-parchment">{t("brand")}</span>
         </Link>
 
         <div className="hidden items-center gap-7 md:flex">
