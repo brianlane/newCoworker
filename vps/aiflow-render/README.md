@@ -20,8 +20,10 @@ templating the businessId into `AIFLOW_RENDER_URL_TEMPLATE`
 (e.g. `https://render-{businessId}.newcoworker.com/render`), exactly like
 `ROWBOAT_CHAT_URL_TEMPLATE` does for per-tenant Rowboat.
 
-> **Tier gating:** the render sidecar is **not** deployed on the starter/KVM2
-> tier (Chromium would compete with Ollama + Rowboat for the box's ~2 GB).
+> **Tier gating:** the render sidecar is **not** deployed on the starter
+> tier: its boxes are small (KVM1, the default since Jul 2026, has no
+> headroom at all, and on the legacy KVM2 starter boxes Chromium would
+> compete with Ollama + Rowboat for the box's ~2 GB).
 > `deploy-client.sh` skips/tears it down there, and the orchestrator omits the
 > `render-<businessId>` hostname for starter tenants.
 

@@ -4779,7 +4779,7 @@ async function fetchStatic(
  * Credentialed browse (`authCtx`) MUST use the render service, a static fetch
  * can't drive a login form, so its errors propagate. A NON-credentialed browse
  * falls back to a static fetch when the render service is unreachable: per-tenant
- * render only exists on render-capable tiers, so a starter/KVM2 tenant has no
+ * render only exists on render-capable tiers, so a starter tenant has no
  * `render-*` hostname/sidecar and must still read public/SPA pages statically
  * rather than failing against a non-existent backend.
  */

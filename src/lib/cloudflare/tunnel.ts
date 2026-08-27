@@ -35,7 +35,7 @@ export type ProvisionedTunnel = {
   /**
    * Public hostname forwarding to `renderServiceUrl` (AiFlow render service on
    * :8080). Only present when `renderEnabled` was passed for this tenant, the
-   * render sidecar is gated to larger tiers (NOT the starter/KVM2 box), so the
+   * render sidecar is gated to larger tiers (NOT starter boxes), so the
    * ingress rule + CNAME are created only where the container actually runs.
    */
   renderHostname?: string;
@@ -53,7 +53,7 @@ export type CloudflareTunnelProvisioner = (input: {
   /**
    * Whether to publish the AiFlow render-service hostname for this tenant.
    * The render sidecar (headless Chromium) is intentionally NOT deployed on
-   * the starter/KVM2 tier, so callers pass `false` there to avoid creating a
+   * the starter tier, so callers pass `false` there to avoid creating a
    * public hostname that would resolve to a non-existent backend.
    */
   renderEnabled?: boolean;

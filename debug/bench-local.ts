@@ -16,8 +16,8 @@
  *
  * Usage: tsx debug/bench-local.ts [businessId] [--model <tag>] [--num-ctx <n>]
  *
- * Defaults benchmark the standard-tier model (qwen3:4b-instruct @ 16384).
- * For a starter/KVM2 box pass the tier's actual config so the numbers match
+ * Defaults benchmark the kvm8 model (qwen3:4b-instruct @ 16384).
+ * For a KVM2/KVM4 box pass its actual config so the numbers match
  * what the fallback path really runs:
  *   tsx debug/bench-local.ts <cloneId> --model llama3.2:3b --num-ctx 4096
  */

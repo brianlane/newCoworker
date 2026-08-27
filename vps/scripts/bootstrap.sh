@@ -6,9 +6,12 @@
 # TIER (starter|standard) is the ENTITLEMENT axis, it no longer drives any
 # hardware decision here. VPS_SIZE (kvm1|kvm2|kvm4|kvm8) is the HARDWARE axis:
 # ZRAM, Ollama tuning + model pulls, and the Rowboat compose profile all key
-# on it. When VPS_SIZE is unset we fall back to the tier default mapping
-# (starter→kvm1, standard→kvm8, keep in lockstep with
-# src/lib/vps/size.ts DEFAULT_TIER_VPS_SIZE).
+# on it. When VPS_SIZE is unset we fall back to starter→kvm1, standard→kvm8.
+# The standard half is deliberately NOT DEFAULT_TIER_VPS_SIZE (a NEW standard
+# provision is kvm2, and the orchestrator always passes VPS_SIZE explicitly):
+# the unset fallback only guards manual runs, where kvm8 matches the legacy
+# no-pin standard boxes (src/lib/vps/size.ts resolveDeployedVpsSize). Either
+# guess can miss the box you are on, so always set VPS_SIZE.
 #
 # kvm1 (1 vCPU / 4GB, starter default since Jul 2026): ZRAM on, NO Ollama,
 # AI is Gemini-only with the shared budget fuse; a fuse trip means no AI
