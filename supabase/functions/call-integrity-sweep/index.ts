@@ -3,14 +3,18 @@
  *
  * Scheduled daily by `schedule_call_integrity_sweep.sql`. Reads yesterday's
  * voice transcripts and reports calls where the AI voiced BOTH sides of the
- * conversation, or held a conversation with a recording.
+ * conversation, held a conversation with a recording, or gave out a phone
+ * number the business does not own.
  *
- * WHY A CRON AND NOT A TEST. Both failures are the model disobeying its
- * prompt (the rules added in PR #1377), and prompt adherence cannot be
- * unit-tested: a test can prove a rule is present in the instruction, never
- * that it was followed. The detection rules live in
- * `_shared/call_integrity.ts` with their full reasoning; this file is the IO
- * around them.
+ * WHY A CRON AND NOT A TEST. Each failure is the model disobeying its
+ * prompt (the rules added in PRs #1377 and #1612), and prompt adherence
+ * cannot be unit-tested: a test can prove a rule is present in the
+ * instruction, never that it was followed. The invented-number rule earned
+ * its place here the hard way: #1612 was verified deployed and the model
+ * still fabricated a callback number on 2 of the next 8 voicemails, and the
+ * only thing that caught it was a human reading transcripts. The detection
+ * rules live in `_shared/call_integrity.ts` with their full reasoning; this
+ * file is the IO around them.
  *
  * It cannot prevent a recurrence. It names one within a day, which is the
  * gap that mattered: the 2026-06-27 instance went unnoticed for seven weeks
@@ -26,8 +30,10 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   callIntegrityAlertSubject,
+  collectAllowedNumbers,
   detectCallIntegrity,
   formatCallIntegrityAlert,
+  spokenNumberForm,
   type CallIntegrityAlertItem,
   type CallIntegrityFinding,
   type IntegrityTurn
@@ -84,12 +90,13 @@ serve(async (req: Request) => {
     id: string;
     business_id: string;
     caller_e164: string | null;
+    forwarded_to_e164: string | null;
     started_at: string | null;
   }> = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from("voice_call_transcripts")
-      .select("id, business_id, caller_e164, started_at")
+      .select("id, business_id, caller_e164, forwarded_to_e164, started_at")
       // Exclude only the non-terminal state, rather than allow-listing
       // "completed". A call still in progress can be mid-IVR with a couple of
       // greetings behind it, which scores as talked_to_recording right up
@@ -135,6 +142,108 @@ serve(async (req: Request) => {
     }
   }
 
+  // The numbers each implicated business may legitimately speak, for the
+  // invented-number rule. Sources mirror `debug/voicemail-number-audit.ts`
+  // exactly (the pure collector is shared, see collectAllowedNumbers), and
+  // they are fetched only for businesses with an unreported call in the
+  // window, which on a normal day is a handful.
+  //
+  // FAIL-OPEN by design: any failed source query disables the rule for this
+  // whole run instead of detecting against a partial set. A shrunken
+  // allowlist reports correct calls as fabrications, and a detector that
+  // cries wolf gets muted, which is worse than one that misses a day.
+  const implicated = [...new Set(calls.filter((c) => !reported.has(c.id)).map((c) => c.business_id))];
+  let allowlistOk = implicated.length > 0;
+  const allowedByBusiness = new Map<string, Set<string>>();
+  if (allowlistOk) {
+    type Row = Record<string, unknown>;
+    const phoneKeyedRows = new Map<string, Row[]>();
+    const bareValues = new Map<string, unknown[]>();
+    const flowDefs = new Map<string, unknown[]>();
+    for (const id of implicated) {
+      phoneKeyedRows.set(id, []);
+      bareValues.set(id, []);
+      flowDefs.set(id, []);
+    }
+    const fail = async (stage: string, message: string) => {
+      allowlistOk = false;
+      console.error(`call-integrity-sweep: allowlist ${stage} select`, message);
+      await telemetryRecord(supabase, "call_integrity_sweep_error", {
+        stage: `allowlist_${stage}`,
+        error: message
+      });
+    };
+    {
+      const { data, error } = await supabase.from("businesses").select("*").in("id", implicated);
+      if (error) await fail("businesses", error.message);
+      for (const row of (data ?? []) as Row[]) phoneKeyedRows.get(row.id as string)?.push(row);
+    }
+    {
+      const { data, error } = await supabase
+        .from("business_telnyx_settings")
+        .select("*")
+        .in("business_id", implicated);
+      if (error) await fail("telnyx_settings", error.message);
+      for (const row of (data ?? []) as Row[]) phoneKeyedRows.get(row.business_id as string)?.push(row);
+    }
+    {
+      const { data, error } = await supabase
+        .from("ai_flow_team_members")
+        .select("*")
+        .in("business_id", implicated);
+      if (error) await fail("team_members", error.message);
+      for (const row of (data ?? []) as Row[]) phoneKeyedRows.get(row.business_id as string)?.push(row);
+    }
+    {
+      const { data, error } = await supabase
+        .from("notification_preferences")
+        .select("business_id, phone_number")
+        .in("business_id", implicated);
+      if (error) await fail("notification_preferences", error.message);
+      for (const row of (data ?? []) as Row[]) {
+        bareValues.get(row.business_id as string)?.push(row.phone_number);
+      }
+    }
+    {
+      const { data, error } = await supabase
+        .from("telnyx_voice_routes")
+        .select("business_id, to_e164")
+        .in("business_id", implicated);
+      if (error) await fail("voice_routes", error.message);
+      for (const row of (data ?? []) as Row[]) bareValues.get(row.business_id as string)?.push(row.to_e164);
+    }
+    // Paged like the transcripts: flow definitions are the one source that can
+    // plausibly cross the PostgREST cap, and a silently truncated select here
+    // would shrink the allowlist, which is the false-positive failure above.
+    for (let from = 0; allowlistOk; from += PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, business_id, definition")
+        .in("business_id", implicated)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) {
+        await fail("flows", error.message);
+        break;
+      }
+      const rows = (data ?? []) as Row[];
+      for (const row of rows) flowDefs.get(row.business_id as string)?.push(row.definition);
+      if (rows.length < PAGE) break;
+    }
+    if (allowlistOk) {
+      for (const id of implicated) {
+        allowedByBusiness.set(
+          id,
+          collectAllowedNumbers({
+            phoneKeyedRows: phoneKeyedRows.get(id),
+            values: bareValues.get(id),
+            flowDefinitions: flowDefs.get(id)
+          })
+        );
+      }
+    }
+  }
+
   let scanned = 0;
   const alerts: CallIntegrityAlertItem[] = [];
   for (const call of calls) {
@@ -160,7 +269,22 @@ serve(async (req: Request) => {
     }
     if (turns.length === 0) continue;
 
-    const findings: CallIntegrityFinding[] = detectCallIntegrity(turns);
+    // Reading a party their OWN number back is explicitly allowed (PR #1612),
+    // so this call's numbers join the set per call rather than business-wide.
+    const base = allowlistOk ? allowedByBusiness.get(call.business_id) : undefined;
+    let allowedNumbers: Set<string> | undefined;
+    if (base) {
+      allowedNumbers = new Set(base);
+      for (const v of [call.caller_e164, call.forwarded_to_e164]) {
+        const n = spokenNumberForm(v);
+        if (n) allowedNumbers.add(n);
+      }
+    }
+
+    const findings: CallIntegrityFinding[] = detectCallIntegrity(
+      turns,
+      allowedNumbers ? { allowedNumbers } : {}
+    );
     for (const finding of findings) {
       alerts.push({
         ...finding,
@@ -186,7 +310,9 @@ serve(async (req: Request) => {
         message:
           finding.kind === "role_leak"
             ? `The AI spoke the caller's side of a call (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
-            : `The AI held a conversation with a recording (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
+            : finding.kind === "invented_contact_number"
+              ? `The AI gave out a phone number this business does not own (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
+              : `The AI held a conversation with a recording (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
         payload: {
           transcript_id: call.id,
           kind: finding.kind,

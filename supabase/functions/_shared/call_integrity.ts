@@ -1,7 +1,7 @@
 /**
- * Detects the two ways a voice call goes wrong that no code check can catch,
- * because both are the model disobeying its prompt rather than the code
- * misbehaving.
+ * Detects the three ways a voice call goes wrong that no code check can
+ * catch, because each is the model disobeying its prompt rather than the
+ * code misbehaving.
  *
  * WHY THIS IS A DETECTOR AND NOT A TEST. The fix for these (PR #1377) is a
  * set of prompt rules. Unit tests can prove the rules are PRESENT in the
@@ -28,6 +28,19 @@
  *   never noticed). The AI greeted a looping "Press one to be connected" menu
  *   three times and never pressed.
  *
+ *   `invented_contact_number` (calls 68ca8cdb 2026-08-26 and 5b335fc8
+ *   2026-08-27, again Amy Laidlaw). Ad-libbing a voicemail sign-off, the
+ *   model told leads to "give us a call back at 480-269-7977" and
+ *   480-331-9100, numbers belonging to nobody on the account. Thirteen
+ *   distinct fabrications preceded these over 45 days; the prompt rule
+ *   shipped against them (PR #1612, `NO_INVENTED_CONTACT_LINE`) was verified
+ *   deployed and still failed on 2 of the first 8 machine calls, which is why
+ *   this is now DETECTED daily rather than prompted against a fourth time.
+ *   Detection needs the set of numbers the business may legitimately speak;
+ *   `collectAllowedNumbers` builds it from the same sources as
+ *   `debug/voicemail-number-audit.ts` (which Bugbot vetted through two rounds
+ *   of false-positive holes), so the sweep and the audit cannot drift.
+ *
  * Pure and dependency-free: the Edge sweep and `debug/audit-call-integrity.ts`
  * both import it so the two cannot drift, and it pins at 100% coverage like
  * every other `_shared` module.
@@ -36,7 +49,7 @@
 /** One transcript turn, narrowed to what detection needs. */
 export type IntegrityTurn = { role: string | null; content: string | null };
 
-export type CallIntegrityKind = "role_leak" | "talked_to_recording";
+export type CallIntegrityKind = "role_leak" | "talked_to_recording" | "invented_contact_number";
 
 export type CallIntegrityFinding = {
   kind: CallIntegrityKind;
@@ -86,6 +99,91 @@ export function hasRoleLeak(text: string): boolean {
   return ROLE_TOKEN_LEAK.test(text);
 }
 
+/**
+ * A phone-ish value normalized to spoken 3-3-4 form ("480-269-7977"), or null
+ * when it does not hold a North American number. One canonical form is what
+ * lets an E.164 column, a flow script's "(480) 269-7977" and a transcribed
+ * "480.269.7977" all compare equal.
+ */
+export function spokenNumberForm(value: unknown): string | null {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  const d = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (d.length !== 10) return null;
+  return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+/**
+ * A phone number as it appears in assistant speech: optionally a +1/1 prefix,
+ * then 3-3-4 with any mix of spaces, dots, dashes or parentheses, including
+ * none. Bare digit runs ARE matched here, unlike in flow definitions below:
+ * transcribed speech has no epoch timestamps to confuse them with.
+ */
+const SPOKEN_NUMBER_PATTERN = /\b(?:\+?1[ .\-()]*)?\(?(\d{3})\)?[ .\-]*(\d{3})[ .\-]*(\d{4})\b/g;
+
+/** Every number spoken in a piece of text, in spoken 3-3-4 form, in order. */
+export function extractSpokenNumbers(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(SPOKEN_NUMBER_PATTERN)) {
+    out.push(`${m[1]}-${m[2]}-${m[3]}`);
+  }
+  return out;
+}
+
+/**
+ * Raw material for the set of numbers a business may legitimately speak.
+ *
+ * The caller does the IO (each runtime has its own client) and hands the rows
+ * over; this stays pure so the Edge sweep, `debug/voicemail-number-audit.ts`
+ * and `debug/audit-call-integrity.ts` all build the SAME set. Completeness
+ * matters more here than anywhere else in the file: a number missing from
+ * this set is reported as INVENTED, and Bugbot found four separate holes in
+ * the audit script's first drafts, every one a false positive that would have
+ * called a correct call a fabrication.
+ */
+export type AllowedNumberSources = {
+  /**
+   * Rows scanned by COLUMN NAME: any phone/e164/did/number-named column is
+   * collected. `businesses`, `business_telnyx_settings` and
+   * `ai_flow_team_members` rows go here, so a column added later (as
+   * `forward_to_e164` once was) is picked up without a code change.
+   */
+  phoneKeyedRows?: ReadonlyArray<Record<string, unknown> | null | undefined>;
+  /** Bare values: `notification_preferences.phone_number`, `telnyx_voice_routes.to_e164`. */
+  values?: ReadonlyArray<unknown>;
+  /**
+   * `ai_flows.definition` payloads. Numbers here are matched as E.164 or as
+   * SEPARATED 3-3-4 only, deliberately NOT as bare 10-digit runs: in flow
+   * JSON those are usually epoch timestamps, and matching them would quietly
+   * widen the allowlist until fabrications pass.
+   */
+  flowDefinitions?: ReadonlyArray<unknown>;
+};
+
+const PHONE_KEYED_COLUMN = /phone|e164|did|number/i;
+
+/** The numbers a business may legitimately speak, in spoken 3-3-4 form. */
+export function collectAllowedNumbers(src: AllowedNumberSources): Set<string> {
+  const out = new Set<string>();
+  const add = (v: unknown) => {
+    const n = spokenNumberForm(v);
+    if (n) out.add(n);
+  };
+  for (const row of src.phoneKeyedRows ?? []) {
+    for (const [k, v] of Object.entries(row ?? {})) {
+      if (PHONE_KEYED_COLUMN.test(k)) add(v);
+    }
+  }
+  for (const v of src.values ?? []) add(v);
+  for (const def of src.flowDefinitions ?? []) {
+    const text = JSON.stringify(def ?? null);
+    for (const m of text.matchAll(/\+1(\d{10})\b/g)) add(m[1]);
+    for (const m of text.matchAll(/\(?(\d{3})\)?[ .\-]+(\d{3})[ .\-]+(\d{4})\b/g)) {
+      add(`${m[1]}${m[2]}${m[3]}`);
+    }
+  }
+  return out;
+}
+
 export function looksMachineGenerated(text: string): boolean {
   const t = text.toLowerCase();
   return MACHINE_PHRASES.some((p) => t.includes(p));
@@ -101,15 +199,45 @@ function textOf(turn: IntegrityTurn): string {
 
 /**
  * Findings for one call, newest rules first. At most one `role_leak` per
- * call: the point is to name the call, and quoting every offending turn would
- * bury the operator in one bad call's noise.
+ * call, and one `invented_contact_number` per distinct number: the point is
+ * to name the call, and quoting every offending turn would bury the operator
+ * in one bad call's noise.
+ *
+ * `allowedNumbers` switches the invented-number rule on: it is the
+ * business's legitimate set (see `collectAllowedNumbers`) PLUS the numbers
+ * of the parties on this call, which the caller adds because reading the
+ * remote party their own number back is explicitly allowed. Omitted, the
+ * rule does not run at all: an allowlist a caller failed to build must
+ * fail toward silence, never toward calling every spoken number invented.
  */
 export function detectCallIntegrity(
   turns: readonly IntegrityTurn[],
-  opts: { minAssistantTurns?: number } = {}
+  opts: { minAssistantTurns?: number; allowedNumbers?: ReadonlySet<string> } = {}
 ): CallIntegrityFinding[] {
   const findings: CallIntegrityFinding[] = [];
   const minAssistantTurns = opts.minAssistantTurns ?? DEFAULT_MIN_ASSISTANT_TURNS;
+
+  // Only the assistant side can fabricate: the caller side is a transcription
+  // of whatever was on the line, and a mailbox reading ITS number out is not
+  // our AI misbehaving. One finding per distinct number, quoting its first
+  // occurrence, so a script read twice does not double the alert.
+  if (opts.allowedNumbers) {
+    const flagged = new Set<string>();
+    for (const turn of turns) {
+      if (!isAssistant(turn)) continue;
+      const text = textOf(turn);
+      for (const n of extractSpokenNumbers(text)) {
+        if (opts.allowedNumbers.has(n) || flagged.has(n)) continue;
+        flagged.add(n);
+        findings.push({
+          kind: "invented_contact_number",
+          detail:
+            `spoke ${n}, which is not a number this business owns: ` +
+            `"${text.replace(/\s+/g, " ").slice(0, 140)}"`
+        });
+      }
+    }
+  }
 
   // Only OUR side can leak a role token. The caller side is a transcription
   // of whatever was on the line, so a menu that happens to read "user:" is
@@ -163,7 +291,9 @@ const ALERT_MAX_ITEMS = 10;
 const ALERT_DETAIL_CHARS = 160;
 
 function kindPhrase(kind: CallIntegrityKind): string {
-  return kind === "role_leak" ? "spoke the caller's side" : "talked to a recording";
+  if (kind === "role_leak") return "spoke the caller's side";
+  if (kind === "invented_contact_number") return "gave out a number it does not own";
+  return "talked to a recording";
 }
 
 /**
