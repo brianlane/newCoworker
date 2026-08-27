@@ -125,7 +125,7 @@ vi.mock("@/lib/email/tenant-mailbox", () => ({
 // purchase path, the pre-pool behavior) and the bookkeeping writes no-op.
 vi.mock("@/lib/db/vps-inventory", () => ({
   claimAvailableVps: vi.fn().mockResolvedValue(null),
-  claimOwnAssignedVps: vi.fn().mockResolvedValue(null),
+  getLastAcquiredAtForBusiness: vi.fn().mockResolvedValue(null),
   claimSpecificAvailableVps: vi.fn().mockResolvedValue(null),
   recordVpsAssigned: vi.fn().mockResolvedValue(undefined),
   releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
@@ -3438,7 +3438,6 @@ describe("provisioning/orchestrate", () => {
     function makePool(overrides: Record<string, unknown> = {}) {
       return {
         claim: vi.fn().mockResolvedValue(null),
-        claimOwn: vi.fn().mockResolvedValue(null),
         claimSpecific: vi.fn().mockResolvedValue(null),
         record: vi.fn().mockResolvedValue(undefined),
         release: vi.fn().mockResolvedValue(undefined),
@@ -3596,57 +3595,65 @@ describe("provisioning/orchestrate", () => {
       expect(pool.record.mock.calls[0][0]).not.toHaveProperty("expiresAt");
     });
 
-    it("skipPoolAdopt still reuses the box THIS business already paid for (dead-attempt retry)", async () => {
+    it("skipPoolAdopt refuses a repeat purchase minutes after this business bought a box", async () => {
       // The V1 residual: a migration killed between percent 15 (purchase
-      // done) and 40 (safe-resume floor) falls through to a full re-run with
-      // skip_pool_adopt, which used to bypass tryAdoptFromPool ENTIRELY,
-      // own-row idempotency shortcut included, so acquireVps purchased a
-      // SECOND term-priced box. skipPoolAdopt means "no arbitrary pooled
-      // box"; it must never mean "buy again past your own paid hardware".
-      const ownRow = { ...claimedRow, assigned_business_id: "biz-own-retry" };
-      const pool = makePool({
-        claim: vi.fn().mockResolvedValue(claimedRow),
-        claimOwn: vi.fn().mockResolvedValue(ownRow)
-      });
-      const adopted = {
-        ...makeVpsStub("1800985"),
-        hostingerBillingSubscriptionId: "hsub-own"
-      };
-      const vpsAdopter = vi.fn().mockResolvedValue(adopted);
+      // done) and 40 (the safe-resume floor) falls through to a full re-run
+      // with skip_pool_adopt, and the old code purchased AGAIN (max_attempts
+      // 3 allows two extra term-priced boxes per incident). Auto-reclaiming
+      // is unsafe (a first-attempt term migration's LIVE box is itself an
+      // assigned row, and adopt recreates hardware), so a purchase inside
+      // the refusal window throws; the failed job feeds the stuck alert.
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn();
       const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const lastAcquiredAt = vi
+        .fn()
+        .mockResolvedValue(new Date(Date.now() - 10 * 60 * 1000));
 
-      const result = await orchestrateProvisioning(
-        { businessId: "biz-own-retry", tier: "starter", skipPoolAdopt: true },
-        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
-      );
-
-      expect(result.vpsId).toBe("1800985");
-      expect(pool.claimOwn).toHaveBeenCalledWith("kvm1", "biz-own-retry");
-      // The general pool stays untouched: no available box may be adopted.
-      expect(pool.claim).not.toHaveBeenCalled();
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-own-retry", tier: "starter", skipPoolAdopt: true },
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec, lastAcquiredAt }
+        )
+      ).rejects.toThrow(/refusing a second VPS purchase/);
       expect(vpsProvisioner).not.toHaveBeenCalled();
-      expect(vpsAdopter).toHaveBeenCalledWith({
-        businessId: "biz-own-retry",
-        tier: "starter",
-        vpsSize: "kvm1",
-        virtualMachineId: 1800985
-      });
+      expect(vpsAdopter).not.toHaveBeenCalled();
+      // The available pool stays untouched under skipPoolAdopt.
+      expect(pool.claim).not.toHaveBeenCalled();
     });
 
-    it("skipPoolAdopt purchases when this business holds no prior box (claimOwn empty)", async () => {
+    it("skipPoolAdopt purchases normally when the last acquisition is outside the window (or absent)", async () => {
       const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
       const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("778"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const lastAcquiredAt = vi
+        .fn()
+        .mockResolvedValue(new Date(Date.now() - 8 * 60 * 60 * 1000));
       const result = await orchestrateProvisioning(
         { businessId: "biz-own-none", tier: "starter", skipPoolAdopt: true },
-        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec, lastAcquiredAt }
       );
       expect(result.vpsId).toBe("778");
-      expect(pool.claimOwn).toHaveBeenCalled();
+      expect(lastAcquiredAt).toHaveBeenCalledWith("biz-own-none");
       expect(pool.claim).not.toHaveBeenCalled();
       expect(vpsAdopter).not.toHaveBeenCalled();
+
+      // Unknown history (null) must also purchase: the refusal needs a
+      // POSITIVE dead-attempt signature, never a missing read.
+      const vpsProvisioner2 = vi.fn().mockResolvedValue(makeVpsStub("779"));
+      const result2 = await orchestrateProvisioning(
+        { businessId: "biz-own-none-2", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner: vpsProvisioner2,
+          vpsAdopter,
+          vpsPool: makePool(),
+          remoteExec,
+          lastAcquiredAt: vi.fn().mockResolvedValue(null)
+        }
+      );
+      expect(result2.vpsId).toBe("779");
     });
 
     it("skipPoolAdopt forces a term purchase past an available pooled box (change-plan term alignment)", async () => {
@@ -3943,7 +3950,6 @@ describe("provisioning/orchestrate", () => {
     function makePool(overrides: Record<string, unknown> = {}) {
       return {
         claim: vi.fn().mockResolvedValue(null),
-        claimOwn: vi.fn().mockResolvedValue(null),
         claimSpecific: vi.fn().mockImplementation(async (vmId: number, businessId: string) => ({
           vm_id: vmId,
           hostname: `srv${vmId}.hstgr.cloud`,
@@ -4746,7 +4752,6 @@ describe("provisioning/orchestrate", () => {
       const remoteExec = vi.fn().mockResolvedValue(okExec());
       const vpsPool = {
         claim: vi.fn(),
-        claimOwn: vi.fn(),
         claimSpecific: vi.fn(),
         record: vi.fn(),
         release: vi.fn(),
@@ -4919,7 +4924,6 @@ describe("provisioning/orchestrate", () => {
       const remoteExec = vi.fn().mockResolvedValue(okExec());
       const vpsPool = {
         claim: vi.fn(),
-        claimOwn: vi.fn(),
         claimSpecific: vi.fn(),
         record: vi.fn(),
         release: vi.fn(),

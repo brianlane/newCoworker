@@ -8,7 +8,7 @@ import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
 import { resolvePaidThroughForBillingSub } from "@/lib/hostinger/paid-through";
 import {
   claimAvailableVps,
-  claimOwnAssignedVps,
+  getLastAcquiredAtForBusiness,
   claimSpecificAvailableVps,
   listVpsInventory,
   recordVpsAssigned,
@@ -457,14 +457,17 @@ export type VpsAdopter = (input: {
  * tests can drive adopt-first without a database; `null` force-disables the
  * pool lookup entirely.
  */
+/**
+ * How close together two purchases for one business must be before the
+ * second is refused as a dead-attempt repeat. Watchdog retries land within
+ * about an hour of the death (max_attempts 3, minutes apart); the sweeps'
+ * own cooldowns (168h term-renewal, 30d contract-upgrade) keep legitimate
+ * repeat purchases far outside this window.
+ */
+export const REPEAT_PURCHASE_REFUSAL_MS = 6 * 60 * 60 * 1000;
+
 export type VpsPool = {
   claim: typeof claimAvailableVps;
-  /**
-   * Own-row-only claim: the box this business already holds from a prior
-   * attempt. Consulted even under skipPoolAdopt, which must never force a
-   * second purchase past already-paid hardware.
-   */
-  claimOwn: typeof claimOwnAssignedVps;
   /** Atomic claim of one specific VM id (term fail-but-charge orphan adopt). */
   claimSpecific: typeof claimSpecificAvailableVps;
   record: typeof recordVpsAssigned;
@@ -943,6 +946,8 @@ export async function orchestrateProvisioning(
      * {@link getLatestProvisioningStatus}; tests inject a stub so the
      * detached-deploy poll does not hit Supabase.
      */
+    /** Repeat-purchase refusal clock source (tests). */
+    lastAcquiredAt?: typeof getLastAcquiredAtForBusiness;
     latestProvisioningStatus?: (
       businessId: string
     ) => Promise<LatestProvisioningStatus>;
@@ -1263,25 +1268,15 @@ async function tryAdoptFromPool(args: {
   vpsSize: VpsSize;
   vpsPool: VpsPool;
   vpsAdopter: VpsAdopter;
-  /**
-   * Only reclaim a box already assigned to THIS business; never touch the
-   * available pool. The skipPoolAdopt retry path uses this: a term-priced
-   * caller must not adopt an arbitrary pooled box, but buying a second box
-   * past its own paid one is the V1-residual failure.
-   */
-  ownRowOnly?: boolean;
 }): Promise<ProvisionVpsForBusinessResult | null> {
-  const { businessId, tier, vpsSize, vpsPool, vpsAdopter, ownRowOnly } = args;
+  const { businessId, tier, vpsSize, vpsPool, vpsAdopter } = args;
   let claimed: Awaited<ReturnType<VpsPool["claim"]>> = null;
   try {
-    claimed = ownRowOnly
-      ? await vpsPool.claimOwn(vpsSize, businessId)
-      : await vpsPool.claim(vpsSize, businessId);
+    claimed = await vpsPool.claim(vpsSize, businessId);
   } catch (err) {
     logger.warn("vps pool claim failed, falling back to purchase", {
       businessId,
       vpsSize,
-      ownRowOnly: ownRowOnly === true,
       error: err instanceof Error ? err.message : String(err)
     });
   }
@@ -1532,6 +1527,12 @@ async function acquireVps(args: {
    * resolves to null on any failure and the row keeps an unknown expiry.
    */
   resolvePaidThrough: (billingSubscriptionId: string | null) => Promise<string | null>;
+  /**
+   * When this business last acquired a still-assigned box; drives the
+   * skipPoolAdopt repeat-purchase refusal. Tests inject; production
+   * defaults to the vps_inventory read.
+   */
+  lastAcquiredAt?: typeof getLastAcquiredAtForBusiness;
   /** Injectable sleep for the orphan-scan retry loop (tests inject a no-op). */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the orphan-scan deadline (tests). */
@@ -1545,21 +1546,37 @@ async function acquireVps(args: {
   /* c8 ignore next -- production default; tests inject now */
   const now = args.now ?? Date.now;
 
-  if (vpsPool && hostingerManaged) {
-    // Under skipPoolAdopt the available pool stays off-limits (term-priced
-    // purchases must not land on an arbitrary pooled box), but a box THIS
-    // business already paid for in a prior dead attempt is reclaimed rather
-    // than bought again: max_attempts is 3, so the old fall-through could
-    // buy up to two extra term-priced boxes per incident (V1 residual).
-    const adopted = await tryAdoptFromPool({
-      businessId,
-      tier,
-      vpsSize,
-      vpsPool,
-      vpsAdopter,
-      ownRowOnly: skipPoolAdopt === true
-    });
+  if (vpsPool && !skipPoolAdopt && hostingerManaged) {
+    const adopted = await tryAdoptFromPool({ businessId, tier, vpsSize, vpsPool, vpsAdopter });
     if (adopted) return adopted;
+  }
+  if (skipPoolAdopt && hostingerManaged) {
+    // V1 residual: a migration killed between percent 15 (purchase done)
+    // and 40 (the watchdog's safe-resume floor) falls through to a full
+    // re-run with skipPoolAdopt, and the old code purchased AGAIN;
+    // max_attempts is 3, so up to two extra term-priced boxes per incident.
+    // Auto-reclaiming the paid box is NOT safe here: on a first-attempt
+    // term migration the tenant's LIVE box is itself an assigned inventory
+    // row for this business, and adopting recreates (wipes) hardware, so
+    // any row-picking heuristic risks the production box. Refuse instead:
+    // a purchase minutes after this business already acquired a box is the
+    // dead-attempt signature, and the thrown error fails the job so the
+    // stuck alert (V5, working since #1043) pages a human who can see
+    // which box is which. Legitimate skipPoolAdopt purchases are never
+    // this close together: the term-renewal sweep gates itself on a 168h
+    // cooldown and the contract-upgrade sweep waits out the 30-day refund
+    // window.
+    /* c8 ignore next -- production default; tests inject lastAcquiredAt */
+    const lastAcquiredAt = args.lastAcquiredAt ?? getLastAcquiredAtForBusiness;
+    const acquiredAt = await lastAcquiredAt(businessId);
+    const acquiredAtMs = acquiredAt instanceof Date ? acquiredAt.getTime() : Number.NaN;
+    if (Number.isFinite(acquiredAtMs) && now() - acquiredAtMs < REPEAT_PURCHASE_REFUSAL_MS) {
+      throw new Error(
+        `refusing a second VPS purchase for ${businessId}: it already acquired a box ` +
+          `${Math.round((now() - acquiredAtMs) / 60_000)} minutes ago (dead-attempt ` +
+          "signature). Reclaim or release that box, then retry; the stuck alert has the ids."
+      );
+    }
   }
 
   // Stamp before the purchase call so the orphan wait only accepts VMs
@@ -1766,7 +1783,7 @@ async function runOrchestrator(
   const vpsPool: VpsPool | null =
     deps?.vpsPool === undefined
       ? /* c8 ignore next -- production default pool; tests inject vpsPool */
-        { claim: claimAvailableVps, claimOwn: claimOwnAssignedVps, claimSpecific: claimSpecificAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
+        { claim: claimAvailableVps, claimSpecific: claimSpecificAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
       : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
@@ -1814,6 +1831,7 @@ async function runOrchestrator(
       deps?.resolvePaidThrough ??
       ((billingSubscriptionId) =>
         resolvePaidThroughForBillingSub(hostinger, billingSubscriptionId, { businessId })),
+    lastAcquiredAt: deps?.lastAcquiredAt,
     sleep: deps?.sleep,
     now: deps?.now
   });
