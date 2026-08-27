@@ -1010,7 +1010,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let acceptPressed = false;
   let acceptPressInFlight = false;
   let acceptPressCount = 0;
+  let acceptAttemptCount = 0;
   let lastAcceptPressAtMs = 0;
+  // The digit whose press Telnyx ACCEPTED. The refallback must re-press what
+  // actually worked: when the announcement names a different key than the
+  // flow authored ("press 2 to accept") and the model pressed it, re-pressing
+  // the authored digit would send the WRONG key into the menu.
+  let lastOkAcceptDigits: string | null = null;
   let ivrRefallbackArmed = false;
 
   /** The opening line, shared so no cue can quote a different one. */
@@ -1072,7 +1078,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     timers.push(
       setTimeout(() => {
         if (ended) return;
-        void pressAcceptDigit(ivrGate.digit, "refallback");
+        void pressAcceptDigit(lastOkAcceptDigits ?? ivrGate.digit, "refallback");
       }, IVR_REFALLBACK_MS)
     );
   };
@@ -1093,6 +1099,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       inFlight: acceptPressInFlight,
       acceptPressed,
       acceptPressCount,
+      attemptCount: acceptAttemptCount,
       lastPressAtMs: lastAcceptPressAtMs,
       nowMs: Date.now(),
       source
@@ -1101,6 +1108,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
     // Claim BEFORE awaiting so the backstop timer cannot double-send mid-request.
     acceptPressInFlight = true;
+    acceptAttemptCount += 1;
     if (!decision.repress) acceptPressed = true;
     try {
       const result = await opts.dtmf.execute(digits).catch((err) => ({
@@ -1109,8 +1117,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }));
       if (!result.ok) {
         // First press: unlock so the other path can retry. Re-press: leave
-        // acceptPressed set; cooldown still gates the next model attempt.
+        // acceptPressed set. Stamp the clock on FAILURE too, so the cooldown
+        // rate-limits a failing retry loop the same as a successful one; the
+        // attempt cap above bounds it outright.
         if (!decision.repress) acceptPressed = false;
+        lastAcceptPressAtMs = Date.now();
         console.error("gemini-bridge: accept digit failed", { source, detail: result.detail });
         emitDiag("voice_bridge_ivr_gate_press_failed", {
           source,
@@ -1121,6 +1132,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
       acceptPressCount += 1;
       lastAcceptPressAtMs = Date.now();
+      lastOkAcceptDigits = digits;
       console.log("gemini-bridge: accept digit pressed", {
         callControlId: opts.callControlId,
         digits,
@@ -2344,7 +2356,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // tool. Not pressing at all forfeits the referral, so a blind press is
   // strictly better than waiting.
   if (ivrGate) {
-    const fallbackMs = Math.min(Math.max(ivrGate.fallbackMs ?? 12000, 1000), 60000);
+    // Default 20s, not 12: HomeLight's announcement routinely outlasts 12s
+    // and a blind press mid-announcement lands before the menu listens
+    // (Amy forfeited a referral to exactly this; the fallback-20 one-shot
+    // moved her live flow and this default follows it).
+    const fallbackMs = Math.min(Math.max(ivrGate.fallbackMs ?? 20000, 1000), 60000);
     timers.push(
       setTimeout(() => {
         if (acceptPressed || ended) return;

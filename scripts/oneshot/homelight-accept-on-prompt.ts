@@ -35,7 +35,7 @@
  * Business id: --business-id <uuid> or AIFLOW_SEED_BUSINESS_ID (defaults to Amy's).
  * Optional: AIFLOW_HOMELIGHT_VOICE_FLOW_NAME (default "HomeLight Live Transfer (AI takes the call)")
  *           AIFLOW_HOMELIGHT_ACCEPT_DIGIT    (default "1")
- *           AIFLOW_HOMELIGHT_ACCEPT_FALLBACK (default "12", seconds)
+ *           AIFLOW_HOMELIGHT_ACCEPT_FALLBACK (default "20", seconds; 12 fired mid-announcement)
  *
  * Exit codes: 0 patched/no-op/dry-run · 1 Supabase error · 2 bad env/arg, flow
  * not found, unexpected flow shape, or invalid definition.
@@ -109,8 +109,8 @@ async function main(): Promise<void> {
   const flowName =
     process.env.AIFLOW_HOMELIGHT_VOICE_FLOW_NAME ?? "HomeLight Live Transfer (AI takes the call)";
   const digit = process.env.AIFLOW_HOMELIGHT_ACCEPT_DIGIT ?? "1";
-  const fallbackRaw = Number(process.env.AIFLOW_HOMELIGHT_ACCEPT_FALLBACK ?? "12");
-  const fallbackSeconds = Number.isFinite(fallbackRaw) ? Math.round(fallbackRaw) : 12;
+  const fallbackRaw = Number(process.env.AIFLOW_HOMELIGHT_ACCEPT_FALLBACK ?? "20");
+  const fallbackSeconds = Number.isFinite(fallbackRaw) ? Math.round(fallbackRaw) : 20;
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   const { data: row, error } = await db

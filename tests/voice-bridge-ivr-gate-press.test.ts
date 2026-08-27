@@ -13,10 +13,35 @@ describe("decideIvrPress", () => {
     inFlight: false,
     acceptPressed: false,
     acceptPressCount: 0,
+    attemptCount: 0,
     lastPressAtMs: 0,
     nowMs: 10_000,
     source: "model" as const
   };
+
+  it("caps on ATTEMPTS, so failing presses cannot retry unbounded", () => {
+    // The old cap keyed on Telnyx-OK presses only: with a partner endpoint
+    // 422ing every send_dtmf, acceptPressCount stayed 0 and the failing path
+    // retried without bound. Five attempts, zero successes, still denied.
+    expect(
+      decideIvrPress({
+        ...base,
+        attemptCount: IVR_MAX_ACCEPT_PRESSES,
+        acceptPressCount: 0,
+        source: "model"
+      })
+    ).toEqual({ action: "deny", reason: "max_presses" });
+    // A refallback past the attempt cap is denied too.
+    expect(
+      decideIvrPress({
+        ...base,
+        acceptPressed: true,
+        attemptCount: IVR_MAX_ACCEPT_PRESSES,
+        acceptPressCount: 1,
+        source: "refallback"
+      })
+    ).toEqual({ action: "deny", reason: "max_presses" });
+  });
 
   it("allows the first press from model or fallback", () => {
     expect(decideIvrPress({ ...base, source: "model" })).toEqual({
@@ -95,11 +120,13 @@ describe("decideIvrPress", () => {
   });
 
   it("locks out every press once the per-call cap is reached", () => {
+    // Five OK presses imply five attempts; the cap keys on attempts.
     expect(
       decideIvrPress({
         ...base,
         acceptPressed: true,
         acceptPressCount: IVR_MAX_ACCEPT_PRESSES,
+        attemptCount: IVR_MAX_ACCEPT_PRESSES,
         lastPressAtMs: 0,
         nowMs: 60_000,
         source: "model"
@@ -109,6 +136,7 @@ describe("decideIvrPress", () => {
       decideIvrPress({
         ...base,
         acceptPressCount: IVR_MAX_ACCEPT_PRESSES,
+        attemptCount: IVR_MAX_ACCEPT_PRESSES,
         source: "fallback"
       })
     ).toEqual({ action: "deny", reason: "max_presses" });
