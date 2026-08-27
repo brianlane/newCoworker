@@ -568,16 +568,34 @@ these standards:
   `businesses.data_retention_days` (min 30, NULL = keep forever) is enforced
   by a daily sweep (pg_cron → Edge `data-retention-sweep` → internal Next
   route → [src/lib/privacy/retention.ts](src/lib/privacy/retention.ts)) that
-  prunes content history past the window — on the tenant's box too for
+  prunes content history past the window, on the tenant's box too for
   dual/vps residency tenants; contacts are exempt. Verified privacy requests
   (PIPEDA / Law 25 / CCPA erasure) run through
   [src/lib/privacy/deletion.ts](src/lib/privacy/deletion.ts) via
   `POST /api/admin/data-deletion`: one person's rows are deleted across every
   content table, central AND box, matching identifiers literally
-  (ILIKE-escaped) including phone aliases; the `coworker_logs` audit row
-  stores a sha256 fingerprint of the identifier, never the identifier itself.
-  An unreachable residency box fails the request loudly instead of reporting
-  a false "deleted".
+  (ILIKE-escaped). The request spans every identifier the person is known
+  by, not just the one the admin typed: `collectLinkedIdentifiers` harvests
+  the matched contact rows' phone numbers on an email request and their
+  emails on a phone request, merged-away `alias_e164s` included, and every
+  phone-keyed block deletes across that whole set, so an email-only request
+  erases the person's SMS and voice history too (the SMS/voice blocks
+  filtering on only the typed number was a silent under-erasure, fixed
+  Aug 2026). The `coworker_logs` audit row stores a sha256 fingerprint of
+  the identifier, never the identifier itself. Failures are typed: bad
+  input returns 400, while a store breaking mid-run returns 500, logs, and
+  writes a `status: "error"` audit row carrying the fingerprint. There is
+  no transaction across the stores, so rows already deleted stay deleted,
+  and since erasure is idempotent the fingerprint is enough to re-run the
+  request once the cause is fixed. An unreachable residency box fails the
+  request loudly instead of reporting a false "deleted". The schema side is
+  guarded too: `tests/privacy-coverage.test.ts` replays every migration's
+  `CREATE` / `DROP` / `RENAME TABLE` statements (and view pairs) in version
+  order and fails CI when the privacy modules still name a table PostgREST
+  can no longer resolve. A stale reference to the dropped
+  `contact_overrides` table aborted every erasure request from 2026-08-02
+  to 2026-08-26 behind a 400 that read as a mistyped identifier, and only a
+  manual audit caught it.
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.** The
   Supabase advisor reports INFO-level `rls_enabled_no_policy` findings for a
   set of service-role-only tables (secret stores like `vps_ssh_keys`,
@@ -3840,6 +3858,20 @@ window gate, first-contact flow trigger (`source: "whatsapp"`), and inbox
 (`/dashboard/whatsapp`, threads shared with `/dashboard/messenger`; both
 sidebar items are connection-gated).
 
+Two Aug 2026 additions ride this same pipeline. Staff messaging the
+business's own WhatsApp number reach the OWNER coworker, not the customer
+engine ([src/lib/messenger/staff-turn.ts](src/lib/messenger/staff-turn.ts)):
+WhatsApp is the only Meta platform that can identify staff, because its
+`psid` IS the sender's `wa_id`, the real number WhatsApp itself confirms,
+where Messenger/Instagram psids are opaque page-scoped ids and any phone
+number in those chats was typed by whoever is in them, so they never reach
+this path. Speaker rules and the per-surface staff switch live in
+[Owner coworker surfaces](#owner-coworker-surfaces-the-registry-contract-required-for-every-new-surface).
+And every outbound send stores its `wamid` and consumes Meta's status
+webhooks into `messenger_messages.delivery_status`: `ok` from the send call
+means Meta ACCEPTED the message, nothing more (see
+[Delivery receipts](#delivery-receipts-accepted-is-not-delivered-email-and-whatsapp)).
+
 Outbound is everywhere SMS is, through ONE policy helper
 (`src/lib/whatsapp/deliver.ts`): free-form text when the recipient's 24h
 service window is open, otherwise the pre-approved **utility template**
@@ -4334,6 +4366,75 @@ from a new surface without it. Contracts pinned live in
 features in the shared `ai-flow-worker`, not per-tenant tools — they need
 none of this.
 
+## Owner coworker surfaces: the registry contract (REQUIRED for every new surface)
+
+An "owner surface" is a place the business's own people reach their
+coworker: dashboard chat, texting the business line, email, Slack, WhatsApp.
+Until Aug 2026 each surface's identity lived in four hand-maintained places
+(the change-notice announce set and owner-facing label, the version-history
+label, the custom-table source map), owner-SMS and Slack each carried a
+private copy of the same turn assembly, and only SMS could recognize staff
+at all. The concrete symptom: an owner messaging their own business's
+WhatsApp number was pitched by their own sales assistant and filed as a
+lead. `src/lib/owner-surfaces/` is the fix, and every new surface MUST go
+through it:
+
+- **Registry** ([registry.ts](src/lib/owner-surfaces/registry.ts)):
+  `OWNER_SURFACES` holds one entry per surface (`dashboard`, `sms`, `email`,
+  `slack`, `whatsapp`) carrying the Settings label and description, the
+  `ai_flows.edit_source` stamp (`ai_edit_<key>`), the custom-table `source`,
+  and the change-notice and version-history labels. A registry test refuses
+  a half-filled entry. Deliberately NOT in it: the flow builder, white
+  glove, and `mcp` / `mcp_restore` (a connected client, not a surface of
+  ours); those keep their own cases at the call sites.
+- **Speaker resolution** ([speaker.ts](src/lib/owner-surfaces/speaker.ts)):
+  `resolveSurfaceSpeaker` is the shared owner / teammate / customer answer,
+  reading the same owner numbers the dashboard labels threads with and the
+  same roster the SMS gate reads. It fails CLOSED, deliberately opposite to
+  `_shared/ai_flows/staff_numbers.ts`: that module answers "may we text,
+  tag, or dial this person", where guessing STAFF only withholds an action;
+  this one answers "does this person get owner-power tools", where guessing
+  OWNER hands `send_sms`, roster CRUD, and live flow edits to whoever is
+  typing. Deactivated roster rows resolve as customer, and the owner-number
+  and business-identity reads THROW on failure (`ownerNumbersOrThrow`,
+  `businessIdentityOrThrow`) instead of letting a swallowed PostgREST error
+  classify the owner as a customer while reporting `readFailed: false`.
+- **One turn assembly** ([gates.ts](src/lib/owner-surfaces/gates.ts) +
+  [system.ts](src/lib/owner-surfaces/system.ts)): `ownerSurfaceToolGates`
+  and `buildOwnerSurfaceSystem` replace the copies owner-SMS and Slack each
+  carried. The one substantive difference between those copies (Slack
+  applies `isOwner &&` to the owner-power tools; the SMS route is owner-only
+  so it pinned the flag true) became a parameter: a teammate can read and
+  act but never reconfigure. `loadOwnerSurfaceContext`
+  ([context.ts](src/lib/owner-surfaces/context.ts)) batches the
+  tool-settings + grounding + MCP-bridge + spend-fuse read for a turn.
+- **Per-surface staff mode** (`public.coworker_staff_mode`,
+  [staff-mode.ts](src/lib/owner-surfaces/staff-mode.ts)): Settings →
+  Coworker renders one switch per registered surface, labels and all, from
+  the registry. ON means "answer them as staff"; OFF means the coworker is
+  SILENT to staff on that surface. It is never "answer them as a customer",
+  which is the bug this exists to remove. Default ON (a missing row is
+  enabled), and a failed read warns and uses the default: staff mode fails
+  OPEN where the speaker resolver fails CLOSED, because the worst wrong
+  default here is an unwanted staff answer, not leaked tools. The old
+  `business_telnyx_settings.staff_sms_assistant_reply_enabled` column is
+  superseded: the migration copied every tenant's value into the new table
+  and the writers were removed (the column stays for rollback only). No
+  CHECK constraint on `surface_key` by design: the app validates against
+  the registry, so adding a surface costs one registry entry and a caller,
+  not also a migration.
+- **WhatsApp is wired**
+  ([src/lib/messenger/staff-turn.ts](src/lib/messenger/staff-turn.ts)):
+  inbound WhatsApp runs the staff path before the customer engine, after
+  the tier gate so nothing changes about who is billed for an AI reply.
+  Only WhatsApp can identify staff among the Meta platforms (its `psid` IS
+  the verified `wa_id`; Messenger and Instagram never reach this path). The
+  staff turn declares no `capture_lead` at all, which is the only path that
+  creates a contact row from a DM, so staff can never be filed into the
+  CRM; flow edits stamp `ai_edit_whatsapp`; and a failed turn is retried by
+  the worker rather than degraded to a customer reply, because answering
+  the owner as a customer is worse than answering late.
+
 ## Email organization (AiFlow `email_organize`)
 
 Owners can file inbound mail from AiFlows: label, move to a folder, archive,
@@ -4451,6 +4552,60 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
 - Entry point: `/api/internal/email-coworker-poll`, kicked ~1/min by the
   ai-flow-worker tick beside the AiFlow trigger polls. Contracts pinned in
   `tests/e2e/beth-email-loop.e2e.test.ts`.
+
+## Delivery receipts: accepted is not delivered (email and WhatsApp)
+
+A send call returning `ok` means the provider ACCEPTED the message, nothing
+more. Both receipt paths exist because a tenant ran for weeks with every
+record of ours saying the message went out while nothing arrived (WhatsApp
+first, then the same audit found the same hole in email). The two modules
+deliberately mirror each other so they can be read side by side. In both,
+null `delivery_status` means UNKNOWN, never "delivered": inbound rows,
+anything sent before the receipts shipped (2026-08-25 WhatsApp, 2026-08-26
+email), and sends whose caller logged no provider id.
+
+- **Email** ([src/lib/email/delivery.ts](src/lib/email/delivery.ts)):
+  `email_log` carries `delivery_status` / `delivery_error_code` /
+  `delivery_error_message` / `delivery_updated_at`. Resend's event webhooks
+  land on `POST /api/webhooks/resend` with the Svix signature verified
+  in-house. `RESEND_WEBHOOK_SECRET` must be set; until it is, the receiver
+  refuses every delivery, because unconfigured must not mean "trust
+  anyone" (a forged receipt could mark a delivered alert as bounced).
+  Statuses rank `sent < delayed < delivered < complained < bounced <
+  failed`, and the rank is re-checked in the UPDATE's own WHERE clause so
+  racing receipts cannot downgrade a row. `delayed` loses to `delivered`
+  because the common sequence is delayed-then-delivered, and `bounced`
+  outranks both so no late receipt can mask it; `opened` / `clicked` are
+  deliberately absent (engagement, not delivery, and they need tracking
+  pixels we do not set). A failure raises `system_logs` (`source: email`,
+  `event: email_delivery_failed`), which surfaces on the admin System
+  Errors view.
+- **`provider_message_id` is NOT unique** (live data shows duplicated
+  Gmail-style hex ids from the owner-mailbox send paths), so the lookup
+  index is non-unique and keyed on the id alone: a receipt arrives carrying
+  no tenant, so discovering the business IS the query, and the writer takes
+  the newest OUTBOUND match instead of `maybeSingle`, which would throw on
+  the second row and swallow the receipt. That lookup is an allowlisted
+  central read of a purged table for the same no-tenant reason.
+- **Owner alert emails now log**: alert sends get an `email_log` row
+  (`source: notification`) so a receipt has somewhere to land. Before this
+  the `notifications` table recorded only that we DECIDED to alert and that
+  the send call returned. Alert rows are excluded from the dashboard Emails
+  page, which is the coworker's correspondence with customers, not the
+  platform's mail to the owner.
+- **Reading the state**: `debug/email-delivery-report.ts` splits the
+  non-failures honestly into `pending` (a receipt can still arrive),
+  `never-captured` (sent before the webhook went live, so none is coming),
+  and `no-id` (nothing for a receipt to match), so a backlog that can never
+  resolve does not read as stuck mail.
+- **WhatsApp** ([src/lib/messenger/db.ts](src/lib/messenger/db.ts)): Meta's
+  status webhook writes `messenger_messages.delivery_status` (`sent` /
+  `delivered` / `read` / `failed`, plus error code and title), keyed by the
+  `wamid` the outbound send now stores, with the same never-downgrade rank
+  enforced in the WHERE clause; a partial index keeps "what did not arrive"
+  cheap. One error worth knowing: `131042` on every send means the WABA's
+  billing is broken (a payment issue, not verification), while replies
+  inside a customer-opened 24h window still deliver.
 
 ## Internationalization (i18n) — REQUIRED for every new feature
 
