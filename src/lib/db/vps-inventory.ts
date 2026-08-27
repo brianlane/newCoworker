@@ -110,12 +110,11 @@ export function hasPoolRunway(
  * killed between percent 15 and 40 fell through to a full re-run and
  * acquireVps purchased a second term-priced box).
  */
-export async function claimOwnAssignedVps(
+async function claimOwnAssignedVps(
   plan: VpsSize,
   businessId: string,
-  client?: SupabaseClient
+  db: SupabaseClient
 ): Promise<VpsInventoryRow | null> {
-  const db = client ?? (await createSupabaseServiceClient());
   const { data: own, error: ownErr } = await db
     .from("vps_inventory")
     .select("*")
@@ -451,6 +450,27 @@ export async function clearVpsNeverRenew(vmId: number, client?: SupabaseClient):
     .update({ never_renew: false, updated_at: new Date().toISOString() })
     .eq("vm_id", vmId);
   if (error) throw new Error(`clearVpsNeverRenew: ${error.message}`);
+}
+
+/**
+ * How many inventory rows are currently `assigned` to this business. The
+ * fleet invariant is at most one (the serving box); two means a dead
+ * provisioning attempt left its purchase behind, which is exactly the state
+ * the skipPoolAdopt repeat-purchase refusal keys on, and the state the
+ * billing-posture stale_assigned_row check surfaces for cleanup.
+ */
+export async function countAssignedVpsForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("vps_inventory")
+    .select("vm_id", { count: "exact", head: true })
+    .eq("state", "assigned")
+    .eq("assigned_business_id", businessId);
+  if (error) throw new Error(`countAssignedVpsForBusiness: ${error.message}`);
+  return count ?? 0;
 }
 
 /**

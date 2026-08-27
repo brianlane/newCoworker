@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   claimAvailableVps,
-  claimOwnAssignedVps,
+  countAssignedVpsForBusiness,
   claimSpecificAvailableVps,
   recordVpsAssigned,
   releaseVpsToPool,
@@ -106,30 +106,38 @@ describe("vps_inventory DB layer", () => {
     });
   });
 
-  describe("claimOwnAssignedVps", () => {
-    it("returns the box already assigned to this business", async () => {
+  describe("countAssignedVpsForBusiness", () => {
+    it("counts assigned rows for the business", async () => {
       const chain = makeChain();
-      const ownRow = { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" };
-      chain.limit.mockResolvedValueOnce({ data: [ownRow], error: null });
+      chain.eq
+        .mockReturnValueOnce(chain)
+        .mockResolvedValueOnce({ count: 2, error: null });
       const db = makeDb(chain);
-      await expect(claimOwnAssignedVps("kvm2", "biz-1", db as never)).resolves.toEqual(ownRow);
+      await expect(countAssignedVpsForBusiness("biz-1", db as never)).resolves.toBe(2);
+      expect(chain.select).toHaveBeenCalledWith("vm_id", { count: "exact", head: true });
       expect(chain.eq).toHaveBeenCalledWith("state", "assigned");
       expect(chain.eq).toHaveBeenCalledWith("assigned_business_id", "biz-1");
-      expect(chain.eq).toHaveBeenCalledWith("plan", "kvm2");
     });
 
-    it("returns null when this business holds nothing", async () => {
+    it("treats a null count as zero and throws on error", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValueOnce({ data: [], error: null });
-      const db = makeDb(chain);
-      await expect(claimOwnAssignedVps("kvm2", "biz-1", db as never)).resolves.toBeNull();
+      chain.eq.mockReturnValueOnce(chain).mockResolvedValueOnce({ count: null, error: null });
+      await expect(countAssignedVpsForBusiness("biz-1", makeDb(chain) as never)).resolves.toBe(0);
+
+      const chain2 = makeChain();
+      chain2.eq
+        .mockReturnValueOnce(chain2)
+        .mockResolvedValueOnce({ count: null, error: { message: "count boom" } });
+      await expect(countAssignedVpsForBusiness("biz-1", makeDb(chain2) as never)).rejects.toThrow(
+        /countAssignedVpsForBusiness: count boom/
+      );
     });
 
     it("uses the default service client when none is provided", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValueOnce({ data: [], error: null });
+      chain.eq.mockReturnValueOnce(chain).mockResolvedValueOnce({ count: 0, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
-      await claimOwnAssignedVps("kvm2", "biz-1");
+      await countAssignedVpsForBusiness("biz-1");
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

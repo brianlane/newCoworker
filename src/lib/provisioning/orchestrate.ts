@@ -8,7 +8,7 @@ import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
 import { resolvePaidThroughForBillingSub } from "@/lib/hostinger/paid-through";
 import {
   claimAvailableVps,
-  getLastAcquiredAtForBusiness,
+  countAssignedVpsForBusiness,
   claimSpecificAvailableVps,
   listVpsInventory,
   recordVpsAssigned,
@@ -457,15 +457,6 @@ export type VpsAdopter = (input: {
  * tests can drive adopt-first without a database; `null` force-disables the
  * pool lookup entirely.
  */
-/**
- * How close together two purchases for one business must be before the
- * second is refused as a dead-attempt repeat. Watchdog retries land within
- * about an hour of the death (max_attempts 3, minutes apart); the sweeps'
- * own cooldowns (168h term-renewal, 30d contract-upgrade) keep legitimate
- * repeat purchases far outside this window.
- */
-export const REPEAT_PURCHASE_REFUSAL_MS = 6 * 60 * 60 * 1000;
-
 export type VpsPool = {
   claim: typeof claimAvailableVps;
   /** Atomic claim of one specific VM id (term fail-but-charge orphan adopt). */
@@ -946,8 +937,8 @@ export async function orchestrateProvisioning(
      * {@link getLatestProvisioningStatus}; tests inject a stub so the
      * detached-deploy poll does not hit Supabase.
      */
-    /** Repeat-purchase refusal clock source (tests). */
-    lastAcquiredAt?: typeof getLastAcquiredAtForBusiness;
+    /** Repeat-purchase refusal row-count source (tests). */
+    countAssignedFor?: typeof countAssignedVpsForBusiness;
     latestProvisioningStatus?: (
       businessId: string
     ) => Promise<LatestProvisioningStatus>;
@@ -1528,11 +1519,11 @@ async function acquireVps(args: {
    */
   resolvePaidThrough: (billingSubscriptionId: string | null) => Promise<string | null>;
   /**
-   * When this business last acquired a still-assigned box; drives the
-   * skipPoolAdopt repeat-purchase refusal. Tests inject; production
-   * defaults to the vps_inventory read.
+   * Assigned-row count for this business; drives the skipPoolAdopt
+   * repeat-purchase refusal. Tests inject; production defaults to the
+   * vps_inventory read.
    */
-  lastAcquiredAt?: typeof getLastAcquiredAtForBusiness;
+  countAssignedFor?: typeof countAssignedVpsForBusiness;
   /** Injectable sleep for the orphan-scan retry loop (tests inject a no-op). */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the orphan-scan deadline (tests). */
@@ -1555,26 +1546,28 @@ async function acquireVps(args: {
     // and 40 (the watchdog's safe-resume floor) falls through to a full
     // re-run with skipPoolAdopt, and the old code purchased AGAIN;
     // max_attempts is 3, so up to two extra term-priced boxes per incident.
-    // Auto-reclaiming the paid box is NOT safe here: on a first-attempt
-    // term migration the tenant's LIVE box is itself an assigned inventory
-    // row for this business, and adopting recreates (wipes) hardware, so
-    // any row-picking heuristic risks the production box. Refuse instead:
-    // a purchase minutes after this business already acquired a box is the
-    // dead-attempt signature, and the thrown error fails the job so the
-    // stuck alert (V5, working since #1043) pages a human who can see
-    // which box is which. Legitimate skipPoolAdopt purchases are never
-    // this close together: the term-renewal sweep gates itself on a 168h
-    // cooldown and the contract-upgrade sweep waits out the 30-day refund
-    // window.
-    /* c8 ignore next -- production default; tests inject lastAcquiredAt */
-    const lastAcquiredAt = args.lastAcquiredAt ?? getLastAcquiredAtForBusiness;
-    const acquiredAt = await lastAcquiredAt(businessId);
-    const acquiredAtMs = acquiredAt instanceof Date ? acquiredAt.getTime() : Number.NaN;
-    if (Number.isFinite(acquiredAtMs) && now() - acquiredAtMs < REPEAT_PURCHASE_REFUSAL_MS) {
+    // Auto-reclaiming the paid box is NOT safe (on a first-attempt term
+    // migration the tenant's LIVE box is itself an assigned inventory row,
+    // and adopting recreates hardware), and a recency window is wrong in
+    // both directions (a same-day upgrade's live box is "recent", a >6h
+    // stalled retry is not). The time-free dead-attempt signature is the
+    // ROW COUNT: the fleet invariant is at most one assigned row per
+    // business, the dead attempt's purchase was recorded as a second one
+    // at percent <15, and a first attempt always sees exactly one. On two
+    // or more, refuse: the thrown error fails the job, the stuck alert
+    // (V5) pages a human, and the billing-posture stale_assigned_row
+    // check names the leftover row to clean up. (A death DURING purchase
+    // records no row; that case is the fail-but-charge orphan adopt,
+    // handled above via claimSpecific.)
+    /* c8 ignore next -- production default; tests inject countAssignedFor */
+    const countAssignedFor = args.countAssignedFor ?? countAssignedVpsForBusiness;
+    const assignedRows = await countAssignedFor(businessId);
+    if (assignedRows >= 2) {
       throw new Error(
-        `refusing a second VPS purchase for ${businessId}: it already acquired a box ` +
-          `${Math.round((now() - acquiredAtMs) / 60_000)} minutes ago (dead-attempt ` +
-          "signature). Reclaim or release that box, then retry; the stuck alert has the ids."
+        `refusing another VPS purchase for ${businessId}: it already holds ` +
+          `${assignedRows} assigned inventory rows (dead-attempt signature; the ` +
+          "invariant is one). Reclaim or release the extra box, then retry; the " +
+          "billing-posture stale_assigned_row finding names it."
       );
     }
   }
@@ -1831,7 +1824,7 @@ async function runOrchestrator(
       deps?.resolvePaidThrough ??
       ((billingSubscriptionId) =>
         resolvePaidThroughForBillingSub(hostinger, billingSubscriptionId, { businessId })),
-    lastAcquiredAt: deps?.lastAcquiredAt,
+    countAssignedFor: deps?.countAssignedFor,
     sleep: deps?.sleep,
     now: deps?.now
   });

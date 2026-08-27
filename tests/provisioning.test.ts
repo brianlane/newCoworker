@@ -125,7 +125,7 @@ vi.mock("@/lib/email/tenant-mailbox", () => ({
 // purchase path, the pre-pool behavior) and the bookkeeping writes no-op.
 vi.mock("@/lib/db/vps-inventory", () => ({
   claimAvailableVps: vi.fn().mockResolvedValue(null),
-  getLastAcquiredAtForBusiness: vi.fn().mockResolvedValue(null),
+  countAssignedVpsForBusiness: vi.fn().mockResolvedValue(0),
   claimSpecificAvailableVps: vi.fn().mockResolvedValue(null),
   recordVpsAssigned: vi.fn().mockResolvedValue(undefined),
   releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
@@ -3595,53 +3595,57 @@ describe("provisioning/orchestrate", () => {
       expect(pool.record.mock.calls[0][0]).not.toHaveProperty("expiresAt");
     });
 
-    it("skipPoolAdopt refuses a repeat purchase minutes after this business bought a box", async () => {
+    it("skipPoolAdopt refuses the purchase when a dead attempt left a SECOND assigned row", async () => {
       // The V1 residual: a migration killed between percent 15 (purchase
-      // done) and 40 (the safe-resume floor) falls through to a full re-run
-      // with skip_pool_adopt, and the old code purchased AGAIN (max_attempts
-      // 3 allows two extra term-priced boxes per incident). Auto-reclaiming
-      // is unsafe (a first-attempt term migration's LIVE box is itself an
-      // assigned row, and adopt recreates hardware), so a purchase inside
-      // the refusal window throws; the failed job feeds the stuck alert.
+      // done and recorded) and 40 (the safe-resume floor) falls through to a
+      // full re-run with skip_pool_adopt, and the old code purchased AGAIN
+      // (max_attempts 3 allows two extra boxes per incident). Auto-reclaim
+      // is unsafe (the live box is itself an assigned row and adopt
+      // recreates hardware) and a recency window is wrong in both
+      // directions, so the signature is the ROW COUNT: the invariant is one
+      // assigned row per business, and the dead attempt recorded a second.
       const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
       const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn();
       const remoteExec = vi.fn().mockResolvedValue(okExec());
-      const lastAcquiredAt = vi
-        .fn()
-        .mockResolvedValue(new Date(Date.now() - 10 * 60 * 1000));
+      const countAssignedFor = vi.fn().mockResolvedValue(2);
 
       await expect(
         orchestrateProvisioning(
           { businessId: "biz-own-retry", tier: "starter", skipPoolAdopt: true },
-          { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec, lastAcquiredAt }
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec, countAssignedFor }
         )
-      ).rejects.toThrow(/refusing a second VPS purchase/);
+      ).rejects.toThrow(/refusing another VPS purchase/);
+      expect(countAssignedFor).toHaveBeenCalledWith("biz-own-retry");
       expect(vpsProvisioner).not.toHaveBeenCalled();
       expect(vpsAdopter).not.toHaveBeenCalled();
       // The available pool stays untouched under skipPoolAdopt.
       expect(pool.claim).not.toHaveBeenCalled();
     });
 
-    it("skipPoolAdopt purchases normally when the last acquisition is outside the window (or absent)", async () => {
+    it("skipPoolAdopt purchases normally with one assigned row (a first attempt's live box)", async () => {
+      // A same-day change-plan term alignment must NOT be refused: the
+      // tenant's live box is one assigned row, however recently acquired.
       const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
       const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("778"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
-      const lastAcquiredAt = vi
-        .fn()
-        .mockResolvedValue(new Date(Date.now() - 8 * 60 * 60 * 1000));
       const result = await orchestrateProvisioning(
         { businessId: "biz-own-none", tier: "starter", skipPoolAdopt: true },
-        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec, lastAcquiredAt }
+        {
+          vpsProvisioner,
+          vpsAdopter,
+          vpsPool: pool,
+          remoteExec,
+          countAssignedFor: vi.fn().mockResolvedValue(1)
+        }
       );
       expect(result.vpsId).toBe("778");
-      expect(lastAcquiredAt).toHaveBeenCalledWith("biz-own-none");
       expect(pool.claim).not.toHaveBeenCalled();
       expect(vpsAdopter).not.toHaveBeenCalled();
 
-      // Unknown history (null) must also purchase: the refusal needs a
-      // POSITIVE dead-attempt signature, never a missing read.
+      // Zero rows (nothing ever recorded) purchases too: the refusal needs
+      // the POSITIVE two-row signature, never a missing read.
       const vpsProvisioner2 = vi.fn().mockResolvedValue(makeVpsStub("779"));
       const result2 = await orchestrateProvisioning(
         { businessId: "biz-own-none-2", tier: "starter", skipPoolAdopt: true },
@@ -3650,7 +3654,7 @@ describe("provisioning/orchestrate", () => {
           vpsAdopter,
           vpsPool: makePool(),
           remoteExec,
-          lastAcquiredAt: vi.fn().mockResolvedValue(null)
+          countAssignedFor: vi.fn().mockResolvedValue(0)
         }
       );
       expect(result2.vpsId).toBe("779");
