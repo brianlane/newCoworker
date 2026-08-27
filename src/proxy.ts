@@ -298,6 +298,12 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     method === "POST" &&
     (pathname.includes("/login") || pathname.includes("/api/auth"))
   ) {
+    // KNOWN-INERT (CASA DAST triage, 2026-07-31): login never passes through
+    // this proxy. The browser calls supabase.auth.signInWithPassword directly
+    // (LoginForm/AdminLoginForm), and the only /api/auth routes are signout
+    // and callback, so this bucket sees no credential traffic. Supabase
+    // Auth's own limits are the real auth rate control; do not "harden" this
+    // bucket expecting it to protect login.
     configKey = "AUTH";
   }
 

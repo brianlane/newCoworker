@@ -47,6 +47,7 @@ The full flow, for every code change, however small:
    | `vps/chat-worker/` | `tsx debug/update-all-vps.ts` (whole fleet) |
    | `vps/voice-bridge/` | `tsx debug/redeploy-voice-bridge.ts --all` (whole fleet) |
    | `vps/aiflow-render/` | `tsx debug/redeploy-aiflow-render.ts --business-id <uuid>` (one tenant) |
+   | `cloudflare/email-worker/` | `cd cloudflare/email-worker && npx wrangler deploy` (all inbound tenant mail routes through it; verify with a probe mail to an unclaimed @newcoworker.com address, which must arrive at FALLBACK_FORWARD_ADDRESS) |
 
    Only aiflow-render still lacks a fleet sweep: loop it one run per distinct
    unrotated `business_id` in `vps_ssh_keys`, and check `voice_active_sessions`

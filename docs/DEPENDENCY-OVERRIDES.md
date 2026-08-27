@@ -32,5 +32,37 @@ safe version instead of silently reopening a fixed advisory.
 - When the last requester of an overridden package leaves the tree, mark the
   row **Orphaned** here rather than deleting the pin, unless the pin itself
   starts causing ERESOLVE conflicts.
-- The VPS, Cloudflare, and Zapier sub-trees carry their own `overrides` in
-  their own `package.json` files; this file covers the root tree only.
+## Sub-tree overrides
+
+The sub-trees carry their own `overrides` in their own `package.json` files.
+Same rules as the root: an override is a ceiling that needs raising, not a
+fix that stays fixed, and each one exists for an advisory that was live in
+that tree when pinned (the audit matrix in `.github/workflows/audit.yml`
+audits every tree the way CI does, dev deps included).
+
+### `zapier/` (published integration; pins ride `zapier-platform-cli`'s tree)
+
+| Package | Pin | Why |
+| --- | --- | --- |
+| `adm-zip` | `>=0.6.0` | GHSA-xcpc-8h2w-3j85 (crafted ZIP memory blowup); CLI pinned 0.5.x exactly (July audit M1) |
+| `brace-expansion` | `>=5.0.9` | GHSA-rgw5-rvv9-x895 ReDoS; raised past the previously-pinned vulnerable floor |
+| `form-data` | `>=4.0.6` | advisory floor, transitive via the CLI |
+| `tar` | `>=7.5.21` | advisory floor, transitive via the CLI |
+| `tmp` | `>=0.2.6` | advisory floor, transitive via the CLI |
+| `sigstore` / `@sigstore/core` | `>=4.1.1` / `>=3.2.1` | advisory floors in the CLI's publish chain |
+| `yeoman-environment` | `>=6.0.1` | advisory floor, transitive via the CLI |
+| `minimatch` | `>=10.0.3` | ReDoS-class advisory floor |
+| `ip-address` | `^10.4.0` | same advisory as the root/aiflow-render pins (the #1140-#1142 Dependabot deadlock trio); our SSRF guard does not use this package |
+
+### `cloudflare/email-worker/`
+
+| Package | Pin | Why |
+| --- | --- | --- |
+| `sharp` | `^0.35.3` | advisory floor in the attachment-processing chain |
+| `undici` | `^7.29.0` | GHSA-8xcm-r25x-g524 / GHSA-4cwx-7wf7-3272; CARET deliberately, not `>=` (an unbounded `>=` once resolved to a v8 major the tooling did not expect) |
+
+### `vps/aiflow-render/`
+
+| Package | Pin | Why |
+| --- | --- | --- |
+| `ip-address` | `^10.4.0` | same advisory family as the zapier/root pins |
