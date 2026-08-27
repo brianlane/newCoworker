@@ -91,6 +91,15 @@ export type BillingPostureFinding = {
     /** A live tenant with no hostinger_vps_id at all. */
     | "online_tenant_no_box"
     /**
+     * An inventory row still `assigned` to a business that no longer points
+     * at that vm (or no longer exists). The admin migrate-size teardown
+     * produced this shape on every run before it pooled the old row; a
+     * Vercel kill mid-cutover still can. Report-only: the row is invisible
+     * to every other check (direction 1 reads the pointed-at box, direction
+     * 2 and the reaper walk `available` rows, untracked_vm needs NO row).
+     */
+    | "stale_assigned_row"
+    /**
      * A subscription whose declared billing cycle cannot explain its next
      * billing date, so its quoted renewal price is stale too and no monthly
      * cost can be derived from it. The cost sync refuses to publish one.
@@ -557,6 +566,42 @@ export async function checkVpsBillingPosture(
   // Membership is tested against the inventory read BEFORE the reaper ran, so
   // a row this run just retired is still "known" and does not resurface here
   // as an untracked VM.
+  // An assigned row whose business does not point back at it. The row's
+  // renewal posture is whatever its last owner left it with, and nothing
+  // else audits it: pool it (so direction 2 and the reaper see it) or retire
+  // it. Never auto-healed here, because the same shape appears TRANSIENTLY
+  // mid-migration (new box assigned, business row repointed a step later),
+  // and pooling a box mid-cutover would hand it to a signup.
+  const businessById = new Map(businesses.map((b) => [b.id, b]));
+  for (const row of inventory) {
+    if (row.state !== "assigned" || !row.assigned_business_id) continue;
+    const owner = businessById.get(row.assigned_business_id) ?? null;
+    const ownerVm = owner ? tenantVmId(owner) : null;
+    if (owner && ownerVm === Number(row.vm_id)) continue;
+    const where = !owner
+      ? "no business row exists for it"
+      : ownerVm !== null
+        ? `that business points at srv${ownerVm}`
+        : `that business has no box${owner.status === "wiped" ? " (wiped)" : ""}`;
+    findings.push({
+      kind: "stale_assigned_row",
+      vmId: Number(row.vm_id),
+      businessId: row.assigned_business_id,
+      businessName: owner?.name ?? null,
+      hostingerBillingSubscriptionId: row.hostinger_billing_subscription_id ?? null,
+      expiresAt: row.expires_at ?? null,
+      autoHealed: false,
+      detail:
+        `inventory row srv${row.vm_id} is assigned to business ${row.assigned_business_id} but ${where}: ` +
+        "pool or retire the row (and check its renewal in hPanel) so the daily checks can see the box. " +
+        "If a migration is mid-flight right now, this clears itself on the next run."
+    });
+    logger.warn("vps billing posture: stale assigned inventory row", {
+      vmId: row.vm_id,
+      assignedBusinessId: row.assigned_business_id
+    });
+  }
+
   const knownVmIds = new Set(inventory.map((row) => Number(row.vm_id)));
   const untrackedVms = (allVms ?? []).filter((vm) => !knownVmIds.has(vm.id));
   // A VM can be missing from vps_inventory and STILL be a live tenant's box

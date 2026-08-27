@@ -230,6 +230,83 @@ describe("migrateBusinessVpsSize, guards", () => {
     expect(order).toEqual(["backup", "retire"]);
   });
 
+  it("pools the old box with never_renew at teardown, so no assigned row strands", async () => {
+    // The teardown used to stop the VM and disable renewal but never touch
+    // vps_inventory, leaving the old row `assigned` to a business that no
+    // longer points at it. That shape is invisible to every monitor: billing
+    // posture direction 1 checks the pointed-at box, direction 2 and the
+    // reaper walk `available` only, and untracked_vm needs NO row at all.
+    const releaseVpsToPool = vi.fn(async () => undefined);
+    const markVpsNeverRenew = vi.fn(async () => undefined);
+    const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew });
+    // The billing list carries the OLD sub too, so the pool row gets its
+    // paid-through stamped instead of waiting for the daily posture refresh.
+    (deps.hostinger.listBillingSubscriptions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "hbs-new", resource_id: "1900001" },
+      { id: "hbs-old", resource_id: "1800985", next_billing_at: "2026-09-30T00:00:00Z" }
+    ]);
+    const res = await migrateBusinessVpsSize(input, deps);
+    expect(res.ok).toBe(true);
+    expect(releaseVpsToPool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vmId: 1800985,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "hbs-old",
+        expiresAt: "2026-09-30T00:00:00Z",
+        notes: expect.stringContaining(BIZ)
+      })
+    );
+    // Flag AFTER pooling, mirroring the term sweep: the old box must lapse
+    // unless a plan-matched adopt later revives it (#1661).
+    expect(markVpsNeverRenew).toHaveBeenCalledWith(1800985);
+  });
+
+  it("still completes the migration when the pool return fails (follow-up noted)", async () => {
+    const releaseVpsToPool = vi.fn(async () => {
+      throw new Error("inventory down");
+    });
+    const markVpsNeverRenew = vi.fn(async () => undefined);
+    const sendOpsEmail = vi.fn(async () => undefined);
+    const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew, sendOpsEmail });
+    const res = await migrateBusinessVpsSize(input, deps);
+    expect(res.ok).toBe(true);
+    // never_renew is only meaningful on a pooled row; skipped when pooling failed.
+    expect(markVpsNeverRenew).not.toHaveBeenCalled();
+    const calls = sendOpsEmail.mock.calls as unknown as Array<[{ phase: string; detail: string }]>;
+    const completed = calls.find((c) => c[0].phase === "completed");
+    expect(completed?.[0].detail).toContain("vps_inventory");
+  });
+
+  it("still completes when the never_renew mark fails after a successful pool return", async () => {
+    const releaseVpsToPool = vi.fn(async () => undefined);
+    const markVpsNeverRenew = vi.fn(async () => {
+      throw new Error("flag write down");
+    });
+    const sendOpsEmail = vi.fn(async () => undefined);
+    const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew, sendOpsEmail });
+    const res = await migrateBusinessVpsSize(input, deps);
+    expect(res.ok).toBe(true);
+    const calls = sendOpsEmail.mock.calls as unknown as Array<[{ phase: string; detail: string }]>;
+    const completed = calls.find((c) => c[0].phase === "completed");
+    expect(completed?.[0].detail).toContain("never_renew=false");
+  });
+
+  it("pools without an expiry stamp when the billing list is unavailable", async () => {
+    const releaseVpsToPool = vi.fn(async () => undefined);
+    const markVpsNeverRenew = vi.fn(async () => undefined);
+    const deps = makeDeps({ releaseVpsToPool, markVpsNeverRenew });
+    (deps.hostinger.listBillingSubscriptions as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("hostinger 5xx")
+    );
+    const res = await migrateBusinessVpsSize(input, deps);
+    expect(res.ok).toBe(true);
+    // releaseVpsToPool preserves the row's existing expires_at when the key
+    // is omitted, so the daily posture refresh backfills it.
+    const arg = releaseVpsToPool.mock.calls[0][0] as Record<string, unknown>;
+    expect("expiresAt" in arg).toBe(false);
+    expect(markVpsNeverRenew).toHaveBeenCalledWith(1800985);
+  });
+
   it("still completes the migration when retiring the old key row fails", async () => {
     // A stale bookkeeping row must never fail an otherwise-good cutover.
     const deps = makeDeps({
