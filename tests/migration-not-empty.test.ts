@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Empty-migration guard (supabase/migrations/CLAUDE.md, "Re-stamping: the
+ * Empty-migration guard (.cursor/rules/migration-timestamps.mdc, "Re-stamping: the
  * helper's scaffold is EMPTY").
  *
  * scripts/new-migration.sh creates a zero-byte scaffold. When a stale PR is
@@ -52,7 +52,7 @@ describe("migration files are never empty", () => {
         `${file} is empty or whitespace-only. The re-stamp scaffold from ` +
           `scripts/new-migration.sh starts empty; move the SQL into it and ` +
           `verify with \`wc -c\` before deleting the old copy. See ` +
-          `supabase/migrations/CLAUDE.md.`
+          `.cursor/rules/migration-timestamps.mdc.`
       ).toBe(true);
     });
   }

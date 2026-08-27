@@ -1,0 +1,22 @@
+---
+description: Cursor files are the only agent-instruction bodies. Claude Code imports them. Do not copy, generate, or /init.
+alwaysApply: true
+---
+
+# Agent loader contract
+
+Working-agreement bodies live in `.cursor/rules/` and `.cursor/skills/`.
+Project memories live in `.cursor/memory/`. Claude Code loads those same
+files through `@` imports in `CLAUDE.md` (and skill directory symlinks).
+
+Do not:
+
+- run `claude /init` or `/import` in this repo (they copy text into `CLAUDE.md`)
+- inline rule text into `CLAUDE.md` or `AGENTS.md`
+- generate `CLAUDE.md` from the rules
+- create `.agents/` or a generator that emits `.mdc` files
+- symlink `CLAUDE.md` to `AGENTS.md` (`AGENTS.md` is an index, not the rules)
+
+`tests/agent-loader-lockstep.test.ts` fails the PR if any of those happen.
+Edit a `.cursor/rules/*.mdc` file to change a rule. Add a matching `@`
+line in `CLAUDE.md` for a new always-on rule.

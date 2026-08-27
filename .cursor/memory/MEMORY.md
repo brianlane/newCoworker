@@ -1,5 +1,5 @@
-Cursor copy of the Claude Code project memory store. Read the matching
-linked file before acting; do not re-derive a known answer.
+Project memory store. Read the matching linked file before acting; do not
+re-derive a known answer.
 
 - [Full test coverage requirement](feedback_testing.md) - npx vitest run --coverage must pass at 100%
 - [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - runner .env + Vercel env override deploy defaults; 3.7-flash 400s on thinkingLevel minimal; billed ~4x metered
