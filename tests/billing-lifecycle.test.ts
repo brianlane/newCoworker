@@ -44,6 +44,7 @@ function makeSub(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
     stripe_refund_id: null,
     refund_amount_cents: null,
     monthly_intro_nudge_sent_at: null,
+    monthly_intro_ends_at: null,
     contract_term_nudge_sent_at: null,
     created_at: "2026-04-01T00:00:00.000Z",
     ...overrides

@@ -46,6 +46,7 @@ function candidate(overrides: Partial<MonthlyIntroNudgeCandidate> = {}): Monthly
     stripe_current_period_end: PERIOD_END,
     created_at: CREATED,
     monthly_intro_nudge_sent_at: null,
+    monthly_intro_ends_at: null,
     ...overrides
   };
 }
@@ -62,7 +63,7 @@ function makeDb(opts: {
   const updateIs = vi.fn();
 
   const chainSelect: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "is", "gte", "gt", "lte", "order", "limit"]) {
+  for (const m of ["select", "eq", "is", "gte", "gt", "lte", "or", "order", "limit"]) {
     chainSelect[m] = vi.fn(() => chainSelect);
   }
   chainSelect.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
@@ -155,6 +156,45 @@ describe("isMonthlyIntroNudgeDue", () => {
     expect(isMonthlyIntroNudgeDue(PERIOD_END, new Date("2026-08-05T17:59:59.000Z"))).toBe(false);
     expect(isMonthlyIntroNudgeDue(PERIOD_END, new Date(PERIOD_END))).toBe(false);
     expect(isMonthlyIntroNudgeDue("not-a-date", NOW)).toBe(false);
+  });
+});
+
+describe("comped first cycle (monthly_intro_ends_at, audit M3)", () => {
+  // The admin billing-date comp re-anchors stripe_current_period_start, after
+  // which the derived isFirstBillingCycle reads a first-cycle tenant as
+  // renewed and the nudge silently never sends. The comp stamps the intro's
+  // true end; the gate must accept the stamp as the first-cycle signal.
+  const COMPED_START = "2026-08-01T18:00:00.000Z"; // re-anchored mid-cycle
+  const OLD_CREATED = "2026-06-20T18:00:00.000Z"; // > 14d before the anchor
+
+  it("a comped row whose stamp matches period_end is a candidate", () => {
+    const row = candidate({
+      created_at: OLD_CREATED,
+      stripe_current_period_start: COMPED_START,
+      monthly_intro_ends_at: PERIOD_END
+    });
+    // Sanity: the derived signal alone reads this row as renewed.
+    expect(isFirstBillingCycle(OLD_CREATED, COMPED_START, NOW.getTime())).toBe(false);
+    expect(isMonthlyIntroNudgeCandidate(row, NOW)).toBe(true);
+  });
+
+  it("after the real renewal the stamp no longer matches and the row is not a candidate", () => {
+    const row = candidate({
+      created_at: OLD_CREATED,
+      stripe_current_period_start: PERIOD_END,
+      stripe_current_period_end: "2026-09-12T18:00:00.000Z",
+      monthly_intro_ends_at: PERIOD_END
+    });
+    expect(isMonthlyIntroNudgeCandidate(row, new Date("2026-09-07T18:00:00.000Z"))).toBe(false);
+  });
+
+  it("an unparseable stamp never rescues a renewed-looking row", () => {
+    const row = candidate({
+      created_at: OLD_CREATED,
+      stripe_current_period_start: COMPED_START,
+      monthly_intro_ends_at: "not-a-date"
+    });
+    expect(isMonthlyIntroNudgeCandidate(row, NOW)).toBe(false);
   });
 });
 

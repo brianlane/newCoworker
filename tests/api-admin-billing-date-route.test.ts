@@ -27,6 +27,11 @@ import { logAdminAction } from "@/lib/admin/audit";
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 const NEXT_ISO = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
 const NEXT_UNIX = Math.floor(Date.parse(NEXT_ISO) / 1000);
+// Period fixtures are anchored to NOW, never to literals: the M2 guard
+// compares against the real clock, so a hardcoded date flips a passing test
+// into a failing one as the calendar moves (the #1081 time-bomb class).
+const DAYS = 24 * 3600 * 1000;
+const iso = (offsetDays: number) => new Date(Date.now() + offsetDays * DAYS).toISOString();
 
 function makeRequest(body: Record<string, unknown> = {}): Request {
   return new Request("http://localhost/api/admin/billing-date", {
@@ -81,6 +86,89 @@ describe("api/admin/billing-date route", () => {
     expect(logAdminAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "set_next_billing_date", businessId: BIZ_ID })
     );
+  });
+
+  it("stamps monthly_intro_ends_at when comping a first-cycle monthly sub (audit M3)", async () => {
+    // The comp re-anchors period_start, which kills the derived
+    // isFirstBillingCycle signal; the stamp is what keeps the intro nudge
+    // eligible afterwards. Fixture: monthly, created minutes before the
+    // current period started (a true first cycle).
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: "sub_stripe_1",
+      billing_period: "monthly",
+      created_at: iso(-10 + 0.003),
+      stripe_current_period_start: iso(-10),
+      stripe_current_period_end: iso(20),
+      monthly_intro_ends_at: null
+    } as never);
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "sub-row-1",
+      expect.objectContaining({
+        monthly_intro_ends_at: new Date(NEXT_UNIX * 1000).toISOString()
+      })
+    );
+  });
+
+  it("re-stamps on a SECOND comp of an already-stamped intro cycle", async () => {
+    const stampedEnd = iso(20);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: "sub_stripe_1",
+      billing_period: "monthly",
+      // First comp already re-anchored: derived signal reads renewed...
+      created_at: iso(-70),
+      stripe_current_period_start: iso(-10),
+      stripe_current_period_end: stampedEnd,
+      // ...but the stamp matches the current period end.
+      monthly_intro_ends_at: stampedEnd
+    } as never);
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "sub-row-1",
+      expect.objectContaining({
+        monthly_intro_ends_at: new Date(NEXT_UNIX * 1000).toISOString()
+      })
+    );
+  });
+
+  it("does NOT stamp a renewed monthly or a term sub", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: "sub_stripe_1",
+      billing_period: "monthly",
+      // Renewed: created a full cycle before the current period.
+      created_at: iso(-70),
+      stripe_current_period_start: iso(-10),
+      stripe_current_period_end: iso(20),
+      monthly_intro_ends_at: null
+    } as never);
+    let res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    let arg = vi.mocked(updateSubscription).mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect("monthly_intro_ends_at" in arg).toBe(false);
+
+    vi.mocked(updateSubscription).mockClear();
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: "sub_stripe_1",
+      billing_period: "annual",
+      created_at: iso(-10 + 0.003),
+      stripe_current_period_start: iso(-10),
+      stripe_current_period_end: iso(20),
+      monthly_intro_ends_at: null
+    } as never);
+    res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    arg = vi.mocked(updateSubscription).mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect("monthly_intro_ends_at" in arg).toBe(false);
   });
 
   it("still audits when Stripe returns no period bounds", async () => {
