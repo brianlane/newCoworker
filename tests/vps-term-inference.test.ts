@@ -7,7 +7,8 @@ import {
   inferTermFromJump,
   inferTermFromRunway,
   monthsBetween,
-  planTermInference
+  planTermInference,
+  sameInstant
 } from "@/lib/vps/term-inference";
 import type { CatalogItem } from "@/lib/hostinger/client";
 
@@ -231,6 +232,29 @@ describe("catalogMonthlyCentsForTerm", () => {
   });
 });
 
+describe("sameInstant", () => {
+  it("matches Hostinger's Z spelling against PostgREST's offset spelling", () => {
+    // The exact pair that occurs in production: Hostinger returns Z, the
+    // timestamptz column round-trips to +00:00.
+    expect(sameInstant("2027-09-05T04:23:54Z", "2027-09-05T04:23:54+00:00")).toBe(true);
+  });
+
+  it("matches across an equivalent non-UTC offset", () => {
+    expect(sameInstant("2027-09-05T04:23:54Z", "2027-09-05T06:23:54+02:00")).toBe(true);
+  });
+
+  it("separates genuinely different instants", () => {
+    expect(sameInstant("2026-09-05T04:23:54Z", "2027-09-05T04:23:54Z")).toBe(false);
+  });
+
+  it("is false when either side is missing or unparseable", () => {
+    expect(sameInstant(null, "2027-09-05T04:23:54Z")).toBe(false);
+    expect(sameInstant("2027-09-05T04:23:54Z", undefined)).toBe(false);
+    expect(sameInstant("nope", "2027-09-05T04:23:54Z")).toBe(false);
+    expect(sameInstant("2027-09-05T04:23:54Z", "nope")).toBe(false);
+  });
+});
+
 describe("planTermInference", () => {
   const hq = (over: Record<string, unknown> = {}) => ({
     subscriptionId: "16BcBrVOTACBI8WdU",
@@ -299,6 +323,51 @@ describe("planTermInference", () => {
       inferred_at: "2026-08-27T12:00:00.000Z"
     });
     expect(result.monthlyBySubscription.get("16BcBrVOTACBI8WdU")).toBe(1299);
+  });
+
+  it("HOLDS the term when the stored date round-trips through Postgres", () => {
+    // Regression: the stored value comes back from a timestamptz column as
+    // "+00:00" while Hostinger says "Z". Comparing spellings made every sync
+    // look like a move, which cleared the term; and because the bootstrap
+    // only runs when no row exists, the recovered price was gone for good
+    // from the second sync onward.
+    const result = planTermInference({
+      subscriptions: [hq({ nextBillingAt: "2027-09-05T04:23:54Z" })],
+      stored: [
+        {
+          subscription_id: "16BcBrVOTACBI8WdU",
+          observed_next_billing_at: "2027-09-05T04:23:54+00:00",
+          term_months: 12,
+          monthly_cents: 1299,
+          source: "runway_match",
+          inferred_at: "2026-08-27T12:00:00.000Z"
+        }
+      ],
+      catalog: CATALOG,
+      now: NOW
+    });
+    expect(result.updates[0]).toMatchObject({ term_months: 12, source: "runway_match" });
+    expect(result.monthlyBySubscription.get("16BcBrVOTACBI8WdU")).toBe(1299);
+  });
+
+  it("clears a stored term when the billing date disappears entirely", () => {
+    // A vanished date is a change, not a match, so the old term must go.
+    const result = planTermInference({
+      subscriptions: [hq({ nextBillingAt: null })],
+      stored: [
+        {
+          subscription_id: "16BcBrVOTACBI8WdU",
+          observed_next_billing_at: "2027-09-05T04:23:54+00:00",
+          term_months: 12,
+          monthly_cents: 1299,
+          source: "runway_match",
+          inferred_at: "2026-08-27T12:00:00.000Z"
+        }
+      ],
+      catalog: CATALOG,
+      now: NOW
+    });
+    expect(result.updates[0]).toMatchObject({ term_months: null, monthly_cents: null });
   });
 
   it("clears a stored term once the box rolls over to a new period", () => {

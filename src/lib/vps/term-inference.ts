@@ -107,6 +107,33 @@ export function inferTermFromJump(
 }
 
 /**
+ * Whether two ISO timestamps denote the same MOMENT.
+ *
+ * String equality is wrong here and breaks on the very first re-read.
+ * Hostinger returns `2027-09-05T04:23:54Z`; the same instant stored in a
+ * `timestamptz` column comes back from PostgREST as
+ * `2027-09-05T04:23:54+00:00`. Comparing spellings makes every sync look
+ * like the billing date moved, which clears the stored term. The runway
+ * bootstrap cannot re-run once a row exists, so the recovered price would be
+ * lost from the SECOND sync onward and never come back: precisely the
+ * rotting-answer failure {@link planTermInference} rule 2 exists to prevent,
+ * reintroduced one layer down.
+ *
+ * False when either side is missing or unparseable, so "the date vanished"
+ * reads as a change rather than as a match.
+ */
+export function sameInstant(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  if (!a || !b) return false;
+  const left = Date.parse(a);
+  const right = Date.parse(b);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  return left === right;
+}
+
+/**
  * Bootstrap for a term change that happened BEFORE we started recording
  * billing dates: match the runway still remaining against the catalog terms.
  *
@@ -231,7 +258,10 @@ export function planTermInference(params: {
   for (const sub of params.subscriptions) {
     const prior = storedById.get(sub.subscriptionId) ?? null;
     const priorDate = prior?.observed_next_billing_at ?? null;
-    const dateMoved = priorDate !== null && priorDate !== sub.nextBillingAt;
+    // Compared as INSTANTS, never as strings: the stored value round-trips
+    // through a timestamptz column and comes back spelled differently. See
+    // sameInstant.
+    const dateMoved = priorDate !== null && !sameInstant(priorDate, sub.nextBillingAt);
 
     let termMonths: number | null = null;
     let source: "jump" | "runway_match" | null = null;
