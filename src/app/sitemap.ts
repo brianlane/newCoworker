@@ -11,9 +11,15 @@ import { SITE_URL } from "@/lib/marketing/site-url";
  * crawlers pair them; the mirror ranks a notch below the English canonical.
  * Non-mirrored paths (e.g. /docs/api, English-only by design) emit one.
  */
-function entriesFor(route: { path: string; priority: number }): MetadataRoute.Sitemap {
+function entriesFor(route: {
+  path: string;
+  priority: number;
+  /** English-only page under a mirrored prefix (prefix matching would
+   *  otherwise claim it): emit one URL, no /es twin, no hreflang pair. */
+  enOnly?: boolean;
+}): MetadataRoute.Sitemap {
   const base = { changeFrequency: "weekly" as const };
-  if (!isMirroredMarketingPath(route.path)) {
+  if (route.enOnly || !isMirroredMarketingPath(route.path)) {
     return [{ ...base, url: `${SITE_URL}${route.path}`, priority: route.priority }];
   }
   const { languages } = esAlternates(route.path);
@@ -36,7 +42,7 @@ function entriesFor(route: { path: string; priority: number }): MetadataRoute.Si
 export const dynamic = "force-dynamic";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const staticRoutes: { path: string; priority: number }[] = [
+  const staticRoutes: { path: string; priority: number; enOnly?: boolean }[] = [
     { path: "/", priority: 1 },
     { path: "/pricing", priority: 0.9 },
     { path: "/features", priority: 0.8 },
@@ -46,7 +52,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: "/integrations/chatgpt", priority: 0.6 },
     { path: "/docs/api", priority: 0.6 },
     { path: "/security", priority: 0.5 },
-    { path: "/security/vulnerability-disclosure", priority: 0.3 },
+    // The disclosure policy is English-only (LegalPage, English governs),
+    // but it sits under the mirrored /security prefix: enOnly stops the
+    // sitemap from advertising an /es twin the page does not have.
+    { path: "/security/vulnerability-disclosure", priority: 0.3, enOnly: true },
     { path: "/compare", priority: 0.8 },
     { path: "/industries", priority: 0.7 },
     { path: "/blog", priority: 0.8 },
