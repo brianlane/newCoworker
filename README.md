@@ -14,11 +14,26 @@ This repository includes:
 
 | Tier | 24mo | 12mo | 1mo | VPS |
 |------|------|------|-----|-----|
-| Starter | $9.99/mo | $10.99/mo | $15.99/mo | KVM 2 (2 vCPU, 8GB) |
-| Standard | $99/mo | $109/mo | $195/mo | KVM 8 (8 vCPU, 32GB) |
-| Enterprise | Custom | Custom | Custom | Custom |
+| Starter | $9.99/mo | $10.99/mo | $15.99/mo | KVM 1 (1 vCPU, 4GB) |
+| Standard | $99/mo | $109/mo | $195/mo | KVM 2 (2 vCPU, 8GB) |
+| Enterprise | Custom | Custom | Custom | Custom (defaults to KVM 8) |
 
 See `src/lib/plans/tier.ts` for pricing logic.
+
+The VPS column is the DEFAULT hardware a new signup provisions
+(`DEFAULT_TIER_VPS_SIZE` in `src/lib/vps/size.ts`), flipped in the Jul 2026
+fleet-economics relaunch (Standard KVM8 → KVM2 in PR #369, Starter KVM2 →
+KVM1 in PR #360; the KVM2 experiment and Amy's live cutover proved the full
+Standard feature set, render sidecar and local-model fallback included, runs
+on KVM2). Hardware is pinned per tenant in `businesses.vps_size`: null means
+"tier default", already-provisioned boxes keep their size (a legacy Standard
+tenant with no pin still resolves to KVM8 through `resolveDeployedVpsSize`),
+and the admin panel escalates along kvm1 → kvm2 → kvm4 → kvm8 for sustained
+load. KVM 1 ships NO local Ollama: a Starter tenant whose shared AI budget
+fuse trips stops getting AI replies until the period resets instead of
+degrading to a local model (decided Jul 2026). Entitlements (caps, minutes,
+AI budget, render sidecar) ride the TIER axis, never the box size; see
+`PRDs/tier-economics-jul-2026.md` for the margin math behind the flip.
 
 Billing model (Hostinger-consistent): **12/24-month plans are charged in full
 at checkout** (e.g. Standard 24mo = $2,376 today) because the tenant's VPS is
