@@ -13,8 +13,6 @@ import {
 import {
   telnyxHangupCall,
   telnyxSendDtmf,
-  telnyxSpeak,
-  telnyxStreamingStop,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
@@ -40,6 +38,8 @@ import {
   isAmdEvent
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
+import { speakVoicemailDeterministic } from "../_shared/voice_voicemail_speak.ts";
+import { resolveEdgeVoicemailSpoken } from "../_shared/voice_voicemail_timing.ts";
 import { parseReachClientState } from "../_shared/voice_reach.ts";
 import {
   resumeFlowRunWithCallOutcome,
@@ -927,7 +927,22 @@ async function handleSpeakEnded(
     .maybeSingle();
   const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
     {}) as Record<string, unknown>;
-  if (ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
+  // `voicemail_speak_started_at` marks the speak WE issued (the accepted
+  // command); legacy `voicemail_spoken` is kept for events redelivered
+  // across the deploy boundary, when the old code stamped spoken at accept.
+  const oursStarted = typeof ctx.voicemail_speak_started_at === "string";
+  if (!oursStarted && ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
+  // Playout finished: THIS is the moment the message has actually been
+  // delivered, so the honest `voicemail_spoken` stamp lands here, before the
+  // hangup, so the hangup webhook's outcome derivation reads it. Stamping at
+  // command-accept overstated: a leg that died mid-playout still recorded a
+  // left voicemail (the same accepted-vs-delivered lie PR #1672 removed from
+  // the bridge-spoken path).
+  const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: callControlId,
+    p_patch: { voicemail_spoken: true }
+  });
+  if (spokenErr) console.error("speak-ended: voicemail_spoken stamp failed", spokenErr);
   await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
   return jsonOk("voicemail_left_hangup");
 }
@@ -1094,79 +1109,27 @@ async function speakVoicemail(
   callControlId: string,
   script: string
 ): Promise<Response> {
-  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
-  /**
-   * End the leg the way the pre-voicemail path did. Used whenever a message
-   * cannot be left: the Gemini bridge is still attached from call.answered, so
-   * leaving the leg up means the assistant keeps talking into the recording and
-   * the run stays parked until something else ends the call.
-   */
-  const giveUpAndHangUp = async (label: string): Promise<Response> => {
-    await telnyxStreamingStop(apiKey, callControlId);
-    await telnyxHangupCall(apiKey, callControlId);
-    return jsonOk(label);
-  };
-
-  // Claim the right to speak in ONE statement. Check-then-speak loses to
-  // Telnyx's at-least-once redelivery: two deliveries both read "not spoken"
-  // and the assistant talks over itself into a single recording.
-  const { data: claimed, error: claimErr } = await supabase.rpc("voice_claim_voicemail_speak", {
-    p_call_control_id: callControlId
-  });
-  if (claimErr) {
-    console.error("amd: voicemail claim failed", claimErr);
-    return await giveUpAndHangUp("amd_voicemail_claim_failed");
-  }
-  // Someone else holds the claim. They own the leg's ending, so leave it alone
-  // rather than hanging up a call that is mid-message.
-  if (claimed !== true) return jsonOk("amd_voicemail_already_claimed");
-
-  // Silence the Gemini bridge BEFORE speaking. It was attached on
-  // call.answered, before anyone knew a machine had picked up, and hanging up
-  // is what used to silence it. A leg held open to leave a message has to stop
-  // the fork explicitly or the recording gets the assistant talking through
-  // the greeting and over the message.
-  const stopped = await telnyxStreamingStop(apiKey, callControlId);
-  if (!stopped.ok) {
-    // Speaking now would record our message UNDER the assistant's chatter.
-    // A clean "no message" beats an unintelligible one.
-    console.error(
-      "amd: streaming_stop before voicemail failed",
-      callControlId,
-      stopped.status,
-      (await stopped.text()).slice(0, 300)
-    );
-    const { error: relErr } = await supabase.rpc("voice_release_voicemail_claim", {
-      p_call_control_id: callControlId
-    });
-    if (relErr) console.error("amd: voicemail claim release failed", relErr);
-    return await giveUpAndHangUp("amd_voicemail_stream_stop_failed");
-  }
-
-  const res = await telnyxSpeak(apiKey, callControlId, script);
-  if (!res.ok) {
-    console.error("amd: voicemail speak failed", callControlId, res.status, await res.text());
-    const { error: relErr } = await supabase.rpc("voice_release_voicemail_claim", {
-      p_call_control_id: callControlId
-    });
-    if (relErr) console.error("amd: voicemail claim release failed", relErr);
-    return await giveUpAndHangUp("amd_voicemail_speak_failed");
-  }
-
-  // Only NOW is a message actually going out. voicemail_spoken is what the
-  // hangup path derives the outcome reason from and what call.speak.ended
-  // checks before releasing the leg, so it is deliberately written after the
-  // speak succeeds rather than as part of the claim: a leg that died between
-  // claiming and speaking must not report a message nobody heard.
-  const { error: markErr } = await supabase.rpc("voice_session_context_merge", {
-    p_call_control_id: callControlId,
-    p_patch: { voicemail_spoken: true }
-  });
-  if (markErr) {
-    // The message IS being spoken; losing the stamp only understates it.
-    console.error("amd: voicemail_spoken stamp failed", markErr);
-  }
-  return jsonOk("amd_voicemail_spoken");
+  // Shared with the AMD resolution sweep (voice-amd-resolution-sweep), which
+  // runs the same claim -> stream stop -> speak sequence when Telnyx never
+  // delivers the greeting event this handler used to wait for. The claim
+  // makes the two callers race-safe: whoever flips it speaks, the other
+  // leaves the leg alone.
+  //
+  // Note the outcome vocabulary: "speaking" means the speak command was
+  // ACCEPTED, not that the message played. `voicemail_spoken` is stamped by
+  // call.speak.ended (playout finished) or by the hangup path's wall-clock
+  // plausibility fallback, never here.
+  const outcome = await speakVoicemailDeterministic(
+    {
+      rpc: (fn, args) => supabase.rpc(fn, args),
+      apiKey: Deno.env.get("TELNYX_API_KEY") ?? "",
+      fetchImpl: fetch,
+      nowIso: () => new Date().toISOString()
+    },
+    callControlId,
+    script
+  );
+  return jsonOk(`amd_voicemail_${outcome}`);
 }
 
 /**
@@ -1271,9 +1234,14 @@ async function stampMachine(
   // be delivered concurrently, and a stamp built from a context read before the
   // voicemail was spoken would clobber voicemail_spoken. call.speak.ended would
   // then decline to hang up and the run would report that no message was left.
+  //
+  // machine_stamped_at is what the AMD resolution sweep ages against: Telnyx
+  // stopped delivering the greeting events that resolve a provisional machine
+  // verdict (2026-08-25), so a verdict left unresolved past its grace window
+  // is acted on by the sweep instead of standing forever.
   const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
     p_call_control_id: callControlId,
-    p_patch: { machine_detected: true }
+    p_patch: { machine_detected: true, machine_stamped_at: new Date().toISOString() }
   });
   if (stampErr) {
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
@@ -1398,6 +1366,8 @@ async function handleHandoffLifecycle(
       flow_run?: FlowRunLink;
       machine_detected?: unknown;
       voicemail_spoken?: unknown;
+      voicemail_speak_started_at?: unknown;
+      voicemail_speak_script_chars?: unknown;
       voicemail?: { script?: unknown };
     };
     await supabase
@@ -1424,6 +1394,30 @@ async function handleHandoffLifecycle(
       // is the same as nobody picking up, so a ladder written before AMD
       // existed keeps working unchanged, and the REASON carries the detail.
       const machine = obCtx.machine_detected === true;
+      // Was the message actually delivered? The direct stamp lands when
+      // call.speak.ended confirms playout (or the bridge's gated confirmSpoken
+      // writes it), but Telnyx has dropped whole webhook classes since
+      // 2026-08-25, so an Edge speak whose completion event was lost is
+      // judged by the wall clock instead: the leg must have stayed up for
+      // at least half the script's read time after the speak was issued.
+      const endMs = Date.parse(String(payload["end_time"] ?? ""));
+      const endedAtIso = new Date(Number.isFinite(endMs) ? endMs : Date.now()).toISOString();
+      const spoken = resolveEdgeVoicemailSpoken({
+        voicemailSpoken: obCtx.voicemail_spoken,
+        startedAtIso: obCtx.voicemail_speak_started_at,
+        storedScriptChars: obCtx.voicemail_speak_script_chars,
+        fallbackScript: obCtx.voicemail?.script,
+        endedAtIso
+      });
+      if (spoken && obCtx.voicemail_spoken !== true) {
+        // The fallback promoted it: persist the stamp so later readers (the
+        // call page, debug audits) agree with the outcome recorded below.
+        const { error: promoteErr } = await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: callControlId,
+          p_patch: { voicemail_spoken: true }
+        });
+        if (promoteErr) console.error("outbound: spoken promote failed", promoteErr);
+      }
       // Surface the voicemail on the transcript itself. This is the one point
       // where the row reliably exists (the bridge finalized it when the stream
       // stopped, seconds before the speak ended and the leg hung up), unlike
@@ -1434,12 +1428,11 @@ async function handleHandoffLifecycle(
         // on a voicemail call is BEFORE the message plays: the recorded span
         // covered only the machine's greeting. The hangup is the true end, so
         // re-stamp it from the webhook's own end_time (wall clock as backstop).
-        const endMs = Date.parse(String(payload["end_time"] ?? ""));
         await decorateTranscriptForVoicemail(supabase, callControlId, {
-          voicemailLeft: obCtx.voicemail_spoken === true,
+          voicemailLeft: spoken,
           script:
             typeof obCtx.voicemail?.script === "string" ? obCtx.voicemail.script.trim() : "",
-          endedAtIso: new Date(Number.isFinite(endMs) ? endMs : Date.now()).toISOString()
+          endedAtIso
         });
       }
       const outcome = obCtx.transfer_initiated === true
@@ -1456,7 +1449,7 @@ async function handleHandoffLifecycle(
         machine
           ? // Both ride no_answer; the reason is what tells the team (and the
             // flow's own copy) whether the lead has actually heard from us.
-            obCtx.voicemail_spoken === true
+            spoken
             ? CALL_REASON.VOICEMAIL_LEFT
             : CALL_REASON.VOICEMAIL_NO_MESSAGE
           : undefined

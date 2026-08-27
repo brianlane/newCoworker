@@ -251,3 +251,10 @@ verify_jwt = false
 
 [functions.slack-jobs-sweep]
 verify_jwt = false
+
+# AMD resolution sweep bridge (pg_cron every 15s, gated by an EXISTS so it
+# rarely fires). Auth is the plain-hex INTERNAL_CRON_SECRET bearer
+# (assertCronAuth), so the gateway JWT check must stay OFF, same rationale
+# as the cron workers above.
+[functions.voice-amd-resolution-sweep]
+verify_jwt = false
