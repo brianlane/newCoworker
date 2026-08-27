@@ -1,0 +1,25 @@
+---
+description: Never use em dashes in any output, code, copy, prompts, or docs
+alwaysApply: true
+---
+
+# No em dashes, ever
+
+Never type an em dash in anything you produce: code, comments, user-facing
+copy, SMS/email templates, AI prompts, i18n catalogs, docs, README text,
+PR titles and bodies, commit messages, chat replies, and plan files. Use a
+comma, a period, or a colon instead. This applies in every context; there is
+no "allowed" placement.
+
+This also covers generated content: every AI worker/model prompt must carry
+the no-em-dash instruction so models never emit one. Use the shared line
+(`NO_EM_DASH_PROMPT_LINE` in `supabase/functions/_shared/sms_prompt_lines.ts`,
+with lockstep copies where a surface cannot import it) instead of writing a
+new phrasing.
+
+`tests/no-em-dashes.test.ts` enforces the rule in CI for the guarded
+user-facing surfaces (message catalogs, email templates, prompt-line modules,
+one-shot flow copy, agent instruction files, and all of `.github/workflows/`,
+which composes the deploy failure email and the PR preview comment). Legacy
+instances elsewhere are cleaned opportunistically: never add new ones, and
+sweep a file you are already editing when it is cheap to do so.

@@ -1,0 +1,71 @@
+---
+description: Start from the generated context pack instead of re-deriving repo orientation from the README, the transcript archive, and the PR list on every session
+alwaysApply: true
+---
+
+# Start from the context pack
+
+Almost every session on this repo used to open the same way: read the
+1,700-line README, review the application code, review the last two weeks of
+conversations, skim the last two weeks of pull requests. That is the same
+orientation re-derived from scratch every time, paid for in tokens, arriving
+at the same answer. It is now generated once, mechanically.
+
+**Read [docs/CONTEXT-PACK.md](../../docs/CONTEXT-PACK.md) first.** It carries:
+
+- a repo map (what lives where, and the tool inventory),
+- a line-numbered index of every README section, so "read the README" becomes
+  "open the two sections this task needs",
+- the last 14 days of pull requests,
+- the last 14 days of agent sessions, with the shared opening boilerplate
+  stripped and the PRs each session touched,
+- a fleet snapshot: every tenant with its full business id, tier, DID, and
+  flow counts.
+
+Then open only the raw sources the task actually needs.
+
+## Regenerating
+
+The pack is gitignored and generated, never hand-edited. If it is missing or
+its header timestamp is more than a day old:
+
+```bash
+npx tsx scripts/context-pack.ts
+```
+
+It is read-only and takes a few seconds. `--days N` widens the window,
+`--no-fleet` skips the Supabase queries, `--out -` prints to stdout.
+
+The generator writes the pack into every checkout (main plus linked
+worktrees). The Cursor `sessionStart` hook (`.cursor/hooks.json`, running
+`scripts/sync-context-pack.sh`) copies the main checkout's pack into a
+worktree created since the last run and injects its age. Claude Code still
+has the same script wired in `.claude/settings.json`.
+
+Run it from the main checkout when you can. A standalone worktree
+(`newCoworker-wt-<name>`) needs its own `node_modules` for the fleet section.
+`.env` and the transcript archive resolve through the shared git common dir.
+
+The session digest reads every transcript archive this repo owns: Cursor
+(`~/.cursor/projects/<slug>/agent-transcripts/`) and the Claude Code archives
+(`~/.claude/projects/<slug>/`, including worktree slugs), so history from
+both tools stays visible. `CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search
+with an explicit directory.
+
+## What still deserves the raw sources
+
+The pack orients; it does not replace reading. Go to the source when:
+
+- you are changing code: read the actual files, not a summary of them,
+- the task names a specific tenant: read `docs/tenants/<slug>.md` first, then
+  the live rows,
+- the task depends on a README contract (tool parity, KG source coverage, i18n,
+  migration stamps): read that section in full, since the pack only links it,
+- you need what a past session actually decided: open its transcript by id.
+
+## Keeping it honest
+
+If you find yourself re-deriving something the pack should have told you, the
+fix is to improve the generator (`scripts/context-pack.ts`), not to go back to
+re-reading everything by hand. Same rule as the rest of this repo: once a
+behavior is understood and repeatable, capture it in code.

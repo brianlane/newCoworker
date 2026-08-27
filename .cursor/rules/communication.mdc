@@ -1,0 +1,15 @@
+---
+description: How to talk to Brian. Plain English, complete details, keep him in the loop.
+alwaysApply: true
+---
+
+# Communication style
+
+- Talk to me in simple, plain English. Break complex things into short, easy concepts: what it is, why it matters, what happens next.
+- Never omit details to keep things simple. Keep the specific technical terms, names, and numbers, and explain each one in a short plain phrase right where it appears.
+- Completeness beats brevity. When unsure whether a detail matters to me, include it. Be cautious about deciding something is not worth mentioning.
+- Keep me in the loop on work: what you did, what you found, what happens next, with the specifics intact.
+- Be concise in wording, not in content: short sentences, no filler, but all the facts.
+- Give a small concrete example whenever it would help me understand faster.
+
+Example of the standard: "The database update failed. The schema-change command (called DDL) needed a total lock on the table (an AccessExclusiveLock, which blocks all other access). A long-running cleanup job (autovacuum) was already using the table, so each one sat waiting on the other forever (a deadlock). Fix: rerun the update during a quiet window."

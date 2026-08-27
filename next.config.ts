@@ -99,11 +99,11 @@ const widgetFrameHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   // Stops `next dev` from writing its managed "nextjs-agent-rules" block into
-  // our tracked CLAUDE.md. Next appends that block whenever it detects an AI
-  // coding agent, and the block it writes contains an em dash, which rule 4 of
-  // that very file bans. It also left CLAUDE.md permanently dirty during local
-  // dev, so the block kept turning up staged alongside unrelated work (caught
-  // by hand on PR #1498, one revert away from shipping).
+  // AGENTS.md / CLAUDE.md. Next appends that block whenever it detects an AI
+  // coding agent, and the block it writes contains an em dash, which the
+  // no-em-dash rule bans. It also left those files permanently dirty during
+  // local dev, so the block kept turning up staged alongside unrelated work
+  // (caught by hand on PR #1498, one revert away from shipping).
   //
   // Editing the block in place does not help: `upsertAgentRulesBlock` in
   // node_modules/next/dist/server/lib/generate-agent-files.js REPLACES

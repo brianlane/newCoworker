@@ -35,12 +35,17 @@ const ALLOWED_LITERALS = [`Human handoff ${EM_DASH} offer to team first`];
 function guardedFiles(): string[] {
   const emailTemplatesDir = join(ROOT, "src/lib/email/templates");
   const workflowsDir = join(ROOT, ".github/workflows");
+  const cursorRulesDir = join(ROOT, ".cursor/rules");
   return [
-    // The file that states the rule has to keep it. Guarded since Aug 2026
+    // The files that state the rule have to keep it. Guarded since Aug 2026
     // because `next dev` used to append a managed block containing an em dash
     // (see `agentRules: false` in next.config.ts); this is the backstop for
     // that and for any other tool that decides to write here.
     "CLAUDE.md",
+    "AGENTS.md",
+    ...readdirSync(cursorRulesDir)
+      .filter((f) => f.endsWith(".mdc"))
+      .map((f) => `.cursor/rules/${f}`),
     "messages/en.json",
     "messages/es.json",
     "messages/edge-en.json",
