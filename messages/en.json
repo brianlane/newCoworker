@@ -875,19 +875,19 @@
           "description": "Sunday open-house traffic and 9pm Zillow browsers get a live conversation, not a callback queue."
         },
         "u4": {
-          "title": "Instant Text Follow-Up",
-          "description": "Missed a warm transfer during a showing? The caller gets an immediate text and the conversation continues over SMS."
+          "title": "Speed to Lead, as a Team",
+          "description": "A new lead can get an AI call back in seconds, and your teammates race for it: first to reply 1 claims the lead, and a warm transfer keeps the buyer talking while phones ring."
         },
         "u5": {
           "title": "Fair Housing Guardrails",
           "description": "FHA compliance rules are enforced in every conversation, protecting your license from a costly slip."
         },
         "u6": {
-          "title": "Transaction Follow-Ups",
-          "description": "AiFlows chase the gap between contract and close: document reminders, milestone updates, and check-ins run themselves."
+          "title": "Deals, To-Dos & Your Old CRM",
+          "description": "Track deal value, close date, and commission from open to won, assign to-dos with due dates, and bring your Follow Up Boss contacts across from a CSV. AiFlows still chase the contract-to-close paperwork for you."
         },
         "day1": "A seller calls about listing their home. Your coworker qualifies the lead, captures the address, and books a listing consult for Thursday.",
-        "day2": "You're in a showing. Two buyer calls come in at once. Both answered, both qualified, one showing booked.",
+        "day2": "You're in a showing. A new buyer lead comes in, the AI calls them back within seconds, and your buyer's agent texts 1 to claim it before you're even out.",
         "day3": "A buyer texts asking about a property's HOA. Your coworker answers from your website knowledge and offers a viewing slot.",
         "day4": "A relocating family calls after dinner. Your coworker walks them through your service, captures their criteria, and texts you a summary with sentiment.",
         "complianceNote": "New Coworker's real estate guardrails include Fair Housing Act compliance in every voice and text conversation."
