@@ -9,6 +9,11 @@
  * rather than seeding a second one, which is what stops a lead being enrolled
  * in two cadences.
  *
+ * ORDERING when the write introduces a var the templates read (as the
+ * two-var site scheme did, 2026-08-27): run the matching parked-run heal
+ * FIRST (amy-heal-parked-cadence-lead-site.ts), so no in-flight run meets a
+ * template whose var it never extracted.
+ *
  * Usage:
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/seed-amy-needs-follow-up-aiflow.ts          # dry run
