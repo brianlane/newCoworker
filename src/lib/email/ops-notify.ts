@@ -57,6 +57,10 @@ import {
   type OpsProvisioningStuckInput
 } from "@/lib/email/templates/ops-provisioning-stuck";
 import {
+  buildOpsDeployFailedEmail,
+  type OpsDeployFailedInput
+} from "@/lib/email/templates/ops-deploy-failed";
+import {
   buildOpsIntakeCompletedEmail,
   type OpsIntakeCompletedInput
 } from "@/lib/email/templates/ops-intake-completed";
@@ -412,6 +416,47 @@ export async function sendOpsProvisioningStuckEmail(
     return true;
   } catch (err) {
     logger.warn("ops provisioning-stuck email failed", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
+
+/**
+ * Fire-and-forget "signup deploy failed" ops notification; never throws.
+ * Sent by the orchestrator on the failed-deploy branch where the owner's
+ * "you're live" notice is suppressed: without this email nothing else in
+ * the system tells a human (see the template header for why each other
+ * channel stays silent).
+ */
+export async function sendOpsDeployFailedEmail(
+  input: Omit<OpsDeployFailedInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops deploy-failed email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsDeployFailedEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), {
+      text,
+      html
+    });
+    logger.info("ops deploy-failed email sent", {
+      businessId: input.businessId,
+      virtualMachineId: input.virtualMachineId,
+      phase: input.phase,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops deploy-failed email failed", {
       businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });

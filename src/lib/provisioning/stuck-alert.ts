@@ -18,12 +18,16 @@ import type { RetryStalledProvisioningResult } from "@/lib/provisioning/jobs";
 
 export const STUCK_PROGRESS_AGE_MS = 20 * 60 * 1000;
 
-/** Phases that count as mid-remote-deploy for the stuck scan. */
-const STUCK_PHASE_HINTS = new Set([
-  "remote_deploy_starting",
-  "deploy_exception",
-  "deploy_failed"
-]);
+/**
+ * Phases that count as mid-remote-deploy for the stuck scan.
+ *
+ * deploy_failed / deploy_exception are deliberately NOT here: those rows
+ * are written with status "error", and the band check below returns false
+ * for every error row, so listing them promised a coverage this scan never
+ * had. A failed deploy alerts ops directly from the orchestrator's notify
+ * branch (sendOpsDeployFailedEmail) instead.
+ */
+const STUCK_PHASE_HINTS = new Set(["remote_deploy_starting"]);
 
 export function isStuckProgressBand(input: {
   phase: string;

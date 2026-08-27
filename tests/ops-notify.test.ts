@@ -35,6 +35,7 @@ import {
   sendOpsNewSignupEmail,
   sendOpsNangoQuotaEmail,
   sendOpsProvisioningStuckEmail,
+  sendOpsDeployFailedEmail,
   sendOpsCronSweepHealthEmail,
   sendOpsIntakeCompletedEmail
 } from "@/lib/email/ops-notify";
@@ -752,6 +753,69 @@ describe("sendOpsNangoQuotaEmail", () => {
     await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops Nango quota email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsDeployFailedEmail", () => {
+  const failedInput = {
+    businessId: "biz-1",
+    businessName: "Acme Plumbing",
+    virtualMachineId: "42",
+    phase: "deploy_exception",
+    reason: "deploy poll down"
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the deploy-failed alert to the ops inbox", async () => {
+    await expect(sendOpsDeployFailedEmail(failedInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Signup deploy FAILED"),
+      expect.objectContaining({
+        text: expect.stringContaining("deploy poll down")
+      })
+    );
+  });
+
+  it("returns false when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsDeployFailedEmail(failedInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await expect(sendOpsDeployFailedEmail(failedInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("returns false when send throws (Error and non-Error)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsDeployFailedEmail(failedInput)).resolves.toBe(false);
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsDeployFailedEmail(failedInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops deploy-failed email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops deploy-failed email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

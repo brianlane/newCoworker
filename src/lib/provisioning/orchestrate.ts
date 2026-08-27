@@ -57,7 +57,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
-import { sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
+import { sendOpsDeployFailedEmail, sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerNotifyEmail } from "@/lib/provisioning/notify-recipient";
@@ -2463,6 +2463,14 @@ async function runOrchestrator(
   // poll the exit file / terminal progress. Survives Vercel killing the
   // long SSH; watchdog can attach to the same in-flight deploy.
   let deploySucceeded = false;
+  // Captured for the ops deploy-failed alert below: which failure site fired
+  // and what it said. Progress rows carry the same text, but the notify block
+  // shouldn't have to re-read them.
+  // Overwritten by whichever failure site fires; the defaults are never
+  // sent (the notify branch only reads them when deploySucceeded is false,
+  // and both failure paths assign first).
+  let deployFailurePhase = "deploy_failed";
+  let deployFailureReason = "(no failure detail captured)";
   /* c8 ignore next -- production default; tests inject latestProvisioningStatus */
   const latestStatus =
     deps?.latestProvisioningStatus ?? getLatestProvisioningStatus;
@@ -2492,6 +2500,8 @@ async function runOrchestrator(
         reason: deployResult.reason,
         exitCode: deployResult.exitCode
       });
+      deployFailurePhase = "deploy_failed";
+      deployFailureReason = deployResult.reason;
       await recordProvisioningProgress({
         businessId,
         phase: "deploy_failed",
@@ -2510,6 +2520,8 @@ async function runOrchestrator(
       vpsId,
       error: msg
     });
+    deployFailurePhase = "deploy_exception";
+    deployFailureReason = msg;
     await recordProvisioningProgress({
       businessId,
       phase: "deploy_exception",
@@ -2576,15 +2588,25 @@ async function runOrchestrator(
   if (input.suppressOwnerNotify) {
     logger.info("Skipping provisioning owner email/SMS (suppressOwnerNotify)", { businessId });
   } else if (!deploySucceeded) {
-    // "Your New Coworker is live!" has to be true when it arrives. The ops
-    // new-signup alert below is already gated on deploySucceeded, so without
-    // this the customer was told they were live while ops heard nothing at
-    // all. Ops still finds this: the business is left online with percent
-    // < 100, which is exactly the hole scanAndAlertStuckProvisioning looks
-    // for.
+    // "Your New Coworker is live!" has to be true when it arrives, so the
+    // owner notice stays suppressed (decision: admin-only alerting, Aug
+    // 2026). But nothing else tells a human either: the ops new-signup
+    // alert below is gated on deploySucceeded, a signup job is marked
+    // succeeded on a normal return so the watchdog never retries it, and
+    // the stuck scan excludes error-status progress rows from its band
+    // check (isStuckProgressBand). This direct ops email is therefore the
+    // ONLY notification a failed signup deploy produces. Fire-and-forget:
+    // the sender never throws.
     logger.warn("Skipping provisioning owner email/SMS: deploy did not succeed", {
       businessId,
       vpsId
+    });
+    await sendOpsDeployFailedEmail({
+      businessId,
+      businessName: freshBusiness?.name ?? "",
+      virtualMachineId: vpsId,
+      phase: deployFailurePhase,
+      reason: deployFailureReason
     });
   } else {
     notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
