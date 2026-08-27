@@ -4941,6 +4941,22 @@ shipped" post, `blog: skip` for bug fixes / internal / ops work (see
 [Platform blog](#platform-blog-newcoworkercomblog) — unlabeled PRs fall back
 to an AI classifier, but the label is authoritative).
 
+### A table, a column, or a filter needs a real database to prove
+
+A mocked query builder cannot prove a table name, a column name, a filter
+predicate, or a grant: it happily "passes" a query against a table that does
+not exist. This bit twice in 2026: the chat clawback leg queried
+`chat_credit_grants` (real name `chat_spend_credit_grants`) with green unit
+tests mocking the same wrong name, and the end-user erasure path shipped a
+delete against `contact_overrides` four weeks after that table was dropped,
+inside a PR whose whole purpose was erasure coverage.
+
+The rule: any fix or finding whose truth depends on one of those ships a
+`tests/worker-integration/*.itest.ts` against the local Supabase stack CI
+already boots (`npm run test:worker-integration`), never a mocked builder.
+The mocked test can stay for speed, but it is not the proof. Background and
+the other lessons: [docs/AUDIT-2026-08.md](docs/AUDIT-2026-08.md).
+
 ### Writing a migration: always stamp it with the helper
 
 ```bash
