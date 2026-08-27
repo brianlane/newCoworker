@@ -247,8 +247,8 @@ export type ProvisionVpsForBusinessInput = {
   tier: "starter" | "standard";
   /**
    * Hardware pin (`businesses.vps_size`). Omitted/null falls back to the
-   * tier default (starter→kvm2, standard→kvm8). Drives the Hostinger SKU
-   * only, entitlements stay on `tier`.
+   * tier default (`DEFAULT_TIER_VPS_SIZE`: starter→kvm1, standard→kvm2).
+   * Drives the Hostinger SKU only, entitlements stay on `tier`.
    */
   vpsSize?: VpsSize | null;
   /**
@@ -662,7 +662,8 @@ export function buildDefaultPostInstallScript(opts?: {
   /**
    * Hardware size passed through as `VPS_SIZE=…`. Drives ZRAM, Ollama
    * tuning/model, and which Rowboat compose profile to render. Defaults to
-   * the tier's historical mapping (starter→kvm2, standard→kvm8). A KVM2
+   * the tier's new-provision default via `resolveVpsSize`
+   * (`DEFAULT_TIER_VPS_SIZE`: starter→kvm1, standard→kvm2). A KVM2
    * host MUST get `kvm2` or ZRAM swap won't be configured and Ollama will
    * crash-loop with the wrong parallelism settings.
    */
@@ -700,7 +701,7 @@ export function buildDefaultPostInstallScript(opts?: {
   if (authorizedKey !== null) {
     assertSafeAuthorizedKey(authorizedKey);
   }
-  // vpsSize needs no assert: `resolveVpsSize` whitelists to 'kvm2'|'kvm8'
+  // vpsSize needs no assert: `resolveVpsSize` whitelists to kvm1|kvm2|kvm4|kvm8
   // (any other input, including hostile strings, falls to the tier default).
 
   return `#!/bin/bash
