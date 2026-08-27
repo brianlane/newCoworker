@@ -129,7 +129,12 @@ export type BillingPostureFinding = {
  * action, so they are counted and shown, never hidden.
  */
 export const ADVISORY_FINDING_KINDS: ReadonlySet<BillingPostureFinding["kind"]> = new Set([
-  "billing_cycle_price_stale"
+  "billing_cycle_price_stale",
+  // Fleet bookkeeping, not a lapse race: the box's renewal posture is
+  // whatever its last owner left, and the fix is pool-or-retire the ROW.
+  // Framing it as lapse risk would tell ops to flip renewal ON for
+  // hardware nobody is using.
+  "stale_assigned_row"
 ]);
 
 /** True when a finding is an auto-renew/lapse risk rather than advisory. */

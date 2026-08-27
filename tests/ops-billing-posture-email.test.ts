@@ -90,6 +90,28 @@ describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
     expect(email.text).not.toContain("/ pool");
   });
 
+  it("does not label a gone-owner stale_assigned_row as pool", () => {
+    // The vm is still marked assigned; "pool" would assert the opposite of
+    // the finding and invite an adopt of hardware in an unknown state.
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 0,
+      checkedPoolBoxes: 0,
+      findings: [
+        finding({
+          kind: "stale_assigned_row",
+          vmId: 1800985,
+          businessId: "gone-biz-id",
+          businessName: null,
+          expiresAt: null,
+          detail: "inventory row srv1800985 is assigned to business gone-biz-id but no business row exists for it"
+        })
+      ]
+    });
+    expect(email.text).toContain("assigned to missing business gone-biz-id");
+    expect(email.text).not.toContain("/ pool");
+  });
+
   it("still labels a real pool finding as pool", () => {
     const email = buildOpsBillingPostureEmail({
       siteUrl: "https://www.newcoworker.com",

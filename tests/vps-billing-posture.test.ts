@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
+import { checkVpsBillingPosture, isLapseRiskFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 
@@ -1641,6 +1641,13 @@ describe("stale assigned rows (fleet consistency)", () => {
     });
     const report = await checkVpsBillingPosture(deps as never);
     expect(report.findings.filter((f) => f.kind === "stale_assigned_row")).toHaveLength(0);
+  });
+
+  it("is advisory, never framed as a lapse risk in the ops digest", () => {
+    // The digest's lapse-risk framing tells ops to align the renewal toggle
+    // with the assigned state, which for a stale row would turn paid renewal
+    // back ON for hardware nobody uses. Bookkeeping, not a race.
+    expect(isLapseRiskFinding({ kind: "stale_assigned_row" })).toBe(false);
   });
 
   it("stays silent when every assigned row matches its business", async () => {
