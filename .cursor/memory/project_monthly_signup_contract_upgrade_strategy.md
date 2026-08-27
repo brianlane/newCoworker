@@ -66,10 +66,43 @@ Two consequences:
 - **Never derive a term LENGTH or a runway from `billing_period`.** Derive it
   from the date, which is the field that actually moved. `src/lib/vps/box-term.ts`
   (PR #1635) is the shared helper; it deliberately shows no term length.
-- **`monthly_price_cents` is wrong for such a box.** `buildHostingerSnapshot`
-  computes `renewal_price / billingCycleMonths(billing_period, unit)`, so HQ
-  prices at $19.49/mo when the real forward cost is ~$12.99/mo. Every margin
-  number downstream inherits it. NOT fixed as of Aug 26 2026.
+- **`monthly_price_cents` cannot be derived for such a box, and is no longer
+  guessed.** `buildHostingerSnapshot` computes `renewal_price /
+  billingCycleMonths(billing_period, unit)`; both operands are stale, so it
+  priced HQ at $19.49/mo against a real ~$12.99. FIXED in PR #1636, but NOT by
+  computing the right number, which is impossible (below). The snapshot now
+  emits `null` when `cycleContradictsNextBilling` fires, and the margin engine
+  falls back to `HOSTING_MONTHLY_CENTS_BY_SIZE`, LABELED "estimate". For HQ
+  that is $11.99 against $12.99, so error $6.50 -> $1.00.
+
+**The real price is UNOBTAINABLE from the Hostinger API.** Established by
+probe on Aug 26 2026, so do not go looking again:
+- The amount paid ($155.88) appears in NO field. `renewal_price` and
+  `total_price` both still read 1949.
+- There is no orders/invoices read endpoint: `/api/billing/v1/orders` is 405
+  (POST-only), and `invoices`, `payments`, `transactions` and
+  `subscriptions/<id>` all 404.
+- The real cycle cannot be measured either, because there is no period-start
+  field. `created_at` is the ORIGINAL purchase, so `next_billing_at -
+  created_at` spans the whole subscription life: 427 days (14 months) for HQ,
+  which bought 12, and 91 days for the retired KVM8 that declared 1 month.
+  Only a sub still inside its FIRST cycle measures correctly.
+So date-derivation is a trap that looks clever and yields $1.39/mo for HQ,
+worse than the bug and in the dangerous direction (understating cost inflates
+margin). Detection is reliable; correction is not.
+
+**Consumers must not read that `null` as zero.** It means "unknown", and the
+fleet KPI on /admin/costs summed it with `?? 0`, silently dropping the box
+from total spend (Bugbot caught it on #1636). `fleetMonthlyTotal` in
+`src/lib/admin/costs-view.ts` is now the one place that sums it, substituting
+the SKU estimate and reporting how many rows needed one. `buildPoolBoxBurn`
+already did this correctly; `hostingCentsByBusiness` skips nulls, which
+correctly routes to the labeled estimate.
+
+**Still open:** recording HQ's TRUE cost. Whether that is the amortized
+$12.99 or the $19.49 Hostinger says it will charge at renewal is a policy
+call about what margin should model, and needs Brian. Until then a
+`billing_cycle_price_stale` finding nags in the daily billing-posture email.
 
 **Which date field is meaningful depends on the renew state.** `next_billing_at`
 is populated while a sub auto-renews; `expires_at` only once it is cancelled or
