@@ -168,7 +168,7 @@ export function PlanCards({
         </div>
         <a
           href="/contact?topic=white-glove"
-          className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 md:mx-auto md:max-w-sm"
+          className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 md:mx-auto md:max-w-sm"
         >
           {t("whiteGloveCta")}
         </a>

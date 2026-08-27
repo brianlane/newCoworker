@@ -198,7 +198,7 @@ export function EmployeesManager(props: Props) {
             <button
               type="button"
               onClick={() => setAddOpen(true)}
-              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors shrink-0"
+              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors shrink-0"
             >
               Add employee
             </button>
@@ -268,7 +268,7 @@ export function EmployeesManager(props: Props) {
               type="button"
               onClick={addMember}
               disabled={adding || !addName.trim() || !addPhone.trim()}
-              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {adding ? "Adding…" : "Add"}
             </button>
@@ -633,7 +633,7 @@ function EmployeeCard({
               type="button"
               onClick={saveEdit}
               disabled={busy || !name.trim() || !phone.trim()}
-              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy ? "Saving…" : "Save"}
             </button>

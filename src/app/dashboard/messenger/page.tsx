@@ -56,7 +56,7 @@ export default async function DashboardMessengerPage() {
             <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >{t("getStarted")}</a>
           </div>
         </Card>
@@ -82,7 +82,7 @@ export default async function DashboardMessengerPage() {
             </p>
             <Link
               href="/dashboard/integrations/meta"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >
               Connect Facebook →
             </Link>
@@ -114,7 +114,7 @@ export default async function DashboardMessengerPage() {
             </p>
             <a
               href="/pricing"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >
               See plans
             </a>

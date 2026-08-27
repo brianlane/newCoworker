@@ -202,7 +202,7 @@ export function LeadBacklogImport({ businessId }: Props) {
           type="button"
           onClick={() => fileInput.current?.click()}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-signal-teal/90 transition-colors disabled:opacity-40"
         >
           <Upload className="h-3.5 w-3.5" />
           {busy ? "Working…" : "Choose Excel / CSV file"}
@@ -320,7 +320,7 @@ export function LeadBacklogImport({ businessId }: Props) {
                   ? "Pick a flow to run for each lead first"
                   : undefined
               }
-              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40"
             >
               {busy ? "Importing…" : `Import ${preview.totalRows} lead${preview.totalRows === 1 ? "" : "s"}`}
             </button>

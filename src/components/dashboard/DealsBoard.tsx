@@ -183,7 +183,7 @@ export function DealsBoard({
           {canManage && (
             <button
               onClick={() => setEditor({ mode: "create" })}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
             >
               <Plus className="h-3.5 w-3.5" />
               {t("newDeal")}
@@ -701,7 +701,7 @@ function DealEditorModal({
               <button
                 onClick={() => void save()}
                 disabled={busy || !title.trim()}
-                className="rounded-lg bg-claw-green px-4 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+                className="rounded-lg bg-claw-green px-4 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-50"
               >
                 {busy ? t("editSaving") : t("editSave")}
               </button>

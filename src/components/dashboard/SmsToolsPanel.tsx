@@ -236,7 +236,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
               type="button"
               onClick={() => void createTemplate()}
               disabled={!newName.trim() || !newBody.trim() || creating}
-              className="rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-40"
+              className="rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-40"
             >
               {creating ? "Saving…" : "Save template"}
             </button>

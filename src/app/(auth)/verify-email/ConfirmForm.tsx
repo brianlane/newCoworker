@@ -64,7 +64,7 @@ export function ConfirmForm({ token, email }: Props) {
         </p>
         <Link
           href="/dashboard"
-          className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+          className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors"
         >
           {t("goToDashboard")}
         </Link>
@@ -90,7 +90,7 @@ export function ConfirmForm({ token, email }: Props) {
             ? t("verifyNotFoundBody")
             : t("verifyInternalBody");
     const ctaClasses =
-      "inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors";
+      "inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors";
     return (
       <Card className="text-center space-y-3">
         <p className="text-sm font-semibold text-spark-orange">{heading}</p>
@@ -139,7 +139,7 @@ export function ConfirmForm({ token, email }: Props) {
         <button
           type="submit"
           disabled={pending}
-          className="w-full rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          className="w-full rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {pending ? t("confirming") : t("confirmEmail")}
         </button>

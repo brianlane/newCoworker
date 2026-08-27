@@ -99,7 +99,7 @@ export function CustomerEmailComposer({ businessId, customerE164, email }: Props
           type="button"
           onClick={send}
           disabled={sending || !subject.trim() || !body.trim()}
-          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {sending ? "Sending…" : "Send"}
         </button>

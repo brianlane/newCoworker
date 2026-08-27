@@ -817,7 +817,7 @@ export default async function BillingPage(props: {
                 <p className="text-[11px] text-parchment/40">{pkg.description}</p>
                 <Link
                   href="/contact?topic=white-glove"
-                  className="mt-auto inline-flex items-center justify-center rounded-md bg-claw-green px-3 py-1.5 text-sm font-semibold text-deep-ink transition-all duration-150 hover:bg-opacity-90"
+                  className="mt-auto inline-flex items-center justify-center rounded-md bg-claw-green px-3 py-1.5 text-sm font-semibold text-deep-ink transition-all duration-150 hover:bg-claw-green/90"
                 >
                   {t("contactUs")}
                 </Link>

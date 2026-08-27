@@ -234,7 +234,7 @@ export function EmailComposer({
             type="button"
             onClick={() => void send()}
             disabled={!canSend}
-            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-40"
+            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-40"
           >
             {busy ? "Sending…" : "Send"}
           </button>

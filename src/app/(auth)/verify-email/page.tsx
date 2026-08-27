@@ -94,7 +94,7 @@ export default async function VerifyEmailPage({ searchParams }: Props) {
           <Card className="text-center">
             <Link
               href="/login"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-claw-green/90 transition-colors"
             >
               {t("signIn")}
             </Link>

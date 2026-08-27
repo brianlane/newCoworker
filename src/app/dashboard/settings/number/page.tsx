@@ -47,7 +47,7 @@ export default async function NumberSettingsPage() {
             <p className="text-parchment/60 mb-4">{t("numberNoCoworker")}</p>
             <a
               href="/onboard"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >
               {t("numberGetStarted")}
             </a>

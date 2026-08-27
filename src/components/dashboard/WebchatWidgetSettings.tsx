@@ -250,7 +250,7 @@ export function WebchatWidgetSettings({
               type="button"
               disabled={busy}
               onClick={saveConfig}
-              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50"
+              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-50"
             >
               Save widget settings
             </button>

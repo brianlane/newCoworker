@@ -168,7 +168,7 @@ export function SmsReplayPanel({
             type="button"
             onClick={() => submit(state.flowId, state.hours)}
             disabled={state.status === "submitting"}
-            className="rounded-lg bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-signal-teal px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-signal-teal/90 disabled:opacity-50"
           >
             {state.status === "submitting" ? "Replaying…" : "Replay"}
           </button>

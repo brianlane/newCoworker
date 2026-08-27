@@ -220,7 +220,7 @@ export function WhiteGloveIntakeForm({
         type="button"
         onClick={submit}
         disabled={submitting}
-        className="w-full rounded-lg bg-claw-green px-4 py-3 text-center font-semibold text-deep-ink hover:bg-opacity-90 disabled:opacity-60"
+        className="w-full rounded-lg bg-claw-green px-4 py-3 text-center font-semibold text-deep-ink hover:bg-claw-green/90 disabled:opacity-60"
       >
         {submitting ? "Sending…" : "Send my answers"}
       </button>

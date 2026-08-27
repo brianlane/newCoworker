@@ -20,6 +20,7 @@ import {
 import { getLocale, getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { CtaLink } from "@/components/marketing/CtaLink";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import {
   CtaBanner,
@@ -128,18 +129,10 @@ export default async function HomePage() {
         subtitle={t("home.heroSubtitle")}
       >
         <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link
-            href="/onboard"
-            className="inline-block rounded-lg bg-claw-green px-8 py-3.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-          >
-            {t("home.startFor", { price: starterFrom })}
-          </Link>
-          <Link
-            href="/pricing"
-            className="inline-block rounded-lg border border-parchment/20 px-8 py-3.5 text-sm font-semibold text-parchment transition-colors hover:bg-parchment/10"
-          >
+          <CtaLink href="/onboard">{t("home.startFor", { price: starterFrom })}</CtaLink>
+          <CtaLink href="/pricing" variant="secondary">
             {t("home.seePricing")}
-          </Link>
+          </CtaLink>
         </div>
       </PageHero>
 
@@ -166,7 +159,7 @@ export default async function HomePage() {
           <p className="mx-auto mt-4 max-w-xl text-parchment/55">{t("home.callDemoBody")}</p>
           <a
             href="tel:+16023131823"
-            className="mt-7 inline-flex items-center gap-3 rounded-lg bg-claw-green px-8 py-3.5 text-lg font-bold text-deep-ink transition-colors hover:bg-opacity-90"
+            className="mt-7 inline-flex items-center gap-3 rounded-lg bg-claw-green px-8 py-3.5 text-lg font-bold text-deep-ink transition-colors hover:bg-claw-green/90"
           >
             <Phone className="h-5 w-5" aria-hidden />
             +1 (602) 313-1823

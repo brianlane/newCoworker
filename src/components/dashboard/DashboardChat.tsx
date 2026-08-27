@@ -459,7 +459,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     <button
                       type="button"
                       onClick={() => openDraft(draft)}
-                      className="mt-2 inline-flex items-center rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-opacity-90 transition-colors"
+                      className="mt-2 inline-flex items-center rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-claw-green/90 transition-colors"
                     >
                       {draft.kind === "aiflow" ? "Open in AiFlows builder" : "Open in Agents"}
                     </button>

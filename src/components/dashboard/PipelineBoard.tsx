@@ -339,7 +339,7 @@ export function PipelineBoard({
             <button
               onClick={() => void seedDefault()}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:opacity-50"
             >
               <Plus className="h-4 w-4" />
               Create the default lead pipeline
@@ -712,7 +712,7 @@ function BoardCard({
               onClaim();
             }}
             disabled={claiming}
-            className="rounded bg-claw-green px-2 py-0.5 text-[10px] font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded bg-claw-green px-2 py-0.5 text-[10px] font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {claiming ? tClaim("claiming") : tClaim("claim")}
           </button>

@@ -38,7 +38,7 @@ export function LegalPage({
           </Link>
           <Link
             href="/onboard"
-            className="rounded-lg bg-claw-green px-4 py-2 font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+            className="rounded-lg bg-claw-green px-4 py-2 font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
           >
             {t("navGetStarted")}
           </Link>

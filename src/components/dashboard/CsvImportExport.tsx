@@ -119,7 +119,7 @@ export function CsvImportExport({ businessId }: Props) {
                 type="button"
                 onClick={() => download(type, "export")}
                 disabled={busy !== null}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40"
               >
                 <Download className="h-3.5 w-3.5" />
                 {busy === `${type}:export` ? "Exporting…" : "Export CSV"}
@@ -128,7 +128,7 @@ export function CsvImportExport({ businessId }: Props) {
                 type="button"
                 onClick={() => fileInputs.current[type]?.click()}
                 disabled={busy !== null}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-signal-teal text-deep-ink px-3 py-2 text-xs font-semibold hover:bg-signal-teal/90 transition-colors disabled:opacity-40"
               >
                 <Upload className="h-3.5 w-3.5" />
                 {busy === `${type}:import` ? "Importing…" : "Import CSV"}

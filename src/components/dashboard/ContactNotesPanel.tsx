@@ -173,7 +173,7 @@ export function ContactNotesPanel(props: Props) {
           type="button"
           onClick={addNote}
           disabled={adding || draft.trim().length === 0}
-          className="rounded-lg bg-claw-green text-deep-ink px-3 py-1.5 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="rounded-lg bg-claw-green text-deep-ink px-3 py-1.5 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {adding ? t("adding") : t("add")}
         </button>
@@ -246,7 +246,7 @@ export function ContactNotesPanel(props: Props) {
                         type="button"
                         onClick={() => saveEdit(note.id)}
                         disabled={busy || editDraft.trim().length === 0}
-                        className="rounded-lg bg-claw-green text-deep-ink px-3 py-1 text-xs font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="rounded-lg bg-claw-green text-deep-ink px-3 py-1 text-xs font-semibold hover:bg-claw-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {busy ? t("saving") : t("save")}
                       </button>

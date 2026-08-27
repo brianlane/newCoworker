@@ -768,7 +768,7 @@ function ReplayPanel({
             type="button"
             onClick={() => submit(state.flowId)}
             disabled={state.status === "submitting"}
-            className="rounded-lg bg-spark-orange px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-spark-orange px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-spark-orange/90 disabled:opacity-50"
           >
             {state.status === "submitting"
               ? "Replaying…"
@@ -1019,7 +1019,7 @@ export function EmailsList({
           <button
             type="button"
             onClick={() => setComposer({ mode: "new" })}
-            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90"
           >
             Compose
           </button>

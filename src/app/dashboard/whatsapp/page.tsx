@@ -55,7 +55,7 @@ export default async function DashboardWhatsAppPage() {
             <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >{t("getStarted")}</a>
           </div>
         </Card>
@@ -79,7 +79,7 @@ export default async function DashboardWhatsAppPage() {
             </p>
             <Link
               href="/dashboard/integrations/whatsapp"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-claw-green/90 transition-colors"
             >
               Connect WhatsApp →
             </Link>
