@@ -548,8 +548,8 @@ these standards:
   receive NO automatic grants to `anon`/`authenticated`/`service_role`.
   Every migration that creates an object must grant access explicitly in the
   same file (service_role only, unless the table is deliberately
-  client-readable via RLS policies); `tests/migration-grants.test.ts`
-  enforces this in CI and [supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md)
+  client-readable via RLS policies);   `tests/migration-grants.test.ts`
+  enforces this in CI and [`.cursor/rules/migration-grants.mdc`](.cursor/rules/migration-grants.mdc)
   documents the convention. The companion sweep
   (`…20260820100500_revoke_legacy_deny_all_table_grants.sql`) also revoked
   the legacy anon/authenticated grants on every existing RLS-on/no-policies
@@ -4619,9 +4619,14 @@ skills under [`.cursor/skills/`](.cursor/skills) (`e2e-bug-hunt`,
 `dependabot-triage`, `oneshot-patch`). Project memories live in
 [`.cursor/memory/MEMORY.md`](.cursor/memory/MEMORY.md). The standing working
 agreements live in [`.cursor/rules/`](.cursor/rules) and the short index
-[AGENTS.md](AGENTS.md), with the migration-specific pair in
-[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md) (also globbed
-as Cursor rules when you touch a migration).
+[AGENTS.md](AGENTS.md). Claude Code loads the same always-on files through
+`@` imports in [CLAUDE.md](CLAUDE.md). The globbed migration pair is
+[`.cursor/rules/migration-timestamps.mdc`](.cursor/rules/migration-timestamps.mdc)
+and [`.cursor/rules/migration-grants.mdc`](.cursor/rules/migration-grants.mdc);
+Claude Code imports those two from
+[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md) when that
+folder is in play. `tests/agent-loader-lockstep.test.ts` fails the PR if
+those loaders grow a second copy of the text.
 
 ### The same rule, applied to model spend
 
@@ -4722,7 +4727,7 @@ PR #1077 shipped a zero-byte migration by deleting the only copy that held
 the DDL (repaired in PR #1091); `tests/migration-not-empty.test.ts` now fails
 a PR carrying an empty migration file. The long form, including the one
 allowlisted historical file, lives in
-[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md).
+[`.cursor/rules/migration-timestamps.mdc`](.cursor/rules/migration-timestamps.mdc).
 
 ### The cron chain has three timeouts, and a hard ceiling under all of them
 

@@ -34,7 +34,7 @@
 #
 # What it will never do:
 #   - Rename a file whose version IS in the remote ledger. The filename must
-#     keep matching the applied row (supabase/migrations/CLAUDE.md rule 2).
+#     keep matching the applied row (.cursor/rules/migration-timestamps.mdc rule 2).
 #   - Touch the ledger. `supabase migration repair` stays a deliberate
 #     human/agent action; this script only renames not-yet-applied files.
 #   - Guess. Duplicate versions on main fail the deploy loudly (which file
@@ -191,7 +191,7 @@ while :; do
     echo "::error::duplicate migration version stamp(s) on main:"
     echo "$dups"
     echo "Auto-heal refuses to guess which file owns the ledger row."
-    echo "Re-stamp the unapplied file manually per supabase/migrations/CLAUDE.md."
+    echo "Re-stamp the unapplied file manually per .cursor/rules/migration-timestamps.mdc."
     exit 1
   fi
 
@@ -292,7 +292,7 @@ for line in sys.stdin:
 
   while IFS=' ' read -r old new; do
     if [ ! -s "$WT/$MIGRATIONS_DIR/$old" ]; then
-      echo "::error::$old is empty or missing at the tip; refusing to re-stamp it (see the empty-scaffold trap in supabase/migrations/CLAUDE.md)."
+      echo "::error::$old is empty or missing at the tip; refusing to re-stamp it (see the empty-scaffold trap in .cursor/rules/migration-timestamps.mdc)."
       exit 1
     fi
     git -C "$WT" mv "$MIGRATIONS_DIR/$old" "$MIGRATIONS_DIR/$new"

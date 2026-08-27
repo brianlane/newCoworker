@@ -54,7 +54,7 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 # .claude/ stays tracked for Claude Code: permission allowlist, SessionStart
-# hook, and thin skill wrappers that point at .cursor/skills/. Only the
+# hook, and skill-directory symlinks into .cursor/skills/. Only the
 # per-machine overrides stay out.
 .claude/settings.local.json
 .claude/*.local.json

@@ -79,7 +79,8 @@ If you are in plan mode, the plan should say so.
 - **Migrations:** never hand-write the version stamp. `bash
   scripts/new-migration.sh <name>`. New tables need explicit Data API grants
   in the same file. Both rules are detailed in
-  `supabase/migrations/CLAUDE.md`.
+  `.cursor/rules/migration-timestamps.mdc` and
+  `migration-grants.mdc`.
 - **i18n:** user-facing strings live in `messages/en.json` AND
   `messages/es.json`, and a parity test fails when they drift.
 - **Tenant changes** (flows, seeds, one-shots) must update the matching
