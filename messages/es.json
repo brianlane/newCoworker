@@ -615,7 +615,7 @@
         },
         "compliance": {
           "title": "Reglas de cumplimiento",
-          "description": "Reglas por industria, como las normas de Fair Housing para bienes raíces por citar un ejemplo, se aplican en cada conversación."
+          "description": "Las reglas por industria (las normas de Fair Housing para bienes raíces, por ejemplo) se aplican en cada conversación, y las llamadas salientes respetan STOP al instante, tus ventanas de llamada y un tope de intentos de marcado por lead."
         },
         "deploy": {
           "title": "Listo en minutos",
@@ -624,6 +624,10 @@
         "training": {
           "title": "Entrenamiento y edición de memoria",
           "description": "Revisa y edita lo que tu coworker sabe desde el panel. Su conocimiento es tuyo para moldearlo."
+        },
+        "askAi": {
+          "title": "Pregunta a la IA en cada página",
+          "description": "Un acompañante en cada página del panel que responde con los datos reales de tu cuenta y puede cambiar ajustes cuando se lo pides: actualizar tus horarios, ajustar lo que un canal puede hacer o explicarte un cobro."
         },
         "whiteGlove": {
           "title": "Onboarding white-glove",

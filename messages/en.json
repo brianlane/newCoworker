@@ -615,7 +615,7 @@
         },
         "compliance": {
           "title": "Compliance Guardrails",
-          "description": "Industry guardrails, such as Fair Housing rules for real estate is just one example, are enforced in every conversation."
+          "description": "Industry guardrails (Fair Housing rules for real estate, for example) are enforced in every conversation, and outbound calling honors STOP instantly, respects your calling windows, and caps dial attempts per lead."
         },
         "deploy": {
           "title": "Deploy in Minutes",
@@ -624,6 +624,10 @@
         "training": {
           "title": "Training & Memory Editing",
           "description": "Review and edit what your coworker knows from the dashboard. Its knowledge is yours to shape."
+        },
+        "askAi": {
+          "title": "Ask AI on Every Page",
+          "description": "A companion on every dashboard page that answers from your real account data and can change settings when you ask: update your hours, adjust what a channel is allowed to do, or explain a bill."
         },
         "whiteGlove": {
           "title": "White-Glove Onboarding",

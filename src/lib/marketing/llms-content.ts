@@ -100,6 +100,8 @@ const CAPABILITY_LINES = [
     "plus a Claude connector (remote MCP) and a ChatGPT app so an owner's assistant can act on the business's behalf.",
   "- Custom tables: owners define their own tables and lists, the coworker reads and updates them as it works " +
     "(every AI change can be undone), and they are reachable from Claude and ChatGPT through the connector.",
+  "- Owner self-serve: an Ask AI companion on every dashboard page answers from the business's own " +
+    "account data and can change settings (hours, channel tool policies) when the owner asks.",
   "- Languages: the owner dashboard is English or Spanish, the owner picks the language the coworker opens with, " +
     "and the coworker replies to each customer in the customer's own language."
 ];
