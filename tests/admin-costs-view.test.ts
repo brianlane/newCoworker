@@ -12,7 +12,8 @@ import {
   sumMarginLinesByKey,
   telnyxDirectionSummary,
   telnyxMonthlyTrend,
-  telnyxUsageWindow
+  telnyxUsageWindow,
+  fleetMonthlyTotal
 } from "@/lib/admin/costs-view";
 import type { HostingerVpsCostRow, TelnyxCostDailyRow } from "@/lib/db/platform-costs";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
@@ -843,5 +844,54 @@ describe("buildUnattributedSenders", () => {
 
   it("returns nothing when every row is attributed", () => {
     expect(buildUnattributedSenders([telnyxRow({ business_id: "biz-1" })])).toEqual([]);
+  });
+});
+
+describe("fleetMonthlyTotal", () => {
+  it("sums synced prices and excludes cancelled rows", () => {
+    // Cancelled boxes are sunk cost until they lapse, not recurring spend,
+    // the same rule buildPoolBoxBurn applies.
+    const total = fleetMonthlyTotal([
+      hostingerRow({ subscription_id: "a", monthly_price_cents: 2449 }),
+      hostingerRow({ subscription_id: "b", monthly_price_cents: 1499 }),
+      hostingerRow({ subscription_id: "c", status: "cancelled", monthly_price_cents: 7399 })
+    ]);
+    expect(total.cents).toBe(3948);
+    expect(total.estimatedRows).toBe(0);
+    expect(total.unpricedRows).toBe(0);
+  });
+
+  it("substitutes the SKU estimate for a withheld price instead of counting it as zero", () => {
+    // The HQ case: the sync withheld the price because Hostinger's declared
+    // cycle could not explain the billing date. Zero would understate fleet
+    // spend by exactly the box we know least about.
+    const total = fleetMonthlyTotal([
+      hostingerRow({ subscription_id: "a", plan: "KVM 2", monthly_price_cents: 2449 }),
+      hostingerRow({ subscription_id: "b", plan: "KVM 1", monthly_price_cents: null })
+    ]);
+    expect(total.cents).toBe(2449 + 1199);
+    expect(total.estimatedRows).toBe(1);
+    expect(total.unpricedRows).toBe(0);
+  });
+
+  it("counts a withheld price with an unparseable plan rather than guessing", () => {
+    const total = fleetMonthlyTotal([
+      hostingerRow({ subscription_id: "a", monthly_price_cents: 2449 }),
+      hostingerRow({ subscription_id: "b", plan: "Mystery Box", monthly_price_cents: null })
+    ]);
+    expect(total.cents).toBe(2449);
+    expect(total.estimatedRows).toBe(0);
+    expect(total.unpricedRows).toBe(1);
+  });
+
+  it("never estimates for a cancelled row, however unpriced", () => {
+    const total = fleetMonthlyTotal([
+      hostingerRow({ subscription_id: "a", status: "cancelled", monthly_price_cents: null })
+    ]);
+    expect(total).toEqual({ cents: 0, estimatedRows: 0, unpricedRows: 0 });
+  });
+
+  it("is zero for an empty snapshot", () => {
+    expect(fleetMonthlyTotal([])).toEqual({ cents: 0, estimatedRows: 0, unpricedRows: 0 });
   });
 });

@@ -617,8 +617,92 @@ describe("buildHostingerSnapshot", () => {
     expect(rows[0].hostname).toBeNull();
     expect(rows[0].assigned_business_id).toBeNull();
   });
-});
 
+  it("refuses to derive a monthly price when the cycle cannot explain the next billing date", () => {
+    // VM 1806097 / sub 16BcBrVOTACBI8WdU as Hostinger actually reported it on
+    // Aug 26 2026: a one-year period was bought for $155.88, Hostinger moved
+    // next_billing_at a year out and left BOTH the cycle ("1 month") and the
+    // price ($19.49) stale. 1949/1 = $19.49 would be published as an ACTUAL
+    // and overstate this tenant's hosting by $6.50/mo, so publish nothing and
+    // let the margin engine use its LABELED SKU estimate instead.
+    const rows = buildHostingerSnapshot({
+      subscriptions: [
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          total_price: 1949,
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: "2027-09-05T04:23:54Z",
+          expires_at: null
+        }
+      ],
+      virtualMachines: [],
+      assignments: [],
+      now: new Date("2026-08-26T12:00:00Z")
+    });
+    expect(rows[0].monthly_price_cents).toBeNull();
+  });
+
+  it("keeps the raw evidence fields when it drops the derived price", () => {
+    // Blanking the inputs too would hide the disagreement that the ops
+    // finding and the costs page both diagnose from.
+    const rows = buildHostingerSnapshot({
+      subscriptions: [
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          total_price: 1949,
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: "2027-09-05T04:23:54Z",
+          expires_at: null
+        }
+      ],
+      virtualMachines: [],
+      assignments: [],
+      now: new Date("2026-08-26T12:00:00Z")
+    });
+    expect(rows[0]).toMatchObject({
+      billing_period: 1,
+      billing_period_unit: "month",
+      renewal_price_cents: 1949,
+      total_price_cents: 1949,
+      next_billing_at: "2027-09-05T04:23:54Z"
+    });
+  });
+
+  it("still prices a correctly-declared long term", () => {
+    // VM 1863856's 2-year term DOES report its period, so nothing is dropped:
+    // $359.76 over 24 months is $14.99/mo.
+    const rows = buildHostingerSnapshot({
+      subscriptions: [
+        {
+          id: "6olQFVQi75HF2es2",
+          status: "active",
+          name: "KVM 2",
+          billing_period: 2,
+          billing_period_unit: "year",
+          total_price: 35976,
+          renewal_price: 35976,
+          is_auto_renewed: true,
+          next_billing_at: "2028-07-14T22:43:24Z",
+          expires_at: null
+        }
+      ],
+      virtualMachines: [],
+      assignments: [],
+      now: new Date("2026-08-26T12:00:00Z")
+    });
+    expect(rows[0].monthly_price_cents).toBe(1499);
+  });
+});
 describe("parsePlatformCostSyncStatus", () => {
   it("returns null for null, non-objects, and missing lastSyncAt", () => {
     expect(parsePlatformCostSyncStatus(null)).toBeNull();

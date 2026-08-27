@@ -12,7 +12,7 @@ import type { BusinessMarginEconomics, MarginLineKey } from "@/lib/admin/margin"
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
 import { HOSTING_MONTHLY_CENTS_BY_SIZE } from "@/lib/plans/enterprise-pricing";
-import { isVpsSize } from "@/lib/vps/size";
+import { isVpsSize, vpsSizeFromHostingerPlan } from "@/lib/vps/size";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -512,6 +512,54 @@ export type PoolBoxBurn = {
 };
 
 /** Idle (available) pool boxes with their carrying cost and lapse clock. */
+export type FleetMonthlyTotal = {
+  /** Recurring Hostinger spend in cents, estimates included. */
+  cents: number;
+  /** Non-cancelled rows that contributed an SKU estimate, not a synced price. */
+  estimatedRows: number;
+  /** Non-cancelled rows we could neither price nor estimate; they add nothing. */
+  unpricedRows: number;
+};
+
+/**
+ * Recurring Hostinger fleet spend.
+ *
+ * A row with a null `monthly_price_cents` is a box whose price could NOT be
+ * derived, not a box that costs nothing. Since PR #1636 the sync deliberately
+ * withholds the figure when Hostinger's declared cycle cannot explain the
+ * next billing date, so summing null as zero would make the headline
+ * understate real spend by exactly the boxes we know least about, and would
+ * silently swallow the very problem that withholding exists to surface.
+ *
+ * Substitutes the size's SKU estimate instead, the same fallback
+ * {@link buildPoolBoxBurn} already applies to a missing billing row, and
+ * reports how many rows needed it so the total is never read as fully
+ * synced. Cancelled rows are excluded: they are sunk cost until they lapse,
+ * not recurring spend (same rule as the pool burn view).
+ */
+export function fleetMonthlyTotal(rows: HostingerVpsCostRow[]): FleetMonthlyTotal {
+  let cents = 0;
+  let estimatedRows = 0;
+  let unpricedRows = 0;
+  for (const row of rows) {
+    if (row.status === "cancelled") continue;
+    if (row.monthly_price_cents !== null) {
+      cents += row.monthly_price_cents;
+      continue;
+    }
+    const size = vpsSizeFromHostingerPlan(row.plan);
+    if (size === null) {
+      // No synced price AND an unparseable plan label, so there is nothing to
+      // estimate from. Counted, never guessed.
+      unpricedRows += 1;
+      continue;
+    }
+    cents += HOSTING_MONTHLY_CENTS_BY_SIZE[size];
+    estimatedRows += 1;
+  }
+  return { cents, estimatedRows, unpricedRows };
+}
+
 export function buildPoolBoxBurn(params: {
   inventory: VpsInventoryRow[];
   hostingerRows: HostingerVpsCostRow[];

@@ -7,6 +7,7 @@ import {
   boxTermDaysLeft,
   boxTermEndsAt,
   boxTermState,
+  cycleContradictsNextBilling,
   pickLiveBoxSnapshot,
   summarizeBoxTerm
 } from "@/lib/vps/box-term";
@@ -279,5 +280,63 @@ describe("summarizeBoxTerm", () => {
   it("defaults now to the wall clock", () => {
     const far = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString();
     expect(summarizeBoxTerm(row({ next_billing_at: far })).urgent).toBe(false);
+  });
+});
+
+describe("cycleContradictsNextBilling", () => {
+  it("flags the HQ box: a 1-month cycle cannot reach a date 375 days out", () => {
+    // VM 1806097 / sub 16BcBrVOTACBI8WdU, live shape Aug 26 2026. A one-year
+    // period was bought; Hostinger moved the date and left the cycle at
+    // "1 month" with a $19.49 renewal price.
+    expect(cycleContradictsNextBilling(1, "2027-09-05T04:23:54Z", NOW)).toBe(true);
+  });
+
+  it("leaves the healthy monthly boxes alone", () => {
+    // The three live KVM2 tenants, all a few days from their monthly charge.
+    expect(cycleContradictsNextBilling(1, "2026-08-29T11:01:01Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, "2026-08-30T11:01:52Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, "2026-08-31T11:01:08Z", NOW)).toBe(false);
+  });
+
+  it("leaves a correctly-declared 2-year term alone", () => {
+    // VM 1863856: declares 24 months and bills 688 days out, comfortably
+    // inside 24 * 31 + 7. Hostinger bills this one 14 days EARLY, which the
+    // slack has to absorb from the other direction too.
+    expect(cycleContradictsNextBilling(24, "2028-07-14T22:43:24Z", NOW)).toBe(false);
+  });
+
+  it("does not fire on a freshly purchased monthly box at the far edge", () => {
+    // 31 days out is the longest a legitimate monthly cycle gets.
+    expect(cycleContradictsNextBilling(1, "2026-09-26T12:00:00Z", NOW)).toBe(false);
+  });
+
+  it("fires just past the slack boundary, not before it", () => {
+    // 1 * 31 + 7 = 38 days. 38 is still fine; 39 is not.
+    const at = (days: number) =>
+      new Date(NOW.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+    expect(cycleContradictsNextBilling(1, at(38), NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, at(39), NOW)).toBe(true);
+  });
+
+  it("fails safe on missing or unusable inputs, never downgrading a good price", () => {
+    // Every one of these must be false: a true here would blank a monthly
+    // price that is actually correct.
+    expect(cycleContradictsNextBilling(null, "2027-09-05T00:00:00Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(undefined, "2027-09-05T00:00:00Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(0, "2027-09-05T00:00:00Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(-1, "2027-09-05T00:00:00Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(Number.NaN, "2027-09-05T00:00:00Z", NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, null, NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, undefined, NOW)).toBe(false);
+    expect(cycleContradictsNextBilling(1, "not-a-date", NOW)).toBe(false);
+  });
+
+  it("never fires on a date already in the past", () => {
+    expect(cycleContradictsNextBilling(1, "2020-01-01T00:00:00Z", NOW)).toBe(false);
+  });
+
+  it("defaults now to the wall clock", () => {
+    const far = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString();
+    expect(cycleContradictsNextBilling(1, far)).toBe(true);
   });
 });

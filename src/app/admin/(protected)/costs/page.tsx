@@ -14,6 +14,7 @@ import {
   buildTelnyxDailySeries,
   buildTelnyxTenantWindowBreakdown,
   buildUnattributedSenders,
+  fleetMonthlyTotal,
   resolveTelnyxUsageWindowKey,
   telnyxDirectionSummary,
   telnyxMonthlyTrend,
@@ -31,7 +32,8 @@ import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { CostSyncButton } from "@/components/admin/CostSyncButton";
 import { MarginAlertSettings } from "@/components/admin/MarginAlertSettings";
-import { boxTermState, boxTermEndsAt } from "@/lib/vps/box-term";
+import { boxTermState, boxTermEndsAt, cycleContradictsNextBilling } from "@/lib/vps/box-term";
+import { billingCycleMonths } from "@/lib/admin/cost-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -156,10 +158,10 @@ export default async function AdminCostsPage({
   });
   // Hostinger fleet monthly total: every non-cancelled subscription's
   // effective monthly price (assigned + pooled; cancelled rows are gone
-  // money, not recurring spend).
-  const hostingerMonthlyTotal = hostingerRows
-    .filter((r) => r.status !== "cancelled")
-    .reduce((sum, r) => sum + (r.monthly_price_cents ?? 0), 0);
+  // money, not recurring spend). A box whose price the sync withheld falls
+  // back to its SKU estimate rather than counting as zero, and the card says
+  // how many did, so the headline is never read as fully synced.
+  const hostingerTotal = fleetMonthlyTotal(hostingerRows);
 
   // Gemini: top current-period chat spenders vs their tier cap.
   const tierById = new Map(margins.businesses.map((b) => [b.id, b.tier]));
@@ -252,9 +254,15 @@ export default async function AdminCostsPage({
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
             Hostinger Fleet / Mo
           </p>
-          <p className="text-3xl font-bold text-parchment">{money(hostingerMonthlyTotal)}</p>
+          <p className="text-3xl font-bold text-parchment">{money(hostingerTotal.cents)}</p>
           <p className="text-xs text-parchment/30 mt-1">
             {hostingerRows.length} billing subs · {money(poolBurnMonthlyCents)} idle-pool burn
+            {hostingerTotal.estimatedRows > 0
+              ? ` · ${hostingerTotal.estimatedRows} at SKU estimate`
+              : ""}
+            {hostingerTotal.unpricedRows > 0
+              ? ` · ${hostingerTotal.unpricedRows} unpriced`
+              : ""}
           </p>
         </Card>
       </div>
@@ -628,6 +636,15 @@ export default async function AdminCostsPage({
                   const state = boxTermState(row);
                   const notRenewing = state !== "renewing";
                   const at = boxTermEndsAt(row);
+                  // The sync blanks monthly_price_cents when the declared
+                  // cycle cannot explain the next billing date, because both
+                  // the cycle and the price Hostinger quotes are stale then.
+                  // A bare "-" would read as "no data"; this is the opposite,
+                  // we have data and know it is wrong, so name it.
+                  const cycleStale = cycleContradictsNextBilling(
+                    billingCycleMonths(row.billing_period, row.billing_period_unit),
+                    row.next_billing_at
+                  );
                   return (
                     <tr key={row.subscription_id}>
                       <td className="py-2 font-mono text-parchment/80">
@@ -648,7 +665,23 @@ export default async function AdminCostsPage({
                         )}
                       </td>
                       <td className="py-2 text-right text-parchment font-medium">
-                        {row.monthly_price_cents !== null ? money(row.monthly_price_cents) : "-"}
+                        {row.monthly_price_cents !== null ? (
+                          money(row.monthly_price_cents)
+                        ) : cycleStale ? (
+                          <span
+                            className="text-spark-orange"
+                            title={
+                              "Hostinger moved this subscription's next billing date without " +
+                              "updating its period or price, so no monthly cost can be derived. " +
+                              "Margin falls back to the SKU estimate. Read the real amount off " +
+                              "the hPanel invoice."
+                            }
+                          >
+                            term changed
+                          </span>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                       <td className="py-2">
                         <Badge variant={notRenewing ? "pending" : "success"}>
