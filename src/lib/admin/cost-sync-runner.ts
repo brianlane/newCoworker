@@ -6,6 +6,10 @@
 
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import {
+  listHostingerBillingTerms,
+  upsertHostingerBillingTerms
+} from "@/lib/db/hostinger-billing-terms";
+import {
   listBusinessVpsAssignments,
   listStripeCustomerBusinessIds,
   listTenantDids,
@@ -68,6 +72,11 @@ export async function runProductionPlatformCostSync(options?: {
       telnyxApiKey: process.env.TELNYX_API_KEY?.trim() || null,
       listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),
       listVirtualMachines: () => hostinger.listVirtualMachines(),
+      // The VPS price list is where a changed term's real cost is readable;
+      // the subscription record keeps quoting the pre-change one.
+      listVpsCatalog: () => hostinger.listCatalog("VPS"),
+      listBillingTerms: () => listHostingerBillingTerms(),
+      upsertBillingTerms: (rows) => upsertHostingerBillingTerms(rows),
       listTenantDids,
       listBusinessVpsAssignments,
       replaceTelnyxCostWindow,

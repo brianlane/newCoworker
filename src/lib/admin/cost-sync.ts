@@ -23,8 +23,14 @@
  * implementations. Nothing here bills anyone, operator telemetry only.
  */
 
-import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
+import type { BillingSubscription, VirtualMachine, CatalogItem } from "@/lib/hostinger/client";
 import { cycleContradictsNextBilling } from "@/lib/vps/box-term";
+import { planTermInference } from "@/lib/vps/term-inference";
+import { vpsSizeFromHostingerPlan } from "@/lib/vps/size";
+import type {
+  HostingerBillingTermRow,
+  HostingerBillingTermUpsert
+} from "@/lib/db/hostinger-billing-terms";
 import type {
   HostingerVpsCostInsert,
   StripeFeeMonthlyInsert,
@@ -49,6 +55,13 @@ export type PlatformCostSyncStatus = {
   telnyxError: string | null;
   hostingerRows: number;
   hostingerError: string | null;
+  /**
+   * Why term inference did not run or failed, or null when it was fine.
+   * Kept OUT of `ok`: the inference is an enhancement over the withheld
+   * figure, so losing it degrades precision, never correctness, and must not
+   * page anyone the way a failed vendor pull does.
+   */
+  termInferenceError: string | null;
   /** How many months back the Stripe balance-transaction pull covered. */
   stripeMonths: number;
   stripeRows: number;
@@ -83,6 +96,8 @@ export function parsePlatformCostSyncStatus(raw: unknown): PlatformCostSyncStatu
     telnyxError: typeof r.telnyxError === "string" ? r.telnyxError : null,
     hostingerRows: typeof r.hostingerRows === "number" ? r.hostingerRows : 0,
     hostingerError: typeof r.hostingerError === "string" ? r.hostingerError : null,
+    termInferenceError:
+      typeof r.termInferenceError === "string" ? r.termInferenceError : null,
     // Status rows written before the Stripe side existed carry none of
     // these keys; they read as "nothing synced, no error" rather than
     // failing the whole parse and blanking the Costs page's sync line.
@@ -131,6 +146,16 @@ export type PlatformCostSyncDeps = {
   sleepImpl?: (ms: number) => Promise<void>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   listVirtualMachines: () => Promise<VirtualMachine[]>;
+  /**
+   * Hostinger's VPS price list, the only place the real cost of a changed
+   * term is readable (the subscription record keeps quoting the old one).
+   * Optional: without it the Hostinger side still syncs, term inference is
+   * simply skipped and an unpriceable box keeps PR #1636's withheld figure.
+   */
+  listVpsCatalog?: () => Promise<CatalogItem[]>;
+  /** Persisted term facts, keyed by subscription. */
+  listBillingTerms?: () => Promise<HostingerBillingTermRow[]>;
+  upsertBillingTerms?: (rows: HostingerBillingTermUpsert[]) => Promise<void>;
   /** Every tenant DID (messaging from-number + routed voice DIDs). */
   listTenantDids: () => Promise<TenantDid[]>;
   /** vm_id → owning business for non-wiped tenants. */
@@ -503,6 +528,13 @@ export function buildHostingerSnapshot(params: {
   assignments: Array<{ businessId: string; vmId: number }>;
   /** Anchor for the stale-cycle check; injectable so tests are not time bombs. */
   now?: Date;
+  /**
+   * subscriptionId -> monthly cents recovered from the term inference, for
+   * boxes whose declared cycle is stale. Publishing this is strictly better
+   * than withholding: it is the catalog's real price for the term actually
+   * bought, not a quotient of two stale fields.
+   */
+  inferredMonthlyCents?: ReadonlyMap<string, number>;
 }): HostingerVpsCostInsert[] {
   const now = params.now ?? new Date();
   const vmBySubscription = new Map<string, VirtualMachine>();
@@ -544,8 +576,11 @@ export function buildHostingerSnapshot(params: {
       billing_period_unit: sub.billing_period_unit ?? null,
       total_price_cents: sub.total_price ?? null,
       renewal_price_cents: sub.renewal_price ?? null,
-      monthly_price_cents:
-        months !== null && cycleCents !== null && !cycleStale
+      monthly_price_cents: cycleStale
+        ? // Recovered from the term inference when it could name the term,
+          // otherwise still withheld so margin uses its labeled SKU estimate.
+          (params.inferredMonthlyCents?.get(sub.id) ?? null)
+        : months !== null && cycleCents !== null
           ? Math.round(cycleCents / months)
           : null,
       is_auto_renewed: sub.is_auto_renewed ?? null,
@@ -600,13 +635,58 @@ export async function runPlatformCostSync(
 
   let hostingerRows = 0;
   let hostingerError: string | null = null;
+  let termInferenceError: string | null = null;
   try {
     const [subscriptions, virtualMachines, assignments] = await Promise.all([
       deps.listBillingSubscriptions(),
       deps.listVirtualMachines(),
       deps.listBusinessVpsAssignments()
     ]);
-    const rows = buildHostingerSnapshot({ subscriptions, virtualMachines, assignments, now });
+    // Recover the real monthly cost for any box whose declared cycle has gone
+    // stale. Best effort and strictly additive: every failure path here
+    // leaves the snapshot exactly as PR #1636 built it, with the untrustworthy
+    // figure withheld rather than replaced by a wrong one.
+    let inferredMonthlyCents: ReadonlyMap<string, number> = new Map();
+    if (!deps.listVpsCatalog || !deps.listBillingTerms || !deps.upsertBillingTerms) {
+      termInferenceError = "term inference deps not wired, stale-cycle boxes keep the SKU estimate";
+    } else {
+      try {
+        const [catalog, stored] = await Promise.all([
+          deps.listVpsCatalog(),
+          deps.listBillingTerms()
+        ]);
+        const plan = planTermInference({
+          subscriptions: subscriptions.filter(isVpsBillingSubscription).map((sub) => ({
+            subscriptionId: sub.id,
+            size: vpsSizeFromHostingerPlan(sub.name),
+            declaredCycleMonths: billingCycleMonths(
+              sub.billing_period,
+              sub.billing_period_unit ?? null
+            ),
+            nextBillingAt: sub.next_billing_at ?? null,
+            cycleContradicted: cycleContradictsNextBilling(
+              billingCycleMonths(sub.billing_period, sub.billing_period_unit ?? null),
+              sub.next_billing_at,
+              now
+            )
+          })),
+          stored,
+          catalog,
+          now
+        });
+        await deps.upsertBillingTerms(plan.updates);
+        inferredMonthlyCents = plan.monthlyBySubscription;
+      } catch (err) {
+        termInferenceError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    const rows = buildHostingerSnapshot({
+      subscriptions,
+      virtualMachines,
+      assignments,
+      now,
+      inferredMonthlyCents
+    });
     await deps.replaceHostingerVpsCosts(rows);
     hostingerRows = rows.length;
   } catch (err) {
@@ -651,6 +731,7 @@ export async function runPlatformCostSync(
     telnyxError,
     hostingerRows,
     hostingerError,
+    termInferenceError,
     stripeMonths: STRIPE_FEE_WINDOW_MONTHS,
     stripeRows,
     stripeError

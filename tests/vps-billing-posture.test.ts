@@ -1440,6 +1440,79 @@ describe("checkVpsBillingPosture, stale billing cycle", () => {
     expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
   });
 
+  it("goes quiet once the cost sync has recovered the real price", async () => {
+    // The nag has to end. Hostinger is still misreporting, but the true cost
+    // was recovered from the catalog, so there is no hPanel invoice for
+    // anyone to read and nothing for a human to do.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ]),
+      listBillingTerms: vi
+        .fn()
+        .mockResolvedValue([{ subscription_id: "16BcBrVOTACBI8WdU", monthly_cents: 1299 }])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(0);
+  });
+
+  it("still reports when a term row exists but the price could not be recovered", async () => {
+    // A stored row with a null price means we saw the box and failed to name
+    // its term. That IS the actionable case.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ]),
+      listBillingTerms: vi
+        .fn()
+        .mockResolvedValue([{ subscription_id: "16BcBrVOTACBI8WdU", monthly_cents: null }])
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(1);
+  });
+
+  it("reports rather than going silent when the term read fails", async () => {
+    // Over-telling beats silence: a failed read must not suppress a finding.
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "16BcBrVOTACBI8WdU",
+          status: "active",
+          name: "KVM 1",
+          billing_period: 1,
+          billing_period_unit: "month",
+          renewal_price: 1949,
+          is_auto_renewed: true,
+          next_billing_at: A_YEAR_OUT,
+          expires_at: null
+        }
+      ]),
+      listBillingTerms: vi.fn().mockRejectedValue(new Error("terms table unreadable"))
+    });
+    const result = await checkVpsBillingPosture(deps as never);
+    expect(result.findings.filter((f) => f.kind === "billing_cycle_price_stale")).toHaveLength(1);
+  });
+
   it("stays silent on healthy subscriptions", async () => {
     const deps = makeDeps({
       listBillingSubscriptions: vi.fn().mockResolvedValue([
