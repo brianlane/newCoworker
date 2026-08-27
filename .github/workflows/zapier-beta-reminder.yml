@@ -1,0 +1,112 @@
+name: Zapier Beta Reminder
+
+# Why: the Zapier integration (app 243681) was approved into the public App
+# Directory on 2026-08-04 and sits in Zapier's 90 day Beta, ending around
+# 2026-11-02. Two things need a human near that date, and nothing else
+# reminds anyone:
+#
+#   1. Zapier can revert a Beta app to Private if it draws heavy support
+#      volume. A revert turns https://zapier.com/apps/new-coworker/integrations
+#      into a dead link while BOTH tenant-facing call sites keep telling
+#      owners to search the directory, silently and indefinitely
+#      (src/lib/integrations/zapier-app.ts documents the recovery: restore
+#      the invite constant from git history).
+#   2. Exiting Beta enters the Partner Program automatically. That moment is
+#      the right one to check the listing, the connected-account health, and
+#      whether the Beta-phase opportunities Zapier named (Zap templates,
+#      embedding, help docs) are worth picking up.
+#
+# Fires 2026-10-20, deliberately ahead of the ~Nov 2 boundary. Same shape and
+# reasoning as casa-recert-reminder.yml: this runs on GitHub, beside the code
+# it points at, and depends on no subscription, no laptop, and no one person
+# still being here.
+#
+# This is a one-shot reminder for a fixed date, not an annual cadence: cron
+# has no year field, so the job itself checks the year and no-ops after 2026
+# rather than reopening the issue every October forever.
+
+on:
+  schedule:
+    # 16:00 UTC on 20 Oct = 09:00 America/Phoenix (no DST drift).
+    - cron: "0 16 20 10 *"
+  # So it can be proved to work now rather than discovered broken in October.
+  workflow_dispatch:
+
+permissions:
+  # issues: write to open the reminder. Everything else is denied.
+  issues: write
+
+jobs:
+  remind:
+    name: Open the Beta-exit issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open the Zapier Beta-exit issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            // One-shot: the Beta window is fixed (approved 2026-08-04, 90
+            // days). On a scheduled run after 2026 there is nothing left to
+            // remind about; manual dispatch still works for testing.
+            const now = new Date();
+            if (context.eventName === "schedule" && now.getUTCFullYear() !== 2026) {
+              core.info("Beta window long past; nothing to do.");
+              return;
+            }
+
+            const title = "Zapier Beta ends ~Nov 2: check the listing before the boundary";
+            const LABEL = "zapier-beta";
+
+            // Label must exist BEFORE issue creation or GitHub silently drops
+            // it, and the duplicate guard below would never match.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: LABEL,
+                color: "ff4f00",
+                description: "Zapier App Directory Beta exit (app 243681)"
+              });
+              core.info(`Created the ${LABEL} label.`);
+            } catch (error) {
+              // 422 = already exists, the normal path after the first run.
+              if (error.status !== 422) throw error;
+            }
+
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: LABEL,
+              per_page: 100
+            });
+            if (existing.some((issue) => issue.title === title)) {
+              core.info(`Already open: ${title}. Nothing to do.`);
+              return;
+            }
+
+            const body = [
+              "The Zapier integration (app 243681, approved 2026-08-04) exits its 90 day Beta around **2026-11-02** and enters the Partner Program automatically.",
+              "",
+              "### Check before the boundary",
+              "",
+              "1. **The listing is still public.** Open https://zapier.com/apps/new-coworker/integrations and confirm it loads and shows the triggers/actions. If Zapier reverted the app to Private (they can, on heavy support volume), both tenant-facing call sites of `ZAPIER_APP_URL` are now pointing owners at a dead link: restore the invite constant from git history per the docblock in [`src/lib/integrations/zapier-app.ts`](../blob/main/src/lib/integrations/zapier-app.ts).",
+              "2. **Connected accounts are healthy.** KYP Ads is a real customer using the integration; their connection surviving the Beta exit is the thing to verify.",
+              "3. **Support volume.** Zapier's revert trigger is support requests; if any came in during Beta, read them.",
+              "",
+              "### Worth deciding at the boundary, none urgent",
+              "",
+              "Zapier named these Beta-phase opportunities: Zap templates, embedding (exits Beta early), published help docs, and the Partner Sandbox for testing future versions. Future version changes follow promote > migrate > deprecate and do NOT need another full technical review.",
+              "",
+              "Close this issue once the listing is confirmed public past the boundary."
+            ].join("\n");
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: [LABEL]
+            });
+            core.info(`Opened #${created.data.number}: ${title}`);
