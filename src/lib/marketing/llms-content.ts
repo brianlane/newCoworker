@@ -98,6 +98,8 @@ const CAPABILITY_LINES = [
     "Zapier or Make.com bridges still work), a public REST API, and webhooks " +
     "(Zapier, Meta lead ads, lead webhooks, the REST API: Standard plan and up), " +
     "plus a Claude connector (remote MCP) and a ChatGPT app so an owner's assistant can act on the business's behalf.",
+  "- Custom tables: owners define their own tables and lists, the coworker reads and updates them as it works " +
+    "(every AI change can be undone), and they are reachable from Claude and ChatGPT through the connector.",
   "- Languages: the owner dashboard is English or Spanish, the owner picks the language the coworker opens with, " +
     "and the coworker replies to each customer in the customer's own language."
 ];

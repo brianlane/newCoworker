@@ -30,6 +30,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Table,
   UserCheck,
   Users,
   Voicemail,
@@ -133,6 +134,7 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "notes", Icon: NotebookPen },
       { key: "claiming", Icon: UserCheck },
       { key: "bulk", Icon: ListFilter },
+      { key: "customTables", Icon: Table },
       { key: "crmImport", Icon: ArrowDownToLine }
     ]
   },
