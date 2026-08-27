@@ -24,7 +24,7 @@ export function PageHero({
   glow?: boolean;
 }) {
   return (
-    <section className="relative mx-auto max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-20">
+    <section className="relative isolate mx-auto max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-20">
       {glow && (
         <div
           aria-hidden
