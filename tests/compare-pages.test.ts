@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import es from "../messages/es.json";
 import {
-  COMPARE_ROW_COUNT,
+  type CompareDef,
   COMPARISONS,
+  DEFAULT_CARD_BULLETS,
+  DEFAULT_FAQ_COUNT,
   getComparison
 } from "../src/app/(marketing)/compare/data";
 
@@ -14,20 +16,35 @@ const CATALOGS: [string, Catalog][] = [
   ["es", (es.marketing as Catalog).compare as Catalog]
 ];
 
+function oneTo(n: number): number[] {
+  return Array.from({ length: n }, (_, i) => i + 1);
+}
+
 /**
- * Copy every templated comparison page reads. A missing key is a runtime
- * throw on a public marketing page, and the dynamic `row${n}` / `faq${n}`
- * lookups are invisible to the static i18n key-usage guard, so they are
- * pinned here instead.
+ * Copy every templated comparison page reads, derived from the entry's own
+ * declared counts (rows from verdicts.length, faqCount, cardBullets, the
+ * stat band, the reviews note). A missing key is a runtime throw on a public
+ * marketing page, and the dynamic `row${n}` / `faq${n}` lookups are
+ * invisible to the static i18n key-usage guard, so they are pinned here
+ * instead.
  */
-function requiredKeys(bespoke: boolean): string[] {
-  if (bespoke) return ["name", "teaser"];
-  const rows = Array.from({ length: COMPARE_ROW_COUNT }, (_, i) => i + 1).flatMap((n) => [
+function requiredKeys(entry: CompareDef): string[] {
+  const rows = oneTo(entry.verdicts.length).flatMap((n) => [
     `row${n}.label`,
     `row${n}.us`,
     `row${n}.them`
   ]);
-  const faq = [1, 2, 3].flatMap((n) => [`faq${n}.q`, `faq${n}.a`]);
+  const faq = oneTo(entry.faqCount ?? DEFAULT_FAQ_COUNT).flatMap((n) => [
+    `faq${n}.q`,
+    `faq${n}.a`
+  ]);
+  const cards = oneTo(entry.cardBullets ?? DEFAULT_CARD_BULLETS).flatMap((n) => [
+    `themCard${n}`,
+    `usCard${n}`
+  ]);
+  const stats = entry.statBand
+    ? oneTo(4).flatMap((n) => [`stat${n}Value`, `stat${n}Label`])
+    : [];
   return [
     "name",
     "teaser",
@@ -41,17 +58,31 @@ function requiredKeys(bespoke: boolean): string[] {
     "heroSubtitle",
     "themColumn",
     "themCardTitle",
-    "themCard1",
-    "themCard2",
-    "themCard3",
     "usCardTitle",
-    "usCard1",
-    "usCard2",
-    "usCard3",
     "ctaTitle",
     "ctaSubtitle",
+    ...(entry.reviewsNote ? ["reviewsNote"] : []),
+    ...stats,
+    ...cards,
     ...rows,
     ...faq
+  ];
+}
+
+/**
+ * Keys just past each declared count. Their absence keeps the declaration
+ * honest in both directions: a verdict added without copy fails the check
+ * above, and copy added without widening the declaration fails this one
+ * (it would otherwise sit in the catalog unrendered).
+ */
+function forbiddenKeys(entry: CompareDef): string[] {
+  return [
+    `row${entry.verdicts.length + 1}`,
+    `faq${(entry.faqCount ?? DEFAULT_FAQ_COUNT) + 1}`,
+    `themCard${(entry.cardBullets ?? DEFAULT_CARD_BULLETS) + 1}`,
+    `usCard${(entry.cardBullets ?? DEFAULT_CARD_BULLETS) + 1}`,
+    ...(entry.statBand ? [] : ["stat1Value"]),
+    ...(entry.reviewsNote ? [] : ["reviewsNote"])
   ];
 }
 
@@ -70,9 +101,9 @@ describe("comparison registry", () => {
     expect(new Set(COMPARISONS.map((c) => c.i18nKey)).size).toBe(COMPARISONS.length);
   });
 
-  it("gives every entry a verdict for each row", () => {
+  it("gives every entry at least one row of valid verdicts", () => {
     for (const entry of COMPARISONS) {
-      expect(entry.verdicts).toHaveLength(COMPARE_ROW_COUNT);
+      expect(entry.verdicts.length).toBeGreaterThan(0);
       for (const verdict of entry.verdicts) {
         expect(["us", "them", "tie"]).toContain(verdict);
       }
@@ -86,9 +117,16 @@ describe("comparison registry", () => {
     expect(conceded.length).toBe(COMPARISONS.length);
   });
 
-  it("keeps the GoHighLevel page bespoke, so its existing URL keeps its own layout", () => {
-    expect(getComparison("gohighlevel")?.bespoke).toBe(true);
-    expect(getComparison("zinng")?.bespoke).toBeUndefined();
+  it("renders GoHighLevel through the template with its full bespoke-era content", () => {
+    // The hand-built page this entry replaced carried 10 rows, 5 FAQs, four
+    // bullets per card, the stat band, and the reviews note. Shrinking any
+    // of these would silently drop published claims from /compare/gohighlevel.
+    const ghl = getComparison("gohighlevel");
+    expect(ghl?.verdicts).toHaveLength(10);
+    expect(ghl?.faqCount).toBe(5);
+    expect(ghl?.cardBullets).toBe(4);
+    expect(ghl?.statBand).toBe(true);
+    expect(ghl?.reviewsNote).toBe(true);
     expect(getComparison("nope")).toBeUndefined();
   });
 });
@@ -99,10 +137,23 @@ describe.each(CATALOGS)("comparison copy (%s)", (_locale, compare) => {
     (i18nKey, entry) => {
       const node = compare[i18nKey] as Catalog | undefined;
       expect(node, `marketing.compare.${i18nKey} missing`).toBeTruthy();
-      for (const key of requiredKeys(Boolean(entry.bespoke))) {
+      for (const key of requiredKeys(entry)) {
         const value = lookup(node as Catalog, key);
         expect(typeof value, `marketing.compare.${i18nKey}.${key}`).toBe("string");
         expect((value as string).length).toBeGreaterThan(0);
+      }
+    }
+  );
+
+  it.each(COMPARISONS.map((c) => [c.i18nKey, c] as const))(
+    "%s declares counts matching its catalog copy",
+    (i18nKey, entry) => {
+      const node = compare[i18nKey] as Catalog;
+      for (const key of forbiddenKeys(entry)) {
+        expect(
+          lookup(node, key),
+          `marketing.compare.${i18nKey}.${key} exists but the entry never renders it`
+        ).toBeUndefined();
       }
     }
   );

@@ -21,7 +21,6 @@ export default function DataDeletionPage() {
       title="Data Deletion Instructions"
       summary="You can request deletion of your personal data from New Coworker at any time, whether you are a business using our platform or an end user (customer, lead, or contact) of a business that uses it."
       effectiveDate={EFFECTIVE_DATE}
-      contactEmail={contactEmail}
     >
       <LegalSection title="1. Who this covers">
         <p>

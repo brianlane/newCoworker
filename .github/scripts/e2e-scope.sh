@@ -230,9 +230,14 @@ scope_file() {
     # --- Safe: provably cannot change what the live suite exercises -------
     docs/* | PRDs/* | *.md) ;;                                     # documentation
     src/app/admin/* | src/components/admin/* | src/lib/admin/*) ;; # admin-only operator views
-    src/app/about/* | src/app/compare/* | src/app/contact/* | src/app/faq/* | \
-    src/app/features/* | src/app/industries/* | src/app/pricing/* | \
-    src/app/privacy/* | src/app/terms/*) ;;                        # marketing/legal pages
+    # Marketing/legal pages. All of these live under the (marketing) route
+    # group (the group changes no URLs); the escaped parens keep bash from
+    # reading them as pattern syntax.
+    src/app/\(marketing\)/about/* | src/app/\(marketing\)/compare/* | \
+    src/app/\(marketing\)/contact/* | src/app/\(marketing\)/faq/* | \
+    src/app/\(marketing\)/features/* | src/app/\(marketing\)/industries/* | \
+    src/app/\(marketing\)/pricing/* | src/app/\(marketing\)/privacy/* | \
+    src/app/\(marketing\)/security/* | src/app/\(marketing\)/terms/*) ;;
     messages/en.json | messages/es.json) ;;                        # app-UI catalogs (edge-* is unsafe above)
     debug/* | scripts/*) ;;                                        # operator one-shots, not in the app bundle
     tests/*) ;;                                                    # unit tests (tests/e2e/* handled above)

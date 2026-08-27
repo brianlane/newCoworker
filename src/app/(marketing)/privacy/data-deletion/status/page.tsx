@@ -50,7 +50,6 @@ export default async function DataDeletionStatusPage({
             })
           : "-"
       }
-      contactEmail={contactEmail}
     >
       {!trimmed ? (
         <LegalSection title="No confirmation code">

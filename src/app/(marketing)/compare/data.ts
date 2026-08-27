@@ -1,13 +1,17 @@
 /**
  * Data-driven comparison pages: /compare lists every entry; each entry
- * without `bespoke` renders at /compare/[slug] from the shared template.
+ * renders at /compare/[slug] from the shared template.
  *
  * Adding a comparison = adding one object here PLUS its copy under
  * `marketing.compare.<i18nKey>` in messages/en.json and messages/es.json
  * (metaTitle, metaDescription, ogTitle, ogDescription, name, teaser,
  * heroEyebrow, heroTitle, heroHighlight, heroSubtitle, themColumn,
- * row1..row6 {label,us,them}, themCardTitle, themCard1..3, usCardTitle,
- * usCard1..3, faq1..3 {q,a}, ctaTitle, ctaSubtitle).
+ * row1..rowN {label,us,them} with N = verdicts.length, themCardTitle,
+ * themCard1..M, usCardTitle, usCard1..M with M = cardBullets,
+ * faq1..faqK {q,a} with K = faqCount, ctaTitle, ctaSubtitle, plus
+ * stat1..stat4 Value/Label when statBand is set and reviewsNote when
+ * reviewsNote is set). tests/compare-pages.test.ts derives the required
+ * keys from these declared counts, so a mismatch fails in CI.
  *
  * COMPETITOR CLAIMS MUST STAY SOURCED AND CURRENT. Every figure below was
  * taken from the vendor's own published pricing in July 2026 (see the note on
@@ -23,23 +27,44 @@ export type CompareDef = {
   slug: string;
   /** Catalog namespace under marketing.compare. */
   i18nKey: string;
-  /** Verdicts for row1..row6, in order. */
-  verdicts: [RowVerdict, RowVerdict, RowVerdict, RowVerdict, RowVerdict, RowVerdict];
+  /** Verdicts for row1..rowN; the template renders one row per verdict. */
+  verdicts: readonly RowVerdict[];
   /**
-   * True when the slug has its own hand-built page instead of rendering
-   * through [slug]. Next gives the static route precedence, so the entry is
-   * here purely so the index, the sitemap, and llms.txt stay complete.
+   * Renders the four-stat band (stat1..stat4 `Value`/`Label` keys) between
+   * the hero and the table. Values may interpolate {starterMonthly} and
+   * {standardMonthly}.
    */
-  bespoke?: boolean;
+  statBand?: boolean;
+  /** FAQ entries (faq1..faqN). Defaults to DEFAULT_FAQ_COUNT. */
+  faqCount?: number;
+  /**
+   * Bullets per difference card (themCard1..N / usCard1..N). Defaults to
+   * DEFAULT_CARD_BULLETS.
+   */
+  cardBullets?: number;
+  /**
+   * Replaces the shared sourced-figures note under the difference cards with
+   * the entry's own rich `reviewsNote` key (<em> and <link> markup, the link
+   * pointing at /onboard).
+   */
+  reviewsNote?: boolean;
 };
+
+export const DEFAULT_FAQ_COUNT = 3;
+export const DEFAULT_CARD_BULLETS = 3;
 
 export const COMPARISONS: CompareDef[] = [
   {
-    // gohighlevel.com pricing + HighLevel support portal, July 2026.
+    // gohighlevel.com pricing + HighLevel support portal, July 2026: $97/
+    // $297/$497 base plans; AI Employee Unlimited $97/mo per location; SMS,
+    // email, voice, and premium AI usage billed separately.
     slug: "gohighlevel",
     i18nKey: "gohighlevel",
-    verdicts: ["us", "us", "us", "us", "them", "us"],
-    bespoke: true
+    verdicts: ["us", "us", "us", "tie", "us", "us", "us", "them", "them", "tie"],
+    statBand: true,
+    faqCount: 5,
+    cardBullets: 4,
+    reviewsNote: true
   },
   {
     // zinng.ai pricing, July 2026: Essentials $49/300 min, Pro $99/700,
@@ -97,8 +122,6 @@ export const COMPARISONS: CompareDef[] = [
     verdicts: ["us", "tie", "us", "them", "them", "us"]
   }
 ];
-
-export const COMPARE_ROW_COUNT = 6;
 
 export function getComparison(slug: string): CompareDef | undefined {
   return COMPARISONS.find((c) => c.slug === slug);
