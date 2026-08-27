@@ -7,6 +7,8 @@ import {
   BookOpenCheck,
   Brain,
   CalendarCheck,
+  CalendarClock,
+  CalendarDays,
   Globe,
   Handshake,
   LayoutDashboard,
@@ -57,7 +59,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 type GroupDef = {
-  key: "voice" | "messaging" | "intelligence" | "automation" | "pipeline" | "platform";
+  key: "voice" | "messaging" | "scheduling" | "intelligence" | "automation" | "pipeline" | "platform";
   features: { key: string; Icon: Feature["Icon"] }[];
 };
 
@@ -68,7 +70,6 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "answering", Icon: Phone },
       { key: "concurrent", Icon: PhoneIncoming },
       { key: "transfers", Icon: PhoneForwarded },
-      { key: "booking", Icon: CalendarCheck },
       { key: "qualification", Icon: Users },
       { key: "byon", Icon: Smartphone }
     ]
@@ -82,6 +83,14 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "missedCall", Icon: PhoneForwarded },
       { key: "scheduled", Icon: AlarmClockCheck },
       { key: "email", Icon: Mail }
+    ]
+  },
+  {
+    key: "scheduling",
+    features: [
+      { key: "booking", Icon: CalendarCheck },
+      { key: "bookingPage", Icon: CalendarClock },
+      { key: "teamCalendar", Icon: CalendarDays }
     ]
   },
   {

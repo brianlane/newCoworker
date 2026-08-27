@@ -435,10 +435,6 @@
           "title": "Transferencias con contexto",
           "description": "Cuando alguien necesita a un humano, la llamada se transfiere a ti o a tu equipo con contexto, para que nadie repita su historia."
         },
-        "booking": {
-          "title": "Reserva de citas",
-          "description": "Conectado a tu calendario de Google o Microsoft, tu coworker encuentra espacios libres y los reserva durante la llamada."
-        },
         "qualification": {
           "title": "Calificación de leads",
           "description": "La intención de quien llama se entiende en segundos; los detalles se capturan, califican y registran para un seguimiento sin esfuerzo."
@@ -475,6 +471,23 @@
         "email": {
           "title": "Gestión de correo",
           "description": "Una dirección de correo dedicada para tu coworker. Lee, prioriza y responde el correo con tu voz también."
+        }
+      },
+      "scheduling": {
+        "eyebrow": "Agenda",
+        "title": "Reservado, reprogramado y en el calendario de todos",
+        "subtitle": "Disponibilidad real desde las herramientas que ya usas, o una página de reservas que alojamos si no tienes ninguna.",
+        "booking": {
+          "title": "Reserva de citas",
+          "description": "Tu coworker revisa la disponibilidad real en Google Calendar, Microsoft 365, CalDAV, Calendly (con varias cuentas), Vagaro o Acuity, reserva durante la llamada o por texto, y reprograma o cancela cuando los planes cambian. Las citas por video reciben un enlace de Zoom o Google Meet automáticamente."
+        },
+        "bookingPage": {
+          "title": "Tu propia página de reservas",
+          "description": "Una página de agendamiento que alojamos por ti, sin necesidad de ninguna herramienta de calendario. Páginas por empleado, rotación por turnos, preguntas de admisión, confirmaciones y recordatorios, y un texto de lista de espera cuando se libera un espacio antes."
+        },
+        "teamCalendar": {
+          "title": "Calendario de equipo y feed",
+          "description": "Cada reserva aterriza en un calendario de equipo compartido con un feed al que cualquiera puede suscribirse desde su propia app de calendario, incluidas las citas reservadas fuera de New Coworker."
         }
       },
       "intelligence": {
@@ -659,7 +672,7 @@
       "transfersQ": "¿Puede transferir llamadas a mí o a mi equipo?",
       "transfersA": "Sí. Los planes Standard incluyen transferencias con contexto: cuando alguien necesita a un humano, tu coworker te pone en la línea con el contexto ya recopilado, para que nadie repita su historia.",
       "bookQ": "¿Una IA realmente puede agendar citas o solo toma recados?",
-      "bookA": "Agenda. Tu coworker revisa la disponibilidad en vivo de tu calendario real (Google Calendar, Microsoft 365, CalDAV, Calendly o Vagaro), ofrece horarios y registra la cita mientras la persona sigue en la llamada. Si no usas ninguna herramienta de calendario, agenda en una página de reservas que alojamos para ti, y todos reciben confirmación y recordatorio.",
+      "bookA": "Agenda. Tu coworker revisa la disponibilidad en vivo de tu calendario real (Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro o Acuity), ofrece horarios y registra la cita mientras la persona sigue en la llamada. Si no usas ninguna herramienta de calendario, agenda en una página de reservas que alojamos para ti, y todos reciben confirmación y recordatorio.",
       "channelsQ": "¿Atiende mensajes y DMs o solo llamadas telefónicas?",
       "channelsA": "Ambos. El mismo coworker contesta llamadas, SMS bidireccional, WhatsApp, Facebook Messenger, DMs de Instagram y el chat de tu sitio web, y recibe su propia dirección de correo. Es una sola memoria para todos esos canales, así que un cliente que llamó el martes y escribe el viernes no tiene que empezar de nuevo.",
       "languagesQ": "¿Puede hablar con mis clientes que hablan español?",
@@ -1793,7 +1806,7 @@
       },
       "appointmentBooking": {
         "title": "Reserva de citas",
-        "description": "Tu coworker revisa la disponibilidad real en Google Calendar, Microsoft 365, CalDAV, Calendly o Vagaro y reserva durante la llamada, y reprograma o cancela cuando los planes cambian."
+        "description": "Tu coworker revisa la disponibilidad real en Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro o Acuity y reserva durante la llamada, y reprograma o cancela cuando los planes cambian."
       },
       "bookingPage": {
         "title": "Tu propia página de reservas",
