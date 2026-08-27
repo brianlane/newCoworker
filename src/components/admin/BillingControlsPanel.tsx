@@ -42,14 +42,18 @@ export function BillingControlsPanel({
   nextChargeAt: string | null;
 }) {
   const router = useRouter();
-  // The server (buildNextBillingDateParams, the M2 guard) rejects any date
-  // before the paid-through, so the picker's floor mirrors it: the day after
-  // the next charge when known, else tomorrow. Cosmetic, the server decides.
+  // Two floors for the two date inputs. The billing-date move is rejected
+  // server-side for any date before the paid-through (the M2 guard), so ITS
+  // picker mirrors that: the day after the next charge when known, else
+  // tomorrow (cosmetic, the server decides). A pause auto-resume has no
+  // paid-through rule: resuming INSIDE the current cycle is valid, so its
+  // floor stays plain tomorrow.
+  const tomorrow = tomorrowUtcDate();
   const paidThroughFloor = nextChargeAt
     ? new Date(Date.parse(nextChargeAt) + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     : null;
-  const tomorrow = tomorrowUtcDate();
-  const minDate = paidThroughFloor && paidThroughFloor > tomorrow ? paidThroughFloor : tomorrow;
+  const billingDateMin =
+    paidThroughFloor && paidThroughFloor > tomorrow ? paidThroughFloor : tomorrow;
 
   // Pause / resume
   const [resumeOn, setResumeOn] = useState(initialResumesAt?.slice(0, 10) ?? "");
@@ -176,7 +180,7 @@ export function BillingControlsPanel({
             <input
               id="billing-resume-on"
               type="date"
-              min={minDate}
+              min={tomorrow}
               value={resumeOn}
               onChange={(e) => {
                 setResumeOn(e.target.value);
@@ -225,7 +229,7 @@ export function BillingControlsPanel({
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="date"
-              min={minDate}
+              min={billingDateMin}
               value={nextDate}
               onChange={(e) => {
                 setNextDate(e.target.value);
