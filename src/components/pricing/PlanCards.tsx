@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { track } from "@vercel/analytics";
 import { PLAN_CARD_ROWS, PlanCard } from "@/components/pricing/PlanCard";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import type { AppLocale } from "@/i18n/routing";
@@ -55,7 +56,10 @@ export function PlanCards({
             {periodOptions.map((opt) => (
               <button
                 key={opt.id}
-                onClick={() => setPeriod(opt.id)}
+                onClick={() => {
+                  track("billing_period_toggled", { period: opt.id });
+                  setPeriod(opt.id);
+                }}
                 className={[
                   "min-w-0 rounded-xl px-2 py-3 text-center text-sm font-semibold transition-all duration-200 sm:px-4 md:px-5",
                   period === opt.id
@@ -168,6 +172,7 @@ export function PlanCards({
         </div>
         <a
           href="/contact?topic=white-glove"
+          onClick={() => track("white_glove_interest")}
           className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 md:mx-auto md:max-w-sm"
         >
           {t("whiteGloveCta")}

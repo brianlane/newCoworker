@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { track } from "@vercel/analytics";
 import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
@@ -119,7 +120,11 @@ export function MarketingNav() {
               <Link href="/login" className="text-sm text-parchment/60 transition-colors hover:text-parchment">
                 {t("signIn")}
               </Link>
-              <CtaLink href="/onboard" size="md">
+              <CtaLink
+                href="/onboard"
+                size="md"
+                onClick={() => track("cta_get_started", { source: "nav" })}
+              >
                 {t("getStarted")}
               </CtaLink>
             </>
@@ -177,7 +182,10 @@ export function MarketingNav() {
                   href="/onboard"
                   size="md"
                   className="mt-2 block text-center"
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    track("cta_get_started", { source: "nav" });
+                    setOpen(false);
+                  }}
                 >
                   {t("getStarted")}
                 </CtaLink>
