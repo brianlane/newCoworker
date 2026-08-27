@@ -184,7 +184,7 @@ export default async function FeaturesPage() {
       {groups.map((group) => (
         <section key={group.eyebrow} className="mx-auto max-w-6xl px-6 pb-20">
           <SectionHeading eyebrow={group.eyebrow} title={group.title} subtitle={group.subtitle} />
-          <FeatureGrid features={group.features} />
+          <FeatureGrid features={group.features} centerLastRow />
         </section>
       ))}
 
