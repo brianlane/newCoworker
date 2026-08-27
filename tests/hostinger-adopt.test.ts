@@ -19,8 +19,10 @@ vi.mock("@/lib/db/vps-ssh-keys", () => ({
 // fallback (deps.db omits the override) must not touch a real database.
 // Defaults to "not tracked" so pre-existing tests keep their behavior.
 const moduleGetVpsInventoryByVmId = vi.fn().mockResolvedValue(null);
+const moduleClearVpsNeverRenew = vi.fn();
 vi.mock("@/lib/db/vps-inventory", () => ({
-  getVpsInventoryByVmId: (...args: unknown[]) => moduleGetVpsInventoryByVmId(...args)
+  getVpsInventoryByVmId: (...args: unknown[]) => moduleGetVpsInventoryByVmId(...args),
+  clearVpsNeverRenew: (...args: unknown[]) => moduleClearVpsNeverRenew(...args)
 }));
 
 import { adoptVpsForBusiness, type AdoptVpsDeps } from "@/lib/hostinger/adopt";
@@ -641,6 +643,119 @@ describe("adoptVpsForBusiness", () => {
     // deliberately NOT re-enabled.
     expect(res.hostingerBillingSubscriptionId).toBe("hsub-never");
     expect(getInventory).toHaveBeenCalledWith(1800985);
+    expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("clears never_renew and re-enables renewal when the box's physical plan matches the adopted size", async () => {
+    // vm 1864812 case (2026-08-24): an ordinary KVM2 stranded in the pool by
+    // a migration, flagged never_renew, then claimed for a NEW paying tenant
+    // (KIN). The flag's sunk-cost rationale (mislabeled hardware whose
+    // renewal the tenant's price doesn't cover) doesn't apply when the
+    // physical plan equals the size being adopted, so renewal must come
+    // back ON or the tenant loses the box at period end. An operator did
+    // exactly this by hand on 2026-08-25; this pins it in code.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-kin", plan: "KVM 2" })
+    });
+    const clearNeverRenew = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi
+          .fn()
+          .mockResolvedValue({ vm_id: 1800985, never_renew: true, state: "assigned" }),
+        clearVpsNeverRenew: clearNeverRenew
+      }
+    });
+    // tier standard resolves to the kvm2 default, matching plan "KVM 2".
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    // Flag cleared BEFORE renewal is enabled, so the posture cron never
+    // sees never_renew + auto-renew ON (it would nag ops to turn it off).
+    expect(clearNeverRenew).toHaveBeenCalledWith(1800985);
+    expect(client.enableBillingAutoRenewal).toHaveBeenCalledWith("hsub-kin");
+  });
+
+  it("keeps renewal OFF when the physical plan mismatches the adopted size (sunk-cost mislabel)", async () => {
+    // The srv1632631 shape the flag exists for: KVM8 hardware pooled under
+    // the kvm2 label. Adopting it as kvm2 must NOT start paying the KVM8
+    // renewal; the posture cron keeps nagging to migrate the tenant off.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-sunk", plan: "KVM 8" })
+    });
+    const clearNeverRenew = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi
+          .fn()
+          .mockResolvedValue({ vm_id: 1800985, never_renew: true, state: "assigned" }),
+        clearVpsNeverRenew: clearNeverRenew
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(clearNeverRenew).not.toHaveBeenCalled();
+    expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("keeps renewal OFF when clearing the never_renew flag fails", async () => {
+    // Order matters: if the flag can't be cleared, enabling renewal anyway
+    // would leave never_renew=true + auto-renew ON, which the posture cron
+    // reads as a conflict and nags ops to DISABLE renewal again. Keep the
+    // consistent (flag on, renew off) state and its existing daily nag.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-kin", plan: "KVM 2" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi
+          .fn()
+          .mockResolvedValue({ vm_id: 1800985, never_renew: true, state: "assigned" }),
+        clearVpsNeverRenew: vi.fn().mockRejectedValue(new Error("inventory update boom"))
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("stringifies a non-Error flag-clear failure and keeps renewal OFF", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-kin", plan: "KVM 2" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi
+          .fn()
+          .mockResolvedValue({ vm_id: 1800985, never_renew: true, state: "assigned" }),
+        clearVpsNeverRenew: vi.fn().mockRejectedValue("clear string boom")
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
     expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
   });
 
