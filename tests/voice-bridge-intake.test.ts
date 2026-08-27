@@ -385,6 +385,21 @@ describe("composeIntakeLeadSms: outbound calls the platform placed", () => {
       voicemail: { detected: true, messageLeft: false }
     });
     expect(silent).toContain("Outcome: reached voicemail, no message left.");
+    // The edge/sweep speak plays AFTER the media stream (and this alert) is
+    // torn down, and the model path's confirmSpoken merge can race the alert
+    // read. A held claim without the delivered stamp is "being left", never
+    // the flatly wrong "no message left".
+    const inFlight = composeIntakeLeadSms({
+      ...base,
+      voicemail: { detected: true, messageLeft: false, messageBeingLeft: true }
+    });
+    expect(inFlight).toContain("Outcome: reached voicemail, the scripted message is being left.");
+    // The delivered stamp outranks the in-flight marker when both are set.
+    const both = composeIntakeLeadSms({
+      ...base,
+      voicemail: { detected: true, messageLeft: true, messageBeingLeft: true }
+    });
+    expect(both).toContain("Outcome: reached voicemail, left the scripted message.");
     const live = composeIntakeLeadSms({
       ...base,
       voicemail: { detected: false, messageLeft: false }
@@ -466,8 +481,24 @@ describe("extractIntakeAlertContext", () => {
     expect(ctx).toEqual({
       contextNote: "Their name: Isiah.",
       machineDetected: true,
-      voicemailSpoken: true
+      voicemailSpoken: true,
+      voicemailBeingLeft: false
     });
+  });
+
+  it("reads a held claim without the delivered stamp as being-left", () => {
+    const ctx = extractIntakeAlertContext({ machine_detected: true, voicemail_claimed: true });
+    expect(ctx.voicemailSpoken).toBe(false);
+    expect(ctx.voicemailBeingLeft).toBe(true);
+    // Once delivery is stamped the in-flight marker clears: the two states
+    // are exclusive so the alert copy has one truth to render.
+    const done = extractIntakeAlertContext({
+      machine_detected: true,
+      voicemail_claimed: true,
+      voicemail_spoken: true
+    });
+    expect(done.voicemailSpoken).toBe(true);
+    expect(done.voicemailBeingLeft).toBe(false);
   });
 
   it("defaults safely on junk and on missing keys", () => {
@@ -475,6 +506,7 @@ describe("extractIntakeAlertContext", () => {
       const ctx = extractIntakeAlertContext(raw);
       expect(ctx.machineDetected).toBe(false);
       expect(ctx.voicemailSpoken).toBe(false);
+      expect(ctx.voicemailBeingLeft).toBe(false);
       expect(ctx.contextNote).toBeUndefined();
     }
   });
