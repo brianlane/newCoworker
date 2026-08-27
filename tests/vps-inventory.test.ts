@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   claimAvailableVps,
+  countAssignedVpsForBusiness,
   claimSpecificAvailableVps,
   recordVpsAssigned,
   releaseVpsToPool,
@@ -102,6 +103,42 @@ describe("vps_inventory DB layer", () => {
         false
       );
       expect(hasPoolRunway(new Date(now + VPS_POOL_MIN_RUNWAY_MS).toISOString(), now)).toBe(true);
+    });
+  });
+
+  describe("countAssignedVpsForBusiness", () => {
+    it("counts assigned rows for the business", async () => {
+      const chain = makeChain();
+      chain.eq
+        .mockReturnValueOnce(chain)
+        .mockResolvedValueOnce({ count: 2, error: null });
+      const db = makeDb(chain);
+      await expect(countAssignedVpsForBusiness("biz-1", db as never)).resolves.toBe(2);
+      expect(chain.select).toHaveBeenCalledWith("vm_id", { count: "exact", head: true });
+      expect(chain.eq).toHaveBeenCalledWith("state", "assigned");
+      expect(chain.eq).toHaveBeenCalledWith("assigned_business_id", "biz-1");
+    });
+
+    it("treats a null count as zero and throws on error", async () => {
+      const chain = makeChain();
+      chain.eq.mockReturnValueOnce(chain).mockResolvedValueOnce({ count: null, error: null });
+      await expect(countAssignedVpsForBusiness("biz-1", makeDb(chain) as never)).resolves.toBe(0);
+
+      const chain2 = makeChain();
+      chain2.eq
+        .mockReturnValueOnce(chain2)
+        .mockResolvedValueOnce({ count: null, error: { message: "count boom" } });
+      await expect(countAssignedVpsForBusiness("biz-1", makeDb(chain2) as never)).rejects.toThrow(
+        /countAssignedVpsForBusiness: count boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.eq.mockReturnValueOnce(chain).mockResolvedValueOnce({ count: 0, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await countAssignedVpsForBusiness("biz-1");
+      expect(defaultClientSpy).toHaveBeenCalled();
     });
   });
 
@@ -206,8 +243,10 @@ describe("vps_inventory DB layer", () => {
       const chain = makeChain();
       chain.limit.mockResolvedValueOnce({ data: null, error: { message: "own scan down" } });
       const db = makeDb(chain);
+      // The own-box scan lives in claimOwnAssignedVps since the V1-residual
+      // fix; the error prefix names the function that actually ran the query.
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).rejects.toThrow(
-        "claimAvailableVps: own scan down"
+        "claimOwnAssignedVps: own scan down"
       );
     });
 
