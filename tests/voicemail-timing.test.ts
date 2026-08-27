@@ -27,50 +27,47 @@ describe("voicemailFullReadMs", () => {
 
 describe("voicemailPlausiblyDelivered", () => {
   // Amy's real round-2 script is 209 characters: full read ~13.9s, so with
-  // the 0.5 fraction about 7s of possible playout is required.
+  // the 0.5 fraction about 7s of playable line time is required. The caller
+  // computes `playableMs` as (first end_call + goodbye grace) minus the
+  // script handover moment.
   const scriptChars = 209;
 
   it("refuses call 06a44d56's shape: end_call moments after the handover", () => {
     // The whole call lasted 13 seconds from ANSWER; the script was handed
     // over and the model asked to hang up within about a second. One second
-    // elapsed plus the 3s goodbye grace cannot hold a 14-second message.
-    expect(
-      voicemailPlausiblyDelivered({ elapsedMs: 1000, hangupGraceMs: 3000, scriptChars })
-    ).toBe(false);
+    // plus the 3s goodbye grace cannot hold a 14-second message.
+    expect(voicemailPlausiblyDelivered({ playableMs: 1000 + 3000, scriptChars })).toBe(false);
   });
 
-  it("accepts a real-time read: elapsed roughly the full script duration", () => {
-    expect(
-      voicemailPlausiblyDelivered({ elapsedMs: 14000, hangupGraceMs: 3000, scriptChars })
-    ).toBe(true);
+  it("refuses Bugbot's interleaving: the script handed over mid-grace", () => {
+    // Same-turn voicemail_reached + end_call: the hangup timer was already
+    // running when the script came back 1s later, so only the REMAINING 2s
+    // of grace could carry audio, however late a duplicate end_call lands.
+    expect(voicemailPlausiblyDelivered({ playableMs: 3000 - 1000, scriptChars })).toBe(false);
+  });
+
+  it("refuses a script handed over after the hangup already fired", () => {
+    expect(voicemailPlausiblyDelivered({ playableMs: -900, scriptChars })).toBe(false);
+  });
+
+  it("accepts a real-time read: the line was up for the full duration", () => {
+    expect(voicemailPlausiblyDelivered({ playableMs: 14000 + 3000, scriptChars })).toBe(true);
   });
 
   it("accepts a fast, buffered read where generation outpaced playout", () => {
     // Gemini can generate audio faster than realtime; Telnyx keeps playing
     // its buffer through the goodbye grace. 5s of generation plus 3s of
     // grace clears the ~7s bar, so legitimate quick reads are not refused.
-    expect(
-      voicemailPlausiblyDelivered({ elapsedMs: 5000, hangupGraceMs: 3000, scriptChars })
-    ).toBe(true);
+    expect(voicemailPlausiblyDelivered({ playableMs: 5000 + 3000, scriptChars })).toBe(true);
   });
 
   it("sits exactly at the boundary: required time counts as delivered", () => {
     const required = voicemailFullReadMs(scriptChars) * VOICEMAIL_MIN_DELIVERED_FRACTION;
-    expect(
-      voicemailPlausiblyDelivered({ elapsedMs: required - 3000, hangupGraceMs: 3000, scriptChars })
-    ).toBe(true);
-    expect(
-      voicemailPlausiblyDelivered({
-        elapsedMs: required - 3001,
-        hangupGraceMs: 3000,
-        scriptChars
-      })
-    ).toBe(false);
+    expect(voicemailPlausiblyDelivered({ playableMs: required, scriptChars })).toBe(true);
+    expect(voicemailPlausiblyDelivered({ playableMs: required - 1, scriptChars })).toBe(false);
   });
 
   it("always accepts an empty script, which needs no time at all", () => {
-    expect(voicemailPlausiblyDelivered({ elapsedMs: 0, hangupGraceMs: 0, scriptChars: 0 })).toBe(
-      true
-    );
+    expect(voicemailPlausiblyDelivered({ playableMs: 0, scriptChars: 0 })).toBe(true);
   });
 });

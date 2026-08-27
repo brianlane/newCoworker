@@ -16,11 +16,15 @@
  * hides exactly the calls the call-integrity sweep exists to surface.
  *
  * The check is wall-clock, which works because playout is realtime: audio
- * reaches the far end no faster than one second per second, so if only three
- * seconds passed between the script handover and `end_call`, at most three
+ * reaches the far end no faster than one second per second, so if the line
+ * was up for only three seconds after the script handover, at most three
  * seconds of script audio can have played, however fast the model generated
- * it. The hangup grace counts too: the PSTN leg stays up that long after
- * `end_call`, and Telnyx keeps playing whatever is buffered.
+ * it. The caller computes that PLAYABLE window itself, as the time from the
+ * script handover to the moment the hangup actually fires (the FIRST
+ * `end_call` plus the goodbye grace, during which Telnyx keeps playing its
+ * buffer). Anchoring on the first `end_call` matters: a duplicate `end_call`
+ * arriving after the script handover must not re-credit a grace that is
+ * already burning, which was Bugbot's finding on PR #1672.
  *
  * The threshold is deliberately generous (HALF the full read time) because
  * the failure directions are asymmetric: refusing a genuinely delivered
@@ -49,18 +53,20 @@ export function voicemailFullReadMs(scriptChars: number): number {
 }
 
 /**
- * True when enough wall-clock time passed between the script handover and
- * `end_call` (plus the hangup grace, during which the line is still up) for
- * at least `VOICEMAIL_MIN_DELIVERED_FRACTION` of the script to have played.
+ * True when the line was up long enough after the script handover for at
+ * least `VOICEMAIL_MIN_DELIVERED_FRACTION` of the script to have played.
  */
 export function voicemailPlausiblyDelivered(opts: {
-  /** Milliseconds from the script being handed to the model until `end_call`. */
-  elapsedMs: number;
-  /** The goodbye grace: the leg stays up this long after `end_call`. */
-  hangupGraceMs: number;
+  /**
+   * Milliseconds the line is/was up after the script handover: the first
+   * `end_call`'s hangup moment (its request time plus the goodbye grace)
+   * minus the handover time. Negative when the script arrived after the
+   * hangup already fired, which naturally fails the check.
+   */
+  playableMs: number;
   /** Length of the script the model was told to read. */
   scriptChars: number;
 }): boolean {
   const required = voicemailFullReadMs(opts.scriptChars) * VOICEMAIL_MIN_DELIVERED_FRACTION;
-  return opts.elapsedMs + opts.hangupGraceMs >= required;
+  return opts.playableMs >= required;
 }

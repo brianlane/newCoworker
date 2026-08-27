@@ -715,7 +715,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let latestUsage: GeminiLiveUsage | null = null;
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
+  // The timestamp anchors the voicemail plausibility window: the line dies
+  // at FIRST end_call + grace, wherever later duplicates land.
   let endCallRequested = false;
+  let endCallRequestedAtMs = 0;
   // Set once `voicemail_reached` handed the model a message to read, so the
   // end_call handler knows to confirm the delivery (see confirmSpoken). The
   // timestamp and length are what let that handler check the read PLAUSIBLY
@@ -1769,6 +1772,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   function handleModelToolCalls(message: LiveServerMessage): void {
     const calls = message.toolCall?.functionCalls;
     if (!calls || calls.length === 0) return;
+    // Whether THIS turn also asks to hang up. The loop below is synchronous
+    // but the capabilities it kicks off are not, so a same-turn
+    // `voicemail_reached` + `end_call` pair would otherwise start the
+    // voicemail claim before the end_call handler can set
+    // `endCallRequested`: the entry guard alone cannot see it (Bugbot,
+    // PR #1672).
+    const batchRequestsEndCall = calls.some((c) => c.name === "end_call");
     for (const call of calls) {
       const name = call.name ?? "unknown";
       // Debug: which tool the model invoked + its arg keys (not values, to
@@ -2117,8 +2127,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // 68ca8cdb: the model greeted the greeting, sat through the maximum
         // recording time, and only reported the recording as the leg
         // dropped). Refuse BEFORE the capability runs so nothing is claimed
-        // or recorded.
-        if (endCallRequested) {
+        // or recorded. `batchRequestsEndCall` covers the same-turn pair: the
+        // capability starts synchronously here, before the loop reaches the
+        // batch's own end_call, so the flag alone would miss it.
+        if (endCallRequested || batchRequestsEndCall) {
           sendToolResponse(call.id, name, {
             ok: false,
             detail: "the call is already ending: leave no message and say nothing"
@@ -2194,13 +2206,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         const graceMs = opts.hangup.graceMs ?? 3000;
         if (voicemailScriptGiven && opts.voicemail?.confirmSpoken) {
           voicemailScriptGiven = false;
-          const elapsedMs = Date.now() - voicemailScriptGivenAtMs;
+          // The audio window ends when the FIRST end_call's hangup timer
+          // fires, so a duplicate end_call arriving later must not re-credit
+          // a grace that is already burning, or has burned: on the first
+          // end_call the hangup is scheduled NOW (full grace ahead), on a
+          // repeat it was scheduled back then (Bugbot, PR #1672).
+          const hangupAtMs = (endCallRequested ? endCallRequestedAtMs : Date.now()) + graceMs;
+          const playableMs = hangupAtMs - voicemailScriptGivenAtMs;
           if (
-            voicemailPlausiblyDelivered({
-              elapsedMs,
-              hangupGraceMs: graceMs,
-              scriptChars: voicemailScriptChars
-            })
+            voicemailPlausiblyDelivered({ playableMs, scriptChars: voicemailScriptChars })
           ) {
             void opts.voicemail.confirmSpoken().catch((err) => {
               console.error("gemini-bridge: voicemail confirmSpoken threw", err);
@@ -2208,10 +2222,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           } else {
             console.error(
               "gemini-bridge: voicemail read cut short, not confirming",
-              JSON.stringify({ elapsedMs, graceMs, scriptChars: voicemailScriptChars })
+              JSON.stringify({ playableMs, graceMs, scriptChars: voicemailScriptChars })
             );
             emitDiag("voice_bridge_voicemail_cut_short", {
-              elapsed_ms: elapsedMs,
+              playable_ms: playableMs,
               grace_ms: graceMs,
               script_chars: voicemailScriptChars
             });
@@ -2219,6 +2233,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         }
         if (!endCallRequested) {
           endCallRequested = true;
+          endCallRequestedAtMs = Date.now();
           // Deliberately a STANDALONE timer, NOT pushed to `timers`. The PSTN
           // leg is still up during the goodbye grace, so the hangup MUST survive
           // a clearTimers() (which fires on Gemini Live `onclose` and on
