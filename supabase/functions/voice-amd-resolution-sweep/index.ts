@@ -71,20 +71,39 @@ serve(async (req: Request) => {
   const supabase = createClient(supabaseUrl, serviceKey);
   const config = await readAmdResolutionConfig(supabase);
   if (!config.enabled) return json(200, { ok: true, enabled: false, acted: 0 });
+  if (!config.allBusinesses && config.businessIds.size === 0) {
+    // Enabled but nobody enrolled: nothing to query (and an empty `in.()`
+    // filter is a PostgREST parse error, not an empty match).
+    return json(200, { ok: true, enabled: true, candidates: 0, acted: 0 });
+  }
 
-  // Candidates: live outbound AI legs with a machine stamp. The fine-grained
-  // checks (claim state, screening, stamp age, script) run in the pure
-  // decision so every skip reason is tested; this query only bounds the set.
-  // The 30-minute window matches AMD_RESOLUTION_MAX_AGE_MS and the pg_cron
-  // EXISTS guard: anything older is a stale session, not a live call.
+  // Candidates: live outbound AI legs with an UNRESOLVED machine stamp, for
+  // enrolled businesses. The filters mirror the pg_cron EXISTS guard AND the
+  // enrollment gate so the 25-row page can only hold actionable rows: a
+  // looser query here could fill the page with other tenants' in-flight or
+  // already-resolved legs and starve the one enrolled call that is overdue
+  // (Bugbot, PR #1674). The pure decision then re-checks everything (claim,
+  // screening, stamp age, script) so every skip reason stays unit-tested,
+  // and remains the sole authority on ACTING.
+  // The 30-minute window matches AMD_RESOLUTION_MAX_AGE_MS and the guard:
+  // anything older is a stale session, not a live call.
   const sinceIso = new Date(Date.now() - AMD_RESOLUTION_MAX_AGE_MS).toISOString();
-  const { data: rows, error: qErr } = await supabase
+  let query = supabase
     .from("voice_handoff_sessions")
     .select("call_control_id, business_id, context")
     .eq("status", "ai_intake")
     .gte("created_at", sinceIso)
     .eq("context->>machine_detected", "true")
+    // ->> of an absent key is NULL, and NULL never satisfies neq, so each
+    // absent-or-not-true filter needs the explicit is.null arm.
+    .or("context->>voicemail_claimed.is.null,context->>voicemail_claimed.neq.true")
+    .is("context->>voicemail_speak_started_at", null)
+    .or("context->>amd_resolution_hung_up.is.null,context->>amd_resolution_hung_up.neq.true")
     .limit(25);
+  if (!config.allBusinesses) {
+    query = query.in("business_id", [...config.businessIds]);
+  }
+  const { data: rows, error: qErr } = await query;
   if (qErr) {
     console.error("amd-resolution-sweep: candidate query failed", qErr);
     return json(500, { ok: false, error: "query_failed" });

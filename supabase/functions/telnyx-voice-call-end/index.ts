@@ -1238,10 +1238,18 @@ async function stampMachine(
   // machine_stamped_at is what the AMD resolution sweep ages against: Telnyx
   // stopped delivering the greeting events that resolve a provisional machine
   // verdict (2026-08-25), so a verdict left unresolved past its grace window
-  // is acted on by the sweep instead of standing forever.
+  // is acted on by the sweep instead of standing forever. It is written ONCE:
+  // Telnyx delivers webhooks at-least-once, and a redelivery that re-merged a
+  // fresh timestamp would keep resetting the sweep's grace clock, deferring
+  // the very action the sweep exists to force (Bugbot, PR #1674). The
+  // read-then-merge race two concurrent FIRST deliveries can hit writes two
+  // near-identical timestamps, which the grace window absorbs.
+  const alreadyStamped = await machineAlreadyStamped(supabase, callControlId);
   const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
     p_call_control_id: callControlId,
-    p_patch: { machine_detected: true, machine_stamped_at: new Date().toISOString() }
+    p_patch: alreadyStamped
+      ? { machine_detected: true }
+      : { machine_detected: true, machine_stamped_at: new Date().toISOString() }
   });
   if (stampErr) {
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
