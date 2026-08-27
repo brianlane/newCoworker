@@ -53,7 +53,6 @@ if [ -f "$root/CLAUDE.md" ]; then
 import re, sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
 lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 ok = re.compile(r"^@\.cursor/(rules/[A-Za-z0-9._-]+\.mdc|memory/MEMORY\.md)$")
 bad = [ln for ln in lines if not ok.match(ln)]
@@ -79,14 +78,24 @@ from pathlib import Path
 root = Path(sys.argv[1])
 mem = str(root / ".cursor" / "memory")
 path = root / ".claude" / "settings.local.json"
-data = {}
 if path.exists():
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = loaded
     except Exception:
-        data = {}
+        print(
+            "Claude settings.local.json is unreadable. Not rewriting it. "
+            "Set autoMemoryDirectory yourself to this checkout's .cursor/memory/."
+        )
+        sys.exit(0)
+    if not isinstance(loaded, dict):
+        print(
+            "Claude settings.local.json is not an object. Not rewriting it. "
+            "Set autoMemoryDirectory yourself to this checkout's .cursor/memory/."
+        )
+        sys.exit(0)
+    data = loaded
+else:
+    data = {}
 if data.get("autoMemoryDirectory") != mem:
     data["autoMemoryDirectory"] = mem
     path.parent.mkdir(parents=True, exist_ok=True)

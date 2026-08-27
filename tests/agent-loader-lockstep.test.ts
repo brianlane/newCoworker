@@ -48,12 +48,8 @@ type RuleFile = {
   heading: string | null;
 };
 
-function stripHtmlComments(text: string): string {
-  return text.replace(/<!--[\s\S]*?-->/g, "");
-}
-
 function importLines(text: string): string[] {
-  return stripHtmlComments(text)
+  return text
     .split("\n")
     .map((ln) => ln.trim())
     .filter((ln) => ln.length > 0);
@@ -242,5 +238,7 @@ describe("agent loader lockstep", () => {
     expect(hook).toContain("autoMemoryDirectory");
     expect(hook).toContain("CLAUDE_PROJECT_DIR");
     expect(hook).toContain(".cursor/memory");
+    expect(hook).toContain("Not rewriting it");
+    expect(hook.includes("<!--")).toBe(false);
   });
 });
