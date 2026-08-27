@@ -101,7 +101,8 @@ vi.mock("@/lib/email/client", () => ({
 }));
 
 vi.mock("@/lib/email/ops-notify", () => ({
-  sendOpsNewSignupEmail: vi.fn().mockResolvedValue(true)
+  sendOpsNewSignupEmail: vi.fn().mockResolvedValue(true),
+  sendOpsDeployFailedEmail: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/subscriptions", () => ({
@@ -895,6 +896,88 @@ describe("provisioning/orchestrate", () => {
     expect(result.deploySucceeded).toBe(false);
     expect(sendOwnerEmail).not.toHaveBeenCalled();
     expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("alerts ops, and only ops, when the signup deploy fails", async () => {
+    // The V17 fix above suppresses the owner's "you're live" email/SMS on a
+    // failed deploy, but nothing told OPS either: the ops new-signup alert
+    // is gated on deploySucceeded, a signup job is marked succeeded on a
+    // normal return (no watchdog retry), and the stuck scan excludes
+    // error-status rows from its band check. This pins the direct ops
+    // alert as the one place a human learns about a failed signup deploy.
+    const { sendOpsDeployFailedEmail, sendOpsNewSignupEmail } = await import(
+      "@/lib/email/ops-notify"
+    );
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendOpsDeployFailedEmail).mockClear();
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(sendOwnerEmail).mockClear();
+    vi.mocked(sendTelnyxSms).mockClear();
+
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-deploy-failed-ops",
+        tier: "starter",
+        ownerPhone: "+15145188192",
+        ownerEmail: "owner@example.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec()),
+        latestProvisioningStatus: async () => {
+          throw new Error("deploy poll down");
+        },
+        sleep: async () => undefined
+      }
+    );
+
+    expect(sendOpsDeployFailedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-deploy-failed-ops",
+        virtualMachineId: "42",
+        phase: "deploy_exception",
+        reason: "deploy poll down"
+      })
+    );
+    // Admin only: no customer-facing notice of any kind, and no false
+    // "new signup live" ops email either.
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+  });
+
+  it("the ops deploy-failed alert names the failure site and the business", async () => {
+    const { sendOpsDeployFailedEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsDeployFailedEmail).mockClear();
+    vi.mocked(getBusiness).mockResolvedValue({
+      name: "Acme Plumbing",
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null
+    } as never);
+
+    await orchestrateProvisioning(
+      { businessId: "biz-deploy-failed-named", tier: "starter", ownerEmail: "o@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("43")),
+        remoteExec: vi.fn().mockResolvedValue(okExec()),
+        // The deploy client's own progress row reports failure, the
+        // non-exception site (deploy_failed rather than deploy_exception).
+        latestProvisioningStatus: async () => ({ phase: "deploy_client_failed" }) as never,
+        sleep: async () => undefined
+      }
+    );
+
+    expect(sendOpsDeployFailedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessName: "Acme Plumbing",
+        virtualMachineId: "43",
+        phase: "deploy_failed",
+        reason: "deploy_client_failed"
+      })
+    );
   });
 
   it("a failed outbound-log insert never fails provisioning (SMS already went out)", async () => {
