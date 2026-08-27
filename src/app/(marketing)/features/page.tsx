@@ -146,6 +146,7 @@ const GROUP_DEFS: GroupDef[] = [
       { key: "compliance", Icon: ShieldCheck },
       { key: "deploy", Icon: Rocket },
       { key: "training", Icon: BookOpenCheck },
+      { key: "askAi", Icon: Sparkles },
       { key: "whiteGlove", Icon: Users }
     ]
   }
