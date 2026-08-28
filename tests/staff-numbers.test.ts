@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   businessSelfNumbers,
+  isBusinessOwnerPhone,
   loadStaffMatcher,
+  ownerAlertNumbers,
   staffNumberCheck
 } from "../supabase/functions/_shared/ai_flows/staff_numbers";
 
@@ -274,5 +276,126 @@ describe("loadStaffMatcher", () => {
     );
     expect(m.readFailed).toBe(false);
     expect(m.isStaff("+15053606293", "customer")).toBe(false);
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * Who is the OWNER
+ * ---------------------------------------------------------------------------
+ *
+ * An owner is not a row anywhere: they are recognized by number, and the
+ * numbers live in three different tables. The "F" follow-up reply invented its
+ * own version of this rule instead, filtering `businesses` on an
+ * `owner_alert_e164` column that has never existed on that table. PostgREST
+ * answered 400, only `data` was destructured, and the owner arm of the gate
+ * was dead from the day it shipped (found Aug 28 2026). These pin the shared
+ * rule so there is no fourth hand-rolled copy to go wrong.
+ */
+describe("ownerAlertNumbers", () => {
+  it("collects the forward cell, the alert phone and the business phone", async () => {
+    const db = makeDb({
+      business_telnyx_settings: [{ data: { forward_to_e164: "+16026951142" }, error: null }],
+      notification_preferences: [{ data: { phone_number: "+14805550001" }, error: null }],
+      businesses: [{ data: { phone: "+16025559999" }, error: null }]
+    });
+    expect(await ownerAlertNumbers(db, BIZ)).toEqual({
+      numbers: ["+16026951142", "+14805550001", "+16025559999"],
+      readFailed: false
+    });
+  });
+
+  /**
+   * Two of the three are free-form owner-typed fields. "(602) 695-1142" and
+   * "+16026951142" are one person, and a raw string compare would say
+   * otherwise, which is how an owner gets locked out of their own gate.
+   */
+  it("normalizes free-form numbers and de-duplicates the result", async () => {
+    const db = makeDb({
+      business_telnyx_settings: [{ data: { forward_to_e164: "(602) 695-1142" }, error: null }],
+      notification_preferences: [{ data: { phone_number: "6026951142" }, error: null }],
+      businesses: [{ data: { phone: "+1 602-695-1142" }, error: null }]
+    });
+    expect(await ownerAlertNumbers(db, BIZ)).toEqual({
+      numbers: ["+16026951142"],
+      readFailed: false
+    });
+  });
+
+  it("skips whatever is not configured, and unparseable junk", async () => {
+    const db = makeDb({
+      business_telnyx_settings: [{ data: null, error: null }],
+      notification_preferences: [{ data: { phone_number: null }, error: null }],
+      businesses: [{ data: { phone: "ask reception" }, error: null }]
+    });
+    expect(await ownerAlertNumbers(db, BIZ)).toEqual({ numbers: [], readFailed: false });
+  });
+
+  /**
+   * "This person is not the owner" and "we could not find out" are different
+   * answers. Collapsing them is precisely what hid the original bug for weeks,
+   * so a read failure is reported and every caller stops rather than guessing.
+   */
+  it.each([
+    ["business_telnyx_settings"],
+    ["notification_preferences"],
+    ["businesses"]
+  ])("reports a failed read of %s rather than answering no", async (table) => {
+    const scripted: Record<string, Array<{ data?: unknown; error?: unknown }>> = {
+      business_telnyx_settings: [{ data: { forward_to_e164: "+16026951142" }, error: null }],
+      notification_preferences: [{ data: { phone_number: null }, error: null }],
+      businesses: [{ data: { phone: null }, error: null }]
+    };
+    scripted[table] = [{ data: null, error: { message: "boom" } }];
+    expect(await ownerAlertNumbers(makeDb(scripted), BIZ)).toEqual({
+      numbers: [],
+      readFailed: true
+    });
+  });
+});
+
+describe("isBusinessOwnerPhone", () => {
+  const ownerDb = () =>
+    makeDb({
+      business_telnyx_settings: [{ data: { forward_to_e164: "+16026951142" }, error: null }],
+      notification_preferences: [{ data: { phone_number: null }, error: null }],
+      businesses: [{ data: { phone: "+16026951142" }, error: null }]
+    });
+
+  it("recognizes the owner however their number was typed", async () => {
+    expect(await isBusinessOwnerPhone(ownerDb(), BIZ, "+16026951142")).toEqual({
+      owner: true,
+      readFailed: false
+    });
+    expect(await isBusinessOwnerPhone(ownerDb(), BIZ, "(602) 695-1142")).toEqual({
+      owner: true,
+      readFailed: false
+    });
+  });
+
+  it("says no for a teammate or a stranger", async () => {
+    expect(await isBusinessOwnerPhone(ownerDb(), BIZ, "+14807202013")).toEqual({
+      owner: false,
+      readFailed: false
+    });
+  });
+
+  it("says no for a number that is not a number", async () => {
+    expect(await isBusinessOwnerPhone(ownerDb(), BIZ, "")).toEqual({
+      owner: false,
+      readFailed: false
+    });
+  });
+
+  it("passes the read failure up rather than answering no", async () => {
+    const db = makeDb({
+      business_telnyx_settings: [{ data: null, error: { message: "boom" } }],
+      notification_preferences: [{ data: null, error: null }],
+      businesses: [{ data: null, error: null }]
+    });
+    expect(await isBusinessOwnerPhone(db, BIZ, "+16026951142")).toEqual({
+      owner: false,
+      readFailed: true
+    });
   });
 });

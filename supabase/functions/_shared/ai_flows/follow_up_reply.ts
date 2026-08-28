@@ -160,11 +160,76 @@ export function followUpAmbiguityText(names: readonly string[]): string {
   return `Which one needs follow-up? Reply with the full name and F, e.g. "${names[0]}, F". Matching: ${names.join("; ")}`;
 }
 
-/** Nothing to tag: say so rather than leaving the teammate wondering. */
+/**
+ * Nothing to tag: say so rather than leaving the teammate wondering.
+ *
+ * The wording matters more than it looks. The first version read "No recent
+ * lead here matches X", which a teammate reads as WE HAVE NEVER HEARD OF X,
+ * and Amy hit exactly that on a HomeLight referral we knew all about and had
+ * texted her about four minutes earlier (Rhonda J., Aug 28 2026). The lead was
+ * real; it simply had no contact row yet. So this text now says what was
+ * actually searched (contacts on file) and what to do about it, and the
+ * "we know them, their details just have not landed" case has its own text
+ * below rather than sharing this one.
+ */
 export function followUpNoLeadText(name: string): string {
   return name.trim()
-    ? `No recent lead here matches "${name.trim()}", so nothing was marked for follow-up.`
-    : "No recent lead to mark for follow-up.";
+    ? `I don't have a contact on file for "${name.trim()}" yet, so there's nothing to ` +
+        "mark for follow-up. If they came from a referral site, their details may " +
+        "not have been released to us yet. Try again once you see them on the dashboard."
+    : "I don't have a recent contact on file to mark for follow-up.";
+}
+
+/**
+ * We KNOW this lead, we just do not have their contact details yet.
+ *
+ * The referral networks withhold a lead's phone and email until the claim is
+ * confirmed on their side, so there is a window, minutes to hours, where the
+ * lead exists to us only as a live flow run. Answering "no lead matches" in
+ * that window is technically true and completely useless, so the request is
+ * parked on the run instead and applied the moment the details land.
+ */
+export function followUpPendingText(
+  name: string,
+  opts: { claimState: FollowUpClaimState }
+): string {
+  const noted =
+    "I've noted the request: the moment their details land they go straight into " +
+    "follow-up, and I'll text you to confirm.";
+  // Only a lead somebody has actually taken may be answered with "nothing else
+  // for you to do". On HomeLight the CLAIM is what releases the contact
+  // details, so telling a teammate to sit tight on an unclaimed lead is
+  // telling them to do the one thing that guarantees the details never arrive
+  // and this parked request never fires (Bugbot, PR #1702).
+  if (opts.claimState === "claimed") {
+    return `${name} is claimed but the referral site hasn't released their contact ` +
+      `details to us yet, so there's no one to call yet. ${noted} Nothing else for ` +
+      "you to do.";
+  }
+  if (opts.claimState === "unclaimed") {
+    return `${name} hasn't been claimed by anyone yet, and the referral site only ` +
+      `releases their contact details once someone claims. ${noted} To make that ` +
+      'happen, claim the lead: reply "1" to the offer, or claim it in the portal.';
+  }
+  // Not every flow tracks a claim at all, so a third answer that asserts
+  // NEITHER. It still carries the nudge, conditionally, because the cost of
+  // omitting it (a lead that silently never releases) is far higher than the
+  // cost of an "if" a teammate can ignore.
+  return `${name}'s contact details haven't been released to us yet, so there's no ` +
+    `one to call yet. ${noted} If this one is still unclaimed, claiming it is what ` +
+    "releases their details.";
+}
+
+/**
+ * The parked request just fired: the details landed and the lead is enrolled.
+ *
+ * Sent to the teammate who asked, not the owner. They asked minutes or hours
+ * ago and have no other way to learn that the thing they asked for happened.
+ */
+export function followUpAppliedText(name: string): string {
+  return `${name}'s contact details just came through, so they're now marked for ` +
+    "follow-up as you asked. The AI will call every 3 days, leave a voicemail and " +
+    "text if there's no answer, and stop the moment they reply.";
 }
 
 /** A contact row as the follow-up lookup reads it. */
@@ -208,4 +273,278 @@ export function followUpCandidatesFrom(
     });
   }
   return out;
+}
+
+/**
+ * The parked request could not be applied, and MAY still be.
+ *
+ * Every failure on the apply path used to log and return silently, which is
+ * indefensible here specifically: the ack that parked the request told a
+ * teammate about a claimed lead that there was "nothing else for you to do",
+ * so they will not send "F" again. A promise made in writing has to be
+ * withdrawn in writing when it cannot be kept (Bugbot, PR #1702).
+ *
+ * Says "try again" because this class of failure is transient (a read blip, a
+ * write that lost a race) and the request stays parked, so a later attempt can
+ * still honor it.
+ */
+export function followUpNotAppliedText(name: string, reason: string): string {
+  return `I couldn't finish marking ${name} for follow-up (${reason}), so the AI is ` +
+    "NOT calling them yet. Their details are on file now, so replying \"F, " +
+    `${name}\" will set it up.`;
+}
+
+/**
+ * The parked request will never be applied: the filed contact turned out to be
+ * one of our own numbers.
+ *
+ * Permanent, unlike the text above, so it does not invite a retry that would
+ * fail the same way. This is the guard that stops a follow-up cadence dialing
+ * the owner or a teammate.
+ */
+export function followUpStaffBlockedText(name: string): string {
+  return `I did not mark ${name} for follow-up: the contact that came through is ` +
+    "one of our own numbers, and the AI never runs a calling cadence at our own " +
+    "team. Worth a look at the lead's details on the dashboard.";
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Leads that exist only as a live run
+ * ---------------------------------------------------------------------------
+ *
+ * A referral network withholds the lead's phone and email until the claim is
+ * confirmed on ITS side, so between "we told you about Rhonda" and "we have a
+ * contact row for Rhonda" there is a gap. Amy's gap on Aug 28 2026 was 38
+ * minutes, and both of her "F, Rhonda" texts landed inside it. The contacts
+ * table genuinely had no Rhonda, so the reply was true and useless.
+ *
+ * During that gap the lead DOES exist to us: it is `vars.lead_name` on a live
+ * ai_flow_run. So a follow-up request that matches no contact is matched
+ * against those runs instead and PARKED on the winning run, as a var. The
+ * worker's upsert_customer step, the step that finally files the contact,
+ * reads the marker and applies the tag then.
+ *
+ * Parking on the run rather than in a table of its own is deliberate: the
+ * request is only meaningful while that run is alive, a run's context is
+ * already the durable place its facts live, and it needs no sweep to expire.
+ */
+
+/** Var names the parked request rides in. Read by the worker, written by SMS. */
+export const FOLLOW_UP_PENDING_BY_VAR = "__follow_up_requested_by";
+export const FOLLOW_UP_PENDING_NAME_VAR = "__follow_up_requested_name";
+/** Set once the parked request has been applied, so it can never fire twice. */
+export const FOLLOW_UP_PENDING_DONE_VAR = "__follow_up_requested_applied";
+
+/** A live run as the pending-follow-up lookup reads it. */
+export type FollowUpRunRow = {
+  id: string;
+  revision: number;
+  /** ai_flow_runs.status, so the ack can tell claimed from still-on-offer. */
+  status?: string | null;
+  context?: {
+    vars?: Record<string, unknown> | null;
+    routing?: {
+      claimed_by?: string | null;
+      /** An owner-alert park, where "1" is an ack and never a claim. */
+      owner_direct?: boolean;
+      /** One-person roster: an informational notice, no offer race ever ran. */
+      solo_owner?: boolean;
+    } | null;
+  } | null;
+};
+
+/** A live run a follow-up request could be about. */
+export type FollowUpRunCandidate = {
+  runId: string;
+  revision: number;
+  /** The lead's name as the run knows it, never "". */
+  leadName: string;
+  /** A request is already parked on this run. */
+  alreadyPending: boolean;
+  /**
+   * Whether somebody has taken this lead, with "we cannot tell" kept as its
+   * own answer rather than folded into either side.
+   *
+   * Drives the ack, and the difference is not cosmetic: on HomeLight the
+   * claim is what RELEASES the contact details, so an unclaimed lead must be
+   * answered with "claim it", never with "nothing else for you to do".
+   * Guessing "claimed" from a run merely sitting in `queued` would recreate
+   * that bug in a narrower window, because an unclaimed offer passes through
+   * `queued` between reminder rounds.
+   */
+  claimState: FollowUpClaimState;
+};
+
+export type FollowUpClaimState = "claimed" | "unclaimed" | "unknown";
+
+/**
+ * Read claim state from a run.
+ *
+ *   claimed   - `routing.claimed_by` (stamped by the claim reply itself) or a
+ *               real `claimed_agent` (what the flow's own steps branch on).
+ *   unclaimed - an offer is parked RIGHT NOW awaiting a claim, and replying
+ *               "1" would claim THIS lead.
+ *   unknown   - anything else. Most runs land here, and that is correct.
+ *
+ * The bar for "unclaimed" is deliberately high, because that is the only
+ * answer that tells a teammate to reply "1", and a bare "1" claims the most
+ * recent live offer: get it wrong and they are handed a different lead. Two
+ * weaker signals were tried and both were wrong on the majority of real runs:
+ *
+ *   `claimed_agent === "none"` is a DEFAULT, not a fact. The worker seeds it
+ *   into every run of every flow at context setup, so 363 of 400 recent
+ *   production runs carried it with no routing at all, across 18 flows with
+ *   no claim concept ("Needs Follow Up (AI cadence)", "Pre-call reminder").
+ *
+ *   The mere PRESENCE of `routing` does not mean a live offer either: the
+ *   object survives the offer being over and is also written where no offer
+ *   ever ran (solo_owner, owner-direct alerts, auto/owner assignment). Of 44
+ *   recent runs holding routing with no claimer, only 2 were live offers; the
+ *   other 42 were finished, never-offered, or owner-alert parks.
+ *
+ * So the test is the park itself: status `awaiting_agent` means an offer is
+ * out and waiting. The two exclusions are the parks that are NOT teammate
+ * offers, where the type's own docs say a "1" is an acknowledgement rather
+ * than a claim (Bugbot, PR #1702).
+ */
+function runClaimState(
+  row: FollowUpRunRow,
+  vars: Record<string, unknown>
+): FollowUpClaimState {
+  const routing = row.context?.routing;
+  if (routing?.claimed_by) return "claimed";
+  const agent = typeof vars.claimed_agent === "string" ? vars.claimed_agent.trim() : "";
+  if (agent && agent.toLowerCase() !== "none") return "claimed";
+  if (
+    (row.status ?? "") === "awaiting_agent" &&
+    !routing?.owner_direct &&
+    !routing?.solo_owner
+  ) {
+    return "unclaimed";
+  }
+  return "unknown";
+}
+
+/**
+ * Which live runs name a lead we could park a follow-up request on.
+ *
+ * A run only qualifies when it names a lead AND has not already filed one: a
+ * run whose `lead_phone` is a real number has, or is about to have, a contact
+ * row, and the contact path is the correct one for it. Parking on a run that
+ * already knows the number would make the request wait for a step that has
+ * already run.
+ *
+ * "none" is the flows' spelling of "not known yet" (an extraction that found
+ * nothing writes the literal string), so it is read as absent, not as a name.
+ * Order is preserved so the caller's newest-first query stays newest-first.
+ */
+export function followUpRunCandidatesFrom(
+  rows: readonly FollowUpRunRow[]
+): FollowUpRunCandidate[] {
+  const out: FollowUpRunCandidate[] = [];
+  for (const r of rows) {
+    const vars = r.context?.vars ?? {};
+    const leadName = flowVarText(vars.lead_name) || flowVarText(vars.lead_first_name);
+    if (!leadName) continue;
+    // Already has a number: its contact row exists or is one step away, so the
+    // ordinary contact match is the right path and this one would only delay.
+    if (flowVarText(vars.lead_phone)) continue;
+    out.push({
+      runId: r.id,
+      revision: r.revision,
+      leadName,
+      alreadyPending: flowVarText(vars[FOLLOW_UP_PENDING_BY_VAR]) !== "",
+      claimState: runClaimState(r, vars)
+    });
+  }
+  return out;
+}
+
+/**
+ * A flow var as text, with the flows' own "absent" spellings folded to "".
+ *
+ * Extraction steps write the literal string "none" (and occasionally "unknown"
+ * or "n/a") when they find nothing, so a raw truthiness check would read
+ * `lead_phone: "none"` as "we have their number" and skip a lead we can
+ * genuinely help. Same trap the phone-named-field rule exists for.
+ */
+function flowVarText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const t = value.trim();
+  if (!t) return "";
+  const lowered = t.toLowerCase();
+  if (lowered === "none" || lowered === "unknown" || lowered === "n/a") return "";
+  return t;
+}
+
+export type FollowUpRunMatch =
+  | { kind: "none" }
+  | { kind: "one"; run: FollowUpRunCandidate }
+  | { kind: "ambiguous"; runs: FollowUpRunCandidate[] };
+
+/**
+ * Pick which live run a follow-up request meant.
+ *
+ * Same name rule as the contact matcher (accents folded, whole first name or
+ * surname), for the same reason: a teammate should not have to learn which of
+ * two lookups their text is about to hit. With no name the newest live run
+ * wins, which is only reachable when no contact matched either, so it means
+ * "the lead you just told me about".
+ */
+export function matchFollowUpRun(
+  candidates: readonly FollowUpRunCandidate[],
+  name: string
+): FollowUpRunMatch {
+  if (candidates.length === 0) return { kind: "none" };
+  const needle = normalizeLeadName(name);
+  if (!needle) return { kind: "one", run: candidates[0]! };
+  const hits = candidates.filter((c) => {
+    const full = normalizeLeadName(c.leadName);
+    if (!full) return false;
+    if (full === needle) return true;
+    return full.split(" ").some((part) => part === needle);
+  });
+  if (hits.length === 0) return { kind: "none" };
+  if (hits.length === 1) return { kind: "one", run: hits[0]! };
+  return { kind: "ambiguous", runs: hits };
+}
+
+/** The run context with a follow-up request parked on it. */
+export function withPendingFollowUp(
+  context: Record<string, unknown> | null | undefined,
+  args: { requestedBy: string; leadName: string }
+): Record<string, unknown> {
+  const base = context && typeof context === "object" ? { ...context } : {};
+  const vars =
+    base.vars && typeof base.vars === "object"
+      ? { ...(base.vars as Record<string, unknown>) }
+      : {};
+  vars[FOLLOW_UP_PENDING_BY_VAR] = args.requestedBy;
+  vars[FOLLOW_UP_PENDING_NAME_VAR] = args.leadName;
+  base.vars = vars;
+  return base;
+}
+
+/**
+ * A request parked on this run that has not been applied yet, if any.
+ *
+ * Read by the worker at the moment it files the contact. The done-marker is
+ * checked here rather than at the call site so a re-claimed or retried
+ * upsert_customer step can never enroll the same lead twice, which would mean
+ * two cadences calling one person.
+ */
+export function pendingFollowUpFrom(
+  vars: Record<string, unknown> | null | undefined
+): { requestedBy: string; leadName: string } | null {
+  const v = vars ?? {};
+  if (v[FOLLOW_UP_PENDING_DONE_VAR] === true) return null;
+  const requestedBy = flowVarText(v[FOLLOW_UP_PENDING_BY_VAR]);
+  if (!requestedBy) return null;
+  return { requestedBy, leadName: flowVarText(v[FOLLOW_UP_PENDING_NAME_VAR]) };
+}
+
+/** Ask which live lead when a name fit more than one. */
+export function followUpRunAmbiguityText(names: readonly string[]): string {
+  return `Which one needs follow-up? Reply with the full name and F, e.g. "${names[0]}, F". Matching: ${names.join("; ")}`;
 }
