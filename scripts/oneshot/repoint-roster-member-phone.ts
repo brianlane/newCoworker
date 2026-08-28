@@ -52,6 +52,8 @@
  */
 import { loadEnv } from "../../debug/_shared.ts";
 import { smsReachability } from "../../src/lib/phone/deliverability.ts";
+import { pickImplicitContactOwner } from "../../src/lib/contacts/owner-attribution.ts";
+import { businessOwnerNumbers } from "../../src/lib/db/contact-names.ts";
 
 loadEnv();
 
@@ -121,7 +123,7 @@ const db = createClient(
 
 const { data: biz, error: bizErr } = await db
   .from("businesses")
-  .select("id, name, phone")
+  .select("id, name")
   .eq("id", BUSINESS_ID)
   .maybeSingle();
 if (bizErr || !biz) {
@@ -181,23 +183,27 @@ if (phoneUnchanged && emailUnchanged) {
 }
 
 // Solo-owner impact, reported because it changes how EVERY contact-scoped
-// alert routes: the match is a literal E.164 comparison against the
-// business's own numbers (pickImplicitContactOwner), so a repoint can flip
-// the tenant between contact-owner paging and team-broadcast claim invites.
-const { data: prefs } = await db
-  .from("notification_preferences")
-  .select("phone_number, alert_email")
-  .eq("business_id", BUSINESS_ID)
-  .maybeSingle();
-const ownerNumbers = [
-  ...new Set(
-    [biz.phone, (prefs as { phone_number?: string } | null)?.phone_number].filter(
-      (p): p is string => typeof p === "string" && p.length > 0
-    )
-  )
-];
-const soloBefore = members.length === 1 && ownerNumbers.includes(target.phone_e164);
-const soloAfter = members.length === 1 && ownerNumbers.includes(TO_PHONE);
+// alert routes: a repoint can flip the tenant between contact-owner paging
+// and team-broadcast claim invites.
+//
+// Both sides come from the PRODUCT's own helpers rather than a local
+// re-derivation. An earlier draft compared raw strings against
+// businesses.phone + notification_preferences.phone_number and counted every
+// roster row; that silently disagreed with the real thing three ways (it
+// counts only ACTIVE rows, `businessOwnerNumbers` also reads
+// business_telnyx_settings.forward_to_e164, and it coerces to E.164 before
+// comparing), so the preview could promise a flip that never happens or hide
+// one that does. A preview that can lie is worse than no preview, since it is
+// the only thing standing between a dry run and a routing change.
+const ownerNumbers = await businessOwnerNumbers(BUSINESS_ID, db);
+/** The roster exactly as it will read after the write, for the "after" call. */
+const membersAfter = members.map((m) =>
+  m.id === target.id ? { ...m, phone_e164: TO_PHONE } : m
+);
+const soloOwnerBefore = pickImplicitContactOwner(members, ownerNumbers);
+const soloOwnerAfter = pickImplicitContactOwner(membersAfter, ownerNumbers);
+const soloBefore = soloOwnerBefore?.id === target.id;
+const soloAfter = soloOwnerAfter?.id === target.id;
 
 console.log(`[oneshot] business: ${biz.name} (${BUSINESS_ID})`);
 console.log("[oneshot] current roster:", JSON.stringify(members, null, 2));
@@ -214,7 +220,11 @@ console.log(
             ? `unchanged (${EMAIL})`
             : `${target.email ?? "null"} -> ${EMAIL}`,
       sms_reachability: `${smsReachability(target.phone_e164)} -> ${reachability}`,
-      owner_numbers: ownerNumbers,
+      // Deduped for READING only. The comparison above runs on the helper's
+      // own array, duplicates and all (a business whose alert phone equals
+      // its main phone legitimately reports the number twice), so this can
+      // never drift from the decision it is describing.
+      owner_numbers: [...new Set(ownerNumbers)],
       solo_owner_match: `${soloBefore} -> ${soloAfter}`,
       routing_effect: soloAfter
         ? soloBefore
