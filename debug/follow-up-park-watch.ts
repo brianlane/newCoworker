@@ -178,24 +178,51 @@ for (const r of parked) {
     .limit(5);
   if (cadenceErr) {
     console.log(`     cadence lookup FAILED: ${cadenceErr.message}`);
-  } else {
+  } else if ((cadence ?? []).length > 0) {
     const started = cadence ?? [];
     console.log(
-      `     cadence run started (${dedupeKey}): ` +
-        (started.length > 0
-          ? `YES (${started.map((c: { id: string; status: string }) => `${c.id.slice(0, 8)}/${c.status}`).join(", ")})`
-          : "NO  <-- tag landed but no follow-up flow picked it up")
+      "     cadence run started by this apply: YES " +
+        `(${started.map((c: { id: string; status: string }) => `${c.id.slice(0, 8)}/${c.status}`).join(", ")})`
     );
+  } else {
+    // A missing dedupe key is NOT proof the cadence failed. applyPendingFollowUp
+    // enqueues that event only when the tag is NEWLY added; a re-referred lead
+    // whose contact already carried "Needs Follow Up" still gets the applied
+    // marker and the confirmation text, and is already enrolled from the
+    // earlier tagging. Calling that a miss would raise a false alarm on a
+    // working case, so ask the real question instead: is ANYTHING following
+    // this lead up? The JSON-path filter is server-side and was verified to
+    // return rows before being trusted (Bugbot, PR #1710).
+    const { data: anyCadence, error: anyErr } = await db
+      .from("ai_flow_runs")
+      .select("id, status, created_at")
+      .eq("business_id", r.business_id)
+      .eq("context->trigger->>from", leadPhone)
+      .limit(10);
+    if (anyErr) {
+      console.log(`     cadence lookup FAILED: ${anyErr.message}`);
+    } else if ((anyCadence ?? []).length > 0) {
+      console.log(
+        `     cadence run started by this apply: no, but ${(anyCadence ?? []).length} run(s) ` +
+          "already follow this lead (contact was tagged before the apply). OK."
+      );
+    } else {
+      console.log("     cadence: NONE  <-- tag landed but nothing is following this lead up");
+    }
   }
 
-  //    The confirmation text, floored at the RUN's creation rather than its
-  //    updated_at: the send happens mid-run, and updated_at moves on after it.
+  //    The confirmation text sent by THIS run. sms_outbound_log carries
+  //    run_id (logOutboundSms stamps it), so the ack is identified exactly.
+  //    Keying on to_e164 plus a time floor could credit a different apply's
+  //    ack to this one, and an unordered limit over that wider window could
+  //    drop the real row entirely (Bugbot, PR #1710).
   const { data: acks, error: ackErr } = await db
     .from("sms_outbound_log")
     .select("created_at, body")
     .eq("business_id", r.business_id)
+    .eq("run_id", r.id)
     .eq("to_e164", v[PARKED_BY])
-    .gte("created_at", r.created_at)
+    .order("created_at", { ascending: false })
     .limit(50);
   if (ackErr) {
     console.log(`     confirmation lookup FAILED: ${ackErr.message}`);
@@ -205,7 +232,7 @@ for (const r of parked) {
     /marked for follow-up|NOT calling them yet|did not mark/i.test(a.body ?? "")
   );
   console.log(
-    `     asker got a text back: ` +
+    "     asker got a text back: " +
       (confirmation
         ? `YES ("${(confirmation as { body: string }).body.slice(0, 60)}...")`
         : "NO  <-- silent, which the fixes were supposed to make impossible")
