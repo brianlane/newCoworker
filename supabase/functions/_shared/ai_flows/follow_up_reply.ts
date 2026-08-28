@@ -276,6 +276,39 @@ export function followUpCandidatesFrom(
 }
 
 /**
+ * The parked request could not be applied, and MAY still be.
+ *
+ * Every failure on the apply path used to log and return silently, which is
+ * indefensible here specifically: the ack that parked the request told a
+ * teammate about a claimed lead that there was "nothing else for you to do",
+ * so they will not send "F" again. A promise made in writing has to be
+ * withdrawn in writing when it cannot be kept (Bugbot, PR #1702).
+ *
+ * Says "try again" because this class of failure is transient (a read blip, a
+ * write that lost a race) and the request stays parked, so a later attempt can
+ * still honor it.
+ */
+export function followUpNotAppliedText(name: string, reason: string): string {
+  return `I couldn't finish marking ${name} for follow-up (${reason}), so the AI is ` +
+    "NOT calling them yet. Their details are on file now, so replying \"F, " +
+    `${name}\" will set it up.`;
+}
+
+/**
+ * The parked request will never be applied: the filed contact turned out to be
+ * one of our own numbers.
+ *
+ * Permanent, unlike the text above, so it does not invite a retry that would
+ * fail the same way. This is the guard that stops a follow-up cadence dialing
+ * the owner or a teammate.
+ */
+export function followUpStaffBlockedText(name: string): string {
+  return `I did not mark ${name} for follow-up: the contact that came through is ` +
+    "one of our own numbers, and the AI never runs a calling cadence at our own " +
+    "team. Worth a look at the lead's details on the dashboard.";
+}
+
+/**
  * ---------------------------------------------------------------------------
  * Leads that exist only as a live run
  * ---------------------------------------------------------------------------

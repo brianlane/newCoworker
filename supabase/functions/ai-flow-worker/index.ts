@@ -191,6 +191,8 @@ import {
 import {
   FOLLOW_UP_PENDING_DONE_VAR,
   followUpAppliedText,
+  followUpNotAppliedText,
+  followUpStaffBlockedText,
   pendingFollowUpFrom
 } from "../_shared/ai_flows/follow_up_reply.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
@@ -3159,9 +3161,22 @@ async function isProtectedStaffContact(
  * indistinguishable from one enrolled directly. The tag is the whole
  * mechanism; the cadence flow starts from the event, not from here.
  *
- * Best-effort throughout: every failure logs and returns. Filing a lead must
- * never fail because a courtesy tag could not be written, and the teammate
- * still has the ordinary "F" reply available once the contact is on file.
+ * Never fails the run: filing a lead must not break because a courtesy tag
+ * could not be written. But "best effort" is NOT "silently give up". The ack
+ * that parked this request told the teammate, on a claimed lead, that there
+ * was nothing else for them to do, so they will not send "F" again. Every
+ * outcome here therefore reaches them:
+ *
+ *   applied      - confirmed, the cadence is running.
+ *   staff        - refused permanently, and why. The marker is burned.
+ *   could-not    - a read or write failed. The marker is deliberately NOT
+ *                  burned, so a later attempt can still honor the request,
+ *                  and the text tells them to re-send "F" now that the
+ *                  contact exists (Bugbot, PR #1702).
+ *
+ * Burning the marker on an unverifiable staff check was the sharpest edge of
+ * that bug: a transient roster blip would refuse the tag (correct, fail safe)
+ * AND make the refusal permanent (not correct at all).
  */
 async function applyPendingFollowUp(
   supabase: Supabase,
@@ -3171,6 +3186,22 @@ async function applyPendingFollowUp(
 ): Promise<void> {
   const pending = pendingFollowUpFrom(scope.vars);
   if (!pending) return;
+  const leadLabel = String(pending.leadName || scope.vars.lead_name || e164);
+  /**
+   * Could not apply it, may still be applicable: tell them, and leave the
+   * request parked. The idempotency key is stable per run+reason, so a
+   * retrying step re-sends nothing.
+   */
+  const couldNotApply = async (reason: string, note: string): Promise<void> => {
+    appendActionTaken(scope, `could not apply the requested follow-up: ${note}`);
+    await sendTeammateSms(
+      supabase,
+      run,
+      pending.requestedBy,
+      followUpNotAppliedText(leadLabel, reason),
+      `aiflow-fu-pending-fail:${run.id}:${reason.replace(/\W+/g, "-")}`
+    );
+  };
   try {
     const lookupBase = supabase
       .from("contacts")
@@ -3183,6 +3214,10 @@ async function applyPendingFollowUp(
     ).maybeSingle();
     if (error || data == null) {
       console.error("pending follow-up: contact lookup", error);
+      await couldNotApply(
+        "I couldn't read their contact just now",
+        `could not read the contact for ${e164}`
+      );
       return;
     }
     const contact = data as {
@@ -3208,12 +3243,31 @@ async function applyPendingFollowUp(
       contactNumbers,
       contact.type
     );
-    if (staff.staff || staff.readFailed) {
+    // "Could not check" and "is staff" are different answers and get different
+    // treatment. Both refuse the tag (fail SAFE: never start a calling cadence
+    // at our own people on an answer we could not verify), but only a VERIFIED
+    // staff contact is permanent. A roster read blip must not burn the
+    // request, which is what it used to do.
+    if (staff.readFailed) {
+      await couldNotApply(
+        "I couldn't verify our team's numbers just now",
+        "the roster could not be read, so the contact was left untagged"
+      );
+      return;
+    }
+    if (staff.staff) {
       appendActionTaken(
         scope,
         "did not apply the requested follow-up: the filed contact is one of our own numbers"
       );
       scope.vars[FOLLOW_UP_PENDING_DONE_VAR] = true;
+      await sendTeammateSms(
+        supabase,
+        run,
+        pending.requestedBy,
+        followUpStaffBlockedText(leadLabel),
+        `aiflow-fu-pending-staff:${run.id}`
+      );
       return;
     }
     const existing = Array.isArray(contact.tags) ? contact.tags : [];
@@ -3228,6 +3282,10 @@ async function applyPendingFollowUp(
         .eq("id", contact.id);
       if (updErr) {
         console.error("pending follow-up: tag write", updErr);
+        await couldNotApply(
+          "the tag didn't save",
+          `the follow-up tag could not be written to ${e164}`
+        );
         return;
       }
     }
@@ -3236,7 +3294,6 @@ async function applyPendingFollowUp(
     // means a second cadence calling one person. A missed confirmation text
     // is the cheaper failure.
     scope.vars[FOLLOW_UP_PENDING_DONE_VAR] = true;
-    const leadName = pending.leadName || scope.vars.lead_name || e164;
     if (!already) {
       // The same chokepoint the dashboard tag editor, update_contact, and the
       // webhook's own "F" use, so the cadence starts identically however the
@@ -3244,7 +3301,7 @@ async function applyPendingFollowUp(
       // different flow and must be allowed to start.
       await enqueueContactEventRuns(supabase, run.business_id, {
         kind: "tag_changed",
-        contact: { e164, name: String(leadName), tags: nextTags },
+        contact: { e164, name: leadLabel, tags: nextTags },
         tag: PENDING_FOLLOW_UP_TAG,
         change: "added",
         dedupeKey: `ce:fu-pending:${run.id}:${contact.id}`
@@ -3252,13 +3309,13 @@ async function applyPendingFollowUp(
     }
     appendActionTaken(
       scope,
-      `marked ${leadName} for follow-up as ${pending.requestedBy} asked earlier`
+      `marked ${leadLabel} for follow-up as ${pending.requestedBy} asked earlier`
     );
     await sendTeammateSms(
       supabase,
       run,
       pending.requestedBy,
-      followUpAppliedText(String(leadName)),
+      followUpAppliedText(leadLabel),
       `aiflow-fu-pending:${run.id}:${contact.id}`
     );
   } catch (e) {

@@ -7,7 +7,9 @@ import {
   followUpAmbiguityText,
   followUpAppliedText,
   followUpNoLeadText,
+  followUpNotAppliedText,
   followUpPendingText,
+  followUpStaffBlockedText,
   followUpRunAmbiguityText,
   followUpCandidatesFrom,
   followUpRunCandidatesFrom,
@@ -215,6 +217,33 @@ describe("reply copy", () => {
     expect(t).toContain("Rhonda J.");
     expect(t).toContain("every 3 days");
     expect(t).toContain("stop the moment they reply");
+  });
+
+  /**
+   * The apply path used to log-and-return on every failure. That is
+   * indefensible here specifically, because the ack that parked the request
+   * told the teammate on a claimed lead there was "nothing else for you to
+   * do": they will not send F again, so a silent failure means the cadence
+   * never starts and nobody ever knows (Bugbot, PR #1702).
+   */
+  it("withdraws the promise in writing when the request could not be applied", () => {
+    const t = followUpNotAppliedText("Rhonda J.", "the tag didn't save");
+    expect(t).toContain("Rhonda J.");
+    expect(t).toContain("the tag didn't save");
+    expect(t).toContain("NOT calling them yet");
+    // Must invite the retry: this class of failure is transient and the
+    // request stays parked.
+    expect(t).toContain('"F, Rhonda J."');
+  });
+
+  /**
+   * The permanent refusal, so it must NOT invite a retry that would fail the
+   * same way. This is the guard that stops a cadence dialing our own team.
+   */
+  it("explains a staff-contact refusal without inviting a retry", () => {
+    const t = followUpStaffBlockedText("Rhonda J.");
+    expect(t).toContain("one of our own numbers");
+    expect(t).not.toContain('"F, Rhonda J."');
   });
 
   it("shows the choices when a live lead's name was ambiguous", () => {
