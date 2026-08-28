@@ -6,8 +6,13 @@ import {
   initialNotificationPreferenceContactsFromSeeds,
   mergeNotificationContactsForDisplay,
   isUniqueViolation,
-  updateNotificationPreferences
+  updateNotificationPreferences,
+  type NotificationPreferencesUpdate
 } from "@/lib/db/notification-preferences";
+import {
+  NOTIFICATION_TOGGLE_KEYS,
+  type NotificationToggleKey
+} from "@/lib/notifications/preferences-tool";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -986,5 +991,111 @@ describe("db/notification-preferences", () => {
     });
     const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.unsubscribed_at).toBe("2026-05-01T00:00:00Z");
+  });
+
+  /**
+   * The two hand-maintained lists inside updateNotificationPreferences, both
+   * of which drop a column SILENTLY when a new channel forgets them: the save
+   * returns 200, the toggle animates, and the column never moves.
+   *
+   * UPDATABLE_PREFERENCE_KEYS is now a Record over the update type, so the
+   * compiler catches an omission there. The re-subscribe chain cannot be made
+   * exhaustive the same way because it is a deliberate SUBSET, so it gets
+   * this test instead.
+   */
+  describe("the update whitelist and the re-subscribe chain stay complete", () => {
+    /**
+     * Typed `Required<...>`, so this fixture cannot drift from the update
+     * type: adding a column without adding it here is a compile error, and
+     * the assertion below then proves the column actually reaches the write.
+     * A hand-listed fixture would only ever prove what it happened to list.
+     */
+    const FULL_PATCH: Required<NotificationPreferencesUpdate> = {
+      sms_urgent: false,
+      whatsapp_urgent: false,
+      whatsapp_replaces_sms: true,
+      slack_urgent: false,
+      slack_digest: false,
+      email_digest: false,
+      email_digest_weekly: false,
+      email_urgent: false,
+      dashboard_alerts: false,
+      sms_warm_transfer: false,
+      image_limit_alerts: false,
+      aiflow_failure_alerts: false,
+      customer_reply_alerts: false,
+      unassigned_booking_alerts: false,
+      booking_alert_audience: "both",
+      booking_alert_member_ids: ["member-1"],
+      category_leads: false,
+      category_team: false,
+      category_system: false,
+      digest_customer_facing_only: true,
+      phone_number: "+15551230000",
+      alert_email: "alerts@example.com",
+      digest_email_daily: "daily@example.com",
+      digest_email_weekly: "weekly@example.com",
+      unsubscribed_at: "2026-01-02T00:00:00Z"
+    };
+
+    async function capturePayload(
+      patch: NotificationPreferencesUpdate,
+      stored: Record<string, unknown> = PREFS
+    ): Promise<Record<string, unknown>> {
+      const selectChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: stored, error: null })
+      };
+      const updateChain = {
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+      };
+      const db = {
+        from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await updateNotificationPreferences("biz-1", patch);
+      return updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    }
+
+    it("writes every column the update type allows", async () => {
+      const payload = await capturePayload(FULL_PATCH);
+      for (const key of Object.keys(FULL_PATCH)) {
+        expect(payload, `${key} was dropped on the way to the write`).toHaveProperty(key);
+      }
+    });
+
+    it("re-subscribes on every channel toggle, and on nothing that only narrows one", async () => {
+      /**
+       * Turning a CHANNEL back on clears the unsubscribed-from-all banner.
+       * Narrowing or rerouting what an already-on channel delivers does not,
+       * because the owner has not asked to start hearing again:
+       *   digest_customer_facing_only  trims the digest's contents
+       *   category_*                   filter which events deliver at all
+       * (whatsapp_replaces_sms and booking_alert_* are the same class and are
+       * already covered by their own tests above.)
+       */
+      const NARROWING_ONLY: NotificationToggleKey[] = [
+        "digest_customer_facing_only",
+        "category_leads",
+        "category_team",
+        "category_system"
+      ];
+
+      const unsubscribed = { ...PREFS, unsubscribed_at: "2026-04-01T00:00:00Z" };
+      const cleared: string[] = [];
+      for (const key of NOTIFICATION_TOGGLE_KEYS) {
+        const payload = await capturePayload({ [key]: true }, unsubscribed);
+        if (payload.unsubscribed_at === null) cleared.push(key);
+      }
+
+      const expected = NOTIFICATION_TOGGLE_KEYS.filter(
+        (k) => !NARROWING_ONLY.includes(k)
+      ).slice();
+      expect(cleared.sort()).toEqual(expected.sort());
+    });
   });
 });
