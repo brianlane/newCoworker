@@ -311,7 +311,13 @@ export type FollowUpRunRow = {
   status?: string | null;
   context?: {
     vars?: Record<string, unknown> | null;
-    routing?: { claimed_by?: string | null } | null;
+    routing?: {
+      claimed_by?: string | null;
+      /** An owner-alert park, where "1" is an ack and never a claim. */
+      owner_direct?: boolean;
+      /** One-person roster: an informational notice, no offer race ever ran. */
+      solo_owner?: boolean;
+    } | null;
   } | null;
 };
 
@@ -340,28 +346,34 @@ export type FollowUpRunCandidate = {
 export type FollowUpClaimState = "claimed" | "unclaimed" | "unknown";
 
 /**
- * Read claim state from a run, on positive evidence only.
+ * Read claim state from a run.
  *
  *   claimed   - `routing.claimed_by` (stamped by the claim reply itself) or a
  *               real `claimed_agent` (what the flow's own steps branch on).
- *   unclaimed - there is demonstrably an offer TO claim and nobody holds it:
- *               a park awaiting a claim (`awaiting_agent`), or a `routing`
- *               object with no claimer on it.
- *   unknown   - neither. Most runs land here, and that is correct.
+ *   unclaimed - an offer is parked RIGHT NOW awaiting a claim, and replying
+ *               "1" would claim THIS lead.
+ *   unknown   - anything else. Most runs land here, and that is correct.
  *
- * `claimed_agent === "none"` is NOT evidence of anything. The worker seeds
- * that sentinel into EVERY run of EVERY flow at context setup, so a flow can
- * carry it having never offered a claim to anyone: 363 of 400 recent
- * production runs held it with no `routing` at all, across 18 flows with no
- * claim concept whatsoever ("Needs Follow Up (AI cadence)", "Pre-call
- * reminder", "Clever Update Leads"). Reading it as "unclaimed" would have
- * told nine teammates in ten to reply "1" to an offer that does not exist,
- * and a bare "1" claims the most recent live offer, which could hand them a
- * completely different lead (Bugbot, PR #1702).
+ * The bar for "unclaimed" is deliberately high, because that is the only
+ * answer that tells a teammate to reply "1", and a bare "1" claims the most
+ * recent live offer: get it wrong and they are handed a different lead. Two
+ * weaker signals were tried and both were wrong on the majority of real runs:
  *
- * `routing` is the honest tell: it exists only once a route_to_team has
- * actually offered this lead, so its presence proves there is something to
- * claim and its missing `claimed_by` proves nobody has.
+ *   `claimed_agent === "none"` is a DEFAULT, not a fact. The worker seeds it
+ *   into every run of every flow at context setup, so 363 of 400 recent
+ *   production runs carried it with no routing at all, across 18 flows with
+ *   no claim concept ("Needs Follow Up (AI cadence)", "Pre-call reminder").
+ *
+ *   The mere PRESENCE of `routing` does not mean a live offer either: the
+ *   object survives the offer being over and is also written where no offer
+ *   ever ran (solo_owner, owner-direct alerts, auto/owner assignment). Of 44
+ *   recent runs holding routing with no claimer, only 2 were live offers; the
+ *   other 42 were finished, never-offered, or owner-alert parks.
+ *
+ * So the test is the park itself: status `awaiting_agent` means an offer is
+ * out and waiting. The two exclusions are the parks that are NOT teammate
+ * offers, where the type's own docs say a "1" is an acknowledgement rather
+ * than a claim (Bugbot, PR #1702).
  */
 function runClaimState(
   row: FollowUpRunRow,
@@ -371,8 +383,13 @@ function runClaimState(
   if (routing?.claimed_by) return "claimed";
   const agent = typeof vars.claimed_agent === "string" ? vars.claimed_agent.trim() : "";
   if (agent && agent.toLowerCase() !== "none") return "claimed";
-  if ((row.status ?? "") === "awaiting_agent") return "unclaimed";
-  if (routing) return "unclaimed";
+  if (
+    (row.status ?? "") === "awaiting_agent" &&
+    !routing?.owner_direct &&
+    !routing?.solo_owner
+  ) {
+    return "unclaimed";
+  }
   return "unknown";
 }
 

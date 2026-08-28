@@ -340,11 +340,13 @@ describe("followUpRunCandidatesFrom", () => {
     });
 
     /**
-     * `routing` is the honest tell: it exists only once a route_to_team has
-     * actually offered this lead, so its presence proves there IS something to
-     * claim, and no claimed_by on it proves nobody has.
+     * The bar for "unclaimed" is the PARK, not the routing object. That object
+     * survives the offer being over and is also written where no offer ever
+     * ran, so of 44 recent production runs holding routing with no claimer,
+     * only 2 were live offers. A run merely carrying routing must stay unknown
+     * (Bugbot, PR #1702).
      */
-    it("reads an offered-but-unclaimed run as unclaimed", () => {
+    it("does not read a stale routing object as a live offer", () => {
       expect(
         followUpRunCandidatesFrom([
           {
@@ -357,8 +359,40 @@ describe("followUpRunCandidatesFrom", () => {
             }
           }
         ])[0]!.claimState
-      ).toBe("unclaimed");
+      ).toBe("unknown");
+      // The 26-run shape: offer finished, routing left behind.
+      expect(
+        followUpRunCandidatesFrom([
+          {
+            id: "r2",
+            revision: 1,
+            status: "done",
+            context: { vars: { lead_name: "R", claimed_agent: "none" }, routing: {} }
+          }
+        ])[0]!.claimState
+      ).toBe("unknown");
     });
+
+    /**
+     * Two awaiting_agent parks are NOT teammate offers, and the routing type's
+     * own docs say so: on both, a "1" is an acknowledgement, never a claim.
+     * Telling someone to reply "1" there would claim a different lead.
+     */
+    it.each(["owner_direct", "solo_owner"])(
+      "does not treat an %s park as a claimable offer",
+      (flag) => {
+        expect(
+          followUpRunCandidatesFrom([
+            {
+              id: "r1",
+              revision: 1,
+              status: "awaiting_agent",
+              context: { vars: { lead_name: "R" }, routing: { [flag]: true } }
+            }
+          ])[0]!.claimState
+        ).toBe("unknown");
+      }
+    );
 
     it("reads a parked offer as unclaimed", () => {
       expect(
