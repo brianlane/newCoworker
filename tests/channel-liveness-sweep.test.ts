@@ -15,6 +15,7 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { businessOwnerNumbers } from "@/lib/db/contact-names";
 import { reportChannelLiveness } from "@/lib/notifications/channel-liveness-read";
 import { sweepChannelLiveness } from "@/lib/notifications/channel-liveness-sweep";
+import { LIVENESS_CHANNELS } from "@/lib/notifications/channel-liveness";
 import type { ChannelJudgement, LivenessChannel } from "@/lib/notifications/channel-liveness";
 
 /**
@@ -98,7 +99,10 @@ type Legs = {
   sends?: Partial<Record<LivenessChannel, number>> | "missing";
   read?: Fixture;
   sms?: Fixture;
+  /** notification_link_clicks with channel='sms' (the SMS deep link). */
   clicks?: Fixture;
+  /** notification_link_clicks with channel='push' (a notificationclick). */
+  pushClicks?: Fixture;
   whatsapp?: Fixture;
   slack?: Fixture;
   email?: Fixture;
@@ -113,7 +117,8 @@ const BUSY: Record<LivenessChannel, number> = {
   email: 40,
   dashboard: 40,
   whatsapp: 40,
-  slack: 40
+  slack: 40,
+  push: 40
 };
 
 function answer(q: Query, legs: Legs): Fixture {
@@ -127,7 +132,13 @@ function answer(q: Query, legs: Legs): Fixture {
   }
   if (q.table === "notifications") return legs.read ?? { data: [] };
   if (q.table === "sms_inbound_jobs") return legs.sms ?? { data: [] };
-  if (q.table === "notification_link_clicks") return legs.clicks ?? { data: [] };
+  if (q.table === "notification_link_clicks") {
+    // Routed by the channel filter, so a test can give SMS and push
+    // DIFFERENT signals. Serving one fixture to both would let a test pass
+    // while the read silently ignored its channel filter.
+    const channel = q.filters.find((f) => f[1] === "channel")?.[2];
+    return (channel === "push" ? legs.pushClicks : legs.clicks) ?? { data: [] };
+  }
   if (q.table === "messenger_conversations") return legs.whatsapp ?? { data: [] };
   if (q.table === "coworker_conversations") return legs.slack ?? { data: [] };
   return legs.email ?? { data: [] };
@@ -215,7 +226,7 @@ describe("send counts", () => {
     // head:true is what keeps the 1000-row PostgREST cap from turning a busy
     // month into a quiet-looking one.
     const counts = db.seen.filter((q) => q.table === "notifications" && q.head);
-    expect(counts).toHaveLength(5);
+    expect(counts).toHaveLength(LIVENESS_CHANNELS.length);
     expect(counts[0].filters).toContainEqual(["eq", "status", "sent"]);
   });
 
@@ -267,6 +278,43 @@ describe("the SMS signal", () => {
     expect(neither.by("sms")).toMatchObject({ verdict: "silent", silentDays: null });
   });
 
+  /**
+   * A push tap is the only TRUE read receipt in this system: it fires on the
+   * owner's device, from a real gesture, on a subscription bound to an
+   * authenticated user. Every other channel here infers engagement.
+   */
+  it("reads the push tap from its own channel, excluding prefetch", async () => {
+    const { query } = await judgeOne();
+    const pushQuery = query("notification_link_clicks", (q) =>
+      q.filters.some((f) => f[1] === "channel" && f[2] === "push")
+    );
+    expect(pushQuery, "no push-scoped click read was issued").toBeTruthy();
+    expect(pushQuery?.filters).toContainEqual(["eq", "likely_prefetch", false]);
+  });
+
+  /**
+   * The two clicks live in ONE table separated only by `channel`, so a read
+   * that dropped its filter would let a push tap certify SMS as alive (and
+   * the reverse). That is the same shape as the WhatsApp bug this module was
+   * built after: reading the newest row of a shared table and attributing it
+   * to the wrong party.
+   */
+  it("does not let a push tap vouch for SMS, or an SMS click for push", async () => {
+    const pushOnly = await judgeOne({
+      clicks: { data: [] },
+      pushClicks: { data: [{ clicked_at: daysAgo(1) }] }
+    });
+    expect(pushOnly.by("push").verdict).toBe("live");
+    expect(pushOnly.by("sms").verdict).toBe("silent");
+
+    const smsOnly = await judgeOne({
+      clicks: { data: [{ clicked_at: daysAgo(1) }] },
+      pushClicks: { data: [] }
+    });
+    expect(smsOnly.by("sms").verdict).toBe("live");
+    expect(smsOnly.by("push").verdict).toBe("silent");
+  });
+
   it("excludes prefetch clicks and pins the channel", async () => {
     // Preview cards and carrier scanners fetch every link seconds after
     // delivery. Counting those would manufacture a perfect, permanent
@@ -284,7 +332,9 @@ describe("the SMS signal", () => {
     const reply = await judgeOne({}, { fail: (q) => q.table === "sms_inbound_jobs" });
     expect(reply.row.outcome === "failed" && reply.row.error).toBe(`lastStaffSmsAt: ${READ_FAILED}`);
     const tap = await judgeOne({}, { fail: (q) => q.table === "notification_link_clicks" });
-    expect(tap.row.outcome === "failed" && tap.row.error).toBe(`lastNotificationLinkClickAt: ${READ_FAILED}`);
+    expect(tap.row.outcome === "failed" && tap.row.error).toBe(
+      `lastNotificationLinkClickAt(sms): ${READ_FAILED}`
+    );
   });
 
   it("tolerates a null result set on either SMS leg", async () => {
@@ -524,7 +574,8 @@ describe("reportChannelLiveness", () => {
       "email",
       "dashboard",
       "whatsapp",
-      "slack"
+      "slack",
+      "push"
     ]);
     expect(recordSystemLog).not.toHaveBeenCalled();
   });

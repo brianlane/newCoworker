@@ -1016,6 +1016,7 @@ describe("db/notification-preferences", () => {
       whatsapp_replaces_sms: true,
       slack_urgent: false,
       slack_digest: false,
+      push_urgent: false,
       email_digest: false,
       email_digest_weekly: false,
       email_urgent: false,

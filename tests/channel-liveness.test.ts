@@ -199,6 +199,55 @@ describe("every channel has a stated silence policy", () => {
     }
   });
 
+  /**
+   * Push is the tightest threshold in the system, and deliberately so. Every
+   * other channel's signal is a proxy (a reply that an attentive owner might
+   * simply never send), so those numbers buy headroom against a false
+   * positive that push does not have: a notificationclick fires only when a
+   * human taps that specific banner.
+   *
+   * Seven rather than three because push is opportunistic. An owner can read
+   * a lock-screen banner and act elsewhere without tapping, and three days
+   * would trip on a long weekend.
+   */
+  it("holds push to a much tighter silence budget than the proxy channels", () => {
+    const at6 = judgeChannel(
+      evidence({ channel: "push", sends: 30, lastHumanSignalAt: daysAgo(6) }),
+      NOW
+    );
+    const at8 = judgeChannel(
+      evidence({ channel: "push", sends: 30, lastHumanSignalAt: daysAgo(8) }),
+      NOW
+    );
+    expect(at6.verdict).toBe("live");
+    expect(at8.verdict).toBe("silent");
+
+    // The same eight days is still healthy on every inferred-reply channel.
+    for (const channel of ["sms", "whatsapp", "dashboard", "slack"] as const) {
+      expect(
+        judgeChannel(evidence({ channel, sends: 30, lastHumanSignalAt: daysAgo(8) }), NOW)
+          .verdict,
+        `${channel} should still be live at 8 days`
+      ).toBe("live");
+    }
+  });
+
+  it("calls push silent when alerts land and nobody has ever tapped one", () => {
+    const j = judgeChannel(
+      evidence({ channel: "push", sends: 30, lastHumanSignalAt: null }),
+      NOW
+    );
+    expect(j.verdict).toBe("silent");
+  });
+
+  it("leaves a low-volume push channel unused rather than dead", () => {
+    // A business that just turned push on must not read as broken.
+    expect(
+      judgeChannel(evidence({ channel: "push", sends: 3, lastHumanSignalAt: null }), NOW)
+        .verdict
+    ).toBe("unused");
+  });
+
   it("holds the floor at exactly ten alerts in the window", () => {
     const below = judgeChannel(evidence({ channel: "sms", sends: 9 }), NOW);
     const at = judgeChannel(evidence({ channel: "sms", sends: 10 }), NOW);

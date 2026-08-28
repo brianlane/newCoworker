@@ -27,6 +27,15 @@ export type NotificationPreferencesRow = {
   slack_urgent?: boolean;
   /** Post the daily/weekly digest to the same Slack channel. */
   slack_digest?: boolean;
+  /**
+   * Deliver urgent owner alerts as a Web Push banner to every subscribed
+   * device. Optional on the type for rows read before 20260828215736.
+   *
+   * There is deliberately no push_digest sibling: a push is an interrupt, and
+   * a daily banner nobody taps would corrode the notificationclick receipt
+   * that channel-liveness reads. See the migration for the full argument.
+   */
+  push_urgent?: boolean;
   email_digest: boolean;
   email_digest_weekly: boolean;
   email_urgent: boolean;
@@ -169,6 +178,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "whatsapp_replaces_sms"
     | "slack_urgent"
     | "slack_digest"
+    | "push_urgent"
     | "email_digest"
     | "email_digest_weekly"
     | "email_urgent"
@@ -213,6 +223,7 @@ const UPDATABLE_PREFERENCE_KEYS: Record<keyof Required<NotificationPreferencesUp
   whatsapp_replaces_sms: true,
   slack_urgent: true,
   slack_digest: true,
+  push_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
   email_urgent: true,
@@ -241,6 +252,10 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   whatsapp_replaces_sms: false,
   slack_urgent: true,
   slack_digest: true,
+  // NOT compiler-enforced, unlike UPDATABLE_PREFERENCE_KEYS above: the field
+  // is optional on the row type (it postdates the table), so Omit<> does not
+  // demand it here. Add every new channel toggle by hand.
+  push_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
   email_urgent: true,
@@ -368,6 +383,7 @@ export async function updateNotificationPreferences(
       patch.whatsapp_urgent === true ||
       patch.slack_urgent === true ||
       patch.slack_digest === true ||
+      patch.push_urgent === true ||
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||
       patch.email_urgent === true ||

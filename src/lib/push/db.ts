@@ -168,6 +168,39 @@ export async function revokePushSubscriptionsForUser(
 }
 
 /**
+ * "Is push applicable to this business at all?" for the dispatcher.
+ *
+ * FAILS TOWARD TRUE, matching slackAlertTargetState. This value decides
+ * whether a business gets NO push row at all (the never-connected silence
+ * rule) versus an honest skipped row, so a transient read blip must degrade
+ * to the noisy-but-honest side. Reporting "not applicable" on a hiccup would
+ * silently erase the channel from a tenant who really does have devices, and
+ * leave nothing behind to notice it by.
+ */
+export async function pushTargetState(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<{ connected: boolean }> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("push_subscriptions")
+      .select("id")
+      .eq("business_id", businessId)
+      .is("revoked_at", null)
+      // limit(1), NOT maybeSingle: this table is one row per DEVICE, and
+      // maybeSingle throws on a second row. Copying the Slack leg's
+      // maybeSingle here would make the check error for every business with
+      // two phones, and the fail-open default would hide it forever.
+      .limit(1);
+    if (error) return { connected: true };
+    return { connected: (data as unknown[] | null)?.length ? true : false };
+  } catch {
+    return { connected: true };
+  }
+}
+
+/**
  * Resolve one live subscription by endpoint, for the click receipt.
  *
  * The service worker posts back an endpoint it holds, and this is what turns

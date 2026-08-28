@@ -57,6 +57,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   );
   const [slackUrgent, setSlackUrgent] = useState(initial.slack_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
+  const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [digestCustomerFacingOnly, setDigestCustomerFacingOnly] = useState(
@@ -106,6 +107,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setWhatsappReplacesSms(initial.whatsapp_replaces_sms ?? false);
     setSlackUrgent(initial.slack_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
+    setPushUrgent(initial.push_urgent ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setDigestCustomerFacingOnly(initial.digest_customer_facing_only ?? false);
@@ -132,6 +134,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setWhatsappReplacesSms(prefs.whatsapp_replaces_sms ?? false);
     setSlackUrgent(prefs.slack_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
+    setPushUrgent(prefs.push_urgent ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setDigestCustomerFacingOnly(prefs.digest_customer_facing_only ?? false);
@@ -166,6 +169,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           whatsapp_replaces_sms: whatsappReplacesSms,
           slack_urgent: slackUrgent,
           slack_digest: slackDigest,
+          push_urgent: pushUrgent,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           digest_customer_facing_only: digestCustomerFacingOnly,
@@ -213,6 +217,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           whatsapp_urgent: false,
           slack_urgent: false,
           slack_digest: false,
+          push_urgent: false,
           email_digest: false,
           email_digest_weekly: false,
           email_urgent: false,
@@ -291,6 +296,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Post the daily and weekly digests to the same Slack channel."
           checked={slackDigest}
           onChange={setSlackDigest}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Push: urgent alerts"
+          description="Show a banner on every device where you turned on notifications for this dashboard."
+          checked={pushUrgent}
+          onChange={setPushUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

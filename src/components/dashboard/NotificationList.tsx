@@ -66,10 +66,17 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped: urgent WhatsApp disabled";
     case "whatsapp_preferred":
       return "Skipped: sent on WhatsApp instead (your WhatsApp-instead-of-SMS preference)";
-    case "not_connected":
-      return "Skipped: WhatsApp isn't connected (connect it under Integrations)";
     case "whatsapp_bridge_unconfigured":
       return "Skipped: WhatsApp service not configured";
+    case "push_urgent_disabled":
+      return "Skipped: push alerts disabled";
+    case "push_all_expired":
+      return "Skipped: no device is subscribed anymore (turn push back on from this page)";
+    case "push_tier_blocked":
+      return "Skipped: push alerts need a Standard or Enterprise plan";
+    case "push_vapid_unconfigured":
+    case "push_bridge_unconfigured":
+      return "Skipped: push service not configured";
     case "recent_team_notify":
       return "Skipped: the team was notified about this contact moments earlier";
     case "email_digest_disabled":

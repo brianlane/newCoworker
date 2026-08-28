@@ -41,6 +41,19 @@ vi.mock("@/lib/slack/deliver", async (importOriginal) => {
   };
 });
 
+/**
+ * Push defaults to NEVER-SUBSCRIBED, exactly as the Slack mock above defaults
+ * to disconnected, and for the same reason: pushTargetState fails TOWARD
+ * connected on a read error, so without this every one of the ~2500 lines of
+ * expectations below would gain a push row and every toHaveLength would
+ * break. The push describe block opts in explicitly.
+ */
+vi.mock("@/lib/push/db", () => ({
+  pushTargetState: vi.fn(async () => ({ connected: false }))
+}));
+
+vi.mock("@/lib/push/send", () => ({ deliverPush: vi.fn() }));
+
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
   getTelnyxMessagingForBusiness: vi.fn(async () => ({
@@ -96,6 +109,8 @@ import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messa
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { deliverSlackAlert, slackAlertTargetState } from "@/lib/slack/deliver";
+import { pushTargetState } from "@/lib/push/db";
+import { deliverPush } from "@/lib/push/send";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -214,6 +229,8 @@ describe("notifications/dispatch", () => {
       alertChannelName: null
     });
     vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    vi.mocked(pushTargetState).mockResolvedValue({ connected: false });
+    vi.mocked(deliverPush).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
     // English unless a test says otherwise: clearAllMocks clears calls, not
@@ -1310,6 +1327,245 @@ describe("notifications/dispatch", () => {
         status: "failed",
         reason: "send_failed"
       });
+    });
+  });
+
+  describe("push channel", () => {
+    const pushRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "push");
+
+    const subscribed = () =>
+      vi.mocked(pushTargetState).mockResolvedValue({ connected: true });
+
+    const dispatch = (over: Record<string, unknown> = {}) =>
+      dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        ...over
+      } as Parameters<typeof dispatchUrgentNotification>[0]);
+
+    it("never-subscribed writes no rows and never delivers", async () => {
+      const result = await dispatch();
+      expect(pushRows()).toHaveLength(0);
+      expect(deliverPush).not.toHaveBeenCalled();
+      expect(result.results.some((r) => r.channel === "push")).toBe(false);
+    });
+
+    it("records sent with the device count", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 2, revoked: 1 });
+      await dispatch({ ctaPath: "/dashboard/calls/abc" });
+
+      const rows = pushRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("sent");
+      const payload = rows[0].payload as Record<string, unknown>;
+      expect(payload.recipient).toBe("2 device(s)");
+      expect(payload.devices_sent).toBe(2);
+      expect(payload.devices_revoked).toBe(1);
+    });
+
+    it("sends an app-relative tap target, not the absolute dashboard url", async () => {
+      // buildPushPayload rejects anything that is not app-relative and would
+      // silently rewrite an absolute URL to /dashboard, losing the deep link.
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      await dispatch({ ctaPath: "/dashboard/calls/abc" });
+      expect(deliverPush).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "/dashboard/calls/abc" })
+      );
+    });
+
+    /**
+     * The receipt depends on this and nothing else will notice if it drifts:
+     * the service worker posts this id back, and a mismatch means every tap
+     * records against a row that does not exist while the channel still looks
+     * healthy.
+     */
+    it("hands the push the SAME id as the row it writes", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      await dispatch();
+
+      const sentId = vi.mocked(deliverPush).mock.calls[0][0].notificationId;
+      expect(sentId).toBeTruthy();
+      expect(pushRows()[0].id).toBe(sentId);
+    });
+
+    it("skips with an owner-readable reason when the toggle is off", async () => {
+      subscribed();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        push_urgent: false
+      } as never);
+      await dispatch();
+      const rows = pushRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("skipped");
+      expect((rows[0].payload as Record<string, unknown>).reason).toBe("push_urgent_disabled");
+      expect(deliverPush).not.toHaveBeenCalled();
+    });
+
+    it("skips when the owner unsubscribed from everything", async () => {
+      subscribed();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-08-01T00:00:00Z"
+      } as never);
+      await dispatch();
+      expect((pushRows()[0].payload as Record<string, unknown>).reason).toBe("unsubscribed");
+    });
+
+    it("writes no row when delivery races an unsubscribe", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: false, reason: "not_connected" });
+      await dispatch();
+      expect(pushRows()).toHaveLength(0);
+    });
+
+    /**
+     * Every device gone is a SKIP, not a failure. The owner uninstalled or
+     * cleared their browser, which is a decision; raising
+     * alert_delivery_failed for that would page us for every cleared browser.
+     * The chronic case is the channel-liveness sweep's job.
+     */
+    it.each([
+      ["all_expired", "push_all_expired:2 expired", "2 expired"],
+      ["vapid_unconfigured", "push_vapid_unconfigured", undefined],
+      ["tier_blocked", "push_tier_blocked", undefined]
+    ])("records %s as a skip", async (reason, expected, detail) => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({
+        ok: false,
+        reason: reason as "all_expired",
+        ...(detail ? { detail } : {})
+      });
+      await dispatch();
+      const rows = pushRows();
+      expect(rows[0].status).toBe("skipped");
+      expect((rows[0].payload as Record<string, unknown>).reason).toBe(expected);
+    });
+
+    it("records a transport failure as failed, so reportFailedChannels sees it", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({
+        ok: false,
+        reason: "send_failed",
+        detail: "http_500"
+      });
+      await dispatch();
+      const rows = pushRows();
+      expect(rows[0].status).toBe("failed");
+      expect((rows[0].payload as Record<string, unknown>).reason).toBe(
+        "push_send_failed:http_500"
+      );
+    });
+
+    it("records a detail-less transport failure as failed", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: false, reason: "send_failed" });
+      await dispatch();
+      expect((pushRows()[0].payload as Record<string, unknown>).reason).toBe("push_send_failed");
+    });
+
+    it("records a thrown delivery as failed without losing the other channels", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockRejectedValue(new Error("socket hang up"));
+      const result = await dispatch();
+      const rows = pushRows();
+      expect(rows[0].status).toBe("failed");
+      expect((rows[0].payload as Record<string, unknown>).reason).toBe("socket hang up");
+      expect(result.results.some((r) => r.channel === "dashboard")).toBe(true);
+    });
+
+    it("records a thrown non-Error as failed", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockRejectedValue("exploded");
+      await dispatch();
+      expect((pushRows()[0].payload as Record<string, unknown>).reason).toBe("send_failed");
+    });
+
+    /**
+     * The deliberate divergence from the WhatsApp leg. WhatsApp sits out an
+     * unowned-lead broadcast because it is single-recipient; deliverPush fans
+     * out to the whole business, so sitting out would trade noise for silence.
+     * This test is the only thing stopping a future reader from "fixing" the
+     * asymmetry to match WhatsApp.
+     */
+    it("still fires on an unowned-lead team broadcast", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 3, revoked: 0 });
+      vi.mocked(resolveContactOwnerTarget).mockResolvedValue({
+        target: "team_broadcast",
+        team: [
+          { phone: "+15550000001", name: "A", employeeId: null },
+          { phone: "+15550000002", name: "B", employeeId: null }
+        ],
+        email: null,
+        emailTarget: "owner"
+      } as never);
+
+      await dispatch({ contactE164: "+15551234567" });
+      expect(deliverPush).toHaveBeenCalled();
+      expect(pushRows()[0].status).toBe("sent");
+    });
+
+    /**
+     * Both suppression paths carry their own hardcoded channel list, so push
+     * has to be added to each by hand. If it is missed, a flood-suppressed or
+     * category-gated dispatch writes rows for five channels and silently
+     * omits the sixth, and the notifications page shows an owner an
+     * incomplete account of what happened.
+     */
+    it("writes a push skip row when the whole dispatch is category-gated", async () => {
+      subscribed();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+
+      await dispatch({ summary: "New lead captured", kind: "voice_capture" });
+      const rows = pushRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("skipped");
+      expect((rows[0].payload as Record<string, unknown>).reason).toBe(
+        "category_leads_disabled"
+      );
+      expect(deliverPush).not.toHaveBeenCalled();
+    });
+
+    it("writes no push skip row for a category-gated dispatch when nobody subscribed", async () => {
+      // The never-connected rule wins over the suppression list: a business
+      // with no devices must not accumulate skip rows for a channel that does
+      // not apply to it.
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+      await dispatch({ summary: "New lead captured", kind: "voice_capture" });
+      expect(pushRows()).toHaveLength(0);
+    });
+
+    it("goes content-free under HIPAA mode, and drops the deep link", async () => {
+      // A banner sits on a lock screen, at least as exposed as an SMS
+      // preview, and a ctaPath like /dashboard/customers/%2B1555... is itself
+      // an identifier.
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      vi.mocked(getBusiness).mockResolvedValue({ ...BUSINESS, hipaa_mode: true } as never);
+
+      await dispatch({
+        summary: "Jane Doe scheduled a follow-up",
+        ctaPath: "/dashboard/customers/%2B15551234567"
+      });
+
+      const arg = vi.mocked(deliverPush).mock.calls[0][0];
+      expect(arg.body).not.toContain("Jane Doe");
+      expect(arg.url).toBe("/dashboard");
     });
   });
 

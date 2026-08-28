@@ -63,7 +63,7 @@ interface WebhookPayload {
   };
 }
 
-type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp" | "slack";
+type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp" | "slack" | "push";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
@@ -83,6 +83,7 @@ type ResolvedTargets = {
    */
   whatsappReplacesSms: boolean;
   slackUrgent: boolean;
+  pushUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -166,6 +167,7 @@ async function resolveTargets(
   // channels), unlike the channel toggles which fail toward on.
   let whatsappReplacesSms = false;
   let slackUrgent = true;
+  let pushUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -174,7 +176,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, push_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -194,6 +196,8 @@ async function resolveTargets(
     whatsappReplacesSms = Boolean(prefs.whatsapp_replaces_sms ?? false);
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
+    // ?? true: rows read before 20260828215736, same posture.
+    pushUrgent = Boolean(prefs.push_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -232,6 +236,7 @@ async function resolveTargets(
     whatsappUrgent,
     whatsappReplacesSms,
     slackUrgent,
+    pushUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
@@ -1213,6 +1218,134 @@ serve(async (req: Request) => {
       kind,
       basePayload,
       "slack_bridge_unconfigured"
+    );
+  }
+
+  // 6) Web Push, delegated to the Next.js internal endpoint (VAPID signing is
+  // ECDSA P-256 and the payload is aes128gcm, both node:crypto, so no VAPID
+  // private key lands in an edge function). Same never-connected silence rule
+  // as WhatsApp and Slack. Mirrors the sixth arm of
+  // src/lib/notifications/dispatch.ts.
+  let pushConnected = true;
+  {
+    // limit(1), NOT maybeSingle like the Slack check above. slack_connections
+    // is one row per business; push_subscriptions is one row per DEVICE, and
+    // maybeSingle ERRORS on a second row. Copying the Slack shape here would
+    // make this check throw for every business with two phones, the error
+    // would be swallowed by the `if (!err)` guard, and pushConnected would sit
+    // at its fail-open default forever without anyone noticing.
+    const { data: pushSubs, error: pushErr } = await supa
+      .from("push_subscriptions")
+      .select("id")
+      .eq("business_id", record.business_id)
+      .is("revoked_at", null)
+      .limit(1);
+    if (!pushErr) pushConnected = (pushSubs?.length ?? 0) > 0;
+  }
+  if (!pushConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.pushUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "push",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "push_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "push",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "recent_team_notify"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const pushRes = await fetch(`${appUrl}/api/internal/push-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs only
+          // when Origin matches NEXT_PUBLIC_APP_URL.
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          title: "New Coworker",
+          // The banner sits on a lock screen, so it takes the phiFree copy on
+          // the same terms as every other leg here.
+          body: phiFree?.summary ?? summary.replace(/\.+$/, ""),
+          // App-relative: the bridge and buildPushPayload both refuse an
+          // absolute URL, and this pipeline has no ctaPath to deep-link with.
+          url: "/dashboard"
+        })
+      });
+      const pushJson = pushRes.ok
+        ? ((await pushRes.json().catch(() => null)) as {
+            data?: { ok?: boolean; sent?: number; revoked?: number; reason?: string; detail?: string };
+          } | null)
+        : null;
+      if (pushJson?.data?.ok) {
+        await recordRow(supa, record.business_id, "push", "sent", summary, kind, {
+          ...basePayload,
+          recipient: `${pushJson.data.sent ?? 0} device(s)`,
+          devices_sent: pushJson.data.sent ?? 0,
+          devices_revoked: pushJson.data.revoked ?? 0
+        });
+      } else if (pushRes.ok) {
+        // Structured policy skip. A NEVER-subscribed business records nothing
+        // (raced an unsubscribe since the check above).
+        const pushReason = pushJson?.data?.reason ?? "send_failed";
+        if (pushReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "push",
+            pushReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            basePayload,
+            pushJson?.data?.detail
+              ? `push_${pushReason}:${pushJson.data.detail}`
+              : `push_${pushReason}`
+          );
+        }
+      } else {
+        errors.push(`Push failed: ${pushRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "push",
+          "failed",
+          summary,
+          kind,
+          basePayload,
+          `push_bridge_${pushRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Push error: ${msg}`);
+      await recordRow(supa, record.business_id, "push", "failed", summary, kind, basePayload, msg);
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "push",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "push_bridge_unconfigured"
     );
   }
 

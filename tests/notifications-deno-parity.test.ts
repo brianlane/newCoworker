@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -90,9 +90,25 @@ describe("the two dispatchers declare the same channels", () => {
     // send on it into a failed insert, and `notifications` is a residency
     // moved table, so on a residency tenant a rejected row stops the write
     // journal and queues every later write behind it.
-    const migrations = read("supabase/migrations/20260822113305_slack_alert_channel.sql");
+    //
+    // Resolved as the NEWEST migration that re-adds the constraint, not a
+    // hardcoded filename: each new channel ships its own widening migration,
+    // so pinning one file means this assertion silently starts checking a
+    // stale definition the day the next channel lands.
+    const dir = join(ROOT, "supabase/migrations");
+    const newest = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort()
+      .reverse()
+      .find((f) =>
+        readFileSync(join(dir, f), "utf8").includes(
+          "add constraint notifications_delivery_channel_check"
+        )
+      );
+    expect(newest, "no migration re-adds the delivery_channel CHECK").toBeTruthy();
+    const migration = readFileSync(join(dir, newest as string), "utf8");
     for (const channel of NODE_CHANNELS) {
-      expect(migrations, `${channel} missing from the delivery_channel CHECK`).toContain(
+      expect(migration, `${channel} missing from the delivery_channel CHECK`).toContain(
         `'${channel}'`
       );
     }
@@ -105,9 +121,17 @@ describe("the Deno reader asks for every preference column it honours", () => {
    * update type rather than hand-listed, so a new channel's column is
    * covered the day it is added rather than the day someone remembers to
    * extend this array.
+   *
+   * Scoped to the `Pick<>` block specifically, not the whole file. A
+   * file-wide scan reads PROSE: the doc comment on `push_urgent` explains
+   * why there is deliberately no `push_digest`, and a bare token match turned
+   * that sentence into a demand that the digest dispatcher select a column
+   * which does not exist. A guard must read the declaration, never the
+   * commentary about it.
    */
   const nodeToggles = [
-    ...NODE_PREFERENCES.matchAll(/\b(\w+_(?:urgent|digest))\b/g)
+    ...(/export type NotificationPreferencesUpdate = Partial<\s*Pick<[\s\S]*?>\s*>;/
+      .exec(NODE_PREFERENCES)?.[0] ?? "").matchAll(/"(\w+_(?:urgent|digest))"/g)
   ]
     .map((m) => m[1])
     .filter((name, i, all) => all.indexOf(name) === i)
@@ -138,4 +162,51 @@ describe("the Deno reader asks for every preference column it honours", () => {
       ).toContain(column);
     }
   });
+});
+
+describe("both dispatchers actually have a leg for every channel", () => {
+  const NODE_DISPATCH = read("src/lib/notifications/dispatch.ts");
+
+  /**
+   * Agreeing on the union is not the same as acting on it. A channel declared
+   * in both files but wired into only one still means every alert down the
+   * other pipeline silently skips it, which looks identical to "that tenant
+   * has not connected it".
+   */
+  it("writes a row for every declared channel, on both sides", () => {
+    const nodeLegs = new Set(
+      [...NODE_DISPATCH.matchAll(/recordRow\(\s*input\.businessId,\s*"([a-z_]+)"/g)].map(
+        (m) => m[1]
+      )
+    );
+    const denoLegs = new Set(
+      [
+        ...DENO_DISPATCH.matchAll(
+          /recordRow\(\s*supa,\s*record\.business_id,\s*"([a-z_]+)"/g
+        )
+      ].map((m) => m[1])
+    );
+    expect(nodeLegs.size, "found no Node legs, so this assertion is vacuous").toBeGreaterThan(1);
+
+    for (const channel of NODE_CHANNELS) {
+      expect(nodeLegs.has(channel), `${channel} has no leg in dispatch.ts`).toBe(true);
+      expect(
+        denoLegs.has(channel),
+        `${channel} has no leg in the Deno mirror, so alerts routed through the edge function silently skip it`
+      ).toBe(true);
+    }
+  });
+
+  /**
+   * The Deno side cannot do Node crypto, so the channels needing it reach back
+   * through an /api/internal route. A renamed or moved route is a 404 that
+   * shows up as a bridge failure on every single alert.
+   */
+  it.each(["slack-send", "whatsapp-send", "push-send"])(
+    "calls /api/internal/%s, and that route exists",
+    (bridge) => {
+      expect(DENO_DISPATCH).toContain(`/api/internal/${bridge}`);
+      expect(() => read(`src/app/api/internal/${bridge}/route.ts`)).not.toThrow();
+    }
+  );
 });

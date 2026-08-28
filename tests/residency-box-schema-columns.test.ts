@@ -210,6 +210,58 @@ describe("vps/data-api/schema.sql covers the email_log columns the dashboard rea
 });
 
 /**
+ * `notifications.delivery_channel` is the OTHER value-list the box pins, and
+ * it is the one with the sharpest failure. `notifications` is a moved table,
+ * so a tenant's rows replay onto their box; a channel the box's CHECK does
+ * not know is rejected, and per this file's own header a replay that fails
+ * "stops, queueing every later write for that tenant behind it". One push row
+ * would not just lose itself, it would wedge that tenant's entire journal.
+ *
+ * The expectation is DERIVED from the TypeScript union rather than
+ * hand-listed, so this cannot drift the way a copied list does, and every
+ * future channel inherits the guard for free.
+ */
+describe("vps/data-api/schema.sql accepts every notification delivery channel", () => {
+  const sql = readFileSync(SCHEMA_PATH, "utf8");
+  const unionSource = readFileSync(
+    join(__dirname, "..", "src/lib/db/notifications.ts"),
+    "utf8"
+  );
+
+  const declared = [
+    ...(/export type NotificationDeliveryChannel =([^;]+);/
+      .exec(unionSource)?.[1] ?? "").matchAll(/"([a-z_]+)"/g)
+  ].map((m) => m[1]);
+
+  it("finds the union, so this sweep is not vacuous", () => {
+    expect(declared.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * Both sites: the create-table constraint for a fresh box, and the
+   * drop/re-add for an existing one. `create table if not exists` never
+   * refreshes a constraint, so patching only the first leaves every box that
+   * already exists rejecting the new channel.
+   */
+  const checks = [
+    ...sql.matchAll(/notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/g)
+  ].map((m) => new Set([...m[1].matchAll(/'([a-z_]+)'/g)].map((v) => v[1])));
+
+  it("patches both the create-table and the alter-table constraint", () => {
+    expect(checks.length).toBe(2);
+  });
+
+  it.each(checks.map((set, i) => [i, set]))(
+    "constraint %i accepts every declared channel",
+    (_i, boxChannels) => {
+      for (const channel of declared) {
+        expect([...(boxChannels as Set<string>)]).toContain(channel);
+      }
+    }
+  );
+});
+
+/**
  * `voice_call_transcripts` columns the box must carry, DERIVED from the
  * projection the call drill-down actually sends. Two of them,
  * `answering_machine_result` and `voicemail_left`, were missing from the box

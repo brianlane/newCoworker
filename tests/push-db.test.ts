@@ -5,6 +5,7 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   findLivePushSubscription,
+  pushTargetState,
   listDeliverablePushSubscriptions,
   recordPushClick,
   revokePushSubscription,
@@ -202,6 +203,61 @@ describe("push/db: revokePushSubscriptionsForUser", () => {
     await expect(revokePushSubscriptionsForUser(BIZ, "u")).rejects.toThrow(
       "revokePushSubscriptionsForUser: nope"
     );
+  });
+});
+
+describe("push/db: pushTargetState", () => {
+  it("reports connected when the business has a live device", async () => {
+    const { db } = makeDb({ data: [{ id: "sub-1" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+  });
+
+  it("reports not connected when the business has never subscribed one", async () => {
+    const { db } = makeDb({ data: [] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: false });
+  });
+
+  it("ignores revoked devices", async () => {
+    const { db, calls } = makeDb({ data: [] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await pushTargetState(BIZ);
+    expect(calls).toContainEqual(["is", "revoked_at", null]);
+  });
+
+  /**
+   * limit(1), not maybeSingle. The Slack leg this mirrors reads a
+   * one-row-per-business table, but push_subscriptions is one row per DEVICE
+   * and maybeSingle ERRORS on a second row. Copying that shape would make the
+   * check throw for every business with two phones, the throw would be
+   * swallowed by the fail-open catch, and this would sit at "connected: true"
+   * forever with nothing to notice it by.
+   */
+  it("uses limit(1), so a business with two devices does not error", async () => {
+    const { db, calls, builder } = makeDb({ data: [{ id: "a" }, { id: "b" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+    expect(calls).toContainEqual(["limit", 1]);
+    expect(builder.maybeSingle).toBeUndefined();
+  });
+
+  /**
+   * FAILS TOWARD CONNECTED, matching slackAlertTargetState. This value decides
+   * whether the dispatcher writes NO push row at all versus an honest skip, so
+   * a read blip must degrade to the noisy-but-honest side. Reporting "not
+   * applicable" on a hiccup would erase the channel from a tenant who really
+   * does have devices, and leave nothing behind to notice it by.
+   */
+  it("fails toward connected on a read error", async () => {
+    const { db } = makeDb({ error: { message: "pg down" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+  });
+
+  it("fails toward connected when the client itself cannot be built", async () => {
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no service key"));
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
   });
 });
 
