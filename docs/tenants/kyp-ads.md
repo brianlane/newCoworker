@@ -12,7 +12,7 @@ written incident review. Calendly is the center of gravity here.
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
-| Roster | James Lee (`+852` mobile, Hong Kong, no email on the row; NOTE the +852 SMS sharp edge below, so any flow step texting this roster row goes dark). Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
+| Roster | James Lee (`+1` Montreal mobile `+1514…`, `james@kypads.com` on the row since 2026-08-28, when `repoint-roster-member-phone.ts` moved it off the `+852` number that no roster text could ever reach; see the +852 sharp edge below for what that number still means for his OWNER-facing surfaces). Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
 
 Build spec: [PRDs/white-glove-build-kyp-ads.md](../../PRDs/white-glove-build-kyp-ads.md).
 Incident review: [docs/INCIDENT-2026-07-KYP-ONBOARDING.md](../INCIDENT-2026-07-KYP-ONBOARDING.md).
@@ -198,6 +198,26 @@ How the pieces fit:
   business-initiated (billed) conversations fail. A reply inside the 24-hour
   window opened by an INBOUND message is free-form and unaffected, which is
   why the live customer threads on this WABA work normally.
+  Status 2026-08-28: the ROSTER half is fixed. `repoint-roster-member-phone.ts`
+  moved James's `ai_flow_team_members` row from the +852 number to his
+  Montreal `+1514…` mobile and set `james@kypads.com` on it (ledger id 244,
+  owner-directed by Brian, who was told James is physically in Hong Kong).
+  Three things were broken by that one field, not one: (a) every team/lead-offer
+  text died with 409/40306 and raised an `alert_delivery_failed` system error,
+  (b) the roster phone never matched the business's own numbers, so
+  `pickImplicitContactOwner` returned null and EVERY contact-scoped alert
+  routed as `team_broadcast` / `contact_unowned` instead of paging him
+  directly, and (c) because routing was never `contact_owner`, the roster
+  email was never consulted at all (`src/lib/notifications/dispatch.ts` reads it only when
+  `emailTarget === "contact_owner"`), which is why adding an email without
+  fixing the phone would have been a no-op. Verified after the apply: the
+  live helper now returns him as the solo owner, and the roster is still
+  exactly one row (a second row would have re-broken it, which is why the
+  script UPDATEs in place and refuses a collision). Note he is reachable but
+  has never REPLIED on the +1 number (16 outbound, 0 inbound over 7 days), so
+  claim-by-reply-"1" is now wired to him but still unproven in practice. His
+  OWNER alert phone (`notification_preferences`) was already this +1 number
+  and is untouched; nothing here changes the WhatsApp billing block above.
 - **The WABA sender number is James's own phone, so he cannot be reached on
   WhatsApp at it.** The Cloud API sender is the +852 number, and a number on
   the Cloud API is taken off consumer WhatsApp: messages to it arrive at our
@@ -288,7 +308,10 @@ Onboarding: `provision-kyp-ads-retry.ts`, `assign-kyp-ads-did-438.ts`,
 
 Recovery: `requeue-failed-flow-run.ts` (generic; applied here Aug 6 2026 to
 re-run the lead flow for H Eve after the Canada-whitelist outage killed run
-4e9fdf3c at its first customer text).
+4e9fdf3c at its first customer text), `repoint-roster-member-phone.ts`
+(generic; applied here Aug 28 2026 to move James's roster row off the
+untextable +852 number onto his +1514 mobile and set his email, ledger id
+244, details in the +852 sharp edge above).
 
 Vantage Flow Media rollout: `apply-vfm-brand.ts` (vault sections + sync),
 `apply-vfm-team.ts` (Liz on the roster + `lead_auto_assign`),
