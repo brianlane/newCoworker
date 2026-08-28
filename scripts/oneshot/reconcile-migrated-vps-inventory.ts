@@ -32,6 +32,13 @@
  *   - REFUSES to pool an old box whose Hostinger auto-renew is still ON:
  *     `never_renew` would then be a lie, and the pool posture check trusts
  *     it.
+ *   - REFUSES to pool an old box `vps_inventory` says belongs to a DIFFERENT
+ *     business, so a re-run (or a mistyped `--old-vm`) cannot strip another
+ *     tenant's claim off live hardware.
+ *   - Writes `expires_at` only when a real date resolves. Both inventory
+ *     helpers treat an omitted key as "preserve" and an explicit null as
+ *     "wipe", so passing an unresolved paid-through through would erase one
+ *     the daily posture cron had already filled in.
  *   - Reads both rows back and asserts their landed state. A PostgREST write
  *     matching zero rows returns no error.
  *
@@ -136,6 +143,16 @@ try {
 // falling back to whatever the row already recorded.
 const oldBillingId = oldSub?.id ?? oldRowBefore?.hostinger_billing_subscription_id ?? null;
 
+// `paidThroughFromBillingSub` returns null when Hostinger reports neither
+// expires_at nor next_billing_at, and both helpers below treat OMIT as
+// "preserve" but null as "wipe". Passing the null through would erase a
+// paid-through the daily billing-posture cron had already resolved, so these
+// spread to nothing unless there is a real date to write.
+const newExpiresAt = newSub ? paidThroughFromBillingSub(newSub) : null;
+const oldExpiresAt = oldSub ? paidThroughFromBillingSub(oldSub) : null;
+const newExpiresPatch = newExpiresAt === null ? {} : { expiresAt: newExpiresAt };
+const oldExpiresPatch = oldExpiresAt === null ? {} : { expiresAt: oldExpiresAt };
+
 console.log(`== migrated VPS inventory reconcile ==`);
 console.log(`business : ${biz.name} (${biz.id})`);
 console.log(`new box  : ${NEW_VM_ID} plan=${newPlan} state=${newVm.state} sub=${newSub?.id ?? "unknown"}`);
@@ -143,6 +160,25 @@ console.log(`           auto_renew=${newSub?.is_auto_renewed ?? "?"} next=${newS
 console.log(`old box  : ${OLD_VM_ID} plan=${oldPlan} sub=${oldBillingId ?? "unknown"}`);
 console.log(`           auto_renew=${oldSub?.is_auto_renewed ?? "?"} next=${oldSub?.next_billing_at ?? "?"}`);
 console.log(`old row  : ${oldRowBefore ? `${oldRowBefore.state} (assigned=${oldRowBefore.assigned_business_id ?? "none"})` : "none"}`);
+
+// `releaseVpsToPool` un-assigns unconditionally. This script is meant to be
+// re-runnable, so a re-run after some other tenant adopted the pooled old box,
+// or a mistyped --old-vm, would clear THEIR assignment and leave live hardware
+// claimable for a destructive recreate. The old box may only be assigned to
+// this business (the state a first run sees) or to nobody (a re-run).
+if (
+  oldRowBefore?.state === "assigned" &&
+  oldRowBefore.assigned_business_id !== null &&
+  oldRowBefore.assigned_business_id !== BUSINESS_ID
+) {
+  console.error(
+    `\nREFUSING: vps_inventory says box ${OLD_VM_ID} is assigned to ` +
+      `${oldRowBefore.assigned_business_id}, not ${BUSINESS_ID}.`
+  );
+  console.error(`Pooling it would strip another tenant's claim off live hardware.`);
+  console.error(`Check --old-vm.`);
+  process.exit(1);
+}
 
 // never_renew is what the pool posture check trusts to say "this box lapses".
 // Setting it while Hostinger is still set to renew makes the row lie.
@@ -166,7 +202,7 @@ await recordVpsAssigned({
   businessId: BUSINESS_ID,
   hostname: newVm.hostname ?? null,
   hostingerBillingSubscriptionId: newVm.subscription_id ?? null,
-  ...(newSub ? { expiresAt: paidThroughFromBillingSub(newSub) } : {}),
+  ...newExpiresPatch,
   notes: `adopted by reconcile-migrated-vps-inventory.ts after an --adopt-vm migration from ${OLD_VM_ID}`
 });
 console.log(`[new] vm ${NEW_VM_ID} recorded assigned`);
@@ -176,7 +212,7 @@ await releaseVpsToPool({
   plan: oldPlan,
   hostname: oldRowBefore?.hostname ?? null,
   hostingerBillingSubscriptionId: oldBillingId,
-  ...(oldSub ? { expiresAt: paidThroughFromBillingSub(oldSub) } : {}),
+  ...oldExpiresPatch,
   notes: `released after ${BUSINESS_ID} cut over to ${NEW_VM_ID}; auto-renew off, lapses at period end`
 });
 await markVpsNeverRenew(OLD_VM_ID);
