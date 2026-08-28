@@ -200,13 +200,36 @@ for (const r of parked) {
     // upsert_customer files the contact in the same step that applies the tag,
     // so a sibling contact_created run would have hidden a real cadence miss
     // every time (Bugbot, PR #1710).
+    //    Mirrors enqueueContactEventRuns' own matching rather than inventing a
+    //    second rule: it unions `definition.trigger` with every entry in
+    //    `definition.triggers[]`, and only considers flows that are ENABLED
+    //    and not soft-deleted. Filtering on `definition->trigger` alone missed
+    //    a cadence whose Needs Follow Up trigger sits in the array instead,
+    //    and 5 production flows use that shape today, one of them with a
+    //    tag_changed trigger (Bugbot, PR #1710). Ignoring enabled/deleted_at
+    //    would be the other direction of the same error: a disabled flow
+    //    covers nobody, and counting it would report a lead as followed up
+    //    when nothing is running.
     const { data: fuFlows, error: flowErr } = await db
       .from("ai_flows")
-      .select("id")
+      .select("id, definition")
       .eq("business_id", r.business_id)
-      .eq("definition->trigger->>channel", "tag_changed")
-      .ilike("definition->trigger->>tag", FOLLOW_UP_TAG);
-    const flowIds = ((fuFlows ?? []) as Array<{ id: string }>).map((f) => f.id);
+      .eq("enabled", true)
+      .is("deleted_at", null)
+      .limit(500);
+    type TriggerLike = { channel?: string; tag?: string } | null | undefined;
+    const watchesFollowUpTag = (def: {
+      trigger?: TriggerLike;
+      triggers?: TriggerLike[];
+    } | null): boolean =>
+      [def?.trigger, ...(def?.triggers ?? [])].some(
+        (t) =>
+          (t?.channel ?? "") === "tag_changed" &&
+          (t?.tag ?? "").trim().toLowerCase() === FOLLOW_UP_TAG
+      );
+    const flowIds = ((fuFlows ?? []) as Array<{ id: string; definition: null }>)
+      .filter((f) => watchesFollowUpTag(f.definition))
+      .map((f) => f.id);
     if (flowErr) {
       console.log(`     cadence flow lookup FAILED: ${flowErr.message}`);
     } else if (flowIds.length === 0) {
