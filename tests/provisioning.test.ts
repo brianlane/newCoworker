@@ -4141,6 +4141,128 @@ describe("provisioning/orchestrate", () => {
       expect(orphanReconciler).not.toHaveBeenCalled();
     });
 
+    // A failure AFTER the purchase call returned (ready-poll timeout, the IPv4
+    // guard, the ssh-key write) leaves the account paying for a box just as
+    // surely as a 402 does. The gate used to key only on the purchase CALL
+    // failing, so this whole window walked away from paid hardware.
+    class FakePostChargeError extends Error {
+      readonly virtualMachineId: number;
+      constructor(vmId: number, detail: string) {
+        super(`Provisioning failed after Hostinger created VM ${vmId}, so the charge has already landed: ${detail}`);
+        this.name = "PostPurchaseProvisionError";
+        this.virtualMachineId = vmId;
+      }
+    }
+
+    it("reconciles a failure that happened AFTER the charge landed", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new FakePostChargeError(1936826, "VPS 1936826 not running 15 min into setup"));
+      const orphanReconciler = vi.fn().mockResolvedValue([
+        {
+          vmId: 1936826,
+          plan: "kvm1",
+          hostingerBillingSubscriptionId: "hsub-post-charge",
+          createdAtMs: Date.now()
+        }
+      ]);
+      const vpsAdopter = vi.fn().mockResolvedValue({
+        ...makeVpsStub("1936826"),
+        hostingerBillingSubscriptionId: "hsub-post-charge"
+      });
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-post-charge", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner,
+          vpsAdopter,
+          vpsPool: pool,
+          orphanReconciler,
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          sleep: vi.fn().mockResolvedValue(undefined)
+        }
+      );
+
+      expect(orphanReconciler).toHaveBeenCalledTimes(1);
+      expect(result.vpsId).toBe("1936826");
+      expect(pool.claimSpecific).toHaveBeenCalledWith(1936826, "biz-post-charge");
+      // One purchase, then the paid box adopted; never a second purchase.
+      expect(vpsProvisioner).toHaveBeenCalledTimes(1);
+    });
+
+    // Hostinger already told us which VM the charge bought, so the size and
+    // age heuristics have nothing to infer. Here a same-size decoy sorts
+    // FIRST by created-at, and the named box must still win.
+    it("adopts the VM the failure named, over an older same-size orphan", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new FakePostChargeError(1936826, "ssh key write failed"));
+      const orphanReconciler = vi.fn().mockResolvedValue([
+        { vmId: 1800985, plan: "kvm1", hostingerBillingSubscriptionId: "hsub-decoy", createdAtMs: 1 },
+        {
+          vmId: 1936826,
+          plan: "kvm1",
+          hostingerBillingSubscriptionId: "hsub-ours",
+          createdAtMs: Date.now()
+        }
+      ]);
+      const vpsAdopter = vi.fn().mockResolvedValue({
+        ...makeVpsStub("1936826"),
+        hostingerBillingSubscriptionId: "hsub-ours"
+      });
+
+      await orchestrateProvisioning(
+        { businessId: "biz-named", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner,
+          vpsAdopter,
+          vpsPool: pool,
+          orphanReconciler,
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          sleep: vi.fn().mockResolvedValue(undefined)
+        }
+      );
+
+      expect(pool.claimSpecific).toHaveBeenCalledWith(1936826, "biz-named");
+      expect(pool.claimSpecific).not.toHaveBeenCalledWith(1800985, expect.anything());
+    });
+
+    // The named box has to have been POOLED to be adoptable. A box the
+    // reconciler refused (terminal `error` state, say) is not recoverable
+    // here, and the original failure is what the operator must see.
+    it("surfaces the original error when the named VM was not poolable", async () => {
+      const pool = makePool();
+      const err = new FakePostChargeError(1936826, "VM 1936826 entered terminal state=error");
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(err);
+      const orphanReconciler = vi.fn().mockResolvedValue([]);
+      // Drive the scan budget off an injected clock. With an instant sleep and
+      // a real one, the 5-minute budget spins until the worker runs out of
+      // memory instead of ending the test.
+      let t = 0;
+      const sleep = vi.fn().mockImplementation(async (ms: number) => {
+        t += ms;
+      });
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-unpoolable", tier: "starter", skipPoolAdopt: true },
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn().mockResolvedValue(okExec()),
+            sleep,
+            now: () => t
+          }
+        )
+      ).rejects.toThrow(/terminal state=error/);
+      expect(orphanReconciler).toHaveBeenCalled();
+      expect(pool.claimSpecific).not.toHaveBeenCalled();
+    });
+
     it("skipPoolAdopt: adopts the SPECIFIC term orphan (not an arbitrary pooled box)", async () => {
       // Change-plan term alignment must land on the term-bought box. After a
       // fail-but-charge, that box IS the reconciled orphan, claim + adopt it

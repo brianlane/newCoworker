@@ -551,6 +551,13 @@ export async function provisionVpsForBusiness(
     orderId: order.orderId
   });
 
+  // From here the account is already paying for VM `vm.id`, so no failure may
+  // leave quietly: everything below runs inside `postPurchase`, which retags
+  // any throw as a PostPurchaseProvisionError carrying the id. That is what
+  // lets the orchestrator's fail-but-charge reconciler adopt the box instead
+  // of abandoning it, a window it could not see when it keyed only on a
+  // failure of the purchase CALL.
+  return await postPurchase(vm.id, async () => {
   // 5. Poll for `running` + public IPv4. Hostinger's API returns the VPS
   //    immediately in `initial`/`installing`; we don't get an SSH-ready IP
   //    until it flips to `running`.
@@ -623,6 +630,7 @@ export async function provisionVpsForBusiness(
     postInstallScriptId,
     hostingerBillingSubscriptionId
   };
+  });
 }
 
 /**
@@ -924,6 +932,72 @@ async function waitForVpsReady(
 function firstIpv4(vm: VirtualMachine): string | undefined {
   if (!vm.ipv4 || !Array.isArray(vm.ipv4) || vm.ipv4.length === 0) return undefined;
   return vm.ipv4[0]?.address;
+}
+
+/**
+ * Thrown when provisioning fails AFTER Hostinger created and charged for the
+ * VM: the ready-poll, the IPv4 guard, or the `vps_ssh_keys` write.
+ *
+ * Everything before the purchase is free to fail; from the moment
+ * `purchaseVirtualMachine` returns, a bare throw abandons a box the account is
+ * already paying for. The orchestrator's fail-but-charge reconciler used to
+ * key ONLY on a failure of the purchase call itself, so this whole window was
+ * invisible to it: the box existed, was paid for, and nothing went looking.
+ *
+ * Carrying the VM id makes the recovery exact rather than inferred. The
+ * reconciler can find a box by hostname and age, but Hostinger has already
+ * told us which box this is, so there is nothing to guess.
+ */
+class PostPurchaseProvisionError extends Error {
+  readonly virtualMachineId: number;
+
+  constructor(virtualMachineId: number, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Provisioning failed after Hostinger created VM ${virtualMachineId}, ` +
+        `so the charge has already landed: ${detail}`,
+      { cause }
+    );
+    this.name = "PostPurchaseProvisionError";
+    this.virtualMachineId = virtualMachineId;
+  }
+}
+
+/**
+ * Run the steps that follow a successful purchase, retagging any failure with
+ * the VM the account is now paying for.
+ *
+ * A PostPurchaseProvisionError that reaches here again is passed through
+ * rather than double-wrapped, so the message stays readable and the id stays
+ * the first one recorded.
+ */
+async function postPurchase<T>(virtualMachineId: number, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    /* c8 ignore next -- defensive: nothing inside `run` throws this today */
+    if (err instanceof PostPurchaseProvisionError) throw err;
+    throw new PostPurchaseProvisionError(virtualMachineId, err);
+  }
+}
+
+/**
+ * The VM id when this error was thrown after the charge landed, else null.
+ *
+ * The orchestrator uses it for both halves of the decision: non-null means
+ * "reconcile, a paid box is out there", and names the box to adopt.
+ *
+ * Duck-typed on `name` rather than `instanceof`, for the same reason
+ * `isHostingerPurchaseFailure` is: this error crosses a module boundary to
+ * reach the orchestrator, and `instanceof` is false whenever the two sides
+ * resolve different instances of this module (server vs edge bundles). The
+ * id is re-validated here so a shape that only borrows the name cannot smuggle
+ * a bogus VM id into an adopt.
+ */
+export function chargedVirtualMachineId(err: unknown): number | null {
+  if (!(err instanceof Error) || err.name !== "PostPurchaseProvisionError") return null;
+  const vmId = (err as Error & { virtualMachineId?: unknown }).virtualMachineId;
+  return typeof vmId === "number" && Number.isInteger(vmId) && vmId > 0 ? vmId : null;
 }
 
 export function truncateBusinessId(id: string): string {

@@ -2,6 +2,7 @@ import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/cli
 import {
   provisionVpsForBusiness,
   buildDefaultPostInstallScript,
+  chargedVirtualMachineId,
   type ProvisionVpsForBusinessResult
 } from "@/lib/hostinger/provision";
 import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
@@ -1593,7 +1594,18 @@ async function acquireVps(args: {
     // the provision still lands on the box that was already paid for.
     // Reconciliation is best-effort: any failure inside it must never mask
     // the original purchase error.
-    if (vpsPool && hostingerManaged && args.reconcileOrphans && isHostingerPurchaseFailure(err)) {
+    // Two ways the account can be paying for a box this attempt is about to
+    // walk away from. The purchase CALL failing is the long-known one. The
+    // other is a failure after it returned (ready-poll timeout, the IPv4
+    // guard, the ssh-key write): the box exists, the charge landed, and this
+    // gate used to skip it entirely, so nothing ever went looking.
+    const chargedVmId = chargedVirtualMachineId(err);
+    if (
+      vpsPool &&
+      hostingerManaged &&
+      args.reconcileOrphans &&
+      (isHostingerPurchaseFailure(err) || chargedVmId !== null)
+    ) {
       // Ceiling stamped when the purchase call FAILED: the fail-but-charge
       // VM was created during that call, so anything newer belongs to a
       // different attempt. Without it, the scan retries turned the 5s
@@ -1617,9 +1629,17 @@ async function acquireVps(args: {
         // Concurrent same-size fail-but-charges: the earlier materialization
         // belongs to the earlier purchase; taking newest can steal a later
         // caller's term-priced box.
-        const sizeMatch = sizeMatches
-          .slice()
-          .sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
+        // When the failure named its box, that IS the box: Hostinger told us
+        // which VM the charge bought, so there is nothing for the size and
+        // age heuristics to infer. It still has to have been POOLED to be
+        // adoptable, so an unhealthy box the reconciler refused (a terminal
+        // `error` state, say) correctly falls through to the original error
+        // and the daily sweep's human report.
+        const namedMatch =
+          chargedVmId !== null ? pooled.find((orphan) => orphan.vmId === chargedVmId) ?? null : null;
+        const sizeMatch =
+          namedMatch ??
+          sizeMatches.slice().sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
         if (sizeMatch) {
           if (skipPoolAdopt) {
             // Term-alignment path: THIS orphan is the term-bought box. Claim
