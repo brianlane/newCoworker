@@ -78,6 +78,11 @@ export function EnterpriseBillingPanel({
   const [voiceMin, setVoiceMin] = useState("2500");
   const [extraDids, setExtraDids] = useState("0");
   const [marginPct, setMarginPct] = useState("60");
+  // Optional: the numbers this prospect will actually dial. Telnyx prices
+  // termination per NPA-NXX, so a rural list costs multiples of the
+  // lower-48 baseline the estimator otherwise assumes. Free text because it
+  // is pasted from wherever the list lives.
+  const [voiceDestinationsText, setVoiceDestinationsText] = useState("");
   const [setupLaborUsd, setSetupLaborUsd] = useState(
     String(DEFAULT_ENTERPRISE_SETUP_LABOR_CENTS / 100)
   );
@@ -95,18 +100,26 @@ export function EnterpriseBillingPanel({
       return null;
     }
     try {
+      // Split on anything that is not part of a number, so a pasted CSV
+      // column, a newline-separated list and "+1 602 838 4497, +1 605 523
+      // 0000" all work. Empty means "no list", which leaves the estimate
+      // exactly as it was before the zone table existed.
+      const destinations = voiceDestinationsText
+        .split(/[^\d+]+/)
+        .filter((value) => value.length > 0);
       const cost = estimateEnterpriseMonthlyCost({
         vpsSize,
         smsPerMonth: smsN,
         voiceMinutesPerMonth: voiceN,
-        extraDids: Math.floor(didsN)
+        extraDids: Math.floor(didsN),
+        voiceDestinations: destinations.length > 0 ? destinations : undefined
       });
       const suggestion = suggestEnterprisePrice(cost.totalCents, marginN, Math.round(laborN * 100));
       return { cost, suggestion };
     } catch {
       return null;
     }
-  }, [vpsSize, sms, voiceMin, extraDids, marginPct, setupLaborUsd]);
+  }, [vpsSize, sms, voiceMin, extraDids, marginPct, setupLaborUsd, voiceDestinationsText]);
 
   // --- Deal state ---
   const router = useRouter();
@@ -270,6 +283,16 @@ export function EnterpriseBillingPanel({
             />
           </label>
         </div>
+
+        <label className="flex flex-col gap-1 text-xs text-parchment/60">
+          Destination numbers (optional, for high-cost zone pricing)
+          <textarea
+            className={`${inputCls} w-full h-16`}
+            value={voiceDestinationsText}
+            onChange={(e) => setVoiceDestinationsText(e.target.value)}
+            placeholder="Paste the numbers this tenant will dial. Leave empty to assume lower-48 rates."
+          />
+        </label>
 
         {calc ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

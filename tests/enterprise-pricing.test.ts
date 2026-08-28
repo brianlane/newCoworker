@@ -14,6 +14,83 @@ import {
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 
 describe("estimateEnterpriseMonthlyCost", () => {
+  it("adds no zone surcharge, and no line, when no destinations are given", () => {
+    // The whole point of the option being optional: an existing caller must
+    // get byte-for-byte the estimate it got before the zone table existed.
+    const est = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500
+    });
+    expect(est.items.some((i) => i.label.startsWith("Voice high-cost zones"))).toBe(false);
+  });
+
+  it("adds no zone surcharge for an all-lower-48 destination list", () => {
+    const withList = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500,
+      voiceDestinations: ["+14805551234", "+16025551234"]
+    });
+    const without = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500
+    });
+    expect(withList.totalCents).toBe(without.totalCents);
+    expect(withList.items.some((i) => i.label.startsWith("Voice high-cost zones"))).toBe(
+      false
+    );
+  });
+
+  it("charges only the INCREMENT above baseline on a rural list", () => {
+    // Half lower-48 (0.5c), half South Dakota Zone 5 (7c) blends to 3.75c.
+    // The surcharge is the 3.25c ABOVE the 0.5c baseline that
+    // voiceTelnyxCentsPerMinute already contains, never the full 3.75c:
+    // charging the full rate would bill Zone 1 termination twice.
+    const est = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500,
+      voiceDestinations: ["+14805551234", "+16055235555"]
+    });
+    const surcharge = est.items.find((i) => i.label.startsWith("Voice high-cost zones"));
+    expect(surcharge?.cents).toBe(500 * 3.25);
+    expect(surcharge?.label).toContain("3.75c/min");
+    expect(surcharge?.label).toContain("2 destinations");
+  });
+
+  it("puts the surcharge before the tax line and taxes it as voice", () => {
+    const base = {
+      vpsSize: "kvm2" as const,
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500
+    };
+    const est = estimateEnterpriseMonthlyCost({
+      ...base,
+      voiceDestinations: ["+16055235555"]
+    });
+    expect(est.items[est.items.length - 1].label).toBe("Telnyx taxes (est.)");
+    // A surcharge that is voice usage must move the tax line, or the tax
+    // model is silently ignoring a Telnyx charge.
+    const taxWith = est.items[est.items.length - 1].cents;
+    const taxWithout =
+      estimateEnterpriseMonthlyCost(base).items.at(-1)?.cents ?? 0;
+    expect(taxWith).toBeGreaterThan(taxWithout);
+  });
+
+  it("uses the singular for a one-destination list", () => {
+    const est = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 10,
+      voiceDestinations: ["+16055235555"]
+    });
+    expect(
+      est.items.find((i) => i.label.startsWith("Voice high-cost zones"))?.label
+    ).toContain("1 destination)");
+  });
+
   it("itemizes hosting + SMS + voice + DID and totals them", () => {
     const est = estimateEnterpriseMonthlyCost({
       vpsSize: "kvm8",

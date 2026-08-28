@@ -1,0 +1,199 @@
+name: Telnyx Voice Rate Cutover
+
+# Why: Telnyx updated its Global Voice Conversational rates effective
+# 2026-08-31T18:00:00Z (11:00 America/Phoenix). Our forward cost model
+# carries ONE calibrated number for a voice minute,
+# ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute, back-calibrated from the
+# June and July 2026 invoices. A termination change passes straight through
+# it, and nothing else in the repo would notice.
+#
+# THIS RUNS AFTER THE CUTOVER, NOT AT IT, and that is the whole design.
+# At 18:00Z on the 31st there is nothing to measure: no post-cutover call has
+# been placed and the daily MDR sync has not run. A job firing at the
+# effective instant could only write a number it had not observed. So this
+# waits for real traffic, measures our own effective cost per outbound
+# minute, and compares it to the pre-cutover figure recorded in
+# PRE_CUTOVER_TERMINATION_CENTS_PER_MINUTE.
+#
+# WHY MEASURE RATHER THAN DIFF THE DECK: Telnyx emails only the new deck,
+# never a diff, and it sits behind a portal.telnyx.com login no CI job can
+# reach. "Did the rates change?" is therefore not answerable from the rates.
+# It is answerable from the invoice.
+#
+# The PR this opens changes the calibrated constant ONLY. Refreshing the
+# per-prefix zone table needs the new CSV, so the PR body asks for that
+# explicitly instead of leaving a half-updated model that looks current.
+#
+# Same shape and reasoning as casa-recert-reminder.yml and
+# zapier-beta-reminder.yml: it runs on GitHub, beside the code it changes,
+# and depends on no laptop and no one person still being here.
+
+on:
+  schedule:
+    # 16:00 UTC on Mondays = 09:00 America/Phoenix, which observes no DST.
+    # Weekly rather than one-shot: the first week after the cutover may not
+    # clear the minimum sample the drift script requires, and a single
+    # missed one-shot would mean the change is never noticed at all.
+    - cron: "0 16 * * 1"
+  # So it can be proved to work now rather than discovered broken in September.
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Measure actuals from this day (YYYY-MM-DD)"
+        required: false
+        default: "2026-09-01"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # First full UTC day after the 2026-08-31T18:00Z cutover, so no minute
+  # billed at the old rates is averaged into the new one.
+  CUTOVER_DAY: "2026-09-01"
+  # Measured 2026-06-29..2026-08-27: 12,600 billed seconds / $1.12, carrier
+  # fee zero. Kept in step with PRE_CUTOVER_TERMINATION_CENTS_PER_MINUTE in
+  # src/lib/plans/voice-zone-rates.ts, which carries the full provenance.
+  PRE_CUTOVER_CENTS_PER_MINUTE: "0.5333"
+
+jobs:
+  measure:
+    name: Measure post-cutover voice rates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # A cron with no year field would fire every Monday forever. The window
+      # closes at the end of 2026: by then either the drift was found and
+      # merged, or the fleet's voice volume never cleared the minimum sample
+      # and a weekly no-op is just noise. Manual dispatch always runs.
+      - name: Close the window after 2026
+        id: window
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%Y)" != "2026" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Cutover window closed; nothing to do."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.window.outputs.run == 'true'
+
+      - uses: actions/setup-node@v7
+        if: steps.window.outputs.run == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install
+        if: steps.window.outputs.run == 'true'
+        run: npm ci
+
+      # Builds the connection from secrets that ALREADY exist. There is no
+      # SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY repo secret, and adding a
+      # service-role key to CI to read two aggregate numbers would be a
+      # bigger grant than the job needs. SUPABASE_DB_PASSWORD is already
+      # here for the migration push, the project ref is checked in at
+      # supabase/config.toml, and the script opens the session read-only.
+      #
+      # Port 5432 is the IPv4 SESSION pooler and is required: the direct host
+      # is IPv6-only (unreachable from a runner) and the 6543 transaction
+      # pooler silently drops the read-only session guard.
+      - name: Measure
+        if: steps.window.outputs.run == 'true'
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          PROJECT_REF=$(sed -n 's/^project_id = "\(.*\)"/\1/p' supabase/config.toml)
+          if [ -z "$PROJECT_REF" ]; then
+            echo "could not read project_id from supabase/config.toml" >&2
+            exit 1
+          fi
+          PW=$(printf '%s' "$SUPABASE_DB_PASSWORD" | jq -sRr @uri)
+          export DIRECT_DATABASE_URL="postgresql://postgres.${PROJECT_REF}:${PW}@aws-1-us-east-2.pooler.supabase.com:5432/postgres"
+          SINCE="${{ github.event.inputs.since || env.CUTOVER_DAY }}"
+          npx tsx debug/measure-voice-zone-exposure.ts --json --since="$SINCE" \
+            > /tmp/voice-zone-report.json
+          cat /tmp/voice-zone-report.json
+
+      - name: Decide whether the constant has drifted
+        if: steps.window.outputs.run == 'true'
+        id: drift
+        run: |
+          npx tsx .github/scripts/telnyx-rate-drift.ts \
+            "${{ env.PRE_CUTOVER_CENTS_PER_MINUTE }}" < /tmp/voice-zone-report.json
+
+      - name: Verify the edited model still passes its own tests
+        if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed == 'true'
+        run: npx vitest run tests/enterprise-pricing.test.ts tests/voice-zone-rates.test.ts
+
+      # Pushed with the deploy key, NOT GITHUB_TOKEN. A branch pushed by the
+      # Actions token cannot trigger the `pull_request` workflows in ci.yml
+      # (GitHub's recursion guard), so the PR would sit forever with no
+      # checks and could never merge. The same key already exists for the
+      # migration order-heal push, which hit this exact wall.
+      - name: Push the branch
+        if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed == 'true'
+        env:
+          SSH_KEY: ${{ secrets.MIGRATION_HEAL_SSH_KEY }}
+          # Through env, never `${{ }}` inside the script body: the summary is
+          # multi-line and contains backticks and quotes, which would break the
+          # shell (and would be an injection seam if the value were ever
+          # attacker-influenced).
+          SUMMARY: ${{ steps.drift.outputs.summary }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          BRANCH="telnyx-rate-cutover-$(date -u +%Y%m%d)"
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add src/lib/plans/enterprise-pricing.ts
+          {
+            echo "Telnyx voice rate cutover: recalibrate the per-minute constant"
+            echo
+            printf '%s\n' "$SUMMARY"
+          } > /tmp/commit-msg.txt
+          git commit -F /tmp/commit-msg.txt
+          git remote set-url --push origin "git@github.com:${{ github.repository }}.git"
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+            git push --set-upstream origin "$BRANCH"
+
+      - name: Open the PR
+        if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: process.env.BRANCH,
+              base: "main",
+              title: process.env.TITLE,
+              body: [
+                process.env.SUMMARY,
+                "",
+                "---",
+                "",
+                "Measured by `debug/measure-voice-zone-exposure.ts` against the live",
+                "`telnyx_cost_daily` sync. The full JSON report is in this run's log.",
+                "",
+                "Opened automatically by `.github/workflows/telnyx-voice-rate-cutover.yml`.",
+                "**Read the number before merging**: it is derived from whatever traffic",
+                "the fleet happened to place since the cutover, so a month with an unusual",
+                "destination mix moves it for a reason that is not a price change."
+              ].join("\n")
+            });
+            core.info(`Opened #${pr.number}`);
+        env:
+          SUMMARY: ${{ steps.drift.outputs.summary }}
+          TITLE: ${{ steps.drift.outputs.title }}
+
+      - name: Report when nothing changed
+        if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed != 'true'
+        env:
+          SUMMARY: ${{ steps.drift.outputs.summary }}
+        run: printf 'No PR opened. %s\n' "$SUMMARY"

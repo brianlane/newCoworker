@@ -13,6 +13,10 @@
 
 import type { VpsSize } from "@/lib/vps/size";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import {
+  NANP_BASELINE_CENTS_PER_MINUTE,
+  blendedVoiceTerminationRate
+} from "@/lib/plans/voice-zone-rates";
 
 /** Hostinger monthly-SKU price per box size (we buy monthly regardless of the customer's term). */
 export const HOSTING_MONTHLY_CENTS_BY_SIZE: Record<VpsSize, number> = {
@@ -54,6 +58,17 @@ export const ENTERPRISE_UNIT_COSTS = {
    * The pre-Aug-2026 figure of 0.55 missed the invoice-only adjunct lines
    * (call control, media streaming, recording never appear in
    * /v2/detail_records; see TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE).
+   *
+   * THIS IS A ZONE 1 MINUTE. Telnyx prices termination per NPA-NXX, and
+   * both calibration months were traffic that never left the lower-48
+   * baseline: zone-matching all 104 outbound legs we had ever placed on
+   * 2026-08-28 put 100% of them in US Zone 1, at an effective 0.5333c/min
+   * of termination against the deck's 0.5c. So this figure is sound for
+   * lower-48 traffic and understates a rural list, where a "High Cost
+   * (Zone 5)" minute terminates at 7c. The gap is priced separately as a
+   * surcharge over baseline in estimateEnterpriseMonthlyCost, never folded
+   * in here, because folding it in would silently bill Zone 1 termination
+   * twice. See src/lib/plans/voice-zone-rates.ts.
    */
   voiceTelnyxCentsPerMinute: 0.9,
   /** Gemini Live realtime audio. */
@@ -214,6 +229,16 @@ export type EnterpriseUsageAssumptions = {
   voiceMinutesPerMonth: number;
   /** Phone numbers beyond the included one. */
   extraDids?: number;
+  /**
+   * The numbers this tenant will actually dial, when they are known (a
+   * prospect's imported contact list, say). Supplying them prices the
+   * high-cost-zone surcharge from the real destination mix instead of
+   * assuming every minute is a lower-48 Zone 1 minute.
+   *
+   * Optional on purpose: with no list the estimate is byte-for-byte what it
+   * was before the zone table existed, so no existing surface moves.
+   */
+  voiceDestinations?: readonly (string | null | undefined)[];
 };
 
 export type EnterpriseCostLineItem = {
@@ -250,6 +275,30 @@ export function estimateEnterpriseMonthlyCost(
   const sms = usage.smsPerMonth * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage;
   const voice = usage.voiceMinutesPerMonth * VOICE_ALL_IN_CENTS_PER_MINUTE;
   const dids = (1 + extraDids) * ENTERPRISE_UNIT_COSTS.didMonthlyCents;
+
+  // HIGH-COST ZONE SURCHARGE, and why it is a surcharge rather than a
+  // replacement for the termination component of `voice` above.
+  //
+  // Telnyx prices termination per NPA-NXX, not per country: the US spread
+  // runs from 0.5c/min in the lower 48 to 7c in "High Cost (Zone 5)" and
+  // 18.1c in Zone 6, and those prefixes are overwhelmingly rural.
+  // `voiceTelnyxCentsPerMinute` (0.9) is a single blended figure
+  // back-calibrated from the June and July 2026 invoices. Measuring every
+  // outbound leg we had ever placed on 2026-08-28 showed all 104 of them
+  // landed in Zone 1, so that 0.9 already contains a Zone 1 termination
+  // rate. Adding a full zone rate on top would bill termination twice.
+  //
+  // The INCREMENT above baseline is the part 0.9 cannot contain, and it is
+  // additive with no double count. A tenant dialing only the lower 48 gets
+  // exactly 0 here, which is why the line disappears rather than showing a
+  // rounded-to-zero surcharge.
+  const zoneBlend = usage.voiceDestinations
+    ? blendedVoiceTerminationRate(usage.voiceDestinations)
+    : null;
+  const zoneSurchargeCentsPerMinute = zoneBlend
+    ? Math.max(0, zoneBlend.centsPerMinute - NANP_BASELINE_CENTS_PER_MINUTE)
+    : 0;
+  const zoneSurcharge = usage.voiceMinutesPerMonth * zoneSurchargeCentsPerMinute;
   // Tax applies to the Telnyx components only (Gemini bills through Google
   // untaxed here). DID MRCs are sourced to the billing address and taxed in
   // full; messaging only on its intrastate share. The 10DLC campaign fee is
@@ -257,7 +306,8 @@ export function estimateEnterpriseMonthlyCost(
   const taxes = estimateTelnyxTaxCents({
     recurringCents: dids,
     voiceUsageCents:
-      usage.voiceMinutesPerMonth * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute,
+      usage.voiceMinutesPerMonth * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
+      zoneSurcharge,
     messagingUsageCents: sms
   });
 
@@ -271,6 +321,14 @@ export function estimateEnterpriseMonthlyCost(
     { label: `Phone numbers (${1 + extraDids} DID${extraDids > 0 ? "s" : ""})`, cents: dids },
     { label: "Telnyx taxes (est.)", cents: taxes }
   ];
+
+  // Insert ahead of the tax line so the itemization reads cost-then-tax.
+  if (zoneSurcharge > 0 && zoneBlend) {
+    items.splice(items.length - 1, 0, {
+      label: `Voice high-cost zones (${zoneBlend.centsPerMinute}c/min blended over the ${NANP_BASELINE_CENTS_PER_MINUTE}c baseline, ${zoneBlend.priced} destination${zoneBlend.priced === 1 ? "" : "s"})`,
+      cents: zoneSurcharge
+    });
+  }
 
   return {
     items,
