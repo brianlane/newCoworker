@@ -125,15 +125,32 @@ if (!newPlan) {
 const newSub = subs.find((s) => s.id === newVm.subscription_id) ?? null;
 
 const oldRowBefore = await getVpsInventoryByVmId(OLD_VM_ID);
-const oldPlan = (oldRowBefore?.plan as typeof newPlan | undefined) ?? newPlan;
 let oldSub = null as (typeof subs)[number] | null;
+let oldVmPlan: typeof newPlan | null = null;
 try {
   const oldVm = await hostinger.getVirtualMachine(OLD_VM_ID);
   oldSub = subs.find((s) => s.id === oldVm.subscription_id) ?? null;
+  oldVmPlan = normalizeHostingerPlan(oldVm.plan);
 } catch {
   // A torn-down box can already be gone from the VM API; fall back to the
   // subscription id the inventory row recorded.
   oldSub = subs.find((s) => s.id === oldRowBefore?.hostinger_billing_subscription_id) ?? null;
+}
+
+// The OLD box's own SKU, never the new one's. `releaseVpsToPool` ignores this
+// on update (an existing row's recorded plan is ground truth) and uses it only
+// when it has to INSERT, which is exactly the case where getting it wrong
+// matters: this script also serves real size changes, so defaulting to the new
+// box's plan would seed the pool with the wrong SKU and let a later
+// adopt-first claim hand out undersized or oversized hardware. The row's own
+// value wins, then the live VM; there is no third guess worth making.
+const oldPlan = (oldRowBefore?.plan as typeof newPlan | undefined) ?? oldVmPlan;
+if (!oldPlan) {
+  console.error(
+    `cannot resolve the OLD box ${OLD_VM_ID}'s plan: no vps_inventory row and the live VM ` +
+      `lookup gave nothing usable. Refusing rather than seeding the pool with a guessed SKU.`
+  );
+  process.exit(1);
 }
 // `releaseVpsToPool` writes this column unconditionally, so omitting it stores
 // null and ERASES the link on an existing row. The pooled box's whole purpose
