@@ -73,11 +73,17 @@ import {
   followUpAmbiguityText,
   followUpNoLeadText,
   followUpCandidatesFrom,
+  followUpPendingText,
+  followUpRunAmbiguityText,
+  followUpRunCandidatesFrom,
+  matchFollowUpRun,
   matchFollowUpTarget,
   parseFollowUpReply,
+  withPendingFollowUp,
+  type FollowUpRunRow,
   type FollowUpContactRow
 } from "../_shared/ai_flows/follow_up_reply.ts";
-import { loadStaffMatcher } from "../_shared/ai_flows/staff_numbers.ts";
+import { isBusinessOwnerPhone, loadStaffMatcher } from "../_shared/ai_flows/staff_numbers.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
@@ -2082,6 +2088,13 @@ const FOLLOW_UP_TAG = "Needs Follow Up";
 const FOLLOW_UP_CANDIDATE_SCAN = 50;
 
 /**
+ * How many live runs the pending-follow-up fallback sifts. Smaller than the
+ * contact scan because only runs that have NOT filed a contact yet qualify,
+ * and a tenant has a handful of those at a time, not fifty.
+ */
+const FOLLOW_UP_RUN_SCAN = 25;
+
+/**
  * Mark a lead for AI follow-up from a teammate's text ("F", "Daniel, F",
  * "needs follow up").
  *
@@ -2117,20 +2130,42 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
 
   // Only a teammate may tag a lead. Without this a customer texting "f" would
   // put THEMSELVES into a calling cadence.
-  const { data: memberRow } = await supabase
+  //
+  // The roster read's error is NOT swallowed: a lookup failure that reads as
+  // "not staff" silently drops a teammate's instruction on the floor, and the
+  // owner arm below shipped with exactly that defect.
+  const { data: memberRow, error: memberErr } = await supabase
     .from("ai_flow_team_members")
     .select("id")
     .eq("business_id", businessId)
     .eq("phone_e164", from)
     .eq("active", true)
     .maybeSingle();
-  const { data: ownerRow } = await supabase
-    .from("businesses")
-    .select("id")
-    .eq("id", businessId)
-    .eq("owner_alert_e164", from)
-    .maybeSingle();
-  if (!memberRow && !ownerRow) return null;
+  if (memberErr) {
+    console.error("follow-up roster gate", memberErr);
+    return new Response(JSON.stringify({ ok: false, error: "team_lookup_failed" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  // The owner arm used to filter `businesses` on an `owner_alert_e164` column
+  // that has never existed on that table. PostgREST answered 400, only `data`
+  // was destructured, so `ownerRow` was unconditionally null and the owner
+  // could never use "F" at all unless they also happened to sit on the roster
+  // (found Aug 28 2026). It now asks the shared owner rule, the same three
+  // numbers the inbound staff gate and the dashboard's "owner" label use.
+  let isOwner = false;
+  if (!memberRow) {
+    const ownerCheck = await isBusinessOwnerPhone(supabase, businessId, from);
+    if (ownerCheck.readFailed) {
+      return new Response(JSON.stringify({ ok: false, error: "team_lookup_failed" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    isOwner = ownerCheck.owner;
+  }
+  if (!memberRow && !isOwner) return null;
 
   const ackProfile = messagingProfileId;
   const ackFrom = ackTo || smsFromE164;
@@ -2212,7 +2247,15 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
 
   const match = matchFollowUpTarget(candidates, parsed.name);
   if (match.kind === "none") {
-    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+    // No contact matched, which does NOT mean we have never heard of them. A
+    // referral network withholds a lead's phone and email until the claim is
+    // confirmed on its side, so for the minutes or hours in between, the lead
+    // exists to us only as a live run. Amy's two "F, Rhonda" texts both landed
+    // inside a 38-minute gap like that (Aug 28 2026) and were answered "no
+    // recent lead matches" about a lead we had texted her about four minutes
+    // earlier. Park the request on the run instead; the worker applies it the
+    // moment it files the contact.
+    return await tryPendingFollowUp({ supabase, businessId, from, parsed, ack });
   }
   if (match.kind === "ambiguous") {
     return await ack(
@@ -2251,6 +2294,97 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
     dedupeKey: `ce:fu:${eventId}:${target.contactId}`
   });
   return await ack(followUpAckText(target.name), "fu-ok");
+}
+
+/**
+ * Park a follow-up request on the live run that knows this lead.
+ *
+ * Reached only when no CONTACT matched, so it can never shadow the ordinary
+ * path. Writing the marker is revision-gated the same way the claim and
+ * unclaim replies are: the worker may be mid-step on this very run, and a
+ * blind context write would clobber whatever it just recorded.
+ */
+async function tryPendingFollowUp(args: {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  parsed: { name: string };
+  ack: (text: string, keySuffix: string) => Promise<Response>;
+}): Promise<Response> {
+  const { supabase, businessId, from, parsed, ack } = args;
+  const { data: runRows, error: runErr } = await supabase
+    .from("ai_flow_runs")
+    .select("id, revision, context")
+    .eq("business_id", businessId)
+    // Every status a run can sit in while still holding a lead it has not
+    // filed yet. "done" is excluded on purpose: a finished run will never
+    // reach another upsert_customer step, so a marker on it could not fire.
+    .in("status", ["queued", "awaiting_agent", "awaiting_approval", "awaiting_reply"])
+    .order("updated_at", { ascending: false })
+    .limit(FOLLOW_UP_RUN_SCAN);
+  if (runErr) {
+    console.error("follow-up live-run lookup", runErr);
+    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+  }
+  const runCandidates = followUpRunCandidatesFrom((runRows ?? []) as FollowUpRunRow[]);
+  const runMatch = matchFollowUpRun(runCandidates, parsed.name);
+  if (runMatch.kind === "none") {
+    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+  }
+  if (runMatch.kind === "ambiguous") {
+    return await ack(
+      followUpRunAmbiguityText(runMatch.runs.map((r) => r.leadName)),
+      "fu-pending-ambiguous"
+    );
+  }
+  const target = runMatch.run;
+  // Already parked (a teammate texting "F" twice, as Amy did): confirm rather
+  // than rewriting, so a second ack never reads as a second enrollment.
+  if (target.alreadyPending) {
+    return await ack(followUpPendingText(target.leadName), "fu-pending-already");
+  }
+  // Re-find the ROW, not just the candidate: the write below replaces the
+  // whole context column, so handing withPendingFollowUp an undefined context
+  // would blank a live run's vars, its resume marker and its routing included.
+  // The candidate came from these rows so this cannot miss, but a destructive
+  // write is the wrong place to rely on an invariant holding.
+  const targetRow = (runRows ?? []).find(
+    (r: { id: string }) => r.id === target.runId
+  ) as { context?: Record<string, unknown> | null } | undefined;
+  if (!targetRow) {
+    console.error("follow-up park: run row vanished", target.runId);
+    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+  }
+  const { data: parked, error: parkErr } = await supabase
+    .from("ai_flow_runs")
+    .update({
+      context: withPendingFollowUp(targetRow.context, {
+        requestedBy: from,
+        leadName: target.leadName
+      }),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", target.runId)
+    .eq("revision", target.revision)
+    .select("id");
+  if (parkErr) {
+    console.error("follow-up park on run", parkErr);
+    return await ack(
+      "Could not note that follow-up request just now. Please try again.",
+      "fu-pending-error"
+    );
+  }
+  if (!parked || (parked as unknown[]).length === 0) {
+    // The worker moved the run between our read and our write. Saying "noted"
+    // would be a claim we cannot stand behind, so ask for the retry instead.
+    return await ack(
+      `${target.leadName} is being worked right now, so I couldn't note that. ` +
+        "Send it again in a moment.",
+      "fu-pending-raced"
+    );
+  }
+  return await ack(followUpPendingText(target.leadName), "fu-pending-ok");
 }
 
 type FollowUpTagArgs = {

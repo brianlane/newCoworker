@@ -17,6 +17,7 @@
  */
 import { isSelfPhone } from "./extracted_contact.ts";
 import { contactKeyEmail } from "../contact_key.ts";
+import { normalizeE164 } from "../normalize_e164.ts";
 
 // Minimal structural client (matches the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -179,4 +180,75 @@ export async function staffNumberCheck(
     staff: contactNumbers.some((n) => isSelfPhone(n, selfNumbers)),
     readFailed: false
   };
+}
+
+/**
+ * The OWNER's own numbers, as one answer the owner-only gates share.
+ *
+ * An owner is not a row anywhere. They are recognized by number, and the
+ * numbers are spread over three tables: the Safe Mode forward cell, the
+ * notification alert phone, and the onboarding phone on the business itself.
+ * That is the same set `resolveContactNames` labels "owner" on the dashboard
+ * and the same set the SMS webhook's staff gate uses, so gate behavior and
+ * labeling cannot disagree.
+ *
+ * This exists because the "F" follow-up reply invented its OWN owner rule
+ * instead: it filtered `businesses` on an `owner_alert_e164` column, which has
+ * never existed on that table. PostgREST answered 400, the error was
+ * destructured away, and the owner arm of the gate was dead from the day it
+ * shipped, silently, for every tenant whose owner is not also on the roster
+ * (Amy Laidlaw, found Aug 28 2026). Hence one shared function with tests,
+ * rather than a fourth hand-rolled copy.
+ *
+ * `readFailed` is reported rather than collapsed into an empty list: "this
+ * person is not the owner" and "we could not find out" are different answers,
+ * and conflating them is precisely what hid the original bug.
+ */
+export async function ownerAlertNumbers(
+  supabase: AnyClient,
+  businessId: string
+): Promise<{ numbers: string[]; readFailed: boolean }> {
+  const [fwdRes, prefsRes, bizRes] = await Promise.all([
+    supabase
+      .from("business_telnyx_settings")
+      .select("forward_to_e164")
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    supabase
+      .from("notification_preferences")
+      .select("phone_number")
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    supabase.from("businesses").select("phone").eq("id", businessId).maybeSingle()
+  ]);
+  if (fwdRes.error || prefsRes.error || bizRes.error) {
+    console.error("owner number lookup", fwdRes.error ?? prefsRes.error ?? bizRes.error);
+    return { numbers: [], readFailed: true };
+  }
+  const raw = [
+    (fwdRes.data as { forward_to_e164?: string | null } | null)?.forward_to_e164,
+    (prefsRes.data as { phone_number?: string | null } | null)?.phone_number,
+    (bizRes.data as { phone?: string | null } | null)?.phone
+  ];
+  // Normalized on the way out: two of the three are free-form owner-typed
+  // fields, so "(602) 695-1142" and "+16026951142" are the same person and a
+  // raw string compare would say otherwise.
+  const numbers = [...new Set(raw.map((n) => normalizeE164(n ?? "")).filter((n): n is string => Boolean(n)))];
+  return { numbers, readFailed: false };
+}
+
+/**
+ * Is this number the business owner's? Normalizes BOTH sides, so a caller
+ * holding a webhook's E.164 and a business holding a hand-typed phone still
+ * agree.
+ */
+export async function isBusinessOwnerPhone(
+  supabase: AnyClient,
+  businessId: string,
+  phone: string
+): Promise<{ owner: boolean; readFailed: boolean }> {
+  const normalized = normalizeE164(phone);
+  const { numbers, readFailed } = await ownerAlertNumbers(supabase, businessId);
+  if (readFailed) return { owner: false, readFailed: true };
+  return { owner: normalized != null && numbers.includes(normalized), readFailed: false };
 }

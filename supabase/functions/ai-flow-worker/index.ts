@@ -188,6 +188,11 @@ import {
   businessSelfNumbers,
   staffNumberCheck
 } from "../_shared/ai_flows/staff_numbers.ts";
+import {
+  FOLLOW_UP_PENDING_DONE_VAR,
+  followUpAppliedText,
+  pendingFollowUpFrom
+} from "../_shared/ai_flows/follow_up_reply.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { leadSourceLabel } from "../_shared/leads/source_label.ts";
 import {
@@ -3048,6 +3053,14 @@ async function upsertCustomerStep(
       console.error("upsert_customer contact_created verify", e);
     }
   }
+  // A follow-up a teammate asked for BEFORE we had this lead's details.
+  // Referral networks withhold the phone and email until the claim is
+  // confirmed on their side, so "F, Rhonda" can legitimately arrive while the
+  // lead exists only as this run. The SMS webhook parked the request here;
+  // this is the moment it becomes possible to honor, because this is the step
+  // that files the contact. Best-effort by contract: filing must not fail
+  // because a courtesy tag could not be written.
+  await applyPendingFollowUp(supabase, run, scope, action.e164);
   // Language: persist what the flow was told (as a DETECTION, so the lead's
   // own replies can still correct it), then refresh
   // {{vars.contact_language}} for this contact so LATER steps can branch on
@@ -3124,6 +3137,178 @@ async function isProtectedStaffContact(
  * A missing phone (planner skipReason) or missing contact row SKIPS with a
  * note, tag bookkeeping must never fail an otherwise-healthy run.
  */
+/**
+ * Apply a follow-up request that was parked on this run before we had the
+ * lead's contact details.
+ *
+ * The gap this closes: a referral network withholds the lead's phone and email
+ * until the claim is confirmed on ITS side, so a teammate who texts "F,
+ * <name>" during that window is asking about a lead with no contact row. The
+ * SMS webhook parks the request on the run (see follow_up_reply.ts); this runs
+ * at the one moment it can be honored, immediately after upsert_customer files
+ * the contact.
+ *
+ * Deliberately mirrors what the webhook's own tagging path does, tag, fire
+ * tag_changed, tell the teammate, so a lead enrolled this way is
+ * indistinguishable from one enrolled directly. The tag is the whole
+ * mechanism; the cadence flow starts from the event, not from here.
+ *
+ * Best-effort throughout: every failure logs and returns. Filing a lead must
+ * never fail because a courtesy tag could not be written, and the teammate
+ * still has the ordinary "F" reply available once the contact is on file.
+ */
+async function applyPendingFollowUp(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  e164: string
+): Promise<void> {
+  const pending = pendingFollowUpFrom(scope.vars);
+  if (!pending) return;
+  try {
+    const lookupBase = supabase
+      .from("contacts")
+      .select("id, tags, type, customer_e164, alias_e164s")
+      .eq("business_id", run.business_id);
+    const lookupFilter = contactAliasOrFilter(e164);
+    const { data, error } = await (lookupFilter
+      ? lookupBase.or(lookupFilter)
+      : lookupBase.eq("customer_e164", e164)
+    ).maybeSingle();
+    if (error || data == null) {
+      console.error("pending follow-up: contact lookup", error);
+      return;
+    }
+    const contact = data as {
+      id: string;
+      tags?: string[] | null;
+      type?: string | null;
+      customer_e164?: string | null;
+      alias_e164s?: string[] | null;
+    };
+    // A teammate is never a lead. The webhook applied this rule to the
+    // contacts it could see; the lead it parked on did not exist yet, so the
+    // check has to happen again HERE, on the row that actually got filed.
+    // Fails SAFE: an unverifiable answer leaves the lead untagged rather than
+    // starting a calling cadence at one of our own people.
+    const contactNumbers = [
+      ...new Set(
+        [e164, contact.customer_e164 ?? "", ...(contact.alias_e164s ?? [])].filter(Boolean)
+      )
+    ];
+    const staff = await staffNumberCheck(
+      supabase,
+      run.business_id,
+      contactNumbers,
+      contact.type
+    );
+    if (staff.staff || staff.readFailed) {
+      appendActionTaken(
+        scope,
+        "did not apply the requested follow-up: the filed contact is one of our own numbers"
+      );
+      scope.vars[FOLLOW_UP_PENDING_DONE_VAR] = true;
+      return;
+    }
+    const existing = Array.isArray(contact.tags) ? contact.tags : [];
+    const already = existing.some(
+      (t) => t.trim().toLowerCase() === PENDING_FOLLOW_UP_TAG.toLowerCase()
+    );
+    const nextTags = already ? existing : [...existing, PENDING_FOLLOW_UP_TAG];
+    if (!already) {
+      const { error: updErr } = await supabase
+        .from("contacts")
+        .update({ tags: nextTags, updated_at: new Date().toISOString() })
+        .eq("id", contact.id);
+      if (updErr) {
+        console.error("pending follow-up: tag write", updErr);
+        return;
+      }
+    }
+    // Mark applied BEFORE the notify: the marker is what stops a retried or
+    // re-claimed step from emitting a second tag_changed, and a second event
+    // means a second cadence calling one person. A missed confirmation text
+    // is the cheaper failure.
+    scope.vars[FOLLOW_UP_PENDING_DONE_VAR] = true;
+    const leadName = pending.leadName || scope.vars.lead_name || e164;
+    if (!already) {
+      // The same chokepoint the dashboard tag editor, update_contact, and the
+      // webhook's own "F" use, so the cadence starts identically however the
+      // tag was applied. NOT loop-guarded to this flow: the cadence is a
+      // different flow and must be allowed to start.
+      await enqueueContactEventRuns(supabase, run.business_id, {
+        kind: "tag_changed",
+        contact: { e164, name: String(leadName), tags: nextTags },
+        tag: PENDING_FOLLOW_UP_TAG,
+        change: "added",
+        dedupeKey: `ce:fu-pending:${run.id}:${contact.id}`
+      });
+    }
+    appendActionTaken(
+      scope,
+      `marked ${leadName} for follow-up as ${pending.requestedBy} asked earlier`
+    );
+    await sendTeammateSms(
+      supabase,
+      run,
+      pending.requestedBy,
+      followUpAppliedText(String(leadName)),
+      `aiflow-fu-pending:${run.id}:${contact.id}`
+    );
+  } catch (e) {
+    console.error("pending follow-up apply", e);
+  }
+}
+
+/**
+ * The tag that IS the follow-up mechanism. Lockstep with FOLLOW_UP_TAG in
+ * telnyx-sms-inbound: both write the tag Amy's "Needs Follow Up (AI cadence)"
+ * flow triggers on, and Deno cannot share a constant across function bundles.
+ */
+const PENDING_FOLLOW_UP_TAG = "Needs Follow Up";
+
+/**
+ * Text one teammate directly (not the owner forward).
+ *
+ * sendOwnerSms always addresses `forward_to_e164`, which is the wrong
+ * recipient for a confirmation owed to whoever asked. Metered operational
+ * traffic, same as the owner path.
+ */
+async function sendTeammateSms(
+  supabase: Supabase,
+  run: RunRow,
+  toE164: string,
+  text: string,
+  idempotencyKey: string
+): Promise<void> {
+  try {
+    const cfg = await messagingConfig(supabase, run.business_id);
+    if (!cfg || !toE164) return;
+    const body = prepareSmsBody(`[AiFlow] ${text}`);
+    const send = await sendOperationalSms(supabase, run.business_id, {
+      apiKey: cfg.apiKey,
+      messagingProfileId: cfg.profile,
+      fromE164: cfg.from,
+      toE164,
+      text: body,
+      idempotencyKey
+    });
+    if (!send.ok) {
+      console.error("teammate sms", send.status, send.body.slice(0, 200));
+      return;
+    }
+    await logOutboundSms(supabase, run, {
+      to: toE164,
+      from: cfg.from || null,
+      body,
+      source: "owner_notify",
+      telnyxMessageId: telnyxMessageIdFromBody(send.body)
+    });
+  } catch (e) {
+    console.error("teammate sms", e);
+  }
+}
+
 async function updateContactStep(
   supabase: Supabase,
   run: RunRow,
@@ -5682,9 +5867,24 @@ async function sendWhatsAppStep(
     }
   }
 
-  // Never message ourselves (same extraction-grabbed-our-own-number guard
-  // as send_sms).
-  if (isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))) {
+  // Never message ourselves (same extraction-grabbed-our-own-number guard as
+  // send_sms), and with the same teammate exemption: on a small team the
+  // owner's personal cell IS businesses.phone / the forward cell, so an
+  // intentional hand-off to the teammate who claimed reaches a "self" number
+  // legitimately. Declared agent recipients are teammates by construction; a
+  // templated phone var is checked against the live roster. A roster read
+  // error leaves this false and the stricter guard applies.
+  const declaredAgentSend =
+    Boolean(action.toAgentName) ||
+    Boolean(action.toAgentNameValue) ||
+    action.toRef?.source === "employee";
+  const internalAgentSend =
+    declaredAgentSend ||
+    (await activeRosterMemberByPhone(supabase, run.business_id, toE164)) != null;
+  if (
+    !internalAgentSend &&
+    isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))
+  ) {
     return {
       kind: "fail",
       error:
@@ -6122,15 +6322,41 @@ async function sendSmsStep(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
 
-  // Never text ourselves: a destination equal to our own sending DID (or any
-  // of the business's own numbers) means an upstream extraction grabbed the
-  // business's contact info instead of the lead's. Telnyx would reject it
-  // anyway (40310, source == destination), fail the step IMMEDIATELY with a
-  // clear message instead of burning MAX_ATTEMPTS on a permanent 400.
-  // isSelfPhone normalizes BOTH sides (businesses.phone is free-form), so the
+  // Our own sending DID can never be a destination, whoever the recipient is:
+  // Telnyx rejects source == destination outright (40310). Fail IMMEDIATELY
+  // with a readable message instead of burning MAX_ATTEMPTS on a permanent 400.
+  if (toE164 === cfg.from) {
+    return {
+      kind: "fail",
+      error:
+        `send_sms: destination ${toE164} is this business's own texting number, and a ` +
+        "text cannot be sent from a number to itself."
+    };
+  }
+  // The business's OTHER self-numbers (businesses.phone, the Safe Mode forward
+  // cell) mean something different, and the difference cost Amy a live lead.
+  // Reaching one of them is normally proof that an upstream extraction grabbed
+  // the business's contact info instead of the lead's, so the step fails
+  // rather than texting ourselves. But those two fields are owner-typed and on
+  // a small team they hold the OWNER'S PERSONAL CELL, which is also a roster
+  // line, so an intentional teammate text lands on them legitimately.
+  //
+  // On Aug 28 2026 Amy claimed her own HomeLight referral. The post-claim
+  // hand-off (`to: "{{vars.claimed_agent_phone}}"`) resolved to her cell,
+  // which is both businesses.phone and forward_to_e164 for her tenant, this
+  // guard called it a bad extraction, and the run died one second after filing
+  // the lead: the lead never got her intro text or email, Amy never got the
+  // details, and the portal note was never posted. The extraction had been
+  // perfectly correct.
+  //
+  // So the bad-extraction reading only applies when the recipient is NOT a
+  // teammate. internalAgentSend is already resolved above (declared agent
+  // recipients plus roster numbers matched live), and a roster read error
+  // leaves it false, which lands back on the old, stricter behavior.
+  // isSelfPhone normalizes BOTH sides (businesses.phone is free-form), so this
   // guard and the extraction scrub can never disagree.
   if (
-    toE164 === cfg.from ||
+    !internalAgentSend &&
     isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))
   ) {
     return {
