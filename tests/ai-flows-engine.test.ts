@@ -41,6 +41,7 @@ import {
   senderPinnedByFromMatches,
   type AvailabilityMode
 } from "../supabase/functions/_shared/ai_flows/engine";
+import { US_SPELLING_PROMPT_LINE_EXTRACTION } from "../supabase/functions/_shared/sms_prompt_lines";
 import type {
   AiFlowDefinition,
   FlowTrigger,
@@ -941,6 +942,32 @@ describe("postProcessExtractedField", () => {
 });
 
 describe("buildExtractionPrompt", () => {
+  it("takes the extraction spelling line, not the full composing one", () => {
+    // Nightly 2026-08-28: PR #1701 put the full US_SPELLING_PROMPT_LINE on
+    // this prompt and the Pamela replay went from 8/8 to 2/10, the extractor
+    // answering "Amy", the tenant's own agent, for "the seller's first name".
+    // That is the exact Jul 2026 incident the person-role disambiguation
+    // instruction above it exists to prevent.
+    //
+    // Two properties, and BOTH are load-bearing (measured 10 samples per
+    // cell, see the constant's docblock):
+    //   no trailing British word list -> the role instruction keeps its grip
+    //   an explicit spelling-only scope -> the self-name retry hint keeps
+    //     answering instead of returning ""
+    // Either edit alone scores worse than the bug on one of the two layers.
+    //
+    // Deterministic companion to tests/e2e/clever-seller-name.e2e.test.ts,
+    // which only runs in the nightly.
+    const p = buildExtractionPrompt([{ name: "seller_first_name" }], "Hi Pamela");
+    expect(p).toContain(US_SPELLING_PROMPT_LINE_EXTRACTION);
+    expect(p).not.toContain("canceled, scheduling");
+    expect(p).toContain("governs spelling only");
+    // The guard it must still carry, and the instruction it must not crowd.
+    expect(p).toContain("inquiry, inquiries, and inquire");
+    expect(p).toContain("ADDRESSES directly");
+  });
+
+
   it("includes field names with and without descriptions", () => {
     const p = buildExtractionPrompt(
       [{ name: "seller_phone", description: "the seller's phone" }, { name: "price" }],

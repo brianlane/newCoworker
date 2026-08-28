@@ -10,7 +10,7 @@
  */
 import {
   NO_EM_DASH_PROMPT_LINE,
-  US_SPELLING_PROMPT_LINE
+  US_SPELLING_PROMPT_LINE_EXTRACTION
 } from "../sms_prompt_lines.ts";
 import { AI_FLOW_DEFINITION_VERSION } from "./types.ts";
 import { emailContactKey } from "../contact_key.ts";
@@ -963,7 +963,12 @@ export function buildExtractionPrompt(
     // bodies. SMS is normalized by gsmSafeSmsText on the way out, but email
     // never is, so an em dash the model wrote here ships as-is.
     NO_EM_DASH_PROMPT_LINE,
-    US_SPELLING_PROMPT_LINE,
+    // The SHORT spelling line, not the full one every composing surface
+    // takes. The full line's trailing list of other British spellings
+    // measurably breaks the person-role disambiguation above it: 5/24 correct
+    // against 8/8 without it, answering with our own agent's name. See the
+    // constant's docblock for the scores.
+    US_SPELLING_PROMPT_LINE_EXTRACTION,
     "",
     "Fields:",
     fieldLines,

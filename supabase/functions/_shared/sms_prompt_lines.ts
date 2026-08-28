@@ -172,13 +172,53 @@ export const NO_EM_DASH_PROMPT_LINE =
  * open, so the instruction rides every AI worker/model prompt the same way
  * NO_EM_DASH_PROMPT_LINE does (SMS, dashboard/owner chat, Slack, messenger,
  * webchat, AiFlow extraction; the voice bridge and the document agents carry
- * lockstep copies).
+ * lockstep copies). AiFlow extraction takes
+ * US_SPELLING_PROMPT_LINE_EXTRACTION instead, for the measured reason on that
+ * constant.
  *
  * The banned spelling appears nowhere in this file except the explicit
  * "Never write" clause below, which tests/inquiry-spelling.test.ts strips as a
  * single contiguous literal before scanning. Keep that clause on one source
  * line so the strip keeps working.
  */
+/**
+ * The spelling rule for surfaces that EXTRACT rather than compose.
+ *
+ * Two differences from the full line below, both measured rather than
+ * reasoned: it drops the trailing list of other British spellings, and it
+ * says out loud that it governs spelling only. Scored on the live model, 10
+ * samples per cell, against the Clever group intro that caused the Jul 2026
+ * "Hi Amy" incident (tests/e2e/clever-seller-name.e2e.test.ts):
+ *
+ *   line on the extraction prompt   L1 seller   L3 retry hint   wrote British
+ *   ------------------------------  ----------  --------------  ------------
+ *   none at all (pre-#1701)          10/10       10/10           10/10  BAD
+ *   the full line (#1701, shipped)    2/10       10/10            0/10  BAD
+ *   full line + the scope clause      0/10       10/10            0/10  BAD
+ *   inquiry clause only               10/10        3/8            0/10  BAD
+ *   THIS: inquiry clause + scope      10/10       10/10            0/10
+ *
+ * L1 is the flow's vague original field description, L3 the worker's
+ * self-name retry hint; both must hold, because L1 is what the live flows ran
+ * on when the incident happened and L3 is the fallback that caught it.
+ *
+ * Read the failures, not just the winner. The word list alone costs the
+ * person-role disambiguation instruction its grip and the extractor answers
+ * "Amy", our own agent. Removing the list but not scoping the rule fixes that
+ * and breaks the retry hint instead, which starts returning "" (the hint and
+ * a bare "write in American English" together read as licence to compose, and
+ * an extractor that composes stops answering). Only both edits together hold
+ * all three. Reordering the lines was tried first and scored 0/8.
+ *
+ * See [[feedback_score_prompt_changes_against_outcomes]]: three of the four
+ * losing candidates above were changes I could argue for in detail.
+ */
+export const US_SPELLING_PROMPT_LINE_EXTRACTION =
+  "Spelling: write in American English. " +
+  "Never write enquiry, enquiries, or enquire; " +
+  "the American spellings are inquiry, inquiries, and inquire. " +
+  "This governs spelling only, never which value you choose.";
+
 export const US_SPELLING_PROMPT_LINE =
   "Spelling: write in American English. " +
   "Never write enquiry, enquiries, or enquire; " +
