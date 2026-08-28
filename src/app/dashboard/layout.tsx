@@ -27,6 +27,7 @@ import { latestAcceptanceFor, needsAcceptance } from "@/lib/legal/acceptance";
 import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
 import { SectionMessages } from "@/components/i18n/SectionMessages";
 import { HipaaIdleLogout } from "@/components/dashboard/HipaaIdleLogout";
+import { PushRegistrar } from "@/components/push/PushRegistrar";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -245,6 +246,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
           impersonating admin can do (their email resolves no role on a
           foreign tenant, so role-gated bridge tools never declare). */}
       {businessId && !requireAcceptance && <CompanionLauncher businessId={businessId} />}
+      {/* Renders nothing. Keeps an already-opted-in browser's push
+          subscription registered and fresh, and re-subscribes it if the VAPID
+          key rotated. It never prompts for permission: that needs a user
+          gesture and lives behind the button in PushSetupCard. */}
+      {businessId && !requireAcceptance && <PushRegistrar businessId={businessId} />}
     </div>
     </SectionMessages>
   );

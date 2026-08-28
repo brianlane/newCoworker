@@ -36,6 +36,9 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "GOOGLE_API_KEY",
   "GEMINI_API_KEY",
   "JINA_API_KEY",
+  // Web Push (VAPID). The private key signs every push; a test that reaches a
+  // real send path must not be able to pick it up from a developer's shell.
+  "VAPID_PRIVATE_KEY",
   // GitHub (weekly blog digest)
   "GITHUB_DIGEST_REPO",
   "GITHUB_DIGEST_TOKEN",

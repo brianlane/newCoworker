@@ -20,6 +20,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { NotificationPreferences } from "@/components/dashboard/NotificationPreferences";
 import { NotificationList } from "@/components/dashboard/NotificationList";
+import { PushSetupCard } from "@/components/push/PushSetupCard";
 
 export const dynamic = "force-dynamic";
 
@@ -184,6 +185,17 @@ export default async function NotificationsPage(props: {
               initial={prefsForDisplay}
               whatsappConnected={whatsappConnected}
             />
+          </Card>
+
+          <Card>
+            <h2 className="text-sm font-semibold text-parchment mb-1">
+              Alerts on this device
+            </h2>
+            <p className="text-xs text-parchment/45 mb-4">
+              Push is per device, not per account. Turn it on once on each phone or computer you
+              want alerts to reach.
+            </p>
+            <PushSetupCard businessId={businessId} />
           </Card>
 
           <Card>
