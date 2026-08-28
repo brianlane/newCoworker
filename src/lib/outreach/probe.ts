@@ -89,9 +89,17 @@ const EMAIL_NOISE = [
   "example.com",
   "example.org",
   "sentry.io",
+  // Any self-hosted Sentry, not just sentry.io: a Sentry DSN
+  // (`https://<32-hex-key>@sentry.<host>/<project>`) in page JavaScript reads
+  // as an email to the regex below. A live pitch went to
+  // `<key>@sentry.wixpress.com` (Wix's Sentry) on 2026-08-27 and bounced.
+  "@sentry.",
   "wordpress.com",
   "wordpress.org",
   "wix.com",
+  // Wix's internal domain, where its platform services (Sentry included)
+  // live. Never a customer mailbox.
+  "wixpress.com",
   "squarespace.com",
   "godaddy.com",
   "domain.com",
@@ -102,6 +110,14 @@ const EMAIL_NOISE = [
   "noreply",
   "donotreply"
 ];
+
+/**
+ * A localpart of 20+ hex characters is a credential or tracking key swept up
+ * by the address regex, not a mailbox a person reads. Sentry DSN public keys
+ * are 32 hex chars; no real business publishes a contact address like that,
+ * and pitching one burns a prospect on a machine that bounces.
+ */
+const MACHINE_KEY_MAILBOX_RE = /^[0-9a-f]{20,}@/;
 
 /** Mailbox names that read as a published contact address rather than a person. */
 const PREFERRED_MAILBOXES = ["info", "contact", "hello", "office", "sales", "admin", "support"];
@@ -197,6 +213,7 @@ export function extractEmails(html: string, domain: string): string[] {
     if (EMAIL_NOISE.some((n) => email.includes(n))) continue;
     // A filename that swept up an @ is not an address.
     if (/\.(?:png|jpe?g|gif|svg|webp|css|js)$/.test(email)) continue;
+    if (MACHINE_KEY_MAILBOX_RE.test(email)) continue;
     candidates.push(email);
   }
   const score = (email: string): number => {

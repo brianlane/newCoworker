@@ -150,6 +150,18 @@ visitor actually books.
 
 ## One-shots
 
+**Bounced-pitch prospects retired (2026-08-28):**
+`retire-bounced-outreach-prospects.ts --apply` moved five prospects whose
+pitch provably bounced from `sent` to `failed`, which is what removes them
+from the day-5 nudge queue (three hard bounces, one full inbox, and the
+Sentry-DSN-scraped-as-email case at sunlandautomesa.com; the probe now
+filters DSN-shaped addresses). The bounce list is read from system_logs
+delivery receipts at run time rather than hand-typed, so the script can be
+re-run whenever new bounces land and converges to a no-op. `sent_at` is
+kept so the daily cap still counts the sends. Root cause of why these
+surfaced unattributed is recorded in
+`.cursor/memory/project_hq_gmail_sendas_resend_relay.md`.
+
 **Discovery-call doc pricing corrected (2026-08-24):**
 `fix-hq-discovery-doc-pricing.ts --apply` replaced the garbled pricing bullet
 in the "Kingsley Moyo + New Coworker: Discovery Call" transcript document

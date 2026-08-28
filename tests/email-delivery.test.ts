@@ -15,6 +15,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   applyEmailDeliveryStatus,
+  applyEmailDeliveryStatusByRecipient,
   emailDeliveryOutranks,
   EMAIL_DELIVERY_FAILURES,
   isEmailDeliveryFailure,
@@ -22,10 +23,20 @@ import {
   type EmailDeliveryStatus
 } from "@/lib/email/delivery";
 
+/**
+ * Pins the module-private fallback window as a LITERAL: Resend retries a
+ * transiently-refused message for up to 72 hours before reporting the
+ * bounce, so the window must stay comfortably above that. Asserting against
+ * the exported constant would be a tautology.
+ */
+const RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
+
 type Chain = {
   select: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  ilike: ReturnType<typeof vi.fn>;
+  gte: ReturnType<typeof vi.fn>;
   or: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
@@ -36,6 +47,8 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     select: vi.fn(() => c),
     update: vi.fn(() => c),
     eq: vi.fn(() => c),
+    ilike: vi.fn(() => c),
+    gte: vi.fn(() => c),
     or: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
@@ -288,6 +301,107 @@ describe("applyEmailDeliveryStatus", () => {
     expect(
       await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" })
     ).toEqual({ outcome: "applied", businessId: BIZ });
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("applyEmailDeliveryStatusByRecipient", () => {
+  // The live case this exists for: a pitch relayed to Resend by Gmail's
+  // send-as SMTP setting, logged under its Gmail id, bounced under Resend's.
+  const input = {
+    to: "info@virginiaautoservice.com",
+    subject: "Virginia Auto Service: the calls that come in after you close",
+    status: "bounced" as const,
+    errorCode: "Permanent",
+    errorMessage: "hard bounce",
+    timestamp: "2026-08-26T15:00:47.000Z"
+  };
+
+  beforeEach(() => {
+    defaultClientSpy.mockReset();
+  });
+
+  it("attributes a receipt to the newest recent outbound row for the recipient and subject", async () => {
+    const { db, read, write } = dbWith("sent");
+    const before = Date.now();
+    expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
+      outcome: "applied",
+      businessId: BIZ
+    });
+    expect(read.ilike).toHaveBeenCalledWith("to_email", "info@virginiaautoservice.com");
+    expect(read.eq).toHaveBeenCalledWith("subject", input.subject);
+    expect(read.eq).toHaveBeenCalledWith("direction", "outbound");
+    expect(read.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(read.limit).toHaveBeenCalledWith(1);
+    // Bounded recency: recipient + subject is a heuristic key, so an old row
+    // with the same pair must never be claimed by a fresh receipt.
+    const cutoff = read.gte.mock.calls[0] as [string, string];
+    expect(cutoff[0]).toBe("created_at");
+    expect(Date.parse(cutoff[1])).toBeGreaterThanOrEqual(
+      before - RECIPIENT_WINDOW_MS
+    );
+    expect(Date.parse(cutoff[1])).toBeLessThanOrEqual(Date.now() - RECIPIENT_WINDOW_MS);
+    expect(write.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery_status: "bounced",
+        delivery_error_code: "Permanent",
+        delivery_error_message: "hard bounce"
+      })
+    );
+  });
+
+  it("escapes ILIKE wildcards so an address is matched literally", async () => {
+    // `_` is a single-character wildcard in ILIKE; unescaped, john_doe@x.com
+    // would also claim receipts for johnXdoe@x.com.
+    const { db, read } = dbWith("sent");
+    await applyEmailDeliveryStatusByRecipient(
+      { ...input, to: "john_doe%1@x.com" },
+      db
+    );
+    expect(read.ilike).toHaveBeenCalledWith("to_email", "john\\_doe\\%1@x.com");
+  });
+
+  it("reports not_found when nothing recent matches", async () => {
+    for (const data of [[], null]) {
+      const db = makeDb(chain({ data, error: null }), chain());
+      expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
+        outcome: "not_found",
+        businessId: null
+      });
+    }
+  });
+
+  it("reports stale without writing when the row already holds a higher state", async () => {
+    const { db, write } = dbWith("failed");
+    expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
+      outcome: "stale",
+      businessId: BIZ
+    });
+    expect(write.update).not.toHaveBeenCalled();
+  });
+
+  it("throws with its own label when the lookup or the write fails", async () => {
+    const readFail = makeDb(chain({ data: null, error: { message: "read boom" } }), chain());
+    await expect(applyEmailDeliveryStatusByRecipient(input, readFail)).rejects.toThrow(
+      "applyEmailDeliveryStatusByRecipient: read boom"
+    );
+
+    const writeFail = makeDb(
+      chain({ data: [{ id: "row-1", business_id: BIZ, delivery_status: null }], error: null }),
+      chain({ data: null, error: { message: "write boom" } })
+    );
+    await expect(applyEmailDeliveryStatusByRecipient(input, writeFail)).rejects.toThrow(
+      "applyEmailDeliveryStatusByRecipient: write boom"
+    );
+  });
+
+  it("falls back to the service client when no client is injected", async () => {
+    const { db } = dbWith(null);
+    defaultClientSpy.mockReturnValue(db);
+    expect(await applyEmailDeliveryStatusByRecipient(input)).toEqual({
+      outcome: "applied",
+      businessId: BIZ
+    });
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
