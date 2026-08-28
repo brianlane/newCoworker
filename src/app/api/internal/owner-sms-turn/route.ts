@@ -27,24 +27,14 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { gatewayBusinessGuard } from "@/lib/voice-tools/common";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
-import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
-import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
-import type { PlanTier } from "@/lib/plans/tier";
-import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
-import {
-  buildBusinessContextBlock,
-  buildIntegrationsStatusLine
-} from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
-import { buildMcpBridgeExtraTools } from "@/lib/dashboard-chat/mcp-bridge";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import { ownerSurfaceToolGates } from "@/lib/owner-surfaces/gates";
-import { buildOwnerSurfaceSystem } from "@/lib/owner-surfaces/system";
+import {
+  runOwnerSurfaceTurn,
+  type OwnerSurfaceTurnMessage
+} from "@/lib/owner-surfaces/run-turn";
 import { SMS_SURFACE_BLOCK, ownerTurnSurface } from "@/lib/owner-surfaces/turn-surfaces";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
-import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -82,105 +72,13 @@ export async function POST(request: Request) {
   if (guard) return guard;
 
   try {
-    const meta = await readBusinessMeta(body.businessId);
-
-    // Same fuse posture as the dashboard route: over the shared AI cap this
-    // surface refuses (ok:false), and the SMS worker's Rowboat fallback owns
-    // the local-model degrade. The read fails OPEN (quality over fuse on a
-    // transient DB blip).
-    const spend = await getChatSpendSnapshotForBusiness(
-      body.businessId,
-      undefined,
-      meta.tier
-    ).catch(() => null);
-    if (spend !== null && spend.spendMicros >= spend.effectiveCapMicros) {
-      return NextResponse.json({ ok: false, detail: "over_cap" });
-    }
-
-    // Same per-turn gates as the dashboard chat route (identical semantics),
-    // batched into one settings query instead of fifteen.
-    const [toolStates, integrationsLine, businessContextBlock, bookingLinkLine] =
-      await Promise.all([
-        getAgentToolStates(body.businessId, "dashboard", [
-          "business_knowledge_lookup",
-          "send_sms",
-          "send_whatsapp",
-          "calendar_find_slots",
-          "calendar_book_appointment",
-          "calendar_reschedule_appointment",
-          "calendar_cancel_appointment",
-          "calendar_join_waitlist",
-          "run_aiflow",
-          "edit_aiflow",
-          "update_notification_preferences",
-          "flag_contact_spam",
-          "set_contact_reply_mode",
-          "manage_employee",
-        "custom_table_read",
-        "custom_table_write",
-        "custom_table_manage",
-          "send_email",
-          "read_business_data",
-          "manage_contacts",
-          "manage_flows",
-          "manage_agents",
-          "update_business_profile",
-          "update_business_knowledge",
-          "manage_coworker_tools"
-        ] as const),
-        buildIntegrationsStatusLine(body.businessId),
-        buildBusinessContextBlock(body.businessId, {}, { includeCustomTables: true }),
-        // The public booking link, so "schedule Liz through her assistant"
-        // can send the page instead of negotiating times over email.
-        bookingLinkPromptLine(body.businessId)
-      ]);
-    const {
-      business_knowledge_lookup: knowledgeToolEnabled,
-      send_sms: smsToolEnabled,
-      send_whatsapp: whatsappToolEnabled,
-      calendar_find_slots: calFindEnabled,
-      calendar_book_appointment: calBookEnabled,
-      calendar_reschedule_appointment: calRescheduleEnabled,
-      calendar_cancel_appointment: calCancelEnabled,
-      calendar_join_waitlist: calWaitlistEnabled,
-      run_aiflow: runAiflowEnabled,
-      edit_aiflow: editAiflowEnabled,
-      update_notification_preferences: notificationPrefsToolEnabled,
-      flag_contact_spam: flagSpamToolEnabled,
-      set_contact_reply_mode: replyModeToolEnabled,
-      manage_employee: manageEmployeeToolEnabled,
-      send_email: emailToolEnabled,
-      custom_table_read: customTableReadEnabled,
-      custom_table_write: customTableWriteEnabled,
-      custom_table_manage: customTableManageEnabled
-    } = toolStates;
-
-    // MCP-bridge tools: this surface IS the verified owner (the SMS
-    // pipeline classified the sender before queueing), so every per-group
-    // role bar is satisfied and the gates are the Settings toggles alone.
-    // The handlers still re-run requireMcpBusinessRole against the owner
-    // email per call. No owner email on record ⇒ no bridge (handlers
-    // could only refuse).
-    const bridgeExtraTools = meta.ownerEmail
-      ? buildMcpBridgeExtraTools(
-          body.businessId,
-          { userId: "owner-sms-operator", email: meta.ownerEmail },
-          {
-            read_business_data: toolStates.read_business_data,
-            manage_contacts: toolStates.manage_contacts,
-            manage_flows: toolStates.manage_flows,
-            manage_agents: toolStates.manage_agents,
-            update_business_profile: toolStates.update_business_profile,
-            update_business_knowledge: toolStates.update_business_knowledge,
-            manage_coworker_tools: toolStates.manage_coworker_tools
-          },
-          "owner"
-        )
-      : null;
-
     // Continuity: the recent SMS exchange with the owner's number (both
     // directions, inbound texts, AI replies, and logged outbound sends).
-    let transcript = "";
+    // This is the one genuinely SMS-shaped part of the turn, which is why
+    // it stays here: the shared runner takes a role-tagged transcript, and
+    // SMS stores a DIRECTION-tagged one that has to be mapped and deduped
+    // first.
+    let history: OwnerSurfaceTurnMessage[] = [];
     try {
       const messages = await listMessagesForCustomer(body.businessId, body.ownerE164, {
         limit: OWNER_SMS_TAIL_MESSAGES
@@ -196,115 +94,67 @@ export async function POST(request: Request) {
       ) {
         tail.pop();
       }
-      transcript = tail
-        .map(
-          (m) => `[${m.direction === "inbound" ? "Owner" : "Coworker"}]: ${m.content.slice(0, 500)}`
-        )
-        .join("\n");
+      history = tail.map((m) => ({
+        role: m.direction === "inbound" ? ("user" as const) : ("assistant" as const),
+        content: m.content
+      }));
     } catch (err) {
       logger.warn("owner-sms-turn: transcript read failed", {
         businessId: body.businessId,
         error: err instanceof Error ? err.message : String(err)
       });
     }
+    // The runner answers the LAST row and replays everything before it, so
+    // the message we were called with goes on the end.
+    history.push({ role: "user", content: body.text });
 
-    const systemInstruction = buildOwnerSurfaceSystem({
-      surface: SURFACE,
+    const outcome = await runOwnerSurfaceTurn({
+      businessId: body.businessId,
+      surfaceKey: "sms",
       // This route is only ever called after telnyx-sms-inbound has
       // classified the sender as the owner from their known number, so the
       // speaker is established server-side before we get here.
       speaker: { kind: "owner", name: body.ownerName ?? null, readFailed: false },
       speakerRef: body.ownerE164,
-      // Email over SMS (the Beth delegation, Jul 2026): the owner texting
-      // "schedule Liz through her assistant Beth" needs the SAME EMAIL_SEND
-      // protocol dashboard chat teaches, or the coworker can only offer to
-      // text a person who works by email.
-      emailToolEnabled,
-      timezone: meta.timezone,
-      integrationsLine,
-      bookingLinkLine,
-      businessContextBlock,
-      bridgeToolsDeclared: Boolean(bridgeExtraTools),
-      transcript
+      history,
+      speakerLabel: "Owner",
+      userLabel: "SMS from owner",
+      // Kept verbatim rather than taking the runner's generic
+      // `sms-owner-operator` default: this string is what the MCP bridge
+      // files against every tool call made by text, and renaming it would
+      // silently split the audit trail at the deploy.
+      bridgeUserId: "owner-sms-operator"
     });
 
-    const inline = await runInlineChatTurn({
-      businessId: body.businessId,
-      systemInstruction,
-      userMessage: `[SMS from owner] ${body.text}`,
-      knowledgeToolEnabled,
-      extraTools: bridgeExtraTools,
-      // Bridged read chains need headroom; the 60s budget below still
-      // bounds the wall clock regardless of the step count.
-      maxToolSteps: SURFACE.maxToolSteps,
-      // Provenance for the definition history: an edit made by text is the
-      // one an owner is least likely to remember agreeing to.
-      flowEditSource: SURFACE.flowEditSource,
-      flowEditActor: body.ownerE164,
-      // By text the coworker can change what an automation SAYS. Changing
-      // what it DOES needs the owner looking at the flow, so structural
-      // edits refuse here and point at the dashboard.
-      flowEditSurfaceKind: "text",
-      // No builder UI on SMS to hand a draft card to, creation tools off,
-      // so compile work can't succeed into a void (the model points the
-      // owner to dashboard chat / /dashboard/aiflows for authoring instead).
-      includeCreationTools: false,
-      // MUST stay below the SMS worker's OWNER_SMS_TURN_TIMEOUT_MS (75s)
-      // abort: the engine stops starting new steps (and thus committing new
-      // tool calls) before the worker gives up and falls back to the Rowboat
-      // staff reply, otherwise a slow turn could keep acting after the
-      // owner already received a contradictory fallback answer.
-      //
-      // 60s, not 70s, because EMAIL_SEND fulfilment runs AFTER this returns
-      // (up to 3 provider sends). At 70s a slow turn could still be mailing
-      // when the worker aborts, leaving mail in flight that the owner is
-      // never told about.
-      budgetMs: SURFACE.budgetMs,
-      actionToolGates: ownerSurfaceToolGates({
-        toolStates: {
-          send_sms: smsToolEnabled,
-          send_whatsapp: whatsappToolEnabled,
-          calendar_find_slots: calFindEnabled,
-          calendar_book_appointment: calBookEnabled,
-          calendar_reschedule_appointment: calRescheduleEnabled,
-          calendar_cancel_appointment: calCancelEnabled,
-          calendar_join_waitlist: calWaitlistEnabled,
-          run_aiflow: runAiflowEnabled,
-          edit_aiflow: editAiflowEnabled,
-          update_notification_preferences: notificationPrefsToolEnabled,
-          flag_contact_spam: flagSpamToolEnabled,
-          set_contact_reply_mode: replyModeToolEnabled,
-          manage_employee: manageEmployeeToolEnabled,
-          custom_table_read: customTableReadEnabled,
-          custom_table_write: customTableWriteEnabled,
-          custom_table_manage: customTableManageEnabled
-        },
-        // The texter IS the verified owner: identity was established from
-        // their number before this route was called.
-        isOwner: true,
-        // Same connection-aware gating as dashboard chat: never declare a
-        // tool that can only fail.
-        whatsappConnected:
-          (await getPublicWhatsAppConnection(body.businessId).catch(() => null))
-            ?.is_active === true
-      })
-    });
-
-    if (!inline.ok) {
-      logger.warn("owner-sms-turn: inline turn failed", {
-        businessId: body.businessId,
-        error: inline.error,
-        detail: inline.detail
-      });
-      return NextResponse.json({ ok: false, detail: inline.detail ?? inline.error });
+    if (outcome.kind === "over_cap") {
+      // Same fuse posture as the dashboard route: over the shared AI cap
+      // this surface refuses (ok:false), and the SMS worker's Rowboat
+      // fallback owns the local-model degrade.
+      return NextResponse.json({ ok: false, detail: "over_cap" });
     }
-
+    if (outcome.kind === "silent") {
+      // Unreachable in production, and worth a loud line if it ever fires.
+      // telnyx-sms-inbound reads the same coworker_staff_mode row BEFORE
+      // queueing and persists a suppressed `done` job when staff replies
+      // are off, so this job is never claimed in the first place. Reaching
+      // here means the Deno gate and this one disagree, which is a wiring
+      // bug rather than a runtime condition.
+      logger.error("owner-sms-turn: staff mode off reached the turn route", {
+        businessId: body.businessId
+      });
+      return NextResponse.json({ ok: false, detail: outcome.reason });
+    }
+    if (outcome.kind === "failed") {
+      return NextResponse.json({ ok: false, detail: outcome.detail });
+    }
     // Fulfil EMAIL_SEND blocks BEFORE the SMS clip: the raw JSON must never
     // reach the owner's phone, and a clip applied first could truncate a
-    // block into an unparseable fragment that then leaks verbatim.
+    // block into an unparseable fragment that then leaks verbatim. That is
+    // exactly why the runner hands back `unclipped` alongside the clipped
+    // reply: fulfil against the whole answer, then clip what comes out.
     const emailOutcome = await fulfillOwnerEmailBlocks({
       businessId: body.businessId,
-      content: inline.content,
+      content: outcome.unclipped,
       source: "sms_assistant"
     });
 
@@ -324,29 +174,5 @@ export async function POST(request: Request) {
       error: err instanceof Error ? err.message : String(err)
     });
     return NextResponse.json({ ok: false, detail: "internal_error" }, { status: 500 });
-  }
-}
-
-/** Business timezone (date line) + tier (cap sizing). Nulls on failure. */
-async function readBusinessMeta(
-  businessId: string
-): Promise<{ timezone: string | null; tier: PlanTier | null; ownerEmail: string | null }> {
-  try {
-    const db = await createSupabaseServiceClient();
-    const { data } = await db
-      .from("businesses")
-      .select("timezone, tier, owner_email")
-      .eq("id", businessId)
-      .maybeSingle();
-    return {
-      timezone: typeof data?.timezone === "string" ? data.timezone : null,
-      tier: typeof data?.tier === "string" ? (data.tier as PlanTier) : null,
-      ownerEmail:
-        typeof data?.owner_email === "string" && data.owner_email.trim() !== ""
-          ? data.owner_email
-          : null
-    };
-  } catch {
-    return { timezone: null, tier: null, ownerEmail: null };
   }
 }

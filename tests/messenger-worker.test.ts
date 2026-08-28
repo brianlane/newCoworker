@@ -578,7 +578,11 @@ describe("staff on WhatsApp", () => {
   it("retries a failed staff turn instead of answering as a customer", async () => {
     const deps = makeDeps({
       claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
-      runStaffTurn: vi.fn(async () => ({ kind: "failed" as const, detail: "model_failed" }))
+      runStaffTurn: vi.fn(async () => ({
+        kind: "failed" as const,
+        detail: "model_failed",
+        code: "model_failed"
+      }))
     });
     await processMessengerJobs({}, deps);
 
@@ -596,6 +600,7 @@ describe("staff on WhatsApp", () => {
       runStaffTurn: vi.fn(async () => ({
         kind: "failed" as const,
         detail: "no_input",
+        code: "no_input",
         terminal: true
       }))
     });

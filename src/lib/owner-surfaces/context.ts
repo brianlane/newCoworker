@@ -84,7 +84,7 @@ export type OwnerSurfaceContextDeps = {
   buildBridge?: typeof buildMcpBridgeExtraTools;
 };
 
-type BusinessMetaRow = {
+export type BusinessMetaRow = {
   timezone: string | null;
   tier: PlanTier | null;
   ownerEmail: string | null;
@@ -115,11 +115,29 @@ export async function readOwnerSurfaceMeta(businessId: string): Promise<Business
   }
 }
 
+export type OwnerSurfaceContextOptions = {
+  /**
+   * The business row this load needs, when the caller has already read it.
+   * Slack reads `businesses` for the owner's UI locale before the turn
+   * starts; without this the load below would read the very same row a
+   * second time on every message.
+   */
+  meta?: BusinessMetaRow;
+  /**
+   * Audit identity recorded against MCP-bridged tool calls. Slack has a
+   * real per-user id (`slack:U123`) and passing it keeps the bridge's
+   * attribution specific; surfaces with no such id get the generic
+   * `<surface>-owner-operator` below.
+   */
+  bridgeUserId?: string;
+};
+
 export async function loadOwnerSurfaceContext(
   businessId: string,
   surface: OwnerTurnSurface,
   speaker: SurfaceSpeaker,
-  deps: OwnerSurfaceContextDeps = {}
+  deps: OwnerSurfaceContextDeps = {},
+  opts: OwnerSurfaceContextOptions = {}
 ): Promise<OwnerSurfaceContext> {
   /* c8 ignore start -- production defaults; tests inject */
   const fetchToolStates = deps.fetchToolStates ?? getAgentToolStates;
@@ -132,7 +150,7 @@ export async function loadOwnerSurfaceContext(
   const buildBridge = deps.buildBridge ?? buildMcpBridgeExtraTools;
   /* c8 ignore stop */
 
-  const meta = await fetchMeta(businessId);
+  const meta = opts.meta ?? (await fetchMeta(businessId));
 
   const [states, integrationsLine, businessContextBlock, bookingLinkLine, connection, spend] =
     await Promise.all([
@@ -153,7 +171,10 @@ export async function loadOwnerSurfaceContext(
     speaker.kind === "owner" && meta.ownerEmail
       ? buildBridge(
           businessId,
-          { userId: `${surface.key}-owner-operator`, email: meta.ownerEmail },
+          {
+            userId: opts.bridgeUserId ?? `${surface.key}-owner-operator`,
+            email: meta.ownerEmail
+          },
           {
             read_business_data: states.read_business_data,
             manage_contacts: states.manage_contacts,

@@ -1,10 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  runMessengerStaffTurn,
-  type MessengerStaffTurnDeps
-} from "@/lib/messenger/staff-turn";
-import type { MessengerConversationRow, MessengerMessageRow } from "@/lib/messenger/db";
-import type { OwnerSurfaceContext } from "@/lib/owner-surfaces/context";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * WhatsApp from the business's own people.
@@ -24,7 +18,35 @@ import type { OwnerSurfaceContext } from "@/lib/owner-surfaces/context";
  *     page-scoped id, and a captured contact_phone is SELF-ASSERTED, so
  *     trusting either would let anyone claim to be the owner by typing a
  *     phone number into a DM.
+ *
+ * The turn assembly moved to `owner-surfaces/run-turn.ts`, but these tests
+ * deliberately still drive it FOR REAL (only the three leaf reads are
+ * mocked) rather than stubbing the runner out. The assertions below are
+ * about what actually reaches the model on this surface (the owner persona,
+ * the WhatsApp provenance stamp, the absence of capture_lead), and a stubbed
+ * runner would assert that we called a function, not that the owner stops
+ * being pitched.
  */
+
+vi.mock("@/lib/owner-surfaces/staff-mode", () => ({
+  staffModeEnabled: vi.fn()
+}));
+vi.mock("@/lib/owner-surfaces/context", () => ({
+  loadOwnerSurfaceContext: vi.fn()
+}));
+vi.mock("@/lib/dashboard-chat/inline-turn", () => ({
+  runInlineChatTurn: vi.fn()
+}));
+
+import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
+import { loadOwnerSurfaceContext } from "@/lib/owner-surfaces/context";
+import { staffModeEnabled } from "@/lib/owner-surfaces/staff-mode";
+import {
+  runMessengerStaffTurn,
+  type MessengerStaffTurnDeps
+} from "@/lib/messenger/staff-turn";
+import type { MessengerConversationRow, MessengerMessageRow } from "@/lib/messenger/db";
+import type { OwnerSurfaceContext } from "@/lib/owner-surfaces/context";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 
@@ -50,6 +72,41 @@ function history(): MessengerMessageRow[] {
   ];
 }
 
+function context(overrides: Partial<OwnerSurfaceContext> = {}): OwnerSurfaceContext {
+  return {
+    timezone: "America/Toronto",
+    tier: "standard" as OwnerSurfaceContext["tier"],
+    ownerEmail: "james@kypads.com",
+    knowledgeToolEnabled: true,
+    emailToolEnabled: true,
+    toolStates: {
+      send_sms: true,
+      send_whatsapp: true,
+      calendar_find_slots: true,
+      calendar_book_appointment: true,
+      calendar_reschedule_appointment: true,
+      calendar_cancel_appointment: true,
+      calendar_join_waitlist: true,
+      run_aiflow: true,
+      edit_aiflow: true,
+      update_notification_preferences: true,
+      flag_contact_spam: true,
+      set_contact_reply_mode: true,
+      manage_employee: true,
+      custom_table_read: true,
+      custom_table_write: true,
+      custom_table_manage: true
+    },
+    whatsappConnected: true,
+    integrationsLine: null,
+    bookingLinkLine: null,
+    businessContextBlock: null,
+    bridgeExtraTools: null,
+    overCap: false,
+    ...overrides
+  };
+}
+
 function deps(overrides: MessengerStaffTurnDeps = {}): MessengerStaffTurnDeps {
   return {
     resolveSpeaker: vi.fn(async () => ({
@@ -57,51 +114,33 @@ function deps(overrides: MessengerStaffTurnDeps = {}): MessengerStaffTurnDeps {
       name: "James Fung",
       readFailed: false
     })),
-    isStaffModeEnabled: vi.fn(async () => true),
-    loadContext: vi.fn(async (): Promise<OwnerSurfaceContext> => ({
-      timezone: "America/Toronto",
-      tier: "standard" as OwnerSurfaceContext["tier"],
-      ownerEmail: "james@kypads.com",
-      knowledgeToolEnabled: true,
-      emailToolEnabled: true,
-      toolStates: {
-        send_sms: true,
-        send_whatsapp: true,
-        calendar_find_slots: true,
-        calendar_book_appointment: true,
-        calendar_reschedule_appointment: true,
-        calendar_cancel_appointment: true,
-        calendar_join_waitlist: true,
-        run_aiflow: true,
-        edit_aiflow: true,
-        update_notification_preferences: true,
-        flag_contact_spam: true,
-        set_contact_reply_mode: true,
-        manage_employee: true,
-        custom_table_read: true,
-        custom_table_write: true,
-        custom_table_manage: true
-      },
-      whatsappConnected: true,
-      integrationsLine: null,
-      bookingLinkLine: null,
-      businessContextBlock: null,
-      bridgeExtraTools: null,
-      overCap: false
-    })),
-    runTurn: vi.fn(async () => ({ ok: true, content: "Dana booked two." })) as never,
     ...overrides
   };
 }
 
+/** The args that actually reached the model on the one turn we ran. */
+function turnArgs() {
+  return vi.mocked(runInlineChatTurn).mock.calls[0][0];
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(staffModeEnabled).mockResolvedValue(true);
+  vi.mocked(loadOwnerSurfaceContext).mockResolvedValue(context());
+  vi.mocked(runInlineChatTurn).mockResolvedValue({
+    ok: true,
+    content: "Dana booked two.",
+    drafts: []
+  });
+});
+
 describe("who gets a staff turn", () => {
   it("answers the owner as the owner", async () => {
-    const d = deps();
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "reply", reply: "Dana booked two." });
+    expect(out).toMatchObject({ kind: "reply", reply: "Dana booked two." });
   });
 
   it("hands an unknown number back to the customer assistant untouched", async () => {
@@ -113,7 +152,7 @@ describe("who gets a staff turn", () => {
       d
     );
     expect(out).toEqual({ kind: "customer" });
-    expect(d.runTurn).not.toHaveBeenCalled();
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
   });
 
   it("treats an unresolvable speaker as a customer", async () => {
@@ -177,37 +216,42 @@ describe("staff mode off means silent", () => {
   it("stays quiet rather than falling through to the customer assistant", async () => {
     // Falling through would re-create the original bug through the settings
     // page: the owner would be pitched by their own sales assistant.
-    const d = deps({ isStaffModeEnabled: async () => false });
+    vi.mocked(staffModeEnabled).mockResolvedValue(false);
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
     expect(out).toEqual({ kind: "silent", reason: "staff_mode_off" });
-    expect(d.runTurn).not.toHaveBeenCalled();
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("asks about THIS surface, not some other one", async () => {
+    await runMessengerStaffTurn(
+      { businessId: BIZ, conversation: conversation(), history: history() },
+      deps()
+    );
+    expect(staffModeEnabled).toHaveBeenCalledWith(BIZ, "whatsapp");
   });
 });
 
 describe("the turn itself", () => {
   it("runs the owner persona, not the messenger customer preamble", async () => {
-    const d = deps();
     await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    const args = vi.mocked(d.runTurn!).mock.calls[0][0];
+    const args = turnArgs();
     expect(args.systemInstruction).toContain("OWNER MODE");
     expect(args.systemInstruction).toContain("WHATSAPP");
     expect(args.systemInstruction).not.toContain("capture_lead");
   });
 
   it("never declares the lead-capture tool, so staff cannot be filed as a lead", async () => {
-    const d = deps();
     await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    const args = vi.mocked(d.runTurn!).mock.calls[0][0];
-    expect(Object.keys(args.actionToolGates ?? {})).not.toContain("capture_lead");
+    expect(Object.keys(turnArgs().actionToolGates ?? {})).not.toContain("capture_lead");
   });
 
   it("gives a teammate the team persona and withholds owner powers", async () => {
@@ -218,7 +262,7 @@ describe("the turn itself", () => {
       { businessId: BIZ, conversation: conversation(), history: history() },
       d
     );
-    const args = vi.mocked(d.runTurn!).mock.calls[0][0];
+    const args = turnArgs();
     expect(args.systemInstruction).not.toContain("OWNER MODE");
     expect(args.actionToolGates?.edit_aiflow).toBe(false);
     expect(args.actionToolGates?.manage_employee).toBe(false);
@@ -241,22 +285,20 @@ describe("the turn itself", () => {
       },
       d
     );
-    const sys = vi.mocked(d.runTurn!).mock.calls[0][0].systemInstruction;
+    const sys = turnArgs().systemInstruction;
     expect(sys).toContain("[Teammate]: earlier question");
     expect(sys).toContain("[Coworker]: earlier answer");
   });
 
   it("stamps WhatsApp provenance on any flow edit made here", async () => {
-    const d = deps();
     await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(vi.mocked(d.runTurn!).mock.calls[0][0].flowEditSource).toBe("ai_edit_whatsapp");
+    expect(turnArgs().flowEditSource).toBe("ai_edit_whatsapp");
   });
 
   it("replays the recent exchange so the thread has continuity", async () => {
-    const d = deps();
     await runMessengerStaffTurn(
       {
         businessId: BIZ,
@@ -267,9 +309,9 @@ describe("the turn itself", () => {
           { id: 3, role: "user", content: "what did Dana book today?" } as MessengerMessageRow
         ]
       },
-      d
+      deps()
     );
-    const args = vi.mocked(d.runTurn!).mock.calls[0][0];
+    const args = turnArgs();
     expect(args.systemInstruction).toContain("earlier question");
     // The message being answered must not appear twice.
     expect(args.systemInstruction).not.toContain("what did Dana book today?");
@@ -281,7 +323,9 @@ describe("the turn itself", () => {
     // turn. The customer engine refuses this case too; the staff path has
     // to agree, or the AI follows up on top of a colleague.
     for (const closingRole of ["assistant", "owner"] as const) {
-      const d = deps();
+      vi.clearAllMocks();
+      vi.mocked(staffModeEnabled).mockResolvedValue(true);
+      vi.mocked(loadOwnerSurfaceContext).mockResolvedValue(context());
       const out = await runMessengerStaffTurn(
         {
           businessId: BIZ,
@@ -291,116 +335,135 @@ describe("the turn itself", () => {
             { id: 2, role: closingRole, content: "answered by hand" } as MessengerMessageRow
           ]
         },
-        d
+        deps()
       );
-      expect(out, closingRole).toEqual({ kind: "failed", detail: "no_input", terminal: true });
-      expect(d.runTurn).not.toHaveBeenCalled();
+      expect(out, closingRole).toEqual({
+        kind: "failed",
+        detail: "no_input",
+        code: "no_input",
+        terminal: true
+      });
+      expect(runInlineChatTurn).not.toHaveBeenCalled();
     }
   });
 
   it("reports a failed turn instead of silently answering as a customer", async () => {
     // The worker retries a failure. Falling back to the customer engine
     // would pitch the owner, which is worse than saying nothing yet.
-    const d = deps({
-      runTurn: (async () => ({ ok: false, error: "model_failed", detail: "boom" })) as never
+    vi.mocked(runInlineChatTurn).mockResolvedValue({
+      ok: false,
+      error: "model_failed",
+      detail: "boom"
     });
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "boom" });
+    expect(out).toEqual({ kind: "failed", detail: "boom", code: "model_failed" });
   });
 
   it("refuses an empty reply rather than sending a blank message", async () => {
-    const d = deps({ runTurn: (async () => ({ ok: true, content: "   " })) as never });
+    vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: true, content: "   ", drafts: [] });
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toMatchObject({ kind: "failed" });
+    expect(out).toEqual({ kind: "failed", detail: "empty_reply", code: "empty" });
   });
 
   it("clips a long reply to what the surface allows", async () => {
-    const d = deps({
-      runTurn: (async () => ({ ok: true, content: "x".repeat(5000) })) as never
+    vi.mocked(runInlineChatTurn).mockResolvedValue({
+      ok: true,
+      content: "x".repeat(5000),
+      drafts: []
     });
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
     expect(out.kind).toBe("reply");
     if (out.kind === "reply") expect(out.reply.length).toBe(1600);
   });
 
   it("returns nothing to answer when the window holds no user turn", async () => {
-    const d = deps();
     const out = await runMessengerStaffTurn(
       {
         businessId: BIZ,
         conversation: conversation(),
         history: [{ id: 1, role: "assistant", content: "only me" } as MessengerMessageRow]
       },
-      d
+      deps()
     );
-    expect(out).toMatchObject({ kind: "failed", detail: "no_input", terminal: true });
-    expect(d.runTurn).not.toHaveBeenCalled();
+    expect(out).toEqual({
+      kind: "failed",
+      detail: "no_input",
+      code: "no_input",
+      terminal: true
+    });
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
   });
 });
 
 describe("things that stop a staff turn before it starts", () => {
   it("declines when the business is over its AI spend cap", async () => {
-    const base = deps();
-    const d = deps({
-      loadContext: (async () => ({
-        ...(await base.loadContext!(BIZ, {} as never, {} as never)),
-        overCap: true
-      })) as never
-    });
+    // WhatsApp has nowhere to post an apology that would not spend a billed
+    // template, so the shared runner's over_cap verdict lands here as a
+    // terminal failure rather than a message.
+    vi.mocked(loadOwnerSurfaceContext).mockResolvedValue(context({ overCap: true }));
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "over_cap", terminal: true });
-    expect(d.runTurn).not.toHaveBeenCalled();
+    expect(out).toEqual({
+      kind: "failed",
+      detail: "over_cap",
+      code: "over_cap",
+      terminal: true
+    });
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
   });
 
   it("reports a context load failure instead of answering as a customer", async () => {
-    const d = deps({
-      loadContext: (async () => {
-        throw new Error("settings unreadable");
-      }) as never
-    });
+    vi.mocked(loadOwnerSurfaceContext).mockRejectedValue(new Error("settings unreadable"));
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "settings unreadable" });
+    expect(out).toEqual({
+      kind: "failed",
+      detail: "settings unreadable",
+      code: "context_load_failed"
+    });
   });
 
   it("survives a context load that rejects with something other than an Error", async () => {
-    const d = deps({
-      loadContext: (async () => {
-        throw "connection reset";
-      }) as never
-    });
+    vi.mocked(loadOwnerSurfaceContext).mockRejectedValue("connection reset");
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "connection reset" });
+    expect(out).toEqual({
+      kind: "failed",
+      detail: "connection reset",
+      code: "context_load_failed"
+    });
   });
 
   it("refuses a message whose only user turn is blank", async () => {
-    const d = deps();
     const out = await runMessengerStaffTurn(
       {
         businessId: BIZ,
         conversation: conversation(),
         history: [{ id: 1, role: "user", content: "   " } as MessengerMessageRow]
       },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "no_input", terminal: true });
+    expect(out).toEqual({
+      kind: "failed",
+      detail: "no_input",
+      code: "no_input",
+      terminal: true
+    });
   });
 
   it("labels the speaker even when no name is known", async () => {
@@ -411,15 +474,15 @@ describe("things that stop a staff turn before it starts", () => {
       { businessId: BIZ, conversation: conversation(), history: history() },
       d
     );
-    expect(vi.mocked(d.runTurn!).mock.calls[0][0].userMessage).toContain("[WhatsApp from owner]");
+    expect(turnArgs().userMessage).toContain("[WhatsApp from owner]");
   });
 
   it("falls back to the generic error when the turn reports neither detail nor error", async () => {
-    const d = deps({ runTurn: (async () => ({ ok: false })) as never });
+    vi.mocked(runInlineChatTurn).mockResolvedValue({} as never);
     const out = await runMessengerStaffTurn(
       { businessId: BIZ, conversation: conversation(), history: history() },
-      d
+      deps()
     );
-    expect(out).toEqual({ kind: "failed", detail: "turn_failed" });
+    expect(out).toEqual({ kind: "failed", detail: "turn_failed", code: "model_failed" });
   });
 });
