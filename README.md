@@ -3671,10 +3671,14 @@ Graph API and enqueues the same webhook flow event the bridges send —
 existing flows work unchanged (`src/lib/meta/*`). Meta's App Review cleared
 Aug 11, 2026 with Advanced Access for `leads_retrieval`, the `pages_*` set,
 Messenger, Instagram DM, and both WhatsApp permissions, so ANY Facebook
-account can connect; the bridges remain as the fallback path. The one
-rejection, `instagram_content_publish`, keeps Instagram publishing
-app-role-only until a resubmission with an end-to-end screencast clears
-(details in `PRDs/whatsapp-meta-app-config.md`).
+account can connect; the bridges remain as the fallback path. A second
+review cleared Aug 25, 2026 with Advanced Access for
+`instagram_content_publish` (Instagram publishing is open to any connected
+account, no app role needed), `instagram_manage_comments`,
+`ads_management`, `business_management`, and the Marketing API Access Tier.
+The one remaining rejection, `ads_read`, blocks nothing in practice
+(`ads_management` authorizes every ads read we make); the optional
+resubmission recipe lives in `PRDs/whatsapp-meta-app-config.md`.
 
 **The Conversions API dataset is entered by the owner, never discovered.**
 The Conversion Leads feedback loop (pipeline stage → `/{dataset_id}/events`,
