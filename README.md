@@ -702,6 +702,18 @@ these standards:
   and tests pin the env var as ignored), so the legacy advice stays true by
   construction: it must stay
   **unset** in production.
+- **Web Push (PWA alerts)**: three server-side env vars, all required together
+  or push is treated as unconfigured: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`
+  and `VAPID_SUBJECT` (a `mailto:` or `https:` contact URI, per RFC 8292).
+  Generate a pair with `npx web-push generate-vapid-keys`. The PUBLIC half is
+  served to browsers by `GET /api/push/vapid-key` rather than being baked in as
+  a `NEXT_PUBLIC_*` build-time value, so the two halves cannot skew across a
+  rotation: a baked key that no longer matches the server's private key makes
+  every subscription minted by that build permanently undeliverable (the push
+  service answers 403 forever) with nothing client-side able to detect it.
+  Rotating is therefore just setting the new pair; each device re-subscribes on
+  its next dashboard load. `VAPID_PRIVATE_KEY` is scrubbed from the test
+  environment by `tests/setup-env.ts`.
 - **Dependency hygiene**: Dependabot alerts are tracked to zero. Transitive
   vulnerabilities are pinned via root `package.json` `overrides` (e.g. `postcss`)
   or by bumping the owning tool when a dependency is implicitly pinned (e.g.
