@@ -34,7 +34,7 @@ function makeDb(result: { data?: unknown; error?: { message: string } | null } =
       calls.push([name, ...args]);
       return builder;
     };
-  for (const method of ["select", "eq", "is", "gt", "in", "order", "limit"]) {
+  for (const method of ["select", "eq", "is", "gt", "in", "or", "order", "limit"]) {
     builder[method] = record(method);
   }
   for (const method of ["upsert", "update", "insert"]) {
@@ -353,6 +353,60 @@ describe("push/db: repointPushSubscription", () => {
     });
     expect(moved).toBe(0);
     expect(calls).toContainEqual(["eq", "user_id", "attacker"]);
+  });
+
+  /**
+   * THE SELF-INFLICTED OUTAGE. Safari does not populate
+   * `event.oldSubscription`, so the worker falls back to the current
+   * subscription; `subscribe()` with an unchanged key returns that SAME
+   * subscription, and the POST arrives with both endpoints equal. Revoking
+   * unconditionally stamped revoked_at on the row the upsert had just
+   * written, killing a working device.
+   */
+  it("does not retire the endpoint when the rotation did not actually change it", async () => {
+    const { db, calls } = makeDb({ data: [{ business_id: BIZ }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const moved = await repointPushSubscription({
+      previousEndpoint: SUB.endpoint,
+      userId: "user-1",
+      subscription: SUB,
+      userAgent: null
+    });
+
+    expect(moved).toBe(1);
+    // The upsert refreshed the row; nothing revoked it.
+    const revoked = calls.filter(
+      (c) => c[0] === "update" && (c[1] as Record<string, unknown>)?.revoked_reason
+    );
+    expect(revoked).toHaveLength(0);
+  });
+
+  /**
+   * A rotation usually RACES the send that discovered the death: the push
+   * service 410s, the send path stamps revoked_reason='expired', and then
+   * pushsubscriptionchange arrives. Requiring revoked_at to be null made that
+   * ordering find nothing and drop the replacement endpoint, which is the
+   * outage the handler exists to prevent.
+   *
+   * `user` and `membership` revocations stay excluded: those are decisions a
+   * browser must never quietly undo.
+   */
+  it("recovers a row already retired as expired, but not one deliberately revoked", async () => {
+    const { db, calls } = makeDb({ data: [{ business_id: BIZ }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await repointPushSubscription({
+      previousEndpoint: "https://fcm.googleapis.com/fcm/send/old",
+      userId: "user-1",
+      subscription: SUB,
+      userAgent: null
+    });
+    expect(calls).toContainEqual(["or", "revoked_at.is.null,revoked_reason.eq.expired"]);
+    // Scoped to the SELECT phase (everything before the first upsert): the
+    // revoke that follows legitimately uses is("revoked_at", null) of its own,
+    // so an unscoped negative would always fail.
+    const selectPhase = calls.slice(0, calls.findIndex((c) => c[0] === "upsert"));
+    expect(selectPhase.some((c) => c[0] === "is" && c[1] === "revoked_at")).toBe(false);
   });
 
   it("moves nothing when PostgREST answers null rather than an empty array", async () => {

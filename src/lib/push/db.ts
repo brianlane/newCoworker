@@ -135,12 +135,12 @@ export async function revokePushSubscription(
   opts: { userId?: string; client?: SupabaseClient } = {}
 ): Promise<void> {
   const db = opts.client ?? (await createSupabaseServiceClient());
-  let query = db
+  const base = db
     .from("push_subscriptions")
     .update({ revoked_at: new Date().toISOString(), revoked_reason: reason })
     .eq("endpoint", endpoint)
     .is("revoked_at", null);
-  if (opts.userId) query = query.eq("user_id", opts.userId);
+  const query = opts.userId ? base.eq("user_id", opts.userId) : base;
   const { error } = await query;
   if (error) throw new Error(`revokePushSubscription: ${error.message}`);
 }
@@ -201,7 +201,21 @@ export async function repointPushSubscription(
     .select("business_id")
     .eq("endpoint", input.previousEndpoint)
     .eq("user_id", input.userId)
-    .is("revoked_at", null);
+    /**
+     * Live rows OR ones we retired as `expired`, and nothing else.
+     *
+     * A rotation usually races the send that discovered the death: the push
+     * service 410s, the send path stamps `revoked_reason = 'expired'`, and
+     * THEN pushsubscriptionchange arrives with the replacement. Filtering on
+     * `revoked_at is null` alone made that ordering find nothing, return 0,
+     * and drop the new endpoint on the floor, which is the exact outage this
+     * handler exists to prevent.
+     *
+     * `user` and `membership` revocations are deliberately NOT included. Those
+     * are decisions (the owner turned push off; a teammate lost access), and a
+     * browser rotating its subscription must never quietly undo one.
+     */
+    .or("revoked_at.is.null,revoked_reason.eq.expired");
   if (error) throw new Error(`repointPushSubscription: ${error.message}`);
 
   const scopes = (data as { business_id: string | null }[] | null) ?? [];
@@ -221,10 +235,22 @@ export async function repointPushSubscription(
       db
     );
   }
-  await revokePushSubscription(input.previousEndpoint, "expired", {
-    userId: input.userId,
-    client: db
-  });
+  /**
+   * Only retire the OLD endpoint when it is genuinely a different one.
+   *
+   * Safari does not populate `event.oldSubscription`, so the worker falls back
+   * to the registration's current subscription; `subscribe()` with an
+   * unchanged VAPID key then hands back that same subscription, and the POST
+   * arrives with previousEndpoint === endpoint. Revoking unconditionally
+   * stamped `revoked_at` on the row the upsert had just written and killed a
+   * perfectly working device until its owner next opened the dashboard.
+   */
+  if (input.previousEndpoint !== input.subscription.endpoint) {
+    await revokePushSubscription(input.previousEndpoint, "expired", {
+      userId: input.userId,
+      client: db
+    });
+  }
   return scopes.length;
 }
 
