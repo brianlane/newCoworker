@@ -1521,7 +1521,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.direction === "outbound",
             intake.contextNote,
             opts.languagePrefs,
-            hasVoicemailTool
+            hasVoicemailTool,
+            Boolean(ivrGate)
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -2148,6 +2149,27 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             detail: "the call is already ending: leave no message and say nothing"
           });
           emitDiag("voice_bridge_voicemail_after_end_call", {});
+          continue;
+        }
+        // A gated session is ANSWERED INTO a recording by design: the partner's
+        // own menu ("press one to agree to our referral fee", "connecting you
+        // now") plays before the person we want is dialled in at all. Every
+        // word of it matches "you reached a machine", so before the accept
+        // digit lands a voicemail verdict cannot be about the seller, and
+        // acting on it would stamp the call a machine and hang up on a
+        // referral that had not started. Refuse until the press is in.
+        // Deterministic on purpose: the rule enumerates mailbox phrasing and
+        // the partner's menu is not in that list, but the whole reason this
+        // exists is that a prompt line alone does not hold
+        // ([[ai-invents-callback-numbers-on-voicemail]]). Counted so a spike
+        // reads as a model mistiming, not as this guard being wrong.
+        if (ivrGate && !acceptPressed) {
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail:
+              "that is the referral service's own menu, not a mailbox: stay silent, press the accept digit, and wait to be connected"
+          });
+          emitDiag("voice_bridge_voicemail_before_accept", {});
           continue;
         }
         // Answered on its own task so the model's turn completes promptly: it

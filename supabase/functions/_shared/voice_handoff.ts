@@ -64,8 +64,29 @@ export type HandoffAiTakeover = {
   accept_sent?: boolean;
 };
 
-/** How far back the pre-call brief looks for the partner's alert text. */
-export const AI_FIRST_BRIEF_LOOKBACK_MINUTES = 15;
+/**
+ * How far back the pre-call brief looks for the partner's alert text.
+ *
+ * Widened from 15 on 2026-08-28 after Rhonda J.'s HomeLight transfer missed
+ * its own alert by 13 seconds: HomeLight texted at 15:40:02Z and transferred
+ * at 15:55:16Z, so the AI opened with a generic line at a seller whose name,
+ * zip and price we were holding. Measured over every live transfer on record
+ * (8 calls, the only tenant using a brief needle): the text-to-transfer delay
+ * ran 0.8, 0.8, 0.9, 2.9, 12.2, 15.2 and 19.2 minutes, plus one transfer with
+ * no matching alert at all. 15 minutes briefed 5 of 8; 30 briefs 7 of 8 and
+ * leaves the alert-less one correctly unbriefed.
+ *
+ * Widening cannot turn a RIGHT brief into a WRONG one: the reader takes the
+ * NEWEST match in the window, so extra reach only supplies a candidate where
+ * there were none. It can only mis-fire when a transfer's own alert is older
+ * than the window AND a different lead's alert sits inside it. The closest
+ * two different-lead alerts have ever landed is 19.1 minutes apart (28 alerts
+ * since June), and replaying all 8 calls at 15, 20, 30 and 60 minutes picked
+ * the same lead every time, so the headroom is bought cheaply. Raising this
+ * further should be re-measured, not assumed: a wrong brief tells the AI a
+ * stranger's details are "already known, so never ask for it".
+ */
+export const AI_FIRST_BRIEF_LOOKBACK_MINUTES = 30;
 
 /** Cap on the alert text carried into the AI's prompt as the brief. */
 export const AI_FIRST_BRIEF_MAX_CHARS = 600;

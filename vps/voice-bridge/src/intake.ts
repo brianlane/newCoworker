@@ -83,14 +83,26 @@ export const INBOUND_VOICEMAIL_RECOGNITION_LINE =
  * would override that choice. The script carries no price, address, or
  * briefing detail on purpose: the recordings rule bans reading those into a
  * mailbox, and this message must stay safe on a stranger's voicemail.
+ *
+ * Split into the SCRIPT and the instruction that wraps it because the bridge
+ * hands the same text back through `voicemail_reached` on a gated call. Two
+ * copies would let the tool's answer and the persona's rule drift apart, and
+ * the model is told to read whichever it was handed word for word.
  */
+export function inboundVoicemailScript(businessName: string): string {
+  return (
+    `Hi, this is the office of ${businessName} calling back about the home you asked about ` +
+    "selling. We will try you again shortly. Thank you."
+  );
+}
+
 export function inboundVoicemailMessageLine(businessName: string, hasEndCall: boolean): string {
   const ending = hasEndCall
     ? "then call the `end_call` tool to hang up"
     : "then end the call by saying nothing more";
   return (
     "If a recording invites you to leave a message, leave EXACTLY this one message, once, and nothing else: " +
-    `"Hi, this is the office of ${businessName} calling back about the home you asked about selling. We will try you again shortly. Thank you." ` +
+    `"${inboundVoicemailScript(businessName)}" ` +
     `Say it and stop: no questions, no details from your briefing, no second attempt, ${ending}. ` +
     "If there is no invitation to record, stay silent and end the call the same way."
   );
@@ -131,6 +143,25 @@ export function iosScreeningLine(businessName: string): string {
 export const OUTBOUND_VOICEMAIL_TOOL_LINE =
   "IF YOU REACH A RECORDING, REPORT IT BEFORE YOU SAY ANYTHING ELSE. A recorded greeting in the person's own voice, an automated one, an invitation to \"please record your message\", \"leave a message after the tone\", \"when you have finished recording you may hang up\", or any mailbox menu offering to replay, re-record, or send your message all mean you reached a machine, not the person. The moment you notice, call the `voicemail_reached` tool and wait for its answer: never deliver your opening line, your pitch, or any question to a recording, and never narrate an action you are about to take. If it returns a `script`, read that text aloud word for word, exactly as written, then call `end_call`. If it returns no script, say nothing at all and call `end_call` immediately. The one exception: if it says a message is already being left, stay completely silent and do NOT end the call, because hanging up would cut that message off part way through.";
 
+/**
+ * The carve-out a LIVE TRANSFER needs alongside the rule above.
+ *
+ * A gated call is answered INTO a recording on purpose: the referral service
+ * reads its terms and asks for a keypress before it dials the seller at all.
+ * Every phrase in the rule above ("a recorded greeting", "an automated one")
+ * describes that menu too, and a persistent NEVER outranks the mid-call cue
+ * telling the model to press the digit, so without this the model reports the
+ * partner's own menu and the referral ends before it starts. The bridge
+ * refuses that report deterministically either way
+ * (`voice_bridge_voicemail_before_accept`); this keeps the prompt agreeing
+ * with the guard instead of fighting it.
+ *
+ * Phrased as the SEQUENCE, not as a list of exempt phrases: the menu wording
+ * changes between partners, but "before the keypress" and "after it" do not.
+ */
+export const TRANSFER_PARTNER_MENU_LINE =
+  "ONE EXCEPTION, and it comes first: this call was answered into the referral service's own automated menu, which reads their terms and asks you to press a key before they dial the client at all. That menu is NOT a mailbox and you must never report it as one. Until you have pressed the accept digit and heard the service say it is connecting you, stay silent, press the digit when asked, and do not call `voicemail_reached` no matter how automated the voice sounds. Only what you hear AFTER that, once the client's own line has been dialled, can be a recording worth reporting.";
+
 export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
@@ -144,8 +175,13 @@ export function intakeSystemInstruction(
     established?: VoiceCustomerLanguage | null;
     defaultLang?: VoiceCustomerLanguage;
   },
-  /** True when the host registered `voicemail_reached` (calls WE placed). */
-  hasVoicemailTool = false
+  /**
+   * True when the host registered `voicemail_reached` (calls WE placed, and
+   * partner live transfers, where carrier AMD cannot reach the seller's leg).
+   */
+  hasVoicemailTool = false,
+  /** True when this session waits on a partner IVR before the client joins. */
+  ivrGated = false
 ): string {
   const opener = intakeOpener(
     businessName,
@@ -246,6 +282,9 @@ export function intakeSystemInstruction(
   // only ships when the tool that carries it actually exists.
   if (hasVoicemailTool) {
     lines.push(OUTBOUND_VOICEMAIL_TOOL_LINE);
+    // Ordered after the rule it narrows, so the model reads the exception
+    // against a rule it has already been given rather than the reverse.
+    if (ivrGated) lines.push(TRANSFER_PARTNER_MENU_LINE);
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
   // must never ask for something the flow already extracted, "why are you
@@ -441,12 +480,20 @@ export function composeIntakeLeadSms(input: {
   voicemail?: { detected: boolean; messageLeft: boolean; messageBeingLeft?: boolean };
 }): string {
   const outbound = input.callDirection === "outbound";
+  // A transfer that reached the client's mailbox has no lead to hand over, so
+  // the standard inbound header ("I captured this on the call") describes a
+  // conversation that did not happen. Measured 2026-08-28: 5 of the 8
+  // HomeLight live transfers on record landed in the seller's voicemail, and
+  // every one of them alerted under that header with an empty capture.
+  const reachedMachine = input.voicemail?.detected === true;
   const lines: string[] = [
     outbound
       ? `${input.businessName}: AI follow-up call summary (AI intake).`
-      : `${input.businessName}: New live-transfer lead (AI intake), the team missed the warm handoff, so I captured this on the call.`
+      : reachedMachine
+        ? `${input.businessName}: Live-transfer referral (AI intake), the client's line went to voicemail, so there was nobody to capture.`
+        : `${input.businessName}: New live-transfer lead (AI intake), the team missed the warm handoff, so I captured this on the call.`
   ];
-  if (outbound && input.voicemail?.detected) {
+  if (input.voicemail?.detected) {
     lines.push(
       input.voicemail.messageLeft
         ? "Outcome: reached voicemail, left the scripted message."

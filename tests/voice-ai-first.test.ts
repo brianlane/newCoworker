@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_FIRST_BRIEF_LOOKBACK_MINUTES,
   AI_FIRST_BRIEF_MAX_CHARS,
   AI_FIRST_DEFAULT_ACCEPT,
   AI_FIRST_DEFAULT_MEDIA_SECONDS,
@@ -172,6 +173,23 @@ describe("buildPreCallBrief", () => {
 
   it("returns nothing for an empty alert (no brief beats an empty one)", () => {
     expect(buildPreCallBrief("   \n ")).toBe("");
+  });
+
+  /**
+   * The window has to outlast the partner, not look reasonable.
+   *
+   * HomeLight texted Rhonda J.'s referral at 2026-08-28T15:40:02Z and live
+   * transferred her at 15:55:16Z, 13 seconds past the old 15-minute reach, so
+   * the AI opened with a generic line at a seller whose name, zip and price
+   * we were holding. Across all 8 live transfers on record the text-to-call
+   * delay topped out at 19.2 minutes, which 15 cannot cover and 30 covers
+   * with room. A number chosen by feel would drift back under the partner's
+   * own timing, so it is pinned here with the measurement that set it.
+   */
+  it("reaches past the partner's own text-to-transfer delay", () => {
+    expect(AI_FIRST_BRIEF_LOOKBACK_MINUTES).toBeGreaterThanOrEqual(20);
+    // 19.2 minutes observed, so anything under 20 re-opens the Rhonda miss.
+    expect(AI_FIRST_BRIEF_LOOKBACK_MINUTES).toBe(30);
   });
 });
 

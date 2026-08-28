@@ -39,6 +39,7 @@ import {
 import {
   composeIntakeLeadSms,
   extractIntakeAlertContext,
+  inboundVoicemailScript,
   type IntakeAlertContext,
   type IntakeKnownLead
 } from "./intake.js";
@@ -1496,13 +1497,34 @@ function main(): void {
         : undefined;
 
       /**
-       * The assistant's own "this is a recording" verdict, for calls WE placed.
+       * The assistant's own "this is a recording" verdict, for calls WE placed
+       * AND for a partner LIVE TRANSFER (an IVR-gated inbound takeover).
        *
        * Carrier AMD is primary and unreliable: it read Jim Inderberg's mailbox
        * as `human_residence` on 2026-08-17, so nothing stamped the call, the
        * cadence recorded "spoke with them", and the follow-up text that only
        * sends on no-answer was skipped. The assistant heard the mailbox; this
        * is how it says so.
+       *
+       * On a live transfer carrier AMD is not merely unreliable, it is
+       * IMPOSSIBLE. The partner (HomeLight) dials the seller on its own leg
+       * and mixes her audio into the inbound call we already answered, so
+       * Telnyx sees one inbound leg with nothing to analyse and we never arm
+       * detection on it. Measured 2026-08-28 across every HomeLight live
+       * transfer on record: 5 of 8 landed in the seller's mailbox (Aug 11,
+       * 14, 16, 24, 28), the AI ran on into it for 10, 86, 228, 26 and 51
+       * seconds after its first word, and ALL EIGHT carry
+       * `answering_machine_result: null` and `voicemail_left: false`.
+       *
+       * The persona is NOT the gap. It already carries
+       * INBOUND_VOICEMAIL_RECOGNITION_LINE and one approved message, and it
+       * used them: Aug 24 read that message verbatim and Aug 28 was midway
+       * through it when the leg dropped. What was missing is anywhere to PUT
+       * the verdict, so a mailbox settled on the record as an ordinary
+       * conversation and the owner's alert claimed a capture that never
+       * happened. Recognition without a tool also drifts: on Aug 14 the model
+       * read a mailbox tone back as a phone number, on Aug 28 it asked a
+       * recording for its best callback number.
        *
        * Two effects, in this order:
        *   1. Record the machine verdict on the session AND the call row. The
@@ -1516,9 +1538,26 @@ function main(): void {
        *      uses, and hand the script back to be read aloud. Losing the claim
        *      means the edge is already speaking it, so the model stays quiet
        *      rather than talking over a message that is already going out.
+       *
+       * On a live transfer there is no authored template to read: nothing
+       * snapshots a voicemailTemplate onto an inbound session. The tool hands
+       * back the persona's own approved message instead of "no script",
+       * because "say nothing and end the call" and "leave EXACTLY this one
+       * message" cannot both be live in one prompt and the model is told to
+       * read whatever it is handed word for word. Same text, one source
+       * (`inboundVoicemailScript`); inventing fresh copy for a partner's
+       * seller is how [[ai-invents-callback-numbers-on-voicemail]] happens.
+       *
+       * Sweep interaction, both branches: the stamp carries no
+       * `machine_stamped_at` (only the edge's `stampMachine` writes one), so
+       * the AMD resolution sweep skips this row as `no_stamp_time` rather
+       * than speaking or hanging up behind a live bridge, and winning the
+       * claim below sets `voicemail_claimed`, which drops it from the sweep's
+       * query outright.
        */
+      const transferVoicemailScript = intake?.ivrGate ? inboundVoicemailScript(businessName) : "";
       const voicemail: VoicemailCapability | undefined =
-        callDirection === "outbound"
+        callDirection === "outbound" || intake?.ivrGate
           ? {
               execute: async () => {
                 const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
@@ -1540,7 +1579,10 @@ function main(): void {
                 if (badgeErr) {
                   console.error("voice-bridge: voicemail badge write failed", badgeErr);
                 }
-                const script = (intakeVoicemailScript ?? "").trim();
+                // Authored template first, so a flow author who wrote one for
+                // an outbound step keeps it; the transfer default only fills
+                // the inbound gap, where no template can exist.
+                const script = (intakeVoicemailScript || transferVoicemailScript).trim();
                 if (!script) return { ok: true, detail: "recorded, no message configured" };
                 const { data: claimed, error: claimErr } = await supabase.rpc(
                   "voice_claim_voicemail_speak",
@@ -1577,6 +1619,22 @@ function main(): void {
                   p_patch: { voicemail_spoken: true }
                 });
                 if (error) console.error("voice-bridge: voicemail_spoken stamp failed", error);
+                // The call PAGE is a separate write, and on a live transfer
+                // nothing else makes it: the edge's decorateTranscriptForVoicemail
+                // runs only inside the outbound `flow_run` branch, so an
+                // inbound leg would keep `voicemail_left: false` next to a
+                // message that really went out. Only the row, never a
+                // "[Voicemail]" turn: the edge needs one because its message
+                // goes out through Telnyx `speak` after the media stream
+                // stops, deaf to the transcriber, while here the model reads
+                // the script aloud on the live stream and the turn is already
+                // in the transcript.
+                if (!transferVoicemailScript) return;
+                const { error: rowErr } = await supabase
+                  .from("voice_call_transcripts")
+                  .update({ answering_machine_result: "machine", voicemail_left: true })
+                  .eq("call_control_id", callControlId);
+                if (rowErr) console.error("voice-bridge: transfer voicemail row write failed", rowErr);
               }
             }
           : undefined;
