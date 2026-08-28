@@ -224,18 +224,21 @@ async function runOneSlackJob(
   // us re-answer an older question.
   const answeredIndex = history.indexOf(latestUser);
 
-  // Streaming: start best-effort; refusals (free plan, non-agent context)
-  // degrade to a single post. The append is withheld the moment a potential
-  // EMAIL_SEND marker shows up, so raw blocks never render mid-stream.
-  await slackSetAssistantStatus(botToken, {
-    channel_id: conversation.channel_id,
-    thread_ts: statusThreadTs,
-    status: "is thinking..."
-  });
-  const stream: SlackStreamHandle | null = await slackStartStream(botToken, replyTarget);
+  // Streaming and the "is thinking" indicator are opened from onTurnStart
+  // below, NOT here. Both are visible in the workspace, and the verdicts
+  // that come back without a reply (staff mode off, over the cap, nothing
+  // to answer) are all supposed to leave no trace: opening either one up
+  // front would have a switched-off surface announce itself with a spinner
+  // and an empty streamed message.
+  // Held on an object rather than in a plain `let`: it is assigned inside
+  // the onTurnStart callback, and the compiler cannot see across that, so a
+  // bare local narrows to `null` for the rest of the function.
+  const streaming: { handle: SlackStreamHandle | null } = { handle: null };
   let streamedChars = 0;
   const stopStream = async () => {
-    if (stream) await slackStopStream(botToken, stream, undefined).catch(() => false);
+    if (streaming.handle) {
+      await slackStopStream(botToken, streaming.handle, undefined).catch(() => false);
+    }
   };
 
   const outcome = await runOwnerSurfaceTurn({
@@ -267,10 +270,23 @@ async function runOneSlackJob(
       tier: (business?.tier ?? null) as PlanTier | null,
       ownerEmail: business?.owner_email?.trim() || null
     },
+    onTurnStart: async () => {
+      // Best-effort: a refusal (free plan, non-agent context) degrades to a
+      // single post at the end.
+      await slackSetAssistantStatus(botToken, {
+        channel_id: conversation.channel_id,
+        thread_ts: statusThreadTs,
+        status: "is thinking..."
+      });
+      streaming.handle = await slackStartStream(botToken, replyTarget);
+    },
+    // The append is withheld the moment a potential EMAIL_SEND marker shows
+    // up, so raw blocks never render mid-stream.
     onTextDelta: (text: string) => {
-      if (!stream) return;
+      const handle = streaming.handle;
+      if (!handle) return;
       if (text.includes(STREAM_WITHHOLD_MARKER)) return;
-      void slackAppendStream(botToken, stream, text.slice(0, SLACK_REPLY_MAX_CHARS)).then(
+      void slackAppendStream(botToken, handle, text.slice(0, SLACK_REPLY_MAX_CHARS)).then(
         (ok) => {
           if (ok) streamedChars += text.length;
         }
@@ -359,9 +375,9 @@ async function runOneSlackJob(
   const finalContent = emailOutcome.content.slice(0, SLACK_REPLY_MAX_CHARS);
 
   let postedTs: string | null = null;
-  if (stream) {
-    const stopped = await slackStopStream(botToken, stream, finalContent);
-    if (stopped) postedTs = stream.ts;
+  if (streaming.handle) {
+    const stopped = await slackStopStream(botToken, streaming.handle, finalContent);
+    if (stopped) postedTs = streaming.handle.ts;
   }
   if (postedTs === null) {
     const posted = await slackPostMessage(botToken, { ...replyTarget, text: finalContent });

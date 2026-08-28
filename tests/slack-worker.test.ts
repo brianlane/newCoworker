@@ -767,10 +767,13 @@ describe("verdicts that are not failures", () => {
     expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "staff_mode_off", terminal: true })
     );
-    // The spinner must not be left running on a turn that will never answer.
-    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+    // Silent means SILENT in the workspace, not just "no reply text". A
+    // stream opened up front leaves an empty assistant message, and a
+    // "thinking" indicator announces a surface the owner switched off.
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackSetAssistantStatus)).not.toHaveBeenCalledWith(
       "xoxb-1",
-      expect.objectContaining({ status: "" })
+      expect.objectContaining({ status: "is thinking..." })
     );
   });
 
@@ -789,6 +792,38 @@ describe("verdicts that are not failures", () => {
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
     expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "no_input", terminal: true })
+    );
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+  });
+
+  it("posts the over-cap line without ever opening a stream", async () => {
+    // The pre-extraction behaviour, and worth pinning: over-cap decides
+    // BEFORE the model call, so a stream opened in advance would leave an
+    // empty streamed message sitting above the explanation.
+    claimOnce();
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValue({
+      spendMicros: 10,
+      effectiveCapMicros: 1
+    } as never);
+    const result = await processSlackJobs();
+
+    expect(result.processed).toBe(1);
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+    expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ text: expect.any(String) })
+    );
+    expect(vi.mocked(completeSlackJob)).toHaveBeenCalled();
+  });
+
+  it("opens the stream only once the turn is really going to run", async () => {
+    claimOnce();
+    await processSlackJobs();
+    expect(vi.mocked(slackStartStream)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ status: "is thinking..." })
     );
   });
 });

@@ -188,6 +188,55 @@ describe("the surface's own configuration is what gets applied", () => {
     expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].flowEditActor).toBe("+15145188192");
   });
 
+  it("signals the start of the turn only when a model call is really coming", async () => {
+    // The callback is where Slack opens its stream and its "thinking"
+    // indicator, both of which are visible in the workspace. Firing it for a
+    // verdict that produces no reply is how a switched-off surface ends up
+    // announcing itself.
+    const onTurnStart = vi.fn();
+
+    vi.mocked(staffModeEnabled).mockResolvedValue(false);
+    await runOwnerSurfaceTurn(args({ onTurnStart }));
+    expect(onTurnStart, "staff mode off").not.toHaveBeenCalled();
+
+    vi.mocked(staffModeEnabled).mockResolvedValue(true);
+    await runOwnerSurfaceTurn(
+      args({ onTurnStart, history: [{ role: "assistant", content: "closed" }] })
+    );
+    expect(onTurnStart, "nothing to answer").not.toHaveBeenCalled();
+
+    vi.mocked(loadOwnerSurfaceContext).mockResolvedValue(context({ overCap: true }));
+    await runOwnerSurfaceTurn(args({ onTurnStart }));
+    expect(onTurnStart, "over the cap").not.toHaveBeenCalled();
+
+    vi.mocked(loadOwnerSurfaceContext).mockRejectedValue(new Error("settings unreadable"));
+    await runOwnerSurfaceTurn(args({ onTurnStart }));
+    expect(onTurnStart, "context unreadable").not.toHaveBeenCalled();
+
+    vi.mocked(loadOwnerSurfaceContext).mockResolvedValue(context());
+    await runOwnerSurfaceTurn(args({ onTurnStart }));
+    expect(onTurnStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits the start signal before calling the model", async () => {
+    // Slack's stream handle is assigned in that callback, and a delta that
+    // arrived before the assignment would be dropped on the floor.
+    const order: string[] = [];
+    vi.mocked(runInlineChatTurn).mockImplementation(async () => {
+      order.push("model");
+      return { ok: true, content: "Four.", drafts: [] };
+    });
+    await runOwnerSurfaceTurn(
+      args({
+        onTurnStart: async () => {
+          await Promise.resolve();
+          order.push("start");
+        }
+      })
+    );
+    expect(order).toEqual(["start", "model"]);
+  });
+
   it("passes a streaming callback through untouched for the surfaces that have one", async () => {
     const onTextDelta = vi.fn();
     await runOwnerSurfaceTurn(args({ onTextDelta }));

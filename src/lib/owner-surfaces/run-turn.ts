@@ -114,6 +114,19 @@ export type OwnerSurfaceTurnArgs = {
   speakerLabel: string;
   /** Channel marker on the answered message, e.g. "Telegram from owner Sam". */
   userLabel: string;
+  /**
+   * Called once, immediately before the model call, and ONLY when the turn
+   * is really going to run.
+   *
+   * This exists because "about to spend a model call" is a moment only this
+   * function knows, and a caller that guesses it gets it wrong. Slack opens
+   * its stream and sets its "is thinking" indicator here: opening either one
+   * earlier would put an empty message and a spinner in the workspace for
+   * the verdicts that are supposed to produce nothing at all, which is how
+   * a switched-off surface ends up announcing itself. Bugbot caught exactly
+   * that on PR #1714.
+   */
+  onTurnStart?: () => void | Promise<void>;
   /** Slack streams its reply; the other surfaces have nowhere to stream to. */
   onTextDelta?: (text: string) => void;
   /**
@@ -197,6 +210,10 @@ export async function runOwnerSurfaceTurn(
   // Over the shared cap this surface declines rather than degrading. There
   // is no Rowboat fallback on any owner surface.
   if (context.overCap) return { kind: "over_cap" };
+
+  // Everything above this line can decline without costing anything and
+  // without the speaker seeing a thing. Past it, the turn is real.
+  await args.onTurnStart?.();
 
   const inline = await runTurn({
     businessId,
