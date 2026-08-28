@@ -12,7 +12,7 @@ written incident review. Calendly is the center of gravity here.
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
-| Roster | James Lee (`+1` Montreal mobile `+1514…`, `james@kypads.com` on the row since 2026-08-28, when `repoint-roster-member-phone.ts` moved it off the `+852` number that no roster text could ever reach; see the +852 sharp edge below for what that number still means for his OWNER-facing surfaces). Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
+| Roster | James Lee (`+1` Montreal mobile `+1514…`, `james@kypads.com` on the row since 2026-08-28, when `repoint-roster-member-phone.ts` moved it off the `+852` number). **He reads NEITHER number: he carries no Canadian SIM, and our long codes cannot reach `+852` at all, so email and the dashboard are his only live channels.** Texts to the roster row now succeed silently instead of erroring, so absence of `alert_delivery_failed` here is not health; see the +852 sharp edge below. Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
 
 Build spec: [PRDs/white-glove-build-kyp-ads.md](../../PRDs/white-glove-build-kyp-ads.md).
 Incident review: [docs/INCIDENT-2026-07-KYP-ONBOARDING.md](../INCIDENT-2026-07-KYP-ONBOARDING.md).
@@ -213,11 +213,39 @@ How the pieces fit:
   fixing the phone would have been a no-op. Verified after the apply: the
   live helper now returns him as the solo owner, and the roster is still
   exactly one row (a second row would have re-broken it, which is why the
-  script UPDATEs in place and refuses a collision). Note he is reachable but
-  has never REPLIED on the +1 number (16 outbound, 0 inbound over 7 days), so
-  claim-by-reply-"1" is now wired to him but still unproven in practice. His
-  OWNER alert phone (`notification_preferences`) was already this +1 number
-  and is untouched; nothing here changes the WhatsApp billing block above.
+  script UPDATEs in place and refuses a collision). His OWNER alert phone
+  (`notification_preferences`) was already this +1 number and is untouched;
+  nothing here changes the WhatsApp billing block above.
+  **CORRECTION, same day, and the important half: SMS reaches James on NO
+  number at all.** The repoint was argued from Telnyx delivery receipts (16
+  of 16 owner alerts stamped `delivered` over 7 days) read as proof the +1
+  number reaches him. It is not proof. Brian confirms **James carries no
+  Canadian SIM**; the number is still his, so nothing is leaking to a
+  recycled subscriber, but nobody is reading it. A carrier `delivered`
+  receipt means a device on the network acknowledged the message, never that
+  the intended person holds that device, and no receipt of any kind can close
+  that gap: only the person can.
+  So the true channel map for James is: **email (`james@kypads.com`,
+  Resend-confirmed) and the dashboard, and nothing else.** WhatsApp is dead
+  on billing 131042, SMS to +852 cannot be originated by our long codes, and
+  SMS to the +1 is accepted by the carrier and read by no one.
+  Known cost of the repoint, accepted by Brian (2026-08-28) rather than
+  reverted: team/lead-offer texts used to fail LOUDLY at Telnyx (40306,
+  raising `alert_delivery_failed` on the admin System Errors card) and now
+  succeed silently into a handset nobody checks. The dead channel is no
+  longer visible to us. Do not read the absence of `alert_delivery_failed`
+  rows on this tenant as the SMS leg being healthy; it is the same outage
+  with the alarm disconnected. Claim-by-reply-"1" is likewise now wired to a
+  number he does not read, so an unclaimed offer here means "never seen",
+  not "declined".
+  The corroborating signal was there and was discounted: the LAST inbound SMS
+  from that +1 number is **2026-07-24** (`tsx debug/trace-sms.ts --to <his +1>
+  --since 60d`, 229 outbound / 11 inbound, 121 sends the carrier never
+  confirmed). He asked to switch his number to the Hong Kong one on Jul 30,
+  six days later. Silence since Jul 24 across 35 days and ~200 sends was the
+  real evidence about reachability, and every one of those sends still came
+  back `delivered`. When asking "is the owner getting our alerts", weigh the
+  last INBOUND far above any delivery receipt.
 - **The WABA sender number is James's own phone, so he cannot be reached on
   WhatsApp at it.** The Cloud API sender is the +852 number, and a number on
   the Cloud API is taken off consumer WhatsApp: messages to it arrive at our
