@@ -51,8 +51,6 @@ type VoiceZoneMatch = {
 type ZoneIndex = {
   /** Exact digit prefixes, bucketed by length so lookup can go longest-first. */
   exact: Map<number, Map<string, VoiceRateZone>>;
-  /** Wildcard patterns (Canada's N11 rows), with the length they consume. */
-  wildcards: { length: number; test: RegExp; zone: VoiceRateZone }[];
   /** Longest prefix the deck defines, the starting point for a lookup. */
   maxLength: number;
 };
@@ -68,22 +66,16 @@ let cachedIndex: ZoneIndex | null = null;
  */
 function buildIndex(): ZoneIndex {
   const exact = new Map<number, Map<string, VoiceRateZone>>();
-  const wildcards: ZoneIndex["wildcards"] = [];
   let maxLength = 0;
 
+  // Exact lookup only. The deck's wildcard rows (Canada's "1XXX310" service
+  // codes) are expanded into concrete prefixes by the generator, against the
+  // area codes that country actually has. Matching "X" as "any digit" here
+  // would let Canada's 75c/min N11 rate win against any US number with a
+  // 310 or N11 exchange.
   for (const zone of VOICE_RATE_ZONES) {
     for (const prefix of zone.prefixes.split(" ")) {
       maxLength = Math.max(maxLength, prefix.length);
-      if (prefix.includes("X")) {
-        // "1XXX310" -> /^1\d\d\d310$/. Anchored so it consumes exactly its
-        // own length and competes at that length, not at any other.
-        wildcards.push({
-          length: prefix.length,
-          test: new RegExp(`^${prefix.replace(/X/g, "\\d")}$`),
-          zone
-        });
-        continue;
-      }
       let bucket = exact.get(prefix.length);
       if (!bucket) {
         bucket = new Map<string, VoiceRateZone>();
@@ -93,7 +85,7 @@ function buildIndex(): ZoneIndex {
     }
   }
 
-  return { exact, wildcards, maxLength };
+  return { exact, maxLength };
 }
 
 function index(): ZoneIndex {
@@ -134,7 +126,7 @@ export function voiceZoneFor(e164: string | null | undefined): VoiceZoneMatch | 
   const digits = nanpDigits(e164);
   if (!digits) return null;
 
-  const { exact, wildcards, maxLength } = index();
+  const { exact, maxLength } = index();
   for (let length = Math.min(maxLength, digits.length); length >= 1; length -= 1) {
     const candidate = digits.slice(0, length);
     const hit = exact.get(length)?.get(candidate);
@@ -145,16 +137,6 @@ export function voiceZoneFor(e164: string | null | undefined): VoiceZoneMatch | 
         centsPerMinute: hit.centsPerMinute,
         matchedPrefix: candidate
       };
-    }
-    for (const wildcard of wildcards) {
-      if (wildcard.length === length && wildcard.test.test(candidate)) {
-        return {
-          iso: wildcard.zone.iso,
-          label: wildcard.zone.label,
-          centsPerMinute: wildcard.zone.centsPerMinute,
-          matchedPrefix: candidate
-        };
-      }
     }
   }
   return null;
@@ -175,6 +157,46 @@ type BlendedVoiceRate = {
    */
   priciestZone: { label: string; iso: string; centsPerMinute: number } | null;
 };
+
+/**
+ * Pull dial-able numbers out of free text an operator pasted.
+ *
+ * Splitting on "every non-digit" looks right and is wrong: it shreds
+ * "(602) 838-4497" into "602", "838" and "4497", none of which is an NANP
+ * number. The blend then prices nothing, falls back to the baseline, and a
+ * pasted rural list is silently quoted as lower-48 traffic. That failure is
+ * invisible, which is the worst kind.
+ *
+ * So: split only on the separators between ENTRIES (newline, comma,
+ * semicolon, tab) and let each entry keep its own formatting, which
+ * `nanpDigits` strips. An entry that still does not parse is passed through
+ * rather than dropped, so it lands in the `unpriced` count where a human can
+ * see it, instead of disappearing.
+ *
+ * The one ambiguous case is several numbers separated by spaces alone
+ * ("+16028384497 +16055230000"): that entry is retried as whitespace-split
+ * pieces, and only accepted if EVERY piece is itself a valid number, since
+ * "602 838 4497" would otherwise become three bogus entries.
+ */
+export function parseDestinationList(text: string): string[] {
+  const out: string[] = [];
+  for (const rawEntry of text.split(/[\n,;\t]+/)) {
+    const entry = rawEntry.trim();
+    if (entry.length === 0) continue;
+    if (nanpDigits(entry) !== null) {
+      out.push(entry);
+      continue;
+    }
+    const pieces = entry.split(/\s+/).filter((piece) => piece.length > 0);
+    if (pieces.length > 1 && pieces.every((piece) => nanpDigits(piece) !== null)) {
+      out.push(...pieces);
+      continue;
+    }
+    // Unparseable: keep it so it shows up as unpriced rather than vanishing.
+    out.push(entry);
+  }
+  return out;
+}
 
 /**
  * The average termination rate across a set of destinations, for sizing a

@@ -26,6 +26,7 @@ import {
   estimateEnterpriseMonthlyCost,
   suggestEnterprisePrice
 } from "@/lib/plans/enterprise-pricing";
+import { parseDestinationList } from "@/lib/plans/voice-zone-rates";
 
 export type EnterpriseDealView = {
   id: string;
@@ -100,13 +101,11 @@ export function EnterpriseBillingPanel({
       return null;
     }
     try {
-      // Split on anything that is not part of a number, so a pasted CSV
-      // column, a newline-separated list and "+1 602 838 4497, +1 605 523
-      // 0000" all work. Empty means "no list", which leaves the estimate
-      // exactly as it was before the zone table existed.
-      const destinations = voiceDestinationsText
-        .split(/[^\d+]+/)
-        .filter((value) => value.length > 0);
+      // Entry separators only, never "every non-digit": that would shred
+      // "(602) 838-4497" into three fragments that price as nothing. Empty
+      // means "no list", which leaves the estimate exactly as it was before
+      // the zone table existed.
+      const destinations = parseDestinationList(voiceDestinationsText);
       const cost = estimateEnterpriseMonthlyCost({
         vpsSize,
         smsPerMonth: smsN,

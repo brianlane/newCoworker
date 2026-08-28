@@ -174,6 +174,59 @@ function main(): void {
     }
   }
 
+  // EXPAND WILDCARDS AGAINST THE OWNING COUNTRY'S AREA CODES.
+  //
+  // Canada prices its service codes as "1XXX310" etc, X = any digit. Compiled
+  // literally that is "any three digits", so it wins at length 7 against
+  // every NANP number with a 310/211/311/411/511/711 exchange, INCLUDING US
+  // ones: +1 602 310 0000 in Phoenix priced as Canadian N11 at 75c/min
+  // instead of 0.5c, 150x too expensive, and a single such contact drags a
+  // whole deal blend with it. The wildcard means "any CANADIAN area code",
+  // so it is expanded here against the area codes the deck gives that ISO
+  // (US and CA area codes are disjoint: 343 and 53, zero overlap). Expanding
+  // at generation time also means the runtime needs no wildcard matching at
+  // all, only exact lookup.
+  const npasByIso = new Map<string, Set<string>>();
+  for (const zone of zones.values()) {
+    for (const prefix of zone.prefixes) {
+      if (prefix.includes("X") || prefix.length < 4) continue;
+      let set = npasByIso.get(zone.iso);
+      if (!set) {
+        set = new Set<string>();
+        npasByIso.set(zone.iso, set);
+      }
+      set.add(prefix.slice(1, 4));
+    }
+  }
+  let expandedFrom = 0;
+  let expandedTo = 0;
+  for (const zone of zones.values()) {
+    const npas = [...(npasByIso.get(zone.iso) ?? [])];
+    const expanded: string[] = [];
+    for (const prefix of zone.prefixes) {
+      if (!prefix.includes("X")) {
+        expanded.push(prefix);
+        continue;
+      }
+      // Every wildcard in the deck is exactly the three area-code digits.
+      if (!/^1XXX\d*$/.test(prefix)) {
+        throw new Error(
+          `unhandled wildcard shape "${prefix}": only the 1XXX form is modelled`
+        );
+      }
+      expandedFrom += 1;
+      const suffix = prefix.slice(4);
+      for (const npa of npas) expanded.push(`1${npa}${suffix}`);
+      expandedTo += npas.length;
+    }
+    zone.prefixes = expanded;
+  }
+  if (expandedFrom > 0) {
+    console.log(
+      `  expanded ${expandedFrom} wildcard row(s) into ${expandedTo} concrete prefixes`
+    );
+  }
+
   if (nanpRows === 0) {
     throw new Error(
       `no US/CA rows found in ${deckPath}: wrong deck, or the column layout changed`
@@ -270,12 +323,15 @@ ${entries}
       .filter(Boolean)
   );
   const emittedCount = emitted.reduce((sum, list) => sum + list.length, 0);
-  if (emittedCount !== nanpRows) {
+  const expectedCount = nanpRows - expandedFrom + expandedTo;
+  if (emittedCount !== expectedCount) {
     throw new Error(
-      `generated table round-trips to ${emittedCount} prefixes but the deck had ${nanpRows}: the emitter is corrupting prefixes at line boundaries`
+      `generated table round-trips to ${emittedCount} prefixes but expected ${expectedCount} (${nanpRows} deck rows, ${expandedFrom} wildcards expanded to ${expandedTo}): the emitter is corrupting prefixes at line boundaries`
     );
   }
-  const malformed = emitted.flat().filter((prefix) => !/^1[\dX]*$/.test(prefix));
+  // No X may survive expansion: one that did would be a silent "any digit"
+  // match at runtime, which is the bug this expansion exists to remove.
+  const malformed = emitted.flat().filter((prefix) => !/^1\d*$/.test(prefix));
   if (malformed.length > 0) {
     throw new Error(
       `generated table contains ${malformed.length} malformed prefix(es), e.g. ${malformed.slice(0, 3).join(", ")}`

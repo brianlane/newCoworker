@@ -13,7 +13,8 @@ name: Telnyx Voice Rate Cutover
 # effective instant could only write a number it had not observed. So this
 # waits for real traffic, measures our own effective cost per outbound
 # minute, and compares it to the pre-cutover figure recorded in
-# PRE_CUTOVER_TERMINATION_CENTS_PER_MINUTE.
+# .github/telnyx-rate-calibration.json, which it also rewrites so a merged
+# recalibration is not re-applied the following week.
 #
 # WHY MEASURE RATHER THAN DIFF THE DECK: Telnyx emails only the new deck,
 # never a diff, and it sits behind a portal.telnyx.com login no CI job can
@@ -51,10 +52,6 @@ env:
   # First full UTC day after the 2026-08-31T18:00Z cutover, so no minute
   # billed at the old rates is averaged into the new one.
   CUTOVER_DAY: "2026-09-01"
-  # Measured 2026-06-29..2026-08-27: 12,600 billed seconds / $1.12, carrier
-  # fee zero. Kept in step with PRE_CUTOVER_TERMINATION_CENTS_PER_MINUTE in
-  # src/lib/plans/voice-zone-rates.ts, which carries the full provenance.
-  PRE_CUTOVER_CENTS_PER_MINUTE: "0.5333"
 
 jobs:
   measure:
@@ -119,9 +116,11 @@ jobs:
       - name: Decide whether the constant has drifted
         if: steps.window.outputs.run == 'true'
         id: drift
-        run: |
-          npx tsx .github/scripts/telnyx-rate-drift.ts \
-            "${{ env.PRE_CUTOVER_CENTS_PER_MINUTE }}" < /tmp/voice-zone-report.json
+        # The comparison point lives in .github/telnyx-rate-calibration.json,
+        # which the script also REWRITES when it edits the constant. Passing
+        # it in from here as well would let the two disagree, and pinning it
+        # would make every Monday re-apply the same delta.
+        run: npx tsx .github/scripts/telnyx-rate-drift.ts < /tmp/voice-zone-report.json
 
       - name: Verify the edited model still passes its own tests
         if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed == 'true'
@@ -151,7 +150,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add src/lib/plans/enterprise-pricing.ts
+          git add src/lib/plans/enterprise-pricing.ts .github/telnyx-rate-calibration.json
           {
             echo "Telnyx voice rate cutover: recalibrate the per-minute constant"
             echo

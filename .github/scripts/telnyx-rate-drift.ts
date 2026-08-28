@@ -42,6 +42,20 @@ const DRIFT_THRESHOLD_CENTS = 0.05;
 
 const PRICING_PATH = "src/lib/plans/enterprise-pricing.ts";
 
+/**
+ * The termination rate the constant is currently calibrated to.
+ *
+ * THIS FILE IS REWRITTEN BY THIS SCRIPT, and it has to be. The drift is
+ * `measured - calibrated`, applied on top of whatever the constant is now.
+ * If the comparison point stayed pinned at the pre-cutover figure, then the
+ * Monday after a recalibration merged, the same measurement would produce
+ * the same delta and add it AGAIN to the already-updated constant, opening
+ * a new PR every week and compounding the cutover forever. Moving the
+ * comparison point in the same commit makes the job idempotent: once the
+ * bump lands, the next run measures a drift of ~0 and does nothing.
+ */
+const CALIBRATION_PATH = ".github/telnyx-rate-calibration.json";
+
 type Report = {
   actualsSince: string | null;
   actuals: { billedSeconds: number; cents: number; centsPerMinute: number | null };
@@ -56,9 +70,14 @@ function setOutput(key: string, value: string): void {
 }
 
 function main(): void {
-  const baseline = Number(process.argv[2]);
+  const calibration = JSON.parse(readFileSync(CALIBRATION_PATH, "utf8")) as {
+    terminationCentsPerMinute: number;
+    measuredThrough: string;
+    note: string;
+  };
+  const baseline = calibration.terminationCentsPerMinute;
   if (!Number.isFinite(baseline)) {
-    throw new Error("usage: telnyx-rate-drift.ts <pre-cutover-cents-per-minute>");
+    throw new Error(`${CALIBRATION_PATH} has no numeric terminationCentsPerMinute`);
   }
   const report = JSON.parse(readFileSync(0, "utf8")) as Report;
 
@@ -109,12 +128,28 @@ function main(): void {
     PRICING_PATH,
     source.replace(match[0], `voiceTelnyxCentsPerMinute: ${updated},`)
   );
+  // Move the comparison point with the constant, in the SAME commit, or the
+  // next run re-applies this same delta on top of the value it just set.
+  writeFileSync(
+    CALIBRATION_PATH,
+    `${JSON.stringify(
+      {
+        ...calibration,
+        terminationCentsPerMinute: measured,
+        measuredThrough: report.actualsSince
+      },
+      null,
+      2
+    )}\n`
+  );
 
   const summary = [
-    `Measured ${measured}c/min of outbound termination since ${report.actualsSince}, against ${baseline}c/min before the cutover.`,
+    `Measured ${measured}c/min of outbound termination since ${report.actualsSince}, against the ${baseline}c/min this constant was last calibrated to.`,
     `That is ${drift >= 0 ? "+" : ""}${drift}c/min, over the ${DRIFT_THRESHOLD_CENTS}c threshold, on ${billedMinutes.toFixed(1)} billed minutes.`,
     ``,
     `\`voiceTelnyxCentsPerMinute\` ${current} -> ${updated}`,
+    `\`${CALIBRATION_PATH}\` ${baseline} -> ${measured} (moves the comparison point, so`,
+    `next Monday measures ~0 drift instead of stacking this delta again)`,
     ``,
     `NOT done by this PR, and needing a human:`,
     `- The generated zone table still describes the PREVIOUS deck. Download the current`,

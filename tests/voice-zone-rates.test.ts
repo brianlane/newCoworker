@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
   blendedVoiceTerminationRate,
+  parseDestinationList,
   voiceZoneFor
 } from "@/lib/plans/voice-zone-rates";
 import {
@@ -36,12 +37,23 @@ describe("the generated deck itself", () => {
     expect(byZone.get("CA N11")?.centsPerMinute).toBe(75);
   });
 
-  it("totals the 22,233 NANP rows the deck defines", () => {
+  it("totals the deck's NANP rows with wildcards expanded", () => {
+    // 22,233 deck rows, less the 6 Canadian wildcard rows, plus those 6
+    // expanded across Canada's 53 area codes (6 x 53 = 318).
     const total = VOICE_RATE_ZONES.reduce(
       (sum, zone) => sum + zone.prefixes.split(" ").length,
       0
     );
-    expect(total).toBe(22_233);
+    expect(total).toBe(22_233 - 6 + 318);
+  });
+
+  it("leaves no wildcard for the runtime to interpret", () => {
+    // An "X" surviving into the table would match any digit at runtime, which
+    // is what priced a Phoenix number as Canadian N11 at 75c/min.
+    const withX = VOICE_RATE_ZONES.flatMap((zone) =>
+      zone.prefixes.split(" ").filter((prefix) => !/^1\d*$/.test(prefix))
+    );
+    expect(withX).toEqual([]);
   });
 
   it("keeps the NANP catch-all, without which no unlisted number prices", () => {
@@ -109,16 +121,30 @@ describe("voiceZoneFor", () => {
     expect(hit?.centsPerMinute).toBe(NANP_BASELINE_CENTS_PER_MINUTE);
   });
 
-  it("matches Canada's wildcard N11 rows", () => {
+  it("matches Canada's N11 service codes inside CANADIAN area codes", () => {
     // "1XXX311" in the deck: any Canadian area code, service code 311.
+    // 416 is Toronto, so this one is genuinely N11.
     const n11 = voiceZoneFor("+14163110000");
     expect(n11?.iso).toBe("CA");
     expect(n11?.label).toBe("N11");
     expect(n11?.centsPerMinute).toBe(75);
+    expect(voiceZoneFor("+14163100000")?.label).toBe("N11");
   });
 
-  it("does not let a wildcard swallow an ordinary number", () => {
-    // Same area code, not a service code: must fall through to a real zone.
+  it("does not price a US number as Canadian N11", () => {
+    // THE REGRESSION. Compiled as "any three digits", the deck's 1XXX310 row
+    // won at length 7 against every NANP number with a 310 or N11 exchange.
+    // +1 602 310 0000 is Phoenix and priced at 75c/min instead of 0.5c, 150x
+    // too expensive, and one such contact drags a whole deal blend with it.
+    for (const usNumber of ["+16023100000", "+16023110000", "+12133105555"]) {
+      const zone = voiceZoneFor(usNumber);
+      expect(zone?.iso).toBe("US");
+      expect(zone?.label).not.toBe("N11");
+      expect(zone?.centsPerMinute).toBe(0.5);
+    }
+  });
+
+  it("does not let a service code swallow an ordinary Canadian number", () => {
     const ordinary = voiceZoneFor("+14165551234");
     expect(ordinary?.label).not.toBe("N11");
   });
@@ -213,5 +239,61 @@ describe("a deck with no catch-all", () => {
     expect(mod.voiceZoneFor("+16025551234")?.matchedPrefix).toBe("1602");
     // 480 is absent and there is no catch-all behind it.
     expect(mod.voiceZoneFor("+14805551234")).toBeNull();
+  });
+});
+
+describe("parseDestinationList", () => {
+  it("keeps a formatted number whole instead of shredding it", () => {
+    // THE REGRESSION. Splitting on every non-digit turned "(602) 838-4497"
+    // into "602", "838", "4497", none of which is an NANP number, so the
+    // blend priced nothing, fell back to baseline, and a pasted rural list
+    // was silently quoted as lower-48 traffic.
+    expect(parseDestinationList("(602) 838-4497")).toEqual(["(602) 838-4497"]);
+    expect(voiceZoneFor(parseDestinationList("(602) 838-4497")[0])).not.toBeNull();
+  });
+
+  it("splits the separators between entries", () => {
+    expect(parseDestinationList("+16028384497\n+16055235555")).toEqual([
+      "+16028384497",
+      "+16055235555"
+    ]);
+    expect(parseDestinationList("(602) 838-4497, +1 605 523 5555")).toEqual([
+      "(602) 838-4497",
+      "+1 605 523 5555"
+    ]);
+    expect(parseDestinationList("+16028384497;\t+16055235555")).toEqual([
+      "+16028384497",
+      "+16055235555"
+    ]);
+  });
+
+  it("splits space-separated numbers only when every piece is valid", () => {
+    expect(parseDestinationList("+16028384497 +16055235555")).toEqual([
+      "+16028384497",
+      "+16055235555"
+    ]);
+    // "602 838 4497" is ONE number written with spaces, not three numbers.
+    expect(parseDestinationList("602 838 4497")).toEqual(["602 838 4497"]);
+  });
+
+  it("passes an unparseable entry through so it shows as unpriced", () => {
+    // Dropping it would hide the problem; counting it makes it visible.
+    const parsed = parseDestinationList("not a phone number\n+16028384497");
+    expect(parsed).toContain("not a phone number");
+    expect(blendedVoiceTerminationRate(parsed).unpriced).toBe(1);
+  });
+
+  it("ignores blank entries and surrounding whitespace", () => {
+    expect(parseDestinationList("\n\n  +16028384497  ,,\n")).toEqual(["+16028384497"]);
+    expect(parseDestinationList("")).toEqual([]);
+  });
+
+  it("prices a pasted rural list as rural, end to end", () => {
+    const blend = blendedVoiceTerminationRate(
+      parseDestinationList("(605) 523-5555, (602) 838-4497")
+    );
+    expect(blend.priced).toBe(2);
+    expect(blend.centsPerMinute).toBe(3.75);
+    expect(blend.priciestZone?.label).toBe("High Cost (Zone 5)");
   });
 });
