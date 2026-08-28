@@ -64,22 +64,43 @@ if (!url || !key) {
 const { createClient } = await import("@supabase/supabase-js");
 const db = createClient(url, key, { auth: { persistSession: false } });
 
-// Filtered on updated_at, NOT created_at. Both things this script looks for
-// happen to a LIVE run partway through its life: a referral that arrived
-// before the deploy can still be parked on, and still die on the post-claim
-// hand-off, afterwards. A created_at window would have called both of those
-// "nothing happened" (Bugbot, PR #1710).
-const SCAN = 1000;
-let runQuery = db
+// TARGETED queries, not a scan-and-filter.
+//
+// Both of these are EXISTENCE claims ("this never fired", "no regressions"),
+// and a bounded recency-ordered scan cannot support one: a parked or dead run
+// stops being touched once it settles, so ordinary live traffic pushes it out
+// of the window and the script confidently reports nothing happened. A cap
+// note does not repair the claim, it just footnotes it (Bugbot, PR #1710).
+//
+// Filtering server-side on the marker itself makes the result set inherently
+// tiny (a handful of runs ever) and independent of how busy the fleet is. The
+// limits below exist to bound a pathological case, and say so if they bite.
+const LIMIT = 500;
+let parkedQuery = db
   .from("ai_flow_runs")
-  .select("id, business_id, flow_id, status, context, created_at, updated_at, last_error")
+  .select("id, business_id, status, context, created_at, updated_at")
+  .not(`context->vars->>${PARKED_BY}`, "is", null)
   .gte("updated_at", since)
   .order("updated_at", { ascending: false })
-  .limit(SCAN);
-if (onlyBusiness) runQuery = runQuery.eq("business_id", onlyBusiness);
-const { data: runs, error } = await runQuery;
-if (error) {
-  console.error(`run scan FAILED: ${error.message}`);
+  .limit(LIMIT);
+if (onlyBusiness) parkedQuery = parkedQuery.eq("business_id", onlyBusiness);
+
+let selfSendQuery = db
+  .from("ai_flow_runs")
+  .select("id, business_id, updated_at, last_error")
+  .ilike("last_error", "%own number, refusing to text ourselves%")
+  .gte("updated_at", since)
+  .order("updated_at", { ascending: false })
+  .limit(LIMIT);
+if (onlyBusiness) selfSendQuery = selfSendQuery.eq("business_id", onlyBusiness);
+
+const [parkedRes, selfSendRes] = await Promise.all([parkedQuery, selfSendQuery]);
+if (parkedRes.error) {
+  console.error(`parked-run query FAILED: ${parkedRes.error.message}`);
+  process.exit(1);
+}
+if (selfSendRes.error) {
+  console.error(`self-send query FAILED: ${selfSendRes.error.message}`);
   process.exit(1);
 }
 type Run = {
@@ -90,21 +111,22 @@ type Run = {
   context: any;
   created_at: string;
   updated_at: string;
-  last_error: string | null;
 };
-const rows = (runs ?? []) as Run[];
-
-console.log(
-  `Scanned ${rows.length} run(s) touched since ${since}${onlyBusiness ? ` for ${onlyBusiness}` : ""}.`
-);
-// PostgREST silently caps an un-limited select at 1000 rows, and a truncated
-// scan reading as "nothing found" is the false negative this script exists to
-// avoid. So the cap is explicit and says when it bit.
-if (rows.length === SCAN) {
-  console.log(`  NOTE: hit the ${SCAN}-row scan cap, so this is a PARTIAL view. Narrow with --since.`);
+const parked = (parkedRes.data ?? []) as Run[];
+const selfSend = (selfSendRes.data ?? []) as Array<{
+  id: string;
+  business_id: string;
+  updated_at: string;
+  last_error: string | null;
+}>;
+for (const [label, n] of [["parked", parked.length], ["self-send", selfSend.length]] as const) {
+  if (n === LIMIT) console.log(`NOTE: the ${label} query hit its ${LIMIT}-row limit; this is a PARTIAL view.`);
 }
+console.log(
+  `Looked for parked follow-ups and self-send deaths since ${since}` +
+    `${onlyBusiness ? ` for ${onlyBusiness}` : ""}.`
+);
 
-const parked = rows.filter((r) => r.context?.vars?.[PARKED_BY]);
 console.log(`\n1. Runs carrying a parked follow-up request: ${parked.length}`);
 
 if (parked.length === 0) {
@@ -193,7 +215,6 @@ for (const r of parked) {
 // The one verdict kept: a literal match on an error column, which cannot mean
 // anything else. This guard killed Amy's run whenever she claimed her own
 // lead, and a recurrence means the teammate exemption is not applying.
-const selfSend = rows.filter((r) => /own number, refusing to text ourselves/i.test(r.last_error ?? ""));
 console.log(`\n2. Runs killed by the self-send guard since ${since}: ${selfSend.length}`);
 if (selfSend.length > 0) {
   console.log("   REGRESSION: the teammate exemption is not applying.");
