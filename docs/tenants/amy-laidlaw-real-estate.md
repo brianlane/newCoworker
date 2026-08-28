@@ -2045,6 +2045,18 @@ and `ensureCommitmentSchedule` are inert for this term. At the 24-month mark
 (renewal Jul 28 2028) the plan card's "Start a new contract" CTA is the path
 back onto a contract rate; it creates a fresh Stripe subscription.
 
+Aug 28 2026, the loose end that caveat left behind: `contract_auto_renew` was
+still `true` on the row, which is impossible without a live subscription. It
+showed auto-renew ON on her plan card, and it excluded her from the pre-term
+rollover nudge, so the term would have lapsed in Jul 2028 with no warning
+email at all. Cleared to `false` by
+`scripts/oneshot/clear-stale-contract-auto-renew.ts` (ledger row 247). Neither
+value is literally accurate for a canceled-sub term, but `false` produces the
+behaviour that matches reality: nothing auto-renews, and the nudge now fires
+in the 5-business-day window pointing at the "Start a new contract" CTA. The
+sweep itself was hardened in the same change so a `true` flag is verified
+against Stripe before it can suppress a nudge.
+
 Under-$500K sellers are AI-owned (Aug 12 2026):
 `amy-under-500k-ai-owned.ts`. Amy: "if the lead price is unknown or below
 $500,000 then the AI worker will own this follow up (unclaimed) until they

@@ -8,7 +8,9 @@ vi.mock("@/lib/supabase/server", () => ({
     throw new Error("default client must not be used in tests");
   })
 }));
+vi.mock("@/lib/stripe/client", () => ({ getStripe: vi.fn() }));
 
+import { getStripe } from "@/lib/stripe/client";
 import {
   claimContractTermNudge,
   isContractTermNudgeCandidate,
@@ -40,6 +42,7 @@ function candidate(overrides: Partial<ContractTermNudgeCandidate> = {}): Contrac
     cancel_at_period_end: false,
     billing_paused: false,
     contract_auto_renew: false,
+    stripe_subscription_id: "sub_live_1",
     renewal_at: RENEWAL_AT,
     stripe_current_period_start: PERIOD_START,
     stripe_current_period_end: PERIOD_END,
@@ -143,9 +146,13 @@ describe("isContractTermNudgeDue / candidate", () => {
     expect(shouldRetireContractTermNudgeCandidate(candidate({ tier: "enterprise" }), NOW)).toBe(
       true
     );
+    // contract_auto_renew deliberately does NOT retire. Retiring stamps
+    // contract_term_nudge_sent_at, which is permanent, and this flag is both
+    // owner-toggleable and unverifiable on a row whose Stripe subscription is
+    // canceled. Only conditions that can never reverse belong here.
     expect(
       shouldRetireContractTermNudgeCandidate(candidate({ contract_auto_renew: true }), NOW)
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldRetireContractTermNudgeCandidate(candidate({ billing_period: "monthly" }), NOW)
     ).toBe(true);
@@ -211,9 +218,11 @@ describe("claimContractTermNudge / sweep", () => {
     expect(result.sent).toBe(0);
   });
 
-  it("retires auto-renew-on rows from the scan index", async () => {
-    const row = candidate({ contract_auto_renew: true });
-    const { db } = makeDb({ select: { data: [row], error: null } });
+  it("retires a loaded row that can never send", async () => {
+    // The scan does not filter tier, so an enterprise term row still loads.
+    // It can never be nudged, so stamp it out of the partial index.
+    const row = candidate({ tier: "enterprise" });
+    const { db, updateEq } = makeDb({ select: { data: [row], error: null } });
     const sendEmail = vi.fn() as unknown as typeof sendOwnerEmail;
     const result = await sweepContractTermNudges({
       client: db,
@@ -223,6 +232,70 @@ describe("claimContractTermNudge / sweep", () => {
     });
     expect(result.sent).toBe(0);
     expect(result.skipped).toBe(1);
+    expect(updateEq).toHaveBeenCalledWith("id", SUB);
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("skips an auto-renew-on row whose Stripe subscription is still live", async () => {
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const sendEmail = vi.fn() as unknown as typeof sendOwnerEmail;
+    const result = await sweepContractTermNudges({
+      client: db,
+      sendEmail,
+      autoRenewIsLive: async () => true,
+      now: () => NOW,
+      resendApiKey: "re_test"
+    });
+    expect(result.sent).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("still nudges an auto-renew-on row whose Stripe subscription is canceled", async () => {
+    // Amy Laidlaw Real Estate: a failed-but-charged Hostinger order left the
+    // biennial contract running on a CANCELED Stripe subscription, with
+    // contract_auto_renew stuck true. Nothing can renew, so the owner must
+    // still get the one warning before the term lapses.
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const sendEmail = vi.fn(async () => "msg_1") as unknown as typeof sendOwnerEmail;
+    const getBusinessRow = vi.fn(async () =>
+      ({ id: BIZ, owner_email: "owner@example.com" }) as unknown as BusinessRow
+    );
+    const result = await sweepContractTermNudges({
+      client: db,
+      sendEmail,
+      getBusinessRow,
+      autoRenewIsLive: async () => false,
+      resolveLocale: (async () => "en") as unknown as typeof resolveOwnerUiLocaleForEmail,
+      now: () => NOW,
+      resendApiKey: "re_test"
+    });
+    expect(result.sent).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the row unstamped when the Stripe liveness probe throws", async () => {
+    // A Stripe outage must not burn the single nudge: record the error and
+    // let the next daily pass retry.
+    const row = candidate({ contract_auto_renew: true });
+    const { db, updateEq } = makeDb({ select: { data: [row], error: null } });
+    const sendEmail = vi.fn() as unknown as typeof sendOwnerEmail;
+    const result = await sweepContractTermNudges({
+      client: db,
+      sendEmail,
+      autoRenewIsLive: async () => {
+        throw new Error("stripe down");
+      },
+      now: () => NOW,
+      resendApiKey: "re_test"
+    });
+    expect(result.sent).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toBe("stripe down");
+    // Nothing was stamped: the claim update never ran.
+    expect(updateEq).not.toHaveBeenCalled();
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
@@ -381,5 +454,98 @@ describe("claimContractTermNudge / sweep", () => {
       resendApiKey: "re_test"
     });
     expect(result.errors).toEqual([{ subscriptionId: SUB, message: "row boom" }]);
+  });
+});
+
+describe("default Stripe liveness probe (no autoRenewIsLive injected)", () => {
+  // Exercises the REAL default wiring rather than a stand-in, so the branch
+  // that decides whether a contract can renew is covered by the code path
+  // production actually runs.
+  beforeEach(() => {
+    vi.mocked(getStripe).mockReset();
+  });
+
+  function sweepWithRealProbe(row: ContractTermNudgeCandidate, db: unknown) {
+    return sweepContractTermNudges({
+      client: db as never,
+      sendEmail: vi.fn(async () => "msg_1") as unknown as typeof sendOwnerEmail,
+      getBusinessRow: vi.fn(async () => ownerBiz) as unknown as typeof getBusiness,
+      resolveLocale: (async () => "en") as unknown as typeof resolveOwnerUiLocaleForEmail,
+      now: () => NOW,
+      resendApiKey: "re_test"
+    });
+  }
+
+  it("treats a row with no subscription id as unable to renew, without calling Stripe", async () => {
+    const row = candidate({ contract_auto_renew: true, stripe_subscription_id: null });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.sent).toBe(1);
+    expect(getStripe).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the nudge when Stripe reports the subscription live", async () => {
+    vi.mocked(getStripe).mockReturnValue({
+      subscriptions: { retrieve: vi.fn(async () => ({ status: "active" })) }
+    } as unknown as ReturnType<typeof getStripe>);
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.sent).toBe(0);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("still nudges when Stripe reports the subscription canceled", async () => {
+    vi.mocked(getStripe).mockReturnValue({
+      subscriptions: { retrieve: vi.fn(async () => ({ status: "canceled" })) }
+    } as unknown as ReturnType<typeof getStripe>);
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.sent).toBe(1);
+  });
+
+  it("still nudges when Stripe no longer has the subscription", async () => {
+    vi.mocked(getStripe).mockReturnValue({
+      subscriptions: {
+        retrieve: vi.fn(async () => {
+          throw new Error("No such subscription: sub_gone");
+        })
+      }
+    } as unknown as ReturnType<typeof getStripe>);
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.sent).toBe(1);
+  });
+
+  it("records a transport error and leaves the row unstamped", async () => {
+    vi.mocked(getStripe).mockReturnValue({
+      subscriptions: {
+        retrieve: vi.fn(async () => {
+          throw new Error("connection reset");
+        })
+      }
+    } as unknown as ReturnType<typeof getStripe>);
+    const row = candidate({ contract_auto_renew: true });
+    const { db, updateEq } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.sent).toBe(0);
+    expect(result.errors[0]?.message).toBe("connection reset");
+    expect(updateEq).not.toHaveBeenCalled();
+  });
+
+  it("records a non-Error rejection too", async () => {
+    vi.mocked(getStripe).mockReturnValue({
+      subscriptions: {
+        retrieve: vi.fn(async () => {
+          throw "boom";
+        })
+      }
+    } as unknown as ReturnType<typeof getStripe>);
+    const row = candidate({ contract_auto_renew: true });
+    const { db } = makeDb({ select: { data: [row], error: null } });
+    const result = await sweepWithRealProbe(row, db);
+    expect(result.errors[0]?.message).toBe("boom");
   });
 });
