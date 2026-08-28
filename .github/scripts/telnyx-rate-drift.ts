@@ -123,7 +123,10 @@ function main(): void {
     `  \`src/lib/plans/voice-zone-rates.generated.ts\` is the only per-prefix answer to`,
     `  "what changed?", because Telnyx does not publish one.`,
     `- Re-check the docblock's Zone 1 claim if the drift is large: it would mean traffic`,
-    `  has left the lower-48 baseline, which is a routing story, not a pricing one.`
+    `  has left the lower-48 baseline, which is a routing story, not a pricing one.`,
+    `- \`TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE\`'s docblock names "the 0.9 cents/min`,
+    `  voiceTelnyxCentsPerMinute above" in prose. This edit only moves the value, so that`,
+    `  sentence now cites a number that is no longer there. Update it in the same PR.`
   ].join("\n");
 
   console.log(`CHANGED: ${current} -> ${updated}`);
