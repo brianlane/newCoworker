@@ -129,4 +129,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Geist+Inter; restrained beats distinctive
 - [Fleet fallback-composition audit](project_fleet_fallback_composition_audit.md) - Aug 27: every finding FIXED same day (#1673 cadence, #1680 KYP gates/Clever Budget/HomeLight labels); sweep method inside
 - [Stripe period fields moved to items](project_stripe_period_moved_to_items.md) - Edge voice JIT reads only the dead top-level shape; term plans age out at 30d and get blocked
-- [Provision fail cancels the sub, keeps the payment](project_provision_fail_cancels_sub_keeps_payment.md) - Hostinger 402 canceled Amy's Stripe sub; $2,376 invoice still paid, local row still active
+- [Amy's term runs on a canceled Stripe sub BY DESIGN](project_provision_fail_cancels_sub_keeps_payment.md) - failed-but-charged recovery, documented; only contract_auto_renew=true lies

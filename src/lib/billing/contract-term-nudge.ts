@@ -5,11 +5,21 @@
  * Idempotence: `contract_term_nudge_sent_at` is stamped BEFORE the send, so
  * an overlapping tick or a crash mid-send can never double-email. Prefer a
  * missed nudge over a duplicate.
+ *
+ * `contract_auto_renew` is NOT taken at face value. A term row can legitimately
+ * point at a CANCELED Stripe subscription: when a Hostinger order fails-but-
+ * charges, the recovery adopts the already-paid box and keeps the canceled
+ * Stripe object, because the payment is real and only the object cannot renew
+ * (see docs/tenants/amy-laidlaw-real-estate.md). Such a contract cannot
+ * auto-renew whatever the flag says, and trusting the flag silently denied the
+ * owner the one warning they get before the term lapses. So a `true` flag is
+ * verified against Stripe before it suppresses the nudge.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { isCommitmentElapsed } from "@/lib/db/subscriptions";
+import { getStripe } from "@/lib/stripe/client";
 import { subtractBusinessDays } from "@/lib/datetime/business-days";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildContractTermNudgeEmail } from "@/lib/email/templates/contract-term-nudge";
@@ -37,6 +47,7 @@ export type ContractTermNudgeCandidate = {
   cancel_at_period_end: boolean;
   billing_paused: boolean;
   contract_auto_renew: boolean;
+  stripe_subscription_id: string | null;
   renewal_at: string | null;
   stripe_current_period_start: string | null;
   stripe_current_period_end: string | null;
@@ -45,7 +56,8 @@ export type ContractTermNudgeCandidate = {
 
 const COLUMNS =
   "id,business_id,tier,status,billing_period,cancel_at_period_end,billing_paused," +
-  "contract_auto_renew,renewal_at,stripe_current_period_start,stripe_current_period_end," +
+  "contract_auto_renew,stripe_subscription_id,renewal_at," +
+  "stripe_current_period_start,stripe_current_period_end," +
   "contract_term_nudge_sent_at";
 
 export type ContractTermNudgeSweepDeps = {
@@ -56,6 +68,11 @@ export type ContractTermNudgeSweepDeps = {
   now?: () => Date;
   siteUrl?: string;
   resendApiKey?: string | null;
+  /**
+   * Resolves whether a `contract_auto_renew: true` row can actually renew,
+   * i.e. whether its Stripe subscription is still live. Injected in tests.
+   */
+  autoRenewIsLive?: (stripeSubscriptionId: string | null) => Promise<boolean>;
 };
 
 export type ContractTermNudgeSweepResult = {
@@ -82,7 +99,6 @@ export function shouldRetireContractTermNudgeCandidate(
 ): boolean {
   if (row.tier !== "starter" && row.tier !== "standard") return true;
   if (!isTermPeriod(row.billing_period)) return true;
-  if (row.contract_auto_renew) return true;
   if (isCommitmentElapsed(row, now)) return true;
   return false;
 }
@@ -99,11 +115,17 @@ export function isContractTermNudgeDue(periodEndAt: string, now: Date): boolean 
 
 export function isContractTermNudgeCandidate(
   row: ContractTermNudgeCandidate,
-  now: Date
+  now: Date,
+  /**
+   * Whether this contract will REALLY auto-renew. Defaults to the stored flag;
+   * the sweep passes a Stripe-verified value so a flag left `true` on a row
+   * whose subscription is canceled cannot suppress the nudge.
+   */
+  effectiveAutoRenew: boolean = row.contract_auto_renew
 ): boolean {
   if (!isTermPeriod(row.billing_period)) return false;
   if (row.status !== "active") return false;
-  if (row.contract_auto_renew) return false;
+  if (effectiveAutoRenew) return false;
   if (row.cancel_at_period_end) return false;
   if (row.billing_paused) return false;
   if (row.contract_term_nudge_sent_at) return false;
@@ -124,7 +146,6 @@ async function loadCandidates(
     .select(COLUMNS)
     .in("billing_period", ["annual", "biennial"])
     .eq("status", "active")
-    .eq("contract_auto_renew", false)
     .is("contract_term_nudge_sent_at", null)
     .gt("stripe_current_period_end", nowIso)
     .lte("stripe_current_period_end", scanEnd.toISOString())
@@ -153,6 +174,31 @@ export async function claimContractTermNudge(
   return data !== null;
 }
 
+/**
+ * Can this contract actually auto-renew? Only if its Stripe subscription is
+ * still live. A row with no subscription id, a subscription Stripe no longer
+ * has, or a canceled one cannot renew, so its `contract_auto_renew: true` is
+ * stale bookkeeping rather than a live instruction.
+ *
+ * Throws on a Stripe transport error rather than guessing: the caller records
+ * it and leaves the row unstamped so the next daily pass retries, which keeps
+ * a Stripe outage from either sending a wrong email or burning the one nudge.
+ */
+export async function autoRenewIsLiveInStripe(
+  stripeSubscriptionId: string | null
+): Promise<boolean> {
+  if (!stripeSubscriptionId) return false;
+  const stripe = getStripe();
+  try {
+    const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+    return sub.status !== "canceled";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/No such subscription|resource_missing/i.test(message)) return false;
+    throw err;
+  }
+}
+
 export async function sweepContractTermNudges(
   deps: ContractTermNudgeSweepDeps = {}
 ): Promise<ContractTermNudgeSweepResult> {
@@ -161,6 +207,7 @@ export async function sweepContractTermNudges(
   const send = deps.sendEmail ?? sendOwnerEmail;
   const resolveLocale = deps.resolveLocale ?? resolveOwnerUiLocaleForEmail;
   const getBusinessRow = deps.getBusinessRow ?? getBusiness;
+  const autoRenewIsLive = deps.autoRenewIsLive ?? autoRenewIsLiveInStripe;
   /* c8 ignore stop */
   const now = (deps.now ?? (() => new Date()))();
   const siteUrl = (deps.siteUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(
@@ -190,10 +237,20 @@ export async function sweepContractTermNudges(
 
   for (const row of rows) {
     try {
-      if (!isContractTermNudgeCandidate(row, now)) {
+      // Check every condition EXCEPT auto-renew first, so the Stripe probe
+      // below runs only for rows that would otherwise be emailed today.
+      if (!isContractTermNudgeCandidate(row, now, false)) {
         if (shouldRetireContractTermNudgeCandidate(row, now)) {
           await claimContractTermNudge(db, row.id, now);
         }
+        result.skipped += 1;
+        continue;
+      }
+
+      // The flag suppresses the nudge only when Stripe agrees the
+      // subscription can still renew. A throw here lands in the catch below:
+      // the row is recorded as an error and left unstamped for the next pass.
+      if (row.contract_auto_renew && (await autoRenewIsLive(row.stripe_subscription_id))) {
         result.skipped += 1;
         continue;
       }
