@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: f92ec33f-e800-4569-9e1b-d63077b2e8c1
-  modified: 2026-08-24T21:24:49.442Z
+  modified: 2026-08-27T19:28:54.095Z
 ---
 
 ## project_amy_seller_call_policy
@@ -165,6 +165,26 @@ See [[project_booking_alert_audience]].
 - `route_to_team` checks `activeContactOwner` unconditionally before offering
   and assigns straight to the owner, so a cadence surviving a claim does not
   re-offer an owned lead to the roster.
+
+**The site is TWO vars since Aug 27 2026 (PR #1673, applied same day).**
+Spoken surfaces (persona, round-1 voicemail/SMS) read `lead_site_ref` ("your
+enquiry through Clever", fallback "your recent enquiry"); team surfaces
+(contextTemplate, FOLLOW-UP REPLY, promote offer, owner fallback) read
+`lead_site` (bare network name, fallback "unknown"). One var could not serve
+both audiences: the one-var fallback composed "your enquiry through your
+recent enquiry about your move in the area", spoken verbatim on call
+68ca8cdb (Sandy Baldwin, Aug 26). Fallbacks are the COMMON case, not the
+edge: lead_city fell back on 14 of 14 in-flight runs that day. A template
+edit that adds a var needs `amy-heal-parked-cadence-lead-site.ts` applied
+BEFORE the re-seed (seeds the var on parked runs, filling a fallen-back site
+from `contacts.lead_source`, CAS on revision; all 12 parked runs healed Aug
+27). The composition test renders every template against the full fallback
+scope; keep 602-695-1142 in separated 3-3-4 form or the call-integrity
+allowlist (#1671) reads the AI speaking it as invented. The builder header's
+old claim that voicemail skips collapseEmpty was FALSE (steps.ts renders
+persona, context, voicemail and SMS all with collapseEmpty); non-empty
+fallbacks stay for route_to_team templates (no collapse) and `when` guards
+(no emptiness test).
 
 Related: [[project_amy_under_500k_gate]],
 [[project_late_claim_path_has_no_name_matching]], [[project_amy_seller_call_policy]].

@@ -1,11 +1,11 @@
 ---
 name: edge-admin-alert-email-stale
-description: "Supabase EDGE secrets carry stale alert recipients: ADMIN_EMAIL=brianlane2@gmail.com (personal), CONTACT_EMAIL=newcoworkerteam@gmail.com, no ADMIN_ALERT_EMAIL; first-ever Edge admin alert (call-integrity sweep, 2026-08-27) exposed it"
+description: "Edge admin-alert email WAS stale (personal gmail, no ADMIN_ALERT_EMAIL); FIXED Aug 27 2026 after the first-ever call-integrity sweep send; Vercel env and Edge secrets are separate stores"
 metadata: 
   node_type: memory
   type: project
   originSessionId: 43b142fd-d438-406b-9852-7437b5d25781
-  modified: 2026-08-27T16:09:44.166Z
+  modified: 2026-08-27T18:39:44.434Z
 ---
 
 Found 2026-08-27 when the call-integrity sweep's first-ever alert email
@@ -38,15 +38,16 @@ chat-spend-velocity alerts, voice-capacity alerts, plus the per-business
 LAST-RESORT recipient in `notifications` (fallbackEmail) and
 `notifications-digest` (adminEmail) when a business has no owner email.
 
-**Safe to fix:** in the Edge environment `ADMIN_EMAIL` is used ONLY as a
-recipient/fallback, never for auth (admin login gating on ADMIN_EMAIL is
-app-side Vercel env, a different store). Fix is
-`supabase link --project-ref glwmorjxzkzpcfffwvkk` then
-`supabase secrets set ADMIN_EMAIL=newcoworkerteam@gmail.com` (and ideally
-`ADMIN_ALERT_EMAIL` explicitly, plus realign `CONTACT_EMAIL` to
-contact@newcoworker.com, which today only changes reply-to headers since
-the Cloudflare catch-all forwards to the team Gmail anyway, see
-[[project_email_routing_catchall_is_the_product]]).
+**FIXED 2026-08-27** (safe because in the Edge environment `ADMIN_EMAIL` is
+used ONLY as a recipient/fallback, never for auth; admin login gating on
+ADMIN_EMAIL is app-side Vercel env, a different store): `supabase secrets
+set` now holds `ADMIN_EMAIL=newcoworkerteam@gmail.com`,
+`ADMIN_ALERT_EMAIL=newcoworkerteam@gmail.com` (explicit), and
+`CONTACT_EMAIL=contact@newcoworker.com` (reply-to realignment only, the
+Cloudflare catch-all forwards it to the team Gmail anyway, see
+[[project_email_routing_catchall_is_the_product]]). Verified by digest
+match and by a live sweep send the same day reporting `alert: "sent"` with
+the new values in effect.
 
 **How to apply:** when an alert path "has always worked", check whether it
 has ever actually FIRED before trusting its configuration; and when adding

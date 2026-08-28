@@ -7,7 +7,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
 - [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD
 - [Migration heal traps](project_migration_heal_traps.md) - restamps ship zero-byte files or rename APPLIED DDL; wc -c first
-- [Browser pane vs real Chrome for console work](feedback_browser_pane_console_work.md) - hidden pane = 0x0, input drops; form_input/JS
+- [Browser pane vs real Chrome for console work](feedback_browser_pane_console_work.md) - hidden pane = 0x0, input drops, screenshots freeze; layout APIs live; headless-shell CLI + sips
 - [Heredoc bodies via files](feedback_heredoc_file_flag.md) - inline heredocs mangle; git commit -F and gh --body-file
 - [Signed-in smoke recipe](project_signed_in_smoke_recipe.md) - TEST_USERNAME/PASSWORD stale; service-role throwaway user + authenticated curl
 - [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp; cost includes carrier fee
@@ -31,7 +31,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
 - [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units since #1189; seed both usage columns in tests
 - [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432
-- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; Aug 23 fields ask unimplemented
+- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented
 - [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
 - [SMS send logging split](project_sms_send_logging_split.md) - replies live in sms_inbound_jobs.assistant_reply_text, NOT sms_outbound_log
@@ -116,8 +116,9 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Undoing a claim needs ownership cleared](project_undoing_a_claim_needs_ownership_cleared.md) - clear contacts.owner_employee_id first, alias-aware
 - [Owner asks that reach the flows](project_owner_ask_reaches_the_flows.md) - memory NEVER reaches AiFlows; owner SMS runs on the platform engine
 - [WhatsApp delivery truth](project_whatsapp_delivery_truth.md) - ok = ACCEPTED not delivered; receipts since #1609; KYP blocked by billing 131042
-- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - #1612 NOT holding (Aug 27); AMD events mostly absent; voicemail_left overstates
-- [Edge admin-alert email is stale](project_edge_admin_alert_email_stale.md) - Edge ADMIN_EMAIL is the personal gmail, no ADMIN_ALERT_EMAIL; recipient-only, safe to reset
+- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - #1612 prompt fix failed; sweep detects invented numbers since #1671; voicemail_left honesty #1672; AMD events collapsed Aug 25
+- [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25 platform-side; #1674 sweep forces resolution at 25s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
+- [Edge admin-alert email was stale](project_edge_admin_alert_email_stale.md) - FIXED Aug 27; Edge secrets held the personal gmail; recipient-only, digests verify by sha256
 - [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; provider_message_id NOT unique
 - [A truncated page is not uniqueness](feedback_truncated_page_is_not_uniqueness.md) - a post-query filter hides a real second match; test in SQL
 - [Score prompt changes against outcomes](feedback_score_prompt_changes_against_outcomes.md) - grade N runs per arm on cases with known real outcomes
@@ -125,3 +126,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Owner surface registry](project_owner_surface_registry.md) - a surface = 1 registry entry; speaker fails CLOSED, staff mode fails OPEN
 - [c8 ignore fails on awaited defaults](feedback_c8_ignore_fails_on_awaited_default.md) - `?? (await createServiceClient())` stays uncovered; mock the module
 - [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Geist+Inter; restrained beats distinctive
+- [Fleet fallback-composition audit](project_fleet_fallback_composition_audit.md) - Aug 27: every finding FIXED same day (#1673 cadence, #1680 KYP gates/Clever Budget/HomeLight labels); sweep method inside
