@@ -82,6 +82,21 @@ export function refIsStaleSpelling(ref: string): boolean {
   return /enquir/i.test(ref);
 }
 
+/**
+ * Whether `lead_site` holds the spoken fallback PHRASE rather than a real
+ * network name. The pre-fix extraction wrote that phrase straight into
+ * `lead_site`, which is the bug the two-var split fixed.
+ *
+ * Both spellings have to match. heal-inquiry-spelling.ts rewrote the stored
+ * British sentinel to the American one, so a check against OLD_SITE_FALLBACK
+ * alone would let "your recent inquiry" through as if it were a network, and
+ * the ref would recompose as "your inquiry through your recent inquiry": the
+ * exact spoken gibberish the site split exists to stop, just respelled.
+ */
+export function isFallbackSitePhrase(site: string): boolean {
+  return site === OLD_SITE_FALLBACK || site === UNKNOWN_SITE_REF;
+}
+
 export type SiteHealDecision =
   /** Write these values; `changed` names which of the two vars moved. */
   | { outcome: "set"; site: string; ref: string; changed: Array<"lead_site" | "lead_site_ref"> }
@@ -106,7 +121,7 @@ export function decideSiteHeal(
   // The run's own extraction wins when it produced a real site; the contact
   // row fills in only where the extraction fell back.
   const runKnows =
-    currentSite !== "" && currentSite !== OLD_SITE_FALLBACK && currentSite !== UNKNOWN_SITE;
+    currentSite !== "" && !isFallbackSitePhrase(currentSite) && currentSite !== UNKNOWN_SITE;
   const site = runKnows ? currentSite : (truth ?? UNKNOWN_SITE);
   // A ref that already names a site is kept; the bare fallback ref, and any
   // ref still spelled the British way, is recomposed from the site above.

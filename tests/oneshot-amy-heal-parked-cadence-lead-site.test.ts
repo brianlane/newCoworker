@@ -14,6 +14,7 @@ import {
   UNKNOWN_SITE,
   UNKNOWN_SITE_REF,
   decideSiteHeal,
+  isFallbackSitePhrase,
   refIsStaleSpelling,
   siteRefFor
 } from "../scripts/oneshot/amy-heal-parked-cadence-lead-site";
@@ -136,6 +137,45 @@ describe("the constants the templates lean on", () => {
     expect(UNKNOWN_SITE_REF).toBe("your recent inquiry");
     expect(UNKNOWN_SITE_REF).not.toBe(OLD_SITE_FALLBACK);
     expect(OLD_SITE_FALLBACK.replace(/enquir/g, "inquir")).toBe(UNKNOWN_SITE_REF);
+  });
+
+  it("recognizes the fallback PHRASE in lead_site in either spelling", () => {
+    // The pre-fix extraction wrote the spoken phrase into lead_site. Then
+    // heal-inquiry-spelling.ts respelled the stored sentinel, so matching the
+    // British form alone would let the American one pass as a network name.
+    expect(isFallbackSitePhrase(OLD_SITE_FALLBACK)).toBe(true);
+    expect(isFallbackSitePhrase(UNKNOWN_SITE_REF)).toBe(true);
+    // Real networks and the team-facing sentinel are not the phrase.
+    for (const real of ["Clever", "ReferralExchange", UNKNOWN_SITE, ""]) {
+      expect(isFallbackSitePhrase(real)).toBe(false);
+    }
+  });
+
+  it("never recomposes the fallback phrase into itself", () => {
+    // The regression Bugbot caught: with lead_site holding the RESPELLED
+    // sentinel, a site-side matcher that only knew the British form treated
+    // it as a network and composed "your inquiry through your recent
+    // inquiry", the same spoken gibberish as call 68ca8cdb, just respelled.
+    for (const sentinel of [OLD_SITE_FALLBACK, UNKNOWN_SITE_REF]) {
+      const fromContact = decideSiteHeal({ lead_site: sentinel }, "Clever");
+      expect(fromContact).toEqual({
+        outcome: "set",
+        site: "Clever",
+        ref: "your inquiry through Clever",
+        changed: ["lead_site", "lead_site_ref"]
+      });
+      // ...and with nothing on the contact row either, it falls back cleanly
+      // instead of naming itself.
+      const blind = decideSiteHeal({ lead_site: sentinel }, null);
+      expect(blind).toEqual({
+        outcome: "set",
+        site: UNKNOWN_SITE,
+        ref: UNKNOWN_SITE_REF,
+        changed: ["lead_site", "lead_site_ref"]
+      });
+      if (blind.outcome !== "set") continue;
+      expect(blind.ref).not.toContain("through your recent");
+    }
   });
 
   it("nothing the healer writes carries the British spelling", () => {
