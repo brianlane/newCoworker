@@ -266,9 +266,21 @@ export function intakeSystemInstruction(
       // are exactly where a short scripted message beats silence, so the
       // message is given HERE, with none of the briefing's lead details in
       // it (the recording ban on details still applies).
-      INBOUND_VOICEMAIL_RECOGNITION_LINE,
-      inboundVoicemailMessageLine(businessName, hasEndCall)
+      INBOUND_VOICEMAIL_RECOGNITION_LINE
     );
+    // The direct read is the FALLBACK, not the default, and it ships only
+    // where the tool cannot. It is a complete procedure that never reports
+    // the recording ("leave EXACTLY this one message ... then end the call"),
+    // and it lands earlier in the prompt than the tool rule, so keeping both
+    // leaves the model the same unstamped path it actually took on Aug 24 and
+    // Aug 28: message delivered, session never marked as a machine, owner
+    // alerted that a lead was captured. With the tool present the same text
+    // comes back from `voicemail_reached` instead, so nothing is lost from
+    // what the model is told to say, only from how it gets there (Bugbot,
+    // PR #1716).
+    if (!hasVoicemailTool) {
+      lines.push(inboundVoicemailMessageLine(businessName, hasEndCall));
+    }
   }
   // Calls WE place can be answered by Apple's call screening (the dial runs
   // premium_ios_call_screening_detection, so the platform knows too). The

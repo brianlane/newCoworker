@@ -1555,9 +1555,16 @@ function main(): void {
        * claim below sets `voicemail_claimed`, which drops it from the sweep's
        * query outright.
        */
-      const transferVoicemailScript = intake?.ivrGate ? inboundVoicemailScript(businessName) : "";
+      // Matched to the bridge's own `ivrGate`, which is `opts.dtmf &&
+      // intake.ivrGate`, so the tool can never ship on a session whose gate
+      // the bridge does not see: that pairing would arm `voicemail_reached`
+      // with BOTH the partner-menu carve-out and the pre-accept refusal
+      // switched off, which is the one combination that can end a referral
+      // mid-menu. `dtmf` is built from the same key, further down.
+      const transferGated = Boolean(hangupApiKey) && Boolean(intake?.ivrGate);
+      const transferVoicemailScript = transferGated ? inboundVoicemailScript(businessName) : "";
       const voicemail: VoicemailCapability | undefined =
-        callDirection === "outbound" || intake?.ivrGate
+        callDirection === "outbound" || transferGated
           ? {
               execute: async () => {
                 const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {

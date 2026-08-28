@@ -902,6 +902,28 @@ describe("intakeSystemInstruction: the partner menu is not a mailbox", () => {
     expect(gated).toContain(TRANSFER_PARTNER_MENU_LINE);
   });
 
+  /**
+   * The tool REPLACES the direct read, it does not sit beside it.
+   *
+   * `inboundVoicemailMessageLine` is a complete procedure that never reports
+   * the recording (leave the message, then end the call) and it lands earlier
+   * in the prompt than the tool rule. Shipping both leaves the model exactly
+   * the unstamped path it took on Aug 24 and Aug 28: message delivered,
+   * session never marked as a machine, owner alerted that a lead was
+   * captured. Recognition stays; only the bypass goes.
+   */
+  it("drops the direct-read procedure once the tool can carry the verdict", () => {
+    expect(gated).toContain(INBOUND_VOICEMAIL_RECOGNITION_LINE);
+    expect(gated).not.toContain("leave EXACTLY this one message");
+    expect(gated).toContain("`voicemail_reached`");
+  });
+
+  it("keeps the direct read where no tool can exist", () => {
+    const noTool = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true);
+    expect(noTool).toContain("leave EXACTLY this one message");
+    expect(noTool).not.toContain("`voicemail_reached`");
+  });
+
   it("bounds the exception by the keypress, not by the menu's wording", () => {
     // Partners reword their menus; "before the keypress" and "after it" hold.
     expect(TRANSFER_PARTNER_MENU_LINE).toContain("Until you have pressed the accept digit");
