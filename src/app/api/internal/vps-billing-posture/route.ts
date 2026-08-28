@@ -23,7 +23,7 @@ import {
   retireLapsedPoolVps
 } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
-import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
+import { checkVpsBillingPosture, warrantsOpsEmail } from "@/lib/vps/billing-posture";
 import { listHostingerBillingTerms } from "@/lib/db/hostinger-billing-terms";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
 
@@ -77,7 +77,15 @@ async function runSweep(request: Request): Promise<Response> {
       listBillingTerms: () => listHostingerBillingTerms()
     });
 
-    if (result.findings.length > 0) {
+    // Send on anything that is not routine-once-healed, but send the WHOLE
+    // finding list when we do: the reaped pool boxes are useful context next
+    // to a real finding, they just are not a reason to write on their own.
+    // A run whose only finding is "the pool reaper did its job" is a
+    // non-problem, and an ops email that reports non-problems is one nobody
+    // reads on the day it is right. Suppressed runs still log below and still
+    // come back in this route's JSON, so nothing is lost, it is just not mail.
+    const emailWorthy = result.findings.filter(warrantsOpsEmail);
+    if (emailWorthy.length > 0) {
       await sendOpsBillingPostureEmail({
         findings: result.findings,
         checkedTenantVms: result.checkedTenantVms,
@@ -90,6 +98,7 @@ async function runSweep(request: Request): Promise<Response> {
       checkedPoolBoxes: result.checkedPoolBoxes,
       findings: result.findings.length,
       autoHealed: result.findings.filter((f) => f.autoHealed).length,
+      emailed: emailWorthy.length > 0,
       expiresRefreshed
     });
 

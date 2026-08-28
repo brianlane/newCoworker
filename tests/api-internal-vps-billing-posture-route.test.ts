@@ -21,7 +21,8 @@ vi.mock("@/lib/hostinger/client", () => ({
     enableBillingAutoRenewal = vi.fn();
   }
 }));
-vi.mock("@/lib/vps/billing-posture", () => ({
+vi.mock("@/lib/vps/billing-posture", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/vps/billing-posture")>()),
   checkVpsBillingPosture: vi.fn()
 }));
 vi.mock("@/lib/email/ops-notify", () => ({
@@ -102,6 +103,99 @@ describe("api/internal/vps-billing-posture route", () => {
       findings,
       checkedTenantVms: 3,
       checkedPoolBoxes: 0
+    });
+  });
+
+  // The pool reaper doing its ordinary job is not news: a box nobody was using
+  // reached the end of a period it was already paid through, and the check
+  // retired its row. Mailing that trains the operator to skim the digest that
+  // matters. KIN's old box 1864812 was about to generate exactly this, Aug 2026.
+  it("stays quiet when the only finding is a pool box the reaper already retired", async () => {
+    vi.mocked(checkVpsBillingPosture).mockResolvedValue({
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1,
+      findings: [
+        {
+          kind: "pool_box_lapsed_retired",
+          vmId: 1864812,
+          businessId: null,
+          businessName: null,
+          hostingerBillingSubscriptionId: "AzysZ0VQl6mkfw7i",
+          expiresAt: "2026-08-29T11:01:01Z",
+          autoHealed: true,
+          detail: "pooled box lapsed; its vps_inventory row was retired"
+        }
+      ]
+    } as never);
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(sendOpsBillingPostureEmail).not.toHaveBeenCalled();
+    // Suppressed from mail, NOT from the record: the route still reports it.
+    const json = await res.json();
+    expect(json.data.findings).toHaveLength(1);
+  });
+
+  // Same kind, but the retire FAILED, so the row still reads `available` and
+  // overstates the pool. That is why the gate keys on autoHealed, not on kind.
+  it("emails when a lapsed pool box could NOT be retired", async () => {
+    vi.mocked(checkVpsBillingPosture).mockResolvedValue({
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1,
+      findings: [
+        {
+          kind: "pool_box_lapsed_retired",
+          vmId: 1864812,
+          businessId: null,
+          businessName: null,
+          hostingerBillingSubscriptionId: "AzysZ0VQl6mkfw7i",
+          expiresAt: "2026-08-29T11:01:01Z",
+          autoHealed: false,
+          detail: "retiring its vps_inventory row FAILED, retire it by hand"
+        }
+      ]
+    } as never);
+
+    const res = await POST(makeRequest());
+    expect(sendOpsBillingPostureEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes the routine reaped boxes in the email when something else earns it", async () => {
+    const findings = [
+      {
+        kind: "pool_box_lapsed_retired",
+        vmId: 1864812,
+        businessId: null,
+        businessName: null,
+        hostingerBillingSubscriptionId: "AzysZ0VQl6mkfw7i",
+        expiresAt: "2026-08-29T11:01:01Z",
+        autoHealed: true,
+        detail: "pooled box lapsed; its vps_inventory row was retired"
+      },
+      {
+        kind: "untracked_vm",
+        vmId: 1936826,
+        businessId: null,
+        businessName: null,
+        hostingerBillingSubscriptionId: "Azyp34VTaWZDIBG8",
+        expiresAt: null,
+        autoHealed: false,
+        detail: "absent from vps_inventory and no business points at it"
+      }
+    ];
+    vi.mocked(checkVpsBillingPosture).mockResolvedValue({
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1,
+      findings
+    } as never);
+
+    await POST(makeRequest());
+    // The whole list, not just the earning finding: a reaped box is useful
+    // context next to a real one, it just is not a reason to write alone.
+    expect(sendOpsBillingPostureEmail).toHaveBeenCalledWith({
+      findings,
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1
     });
   });
 
