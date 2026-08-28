@@ -16,13 +16,20 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   applyEmailDeliveryStatus,
   applyEmailDeliveryStatusByRecipient,
-  EMAIL_RECEIPT_RECIPIENT_WINDOW_MS,
   emailDeliveryOutranks,
   EMAIL_DELIVERY_FAILURES,
   isEmailDeliveryFailure,
   resendEventToStatus,
   type EmailDeliveryStatus
 } from "@/lib/email/delivery";
+
+/**
+ * Pins the module-private fallback window as a LITERAL: Resend retries a
+ * transiently-refused message for up to 72 hours before reporting the
+ * bounce, so the window must stay comfortably above that. Asserting against
+ * the exported constant would be a tautology.
+ */
+const RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
 
 type Chain = {
   select: ReturnType<typeof vi.fn>;
@@ -331,9 +338,9 @@ describe("applyEmailDeliveryStatusByRecipient", () => {
     const cutoff = read.gte.mock.calls[0] as [string, string];
     expect(cutoff[0]).toBe("created_at");
     expect(Date.parse(cutoff[1])).toBeGreaterThanOrEqual(
-      before - EMAIL_RECEIPT_RECIPIENT_WINDOW_MS
+      before - RECIPIENT_WINDOW_MS
     );
-    expect(Date.parse(cutoff[1])).toBeLessThanOrEqual(Date.now() - EMAIL_RECEIPT_RECIPIENT_WINDOW_MS);
+    expect(Date.parse(cutoff[1])).toBeLessThanOrEqual(Date.now() - RECIPIENT_WINDOW_MS);
     expect(write.update).toHaveBeenCalledWith(
       expect.objectContaining({
         delivery_status: "bounced",

@@ -259,7 +259,7 @@ export async function applyEmailDeliveryStatus(
  * the same pair (a re-sent pitch, a recurring report) is likelier to be a
  * different message the further back it sits.
  */
-export const EMAIL_RECEIPT_RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
+const EMAIL_RECEIPT_RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
 
 /** Escape `%`, `_`, and `\` so an address is an exact ILIKE match, not a pattern. */
 function escapeIlike(value: string): string {
