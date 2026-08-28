@@ -79,36 +79,59 @@ type BouncePayload = {
   errorMessage?: string;
 };
 
-// 1) The evidence: delivery-failure receipts since the window opened.
-const { data: logRows, error: logErr } = await db
-  .from("system_logs")
-  .select("created_at, event, payload")
-  .eq("source", "email")
-  .in("event", ["email_delivery_failed", "email_delivery_failed_unattributed"])
-  .gte("created_at", SINCE)
-  .order("created_at", { ascending: true })
-  .limit(500);
-if (logErr) {
-  console.error(`read system_logs: ${logErr.message}`);
-  process.exit(1);
+// 1) The evidence: delivery-failure receipts since the window opened. PAGED,
+//    not capped: the webhook now logs an attributed `email_delivery_failed`
+//    for EVERY failed message on the account, so a single `.limit()` over a
+//    busy window would read the OLDEST rows and silently drop the newest
+//    receipts (PostgREST truncates without an error), which is exactly the
+//    half a re-run needs (Bugbot, PR #1695).
+const PAGE = 500;
+type LogRow = { created_at: string; payload: unknown };
+const logRows: LogRow[] = [];
+for (let from = 0; ; from += PAGE) {
+  const { data: page, error: logErr } = await db
+    .from("system_logs")
+    .select("created_at, event, payload")
+    .eq("source", "email")
+    .in("event", ["email_delivery_failed", "email_delivery_failed_unattributed"])
+    .gte("created_at", SINCE)
+    .order("created_at", { ascending: true })
+    .range(from, from + PAGE - 1);
+  if (logErr) {
+    console.error(`read system_logs: ${logErr.message}`);
+    process.exit(1);
+  }
+  const batch = (page ?? []) as LogRow[];
+  logRows.push(...batch);
+  if (batch.length < PAGE) break;
 }
 
-/** Newest failure receipt per recipient (lowercased address). */
-const bounces = new Map<string, { subject: string | null; detail: string; at: string }>();
-for (const row of logRows ?? []) {
+type BounceReceipt = { subject: string | null; detail: string; at: string };
+
+/**
+ * EVERY failure receipt per recipient (lowercased address), oldest first.
+ * All of them are kept rather than the newest only: the same address can
+ * bounce again later under a different subject (an owner alert, a campaign),
+ * and letting that receipt replace the pitch's would make the pitch look
+ * unmatched and leave the prospect in the nudge queue (Bugbot, PR #1695).
+ */
+const bounces = new Map<string, BounceReceipt[]>();
+for (const row of logRows) {
   const p = (row.payload ?? {}) as BouncePayload;
   const to = p.to?.trim().toLowerCase();
   if (!to) continue;
   // Bounced/failed only: a `complained` recipient received the mail, and
   // whether to keep talking to them is an owner decision, not a data repair.
   if (p.status !== "bounced" && p.status !== "failed") continue;
-  bounces.set(to, {
+  const list = bounces.get(to) ?? [];
+  list.push({
     subject: p.subject?.trim() || null,
     detail: `${p.status}${p.errorCode ? ` (${p.errorCode})` : ""}${
       p.errorMessage ? `: ${p.errorMessage}` : ""
     }`.slice(0, 260),
     at: String(row.created_at)
   });
+  bounces.set(to, list);
 }
 
 console.log(
@@ -126,7 +149,7 @@ let alreadyRetired = 0;
 let skipped = 0;
 const touched: Record<string, unknown>[] = [];
 
-for (const [to, bounce] of bounces) {
+for (const [to, receipts] of bounces) {
   // 2) The prospects that pitched this address, any status, so the report can
   //    say "already retired" instead of silently finding nothing on a re-run.
   let query = db
@@ -145,10 +168,18 @@ for (const [to, bounce] of bounces) {
 
   for (const prospect of prospects) {
     const label = `${prospect.domain}  (${prospect.business_name}, ${to})`;
-    // A receipt that names a subject must name THIS pitch. First pitch and
-    // nudge share the subject by design, so this stays one comparison.
-    if (bounce.subject && prospect.pitch_subject && bounce.subject !== prospect.pitch_subject) {
-      console.log(`  SKIP ${label}: bounce subject does not match the pitch subject`);
+    // The newest receipt that could be about THIS pitch: a receipt naming a
+    // subject must name the pitch's (first pitch and nudge share it by
+    // design), and a subjectless receipt matches anything. Searched newest
+    // first across ALL of the address's receipts, so an unrelated later
+    // bounce to the same address cannot shadow the one that matches.
+    const bounce = [...receipts]
+      .reverse()
+      .find(
+        (r) => !r.subject || !prospect.pitch_subject || r.subject === prospect.pitch_subject
+      );
+    if (!bounce) {
+      console.log(`  SKIP ${label}: no bounce receipt matches the pitch subject`);
       skipped++;
       continue;
     }
