@@ -17,14 +17,13 @@
  *
  *   - was created recently (default: within the last 30 minutes, old strays
  *     like retired experiments must never get auto-pooled), AND
- *   - carries the fail-but-charge signature: Hostinger `state === "initial"`
- *     with NO template applied. When the purchase call fails, the embedded
- *     setup payload is never applied, so the box sits in `initial` with
- *     `template: null` (observed on VMs 1806114 and 1815606). A healthy
- *     concurrent purchase's box has its template from the setup payload and
- *     moves to installing/running, and a `running` tenant box whose
- *     post-purchase pool bookkeeping failed (bookkeeping is best-effort)
- *     must NEVER be pooled out from under its business, AND
+ *   - carries an orphan signature (see {@link carriesOrphanSignature}):
+ *     either never set up (`initial` with no template, the purchase errored
+ *     before the embedded setup payload ran) or set up wearing THIS
+ *     business's own purchase hostname (the purchase succeeded and we failed
+ *     after it). A `running` box belonging to anyone else is never pooled,
+ *     because a tenant box whose post-purchase bookkeeping failed must not be
+ *     taken out from under its business, AND
  *   - has a recognizable KVM plan (kvm1/kvm2/kvm4/kvm8), AND
  *   - is not already tracked in `vps_inventory` (any state, a `retired` row
  *     means the box was deliberately pulled and must stay out).
@@ -42,6 +41,7 @@ import { logger } from "@/lib/logger";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { releaseVpsToPool } from "@/lib/db/vps-inventory";
+import { defaultPurchaseHostname } from "@/lib/hostinger/provision";
 import type { VpsSize } from "@/lib/vps/size";
 
 /** A box that was found orphaned upstream and returned to the adopt pool. */
@@ -90,6 +90,44 @@ export function normalizeHostingerPlan(plan: string | undefined | null): VpsSize
 }
 
 /**
+ * States a box bought seconds ago can legitimately be in. A `stopped`,
+ * `suspended`, `destroyed`, or `error` box wearing our hostname is a leftover
+ * from some earlier life, not the box this purchase just paid for, so it goes
+ * to the daily sweep's human report rather than into the pool.
+ */
+const LIVE_PURCHASE_STATES: ReadonlySet<string> = new Set(["initial", "installing", "running"]);
+
+/**
+ * True when an untracked VM is safe to pool as this purchase's stranded box.
+ *
+ * Two signatures qualify, and they cover the two ways Hostinger takes our
+ * money without us recording a box.
+ *
+ * 1. Never set up: `initial` with no template. The purchase call errored
+ *    before the embedded setup payload was applied, so the box cannot be
+ *    serving anyone (observed on VMs 1806114 and 1815606).
+ * 2. Set up under OUR hostname. The purchase SUCCEEDED and Hostinger applied
+ *    the setup payload, but we failed afterwards, so the box is running with
+ *    a template and signature 1 refuses it. That is what stranded VM 1936826
+ *    on 2026-08-28: paid for, correctly built for KIN Integrated Child
+ *    Health, and invisible to a reconciler that only knew signature 1.
+ *
+ * The hostname is the safety property, not a heuristic: it is derived from
+ * the business id, so only this business's own purchase asks for it. Combined
+ * with the caller's `vps_inventory` check and recency window, a match means
+ * the box was bought for this business, minutes ago, and nothing has recorded
+ * it. A box already serving a tenant has an inventory row and never reaches
+ * here.
+ */
+export function carriesOrphanSignature(
+  vm: Pick<VirtualMachine, "state" | "template" | "hostname">,
+  ourPurchaseHostname: string
+): boolean {
+  if (vm.state === "initial" && !vm.template) return true;
+  return vm.hostname === ourPurchaseHostname && LIVE_PURCHASE_STATES.has(vm.state);
+}
+
+/**
  * Resolve the Hostinger billing subscription id for a VM: prefer the VM
  * detail's `subscription_id`, then fall back to a billing-list lookup by
  * `resource_id` (legacy list shape; live list often omits it, Jul 2026).
@@ -107,7 +145,10 @@ export function resolveOrphanBillingSubscriptionId(
 }
 
 export async function reconcileOrphanedPurchases(args: {
-  /** Business whose purchase just failed (audit trail only). */
+  /**
+   * Business whose purchase just failed. Load-bearing, not just audit: its
+   * purchase hostname is one of the two orphan signatures.
+   */
   businessId: string;
   /** `HostingerClient.listVirtualMachines` (or a stub). */
   listVirtualMachines: () => Promise<VirtualMachine[]>;
@@ -148,8 +189,7 @@ export async function reconcileOrphanedPurchases(args: {
   const needBillingLookup = vms.some(
     (vm) =>
       !knownVmIds.has(vm.id) &&
-      vm.state === "initial" &&
-      !vm.template &&
+      carriesOrphanSignature(vm, defaultPurchaseHostname(args.businessId)) &&
       !(typeof vm.subscription_id === "string" && vm.subscription_id.length > 0)
   );
   if (needBillingLookup && args.listBillingSubscriptions) {
@@ -163,15 +203,12 @@ export async function reconcileOrphanedPurchases(args: {
     }
   }
 
+  const ourPurchaseHostname = defaultPurchaseHostname(args.businessId);
+
   const reconciled: ReconciledOrphan[] = [];
   for (const vm of vms) {
     if (knownVmIds.has(vm.id)) continue;
-    // Fail-but-charge signature gate (see module header): only a box that
-    // was never set up, `initial` with no template, is safe to pool. A
-    // running/installing box may belong to a live tenant or a concurrent
-    // in-flight provision; stealing it into the pool would let another
-    // signup recreate it.
-    if (vm.state !== "initial" || vm.template) continue;
+    if (!carriesOrphanSignature(vm, ourPurchaseHostname)) continue;
     const createdAtMs = vm.created_at ? Date.parse(vm.created_at) : NaN;
     if (!Number.isFinite(createdAtMs) || nowMs - createdAtMs > maxAgeMs) continue;
     const plan = normalizeHostingerPlan(vm.plan);
@@ -211,8 +248,9 @@ export async function reconcileOrphanedPurchases(args: {
       hostname: vm.hostname ?? null,
       hostingerBillingSubscriptionId,
       notes:
-        `orphaned purchase reconciled for ${args.businessId}: Hostinger purchase API ` +
-        `failed after creating the VM (fail-but-charge). Pooled for adopt-first reuse.`
+        `orphaned purchase reconciled for ${args.businessId}: Hostinger purchase ` +
+        `created VM ${vm.id} (${vm.hostname ?? "no hostname"}, state ${vm.state}) but the ` +
+        `call did not return a usable box. Pooled for adopt-first reuse.`
     });
     if (released !== "pooled") {
       // A concurrent reconciler pooled it and a claim already landed. It is

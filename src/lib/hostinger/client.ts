@@ -189,11 +189,60 @@ export type VirtualMachine = {
   created_at?: string;
 };
 
-export type VirtualMachineOrder = {
-  order_id: string;
-  /** Hostinger returns an array because a single order can create multiple VPSes when quantity > 1. We always purchase one at a time, but we expose the full array for flexibility. */
-  virtual_machines: VirtualMachine[];
+/**
+ * Raw wire shape of a purchase response, both spellings we have to accept.
+ *
+ * Hostinger's live (and OpenAPI-documented) response is
+ * `BillingV1OrderVirtualMachineOrderResource`: an `order` object plus a
+ * SINGULAR `virtual_machine`. This client was originally written against a
+ * `{ order_id, virtual_machines: [] }` shape that the API does not send, so
+ * every purchase threw on a reply that had actually succeeded (KIN
+ * Integrated Child Health, 2026-08-28: VM 1936826 bought, charged, and
+ * declared a failure). Both spellings are read here so the fix cannot be
+ * undone by Hostinger moving back.
+ */
+type VirtualMachineOrderWire = {
+  /** Live shape. */
+  order?: { id?: number | string | null } | null;
+  virtual_machine?: VirtualMachine | null;
+  /** Legacy shape this client was first written against. */
+  order_id?: string | null;
+  virtual_machines?: VirtualMachine[] | null;
 };
+
+/** Normalized purchase result. `virtualMachines` is never empty: {@link purchaseVirtualMachine} throws instead. */
+export type VirtualMachineOrder = {
+  /** Order id as a string, or null when Hostinger sent the VM without one. */
+  orderId: string | null;
+  /** One entry per VM the order created. We always buy one at a time. */
+  virtualMachines: VirtualMachine[];
+};
+
+/** A wire VM is usable only if it carries the numeric id every later call keys on. */
+function isUsableVirtualMachine(vm: unknown): vm is VirtualMachine {
+  return typeof vm === "object" && vm !== null && typeof (vm as VirtualMachine).id === "number";
+}
+
+/**
+ * Read a purchase response in either wire shape. Returns null when neither
+ * spelling yields a VM, which is the only case the caller must treat as a
+ * failure (the money may still have moved, see {@link purchaseVirtualMachine}).
+ */
+export function normalizeVirtualMachineOrder(body: unknown): VirtualMachineOrder | null {
+  if (typeof body !== "object" || body === null) return null;
+  const wire = body as VirtualMachineOrderWire;
+  const virtualMachines = Array.isArray(wire.virtual_machines)
+    ? wire.virtual_machines.filter(isUsableVirtualMachine)
+    : isUsableVirtualMachine(wire.virtual_machine)
+      ? [wire.virtual_machine]
+      : [];
+  if (virtualMachines.length === 0) return null;
+  const rawOrderId = wire.order_id ?? wire.order?.id ?? null;
+  return {
+    orderId: rawOrderId === null ? null : String(rawOrderId),
+    virtualMachines
+  };
+}
 
 export type Action = {
   id: number;
@@ -397,11 +446,30 @@ export class HostingerClient {
    * Laidlaw, Jul 28 2026), so a client timeout shorter than that turns a slow
    * success into a fail-but-charge orphan we then have to reconcile. Every
    * other endpoint keeps the fail-fast default.
+   *
+   * An unreadable 200 throws `HostingerApiError` carrying the raw body, for
+   * two reasons. The body is the only evidence of what Hostinger actually
+   * sent (the shape bug this guards was invisible for weeks because we threw
+   * a bare Error and kept nothing), and the orchestrator's fail-but-charge
+   * reconciler keys on `HostingerApiError` at this endpoint, so a bare Error
+   * would skip the very recovery that finds the box we just paid for.
    */
   async purchaseVirtualMachine(req: VpsPurchaseRequest): Promise<VirtualMachineOrder> {
-    return this.request<VirtualMachineOrder>("POST", "/api/vps/v1/virtual-machines", req, {
+    const endpoint = "/api/vps/v1/virtual-machines";
+    const body = await this.request<unknown>("POST", endpoint, req, {
       timeoutMs: PURCHASE_TIMEOUT_MS
     });
+    const order = normalizeVirtualMachineOrder(body);
+    if (!order) {
+      throw new HostingerApiError(
+        endpoint,
+        200,
+        body,
+        "Hostinger purchase returned 200 with no readable virtual machine. " +
+          "The charge may still have gone through; reconcile before retrying."
+      );
+    }
+    return order;
   }
 
   async setupVirtualMachine(
