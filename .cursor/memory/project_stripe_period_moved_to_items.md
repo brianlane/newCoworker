@@ -12,13 +12,17 @@ Stripe SDK is pinned to `2026-07-29.dahlia` (`src/lib/stripe/client.ts`) and the
 `Stripe-Version` header ALSO gets the new shape. Top-level period fields are
 simply absent everywhere now.
 
-**Two readers, only one was fixed.**
-- `stripeSubscriptionPeriodCache` in `src/lib/db/subscriptions.ts` reads BOTH
-  shapes (top level, else `min(item starts)` / `max(item ends)`). App + webhook
-  paths are fine.
+**FIXED Aug 28 2026 (PR #1698, deployed 16:17 UTC).** Both readers now share
+ONE parser, `stripeSubscriptionPeriodSeconds` in
+`supabase/functions/_shared/stripe_voice_period.ts`; `src/lib/db/subscriptions.ts`
+imports it. The history below is why, and what to look for if it recurs.
+
+**Two readers, only one had been fixed.**
+- `stripeSubscriptionPeriodCache` in `src/lib/db/subscriptions.ts` read BOTH
+  shapes. App + webhook paths were fine.
 - `fetchStripeSubscriptionPeriods` in
-  `supabase/functions/_shared/voice_reserve.ts` reads ONLY the top level, so the
-  voice §4.2 JIT period refresh returns `null` on EVERY call, for EVERY tenant.
+  `supabase/functions/_shared/voice_reserve.ts` read ONLY the top level, so the
+  voice §4.2 JIT period refresh returned `null` on EVERY call, for EVERY tenant.
 
 **Why it stayed invisible for a month.** A failed JIT falls back to the cached
 period (`cacheLooksValidForQuotaAfterJitFailure`) and emits
@@ -39,8 +43,15 @@ minutes after the 30-day mark. New Coworker HQ was at 42.7 days and next in line
 Stripe fetch as `{ current_period_start, current_period_end }` — the shape the
 API no longer returns. See [[feedback_assert_the_producer_not_the_fixture]].
 
-**Fix shape:** put the dual-shape parser in
-`supabase/functions/_shared/stripe_voice_period.ts` and import it from
-`src/lib/db/subscriptions.ts`. `src/` already imports Deno `_shared` modules
-(e.g. `hipaa_model_surface`), so this direction works and stops the two readers
-drifting again.
+**Also shipped in #1698:** `stripeCacheMaxAgeMs` gives annual/biennial plans
+their term length plus the 30-day grace, because a prepaid term produces no
+renewal webhook and cache age says nothing about whether it is paid up.
+Monthly is unchanged at 30 days.
+
+**Remediation for a stale cache:** `scripts/backfill-stripe-subscription-periods.ts`
+already read both shapes. `--verify-only` audits drift, `--apply` re-stamps.
+Used it to unblock Amy before the code fix landed.
+
+**The direction that works:** `src/` imports Deno `_shared` modules (e.g.
+`hipaa_model_surface`), so shared logic belongs in `_shared` with the Node side
+importing it, never a second copy.
