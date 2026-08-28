@@ -60,6 +60,7 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   // Daily.
   "abandoned-signup-sweep": { maxGapMinutes: 1500, schedule: "23 5 * * *" },
   "analytics-snapshot-sweep": { maxGapMinutes: 1500, schedule: "50 2 * * *" },
+  "channel-liveness-sweep": { maxGapMinutes: 1500, schedule: "41 6 * * *" },
   "contract-term-nudge-sweep": { maxGapMinutes: 1500, schedule: "25 15 * * *" },
   "cron-sweep-watchdog": { maxGapMinutes: 1500, schedule: "30 3 * * *" },
   "data-retention-sweep": { maxGapMinutes: 1500, schedule: "35 1 * * *" },

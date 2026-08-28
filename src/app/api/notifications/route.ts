@@ -7,6 +7,7 @@ import {
   softDeleteNotification
 } from "@/lib/db/notifications";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { resolveNotificationReadActor } from "@/lib/notifications/read-actor";
 import { rateLimit } from "@/lib/rate-limit";
 
 /**
@@ -90,11 +91,16 @@ export async function POST(request: Request) {
     const body = markReadSchema.parse(await request.json());
     await requireBusinessRole(body.businessId, "view_dashboard");
 
+    // Who is doing the reading is recorded, because admin view-as reaches
+    // this route with the tenant's own permissions and its stamp used to be
+    // indistinguishable from the owner's. See src/lib/notifications/read-actor.ts.
+    const actor = await resolveNotificationReadActor(user, body.businessId);
+
     if (body.action === "mark_read") {
-      const row = await markNotificationRead(body.id, body.businessId);
+      const row = await markNotificationRead(body.id, body.businessId, actor);
       return successResponse({ marked: row ? 1 : 0, notification: row });
     }
-    const count = await markAllNotificationsRead(body.businessId);
+    const count = await markAllNotificationsRead(body.businessId, actor);
     return successResponse({ marked: count });
   } catch (err) {
     return handleRouteError(err);

@@ -246,6 +246,25 @@ How the pieces fit:
   real evidence about reachability, and every one of those sends still came
   back `delivered`. When asking "is the owner getting our alerts", weigh the
   last INBOUND far above any delivery receipt.
+  **The alarm is now automatic** (2026-08-28, same day). That "weigh the last
+  inbound" instruction is a habit nobody can be relied on to keep, so it is a
+  daily check instead: `channel-liveness-sweep` reads, per tenant and per
+  channel, whether a HUMAN has acted lately and raises an admin `system_logs`
+  row when one of the channels we actively send on has gone quiet. Run it by
+  hand, read-only, with `tsx debug/channel-liveness-report.ts --business
+  056034a7-e84c-444d-8d15-747eeb1fa899`. KYP resolves to **degraded**, not
+  dark, which is the honest answer: SMS and WhatsApp are gone, email and the
+  dashboard still land. Two details of this tenant shaped the design and are
+  worth knowing before trusting the output elsewhere. First, the check reads
+  the OWNER's WhatsApp thread specifically, matched by `psid`: KYP has four
+  lead threads whose newest message is hours old, and reading the newest
+  thread of any kind would report WhatsApp as live on the one tenant whose
+  WhatsApp has been dead on 131042 for weeks. Second, the dashboard read that
+  keeps this tenant off "dark" is only trustworthy going forward: reads are
+  stamped with an actor from 2026-08-28, admin reads are discarded, and every
+  read before that date stays unattributed forever, so the ~4-day-old read
+  found during this investigation cannot be proven to have been James rather
+  than us.
 - **The WABA sender number is James's own phone, so he cannot be reached on
   WhatsApp at it.** The Cloud API sender is the +852 number, and a number on
   the Cloud API is taken off consumer WhatsApp: messages to it arrive at our
