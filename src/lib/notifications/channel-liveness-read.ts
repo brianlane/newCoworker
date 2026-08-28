@@ -266,6 +266,17 @@ async function lastOwnerSlackAt(
  * `admin` read is DISCARDED outright, not merely marked weak: a support
  * session opening a tenant's notifications is us, and letting it vouch for
  * the owner is how this check would come to certify its own investigators.
+ *
+ * `isdistinct` (IS DISTINCT FROM), NOT `neq`. This is the whole read, and
+ * `neq` breaks it silently: `read_by_actor <> 'admin'` evaluates to NULL,
+ * not TRUE, for a NULL actor, so PostgREST would drop every row stamped
+ * before the migration. Today that is EVERY row on the fleet, which means
+ * the dashboard signal this check was calibrated against would vanish the
+ * moment the migration landed, and KYP Ads, whose only live-looking channel
+ * is one legacy dashboard read, would flip straight from `degraded` to
+ * `dark`. IS DISTINCT FROM is the NULL-safe form and is TRUE for both a NULL
+ * actor and any non-admin value. Same operator, same reason, as the AMD
+ * resolution sweep's resolved-state filters.
  */
 async function lastDashboardReadAt(
   businessId: string,
@@ -276,7 +287,7 @@ async function lastDashboardReadAt(
     .select("read_at, read_by_actor")
     .eq("business_id", businessId)
     .not("read_at", "is", null)
-    .neq("read_by_actor", "admin")
+    .filter("read_by_actor", "isdistinct", "admin")
     .order("read_at", { ascending: false })
     .limit(1);
   if (error) throw new Error(`lastDashboardReadAt: ${error.message}`);

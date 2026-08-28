@@ -77,6 +77,13 @@ function makeDb(resolve: (q: Query) => Fixture) {
           return builder;
         };
       }
+      // .filter(col, op, val) carries its operator in the middle argument;
+      // recorded as `filter:<op>` so an assertion can name the exact SQL
+      // operator, which for the read-actor filter is the entire point.
+      builder.filter = (col: string, op: string, val: unknown) => {
+        q.filters.push([`filter:${op}`, col, val]);
+        return builder;
+      };
       return builder;
     }
   };
@@ -415,8 +422,17 @@ describe("the dashboard signal", () => {
     expect(by("dashboard")).toMatchObject({ verdict: "live", attributed: true });
     expect(by("dashboard").silentDays).toBeCloseTo(3.9, 4);
     const q = query("notifications", (x) => !x.head);
-    expect(q?.filters).toContainEqual(["neq", "read_by_actor", "admin"]);
     expect(q?.filters).toContainEqual(["not", "read_at", "is"]);
+    // NULL-SAFE, and asserted on the OPERATOR rather than on returned rows,
+    // because this double cannot evaluate SQL: it hands back whatever the
+    // fixture says regardless of the filters, so a row-level assertion here
+    // passes identically with `neq` and with `isdistinct`. That gap is how
+    // the bug this guards against reached review. In Postgres
+    // `read_by_actor <> 'admin'` is NULL, not TRUE, for a NULL actor, so
+    // `neq` silently drops every legacy row: today that is every row on the
+    // fleet, and KYP Ads would flip from degraded to dark on deploy.
+    expect(q?.filters).toContainEqual(["filter:isdistinct", "read_by_actor", "admin"]);
+    expect(q?.filters.some((f) => f[0] === "neq" && f[1] === "read_by_actor")).toBe(false);
   });
 
   it("keeps a legacy unattributed read as evidence, but marks it soft", async () => {
