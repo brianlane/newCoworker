@@ -168,18 +168,26 @@ for (const [to, receipts] of bounces) {
 
   for (const prospect of prospects) {
     const label = `${prospect.domain}  (${prospect.business_name}, ${to})`;
-    // The newest receipt that could be about THIS pitch: a receipt naming a
-    // subject must name the pitch's (first pitch and nudge share it by
-    // design), and a subjectless receipt matches anything. Searched newest
-    // first across ALL of the address's receipts, so an unrelated later
-    // bounce to the same address cannot shadow the one that matches.
+    // The newest receipt that could be about THIS pitch. Three conditions,
+    // each closing a real mis-match:
+    //   - it must POSTDATE the pitch's send (receipt `at` is our own
+    //     system_logs clock, which is always after the sent_at claim stamp),
+    //     or an old bounce of unrelated mail to the same address would
+    //     retire a later pitch that delivered fine (Bugbot, PR #1695);
+    //   - a receipt naming a subject must name the pitch's (first pitch and
+    //     nudge share it by design), while a subjectless receipt matches;
+    //   - searched newest first across ALL of the address's receipts, so an
+    //     unrelated later bounce cannot shadow the one that matches.
+    const sentAtMs = prospect.sent_at ? Date.parse(String(prospect.sent_at)) : NaN;
     const bounce = [...receipts]
       .reverse()
       .find(
-        (r) => !r.subject || !prospect.pitch_subject || r.subject === prospect.pitch_subject
+        (r) =>
+          (Number.isNaN(sentAtMs) || Date.parse(r.at) >= sentAtMs) &&
+          (!r.subject || !prospect.pitch_subject || r.subject === prospect.pitch_subject)
       );
     if (!bounce) {
-      console.log(`  SKIP ${label}: no bounce receipt matches the pitch subject`);
+      console.log(`  SKIP ${label}: no bounce receipt matches this pitch (subject and send time)`);
       skipped++;
       continue;
     }
