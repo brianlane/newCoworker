@@ -303,7 +303,7 @@ export async function resolveNotificationTargets(
     whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
-    // ?? true: rows read before 20260828215736, same posture.
+    // ?? true: rows read before 20260828234556, same posture.
     pushUrgent = prefs.push_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;

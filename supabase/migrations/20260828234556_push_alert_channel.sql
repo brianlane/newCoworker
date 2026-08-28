@@ -2,7 +2,7 @@
 -- sms/email/dashboard/whatsapp/slack (same widening pattern as 20260822113305).
 --
 -- Delivery requires at least one live Web Push subscription for the business
--- (push_subscriptions, 20260828212830); a business that has never subscribed
+-- (push_subscriptions, 20260828234552); a business that has never subscribed
 -- a device records NO push rows at all (the WhatsApp never-connected rule
 -- from PR #1148).
 --

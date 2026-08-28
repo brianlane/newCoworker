@@ -196,7 +196,7 @@ async function resolveTargets(
     whatsappReplacesSms = Boolean(prefs.whatsapp_replaces_sms ?? false);
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
-    // ?? true: rows read before 20260828215736, same posture.
+    // ?? true: rows read before 20260828234556, same posture.
     pushUrgent = Boolean(prefs.push_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);

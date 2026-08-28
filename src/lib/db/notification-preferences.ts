@@ -29,7 +29,7 @@ export type NotificationPreferencesRow = {
   slack_digest?: boolean;
   /**
    * Deliver urgent owner alerts as a Web Push banner to every subscribed
-   * device. Optional on the type for rows read before 20260828215736.
+   * device. Optional on the type for rows read before 20260828234556.
    *
    * There is deliberately no push_digest sibling: a push is an interrupt, and
    * a daily banner nobody taps would corrode the notificationclick receipt
