@@ -119,7 +119,7 @@ const LIVE_PURCHASE_STATES: ReadonlySet<string> = new Set(["initial", "installin
  * it. A box already serving a tenant has an inventory row and never reaches
  * here.
  */
-export function carriesOrphanSignature(
+function carriesOrphanSignature(
   vm: Pick<VirtualMachine, "state" | "template" | "hostname">,
   ourPurchaseHostname: string
 ): boolean {

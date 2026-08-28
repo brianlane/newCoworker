@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  carriesOrphanSignature,
   normalizeHostingerPlan,
   reconcileOrphanedPurchases,
   reconcileUntilSizeMatch,
@@ -346,6 +345,43 @@ describe("reconcileOrphanedPurchases", () => {
       "nc-a912aff5-dd8.newcoworker.com"
     );
   });
+
+  it.each(["initial", "installing", "running"])(
+    "pools our own set-up purchase hostname at state=%s",
+    async (state) => {
+      const args = makeArgs({
+        listVirtualMachines: vi.fn().mockResolvedValue([
+          vm({
+            id: 1936826,
+            state,
+            hostname: defaultPurchaseHostname("biz-orphan-1"),
+            template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+          })
+        ])
+      });
+
+      expect((await reconcileOrphanedPurchases(args)).map((r) => r.vmId)).toEqual([1936826]);
+    }
+  );
+
+  it.each(["stopped", "suspended", "destroyed", "error"])(
+    "leaves our purchase hostname alone at state=%s (leftover, not this purchase's box)",
+    async (state) => {
+      const args = makeArgs({
+        listVirtualMachines: vi.fn().mockResolvedValue([
+          vm({
+            id: 1936826,
+            state,
+            hostname: defaultPurchaseHostname("biz-orphan-1"),
+            template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+          })
+        ])
+      });
+
+      expect(await reconcileOrphanedPurchases(args)).toEqual([]);
+      expect(args.release).not.toHaveBeenCalled();
+    }
+  );
 
   it("leaves a running, set-up VM wearing ANOTHER business's hostname alone", async () => {
     const args = makeArgs({
@@ -708,53 +744,5 @@ describe("reconcileUntilSizeMatch", () => {
     await reconcileUntilSizeMatch({ reconcile, vpsSize: "kvm2", sleep });
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
-  });
-});
-
-describe("carriesOrphanSignature", () => {
-  const ours = defaultPurchaseHostname("a912aff5-dd87-49fb-ad6a-477acefb66c0");
-
-  it("accepts a never-set-up box: initial with no template", () => {
-    expect(carriesOrphanSignature({ state: "initial", hostname: "srv1.hstgr.cloud" }, ours)).toBe(
-      true
-    );
-  });
-
-  it("accepts a set-up box wearing our purchase hostname, whatever stage it reached", () => {
-    for (const state of ["initial", "installing", "running"]) {
-      expect(
-        carriesOrphanSignature(
-          { state, hostname: ours, template: { id: 1121, name: "Ubuntu 24.04 with Docker" } },
-          ours
-        )
-      ).toBe(true);
-    }
-  });
-
-  it("rejects a set-up box that is not ours", () => {
-    expect(
-      carriesOrphanSignature(
-        {
-          state: "running",
-          hostname: "srv1869876.hstgr.cloud",
-          template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
-        },
-        ours
-      )
-    ).toBe(false);
-  });
-
-  it("rejects our hostname on a box that cannot be this purchase's", () => {
-    // A stopped, suspended, destroyed, or errored box is a leftover from an
-    // earlier life, not the machine a purchase created seconds ago. Those go
-    // to the daily sweep's human report rather than into the pool.
-    for (const state of ["stopped", "suspended", "destroyed", "error"]) {
-      expect(
-        carriesOrphanSignature(
-          { state, hostname: ours, template: { id: 1121, name: "Ubuntu 24.04 with Docker" } },
-          ours
-        )
-      ).toBe(false);
-    }
   });
 });

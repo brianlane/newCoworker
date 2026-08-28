@@ -229,10 +229,16 @@ if (ADOPT_VM_ID !== null) {
 console.log(`owner notify    : ${NOTIFY_OWNER ? `YES → ${biz.owner_email}` : "no (admin email only)"}`);
 console.log(`old box         : ${KEEP_OLD ? "KEPT (renewing!)" : "stop + auto-renew off (lapses at period end)"}`);
 
-if (currentSize === TARGET_SIZE) {
+// A same-size run normally means an accidental box refresh that still CHARGES
+// for a second identical box, so it is refused. With --adopt-vm nothing is
+// bought, and same-size is the shape the recovery actually needs: moving a
+// tenant onto a box that was already paid for. KIN Integrated Child Health,
+// 2026-08-28, kvm2 to kvm2 onto the stranded VM 1936826.
+if (currentSize === TARGET_SIZE && ADOPT_VM_ID === null) {
   console.log(`\nNOTE: effective size is already ${TARGET_SIZE}. Proceeding anyway would still`);
   console.log(`buy a fresh ${TARGET_SIZE} box and migrate onto it (box refresh). Aborting.`);
-  console.log(`if that's what you want, flip the pin first or edit this guard.`);
+  console.log(`if that's what you want, pass --adopt-vm <id> to move onto a box you already`);
+  console.log(`own, or flip the pin first.`);
   process.exit(1);
 }
 

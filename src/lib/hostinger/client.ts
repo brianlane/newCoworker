@@ -228,7 +228,7 @@ function isUsableVirtualMachine(vm: unknown): vm is VirtualMachine {
  * spelling yields a VM, which is the only case the caller must treat as a
  * failure (the money may still have moved, see {@link purchaseVirtualMachine}).
  */
-export function normalizeVirtualMachineOrder(body: unknown): VirtualMachineOrder | null {
+function normalizeVirtualMachineOrder(body: unknown): VirtualMachineOrder | null {
   if (typeof body !== "object" || body === null) return null;
   const wire = body as VirtualMachineOrderWire;
   const virtualMachines = Array.isArray(wire.virtual_machines)
