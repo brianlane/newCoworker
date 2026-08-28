@@ -185,29 +185,53 @@ for (const r of parked) {
         `(${started.map((c: { id: string; status: string }) => `${c.id.slice(0, 8)}/${c.status}`).join(", ")})`
     );
   } else {
-    // A missing dedupe key is NOT proof the cadence failed. applyPendingFollowUp
-    // enqueues that event only when the tag is NEWLY added; a re-referred lead
-    // whose contact already carried "Needs Follow Up" still gets the applied
-    // marker and the confirmation text, and is already enrolled from the
-    // earlier tagging. Calling that a miss would raise a false alarm on a
-    // working case, so ask the real question instead: is ANYTHING following
-    // this lead up? The JSON-path filter is server-side and was verified to
-    // return rows before being trusted (Bugbot, PR #1710).
-    const { data: anyCadence, error: anyErr } = await db
-      .from("ai_flow_runs")
-      .select("id, status, created_at")
+    // A missing dedupe key is NOT proof the cadence failed.
+    // applyPendingFollowUp enqueues that event only when the tag is NEWLY
+    // added; a re-referred lead whose contact already carried "Needs Follow
+    // Up" still gets the applied marker and the confirmation, and is already
+    // enrolled from the earlier tagging. Calling that a miss would raise a
+    // false alarm on a working case, so ask the real question instead: is
+    // anything following this lead up?
+    //
+    // Restricted to flows that actually TRIGGER on this tag. Matching any run
+    // whose trigger.from is the lead's number was wrong in the direction that
+    // reports success: that key is also the sender on SMS runs and the contact
+    // key on contact_created events, and the parked path's own
+    // upsert_customer files the contact in the same step that applies the tag,
+    // so a sibling contact_created run would have hidden a real cadence miss
+    // every time (Bugbot, PR #1710).
+    const { data: fuFlows, error: flowErr } = await db
+      .from("ai_flows")
+      .select("id")
       .eq("business_id", r.business_id)
-      .eq("context->trigger->>from", leadPhone)
-      .limit(10);
-    if (anyErr) {
-      console.log(`     cadence lookup FAILED: ${anyErr.message}`);
-    } else if ((anyCadence ?? []).length > 0) {
+      .eq("definition->trigger->>channel", "tag_changed")
+      .ilike("definition->trigger->>tag", FOLLOW_UP_TAG);
+    const flowIds = ((fuFlows ?? []) as Array<{ id: string }>).map((f) => f.id);
+    if (flowErr) {
+      console.log(`     cadence flow lookup FAILED: ${flowErr.message}`);
+    } else if (flowIds.length === 0) {
       console.log(
-        `     cadence run started by this apply: no, but ${(anyCadence ?? []).length} run(s) ` +
-          "already follow this lead (contact was tagged before the apply). OK."
+        '     cadence: this tenant has NO flow triggered by "Needs Follow Up", so the ' +
+          "tag starts nothing  <-- the request cannot be honored here"
       );
     } else {
-      console.log("     cadence: NONE  <-- tag landed but nothing is following this lead up");
+      const { data: anyCadence, error: anyErr } = await db
+        .from("ai_flow_runs")
+        .select("id, status, created_at")
+        .eq("business_id", r.business_id)
+        .in("flow_id", flowIds)
+        .eq("context->trigger->>from", leadPhone)
+        .limit(10);
+      if (anyErr) {
+        console.log(`     cadence lookup FAILED: ${anyErr.message}`);
+      } else if ((anyCadence ?? []).length > 0) {
+        console.log(
+          `     cadence run started by this apply: no, but ${(anyCadence ?? []).length} ` +
+            "follow-up run(s) already cover this lead (tagged before the apply). OK."
+        );
+      } else {
+        console.log("     cadence: NONE  <-- tag landed but no follow-up flow picked it up");
+      }
     }
   }
 
