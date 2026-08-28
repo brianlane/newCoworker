@@ -48,7 +48,15 @@ against a 32-hex machine localpart.
 
 **How to apply:** treat unattributed Resend failures whose subject matches an
 outreach pitch as REAL undelivered pitches (the ledger still says `sent`,
-and the day-5 nudge will re-mail the same dead address). Any fix to
-attribution has to match on recipient+subject+time, not provider id, or move
-the send off the relay. When auditing deliverability, remember Gmail send-as
-smtpMsa means "delivered by Resend", not "delivered by Google".
+and the day-5 nudge will re-mail the same dead address). When auditing
+deliverability, remember Gmail send-as smtpMsa means "delivered by Resend",
+not "delivered by Google".
+
+**Fixes shipped 2026-08-28:** the webhook now falls back to recipient +
+subject over a bounded 4-day window for unmatched FAILURES
+(`applyEmailDeliveryStatusByRecipient` in src/lib/email/delivery.ts), so
+relay bounces surface attributed; the probe drops `wixpress.com`,
+`@sentry.`, and 20+ hex-char localparts; and
+`scripts/oneshot/retire-bounced-outreach-prospects.ts` (applied same day,
+five prospects) retires bounced pitches out of the nudge queue, evidence
+read from system_logs at run time.

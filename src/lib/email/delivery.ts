@@ -130,6 +130,77 @@ export type ApplyEmailDeliveryInput = {
 
 export type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
 
+type MatchedEmailLogRow = {
+  id: string;
+  business_id: string;
+  delivery_status: EmailDeliveryStatus | null;
+};
+
+type ReceiptDetail = {
+  status: EmailDeliveryStatus;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  timestamp?: string | null;
+};
+
+/**
+ * Write one receipt onto one matched row, rank-guarded. Shared by the
+ * provider-id lookup and the recipient fallback so the two paths cannot
+ * drift in how they enforce ordering. `label` prefixes thrown errors so a
+ * failure names the lookup that found the row.
+ */
+async function writeDeliveryStatus(
+  db: SupabaseClient,
+  row: MatchedEmailLogRow,
+  input: ReceiptDetail,
+  label: string
+): Promise<{ outcome: "applied" | "stale"; businessId: string }> {
+  // Fast path only: skips a pointless write. It is NOT what makes the
+  // ordering safe, because the row can change between this read and the
+  // update below. The predicate on the update is what actually enforces it.
+  if (!emailDeliveryOutranks(input.status, row.delivery_status)) {
+    return { outcome: "stale", businessId: row.business_id };
+  }
+
+  // Resend fires sent/delivered within milliseconds, and separate webhook
+  // POSTs run as separate concurrent invocations. Two of them reading the
+  // same snapshot would both pass the check above, and last-write-wins could
+  // then drop a `delivered` back to `sent`, or bury a `bounced`. Re-checking
+  // the rank in the UPDATE's own WHERE clause closes that: Postgres evaluates
+  // it under the row lock, so the loser of a race matches zero rows instead
+  // of overwriting the winner. (Bugbot caught exactly this on the WhatsApp
+  // receipt path, PR #1609.)
+  const outranked = DELIVERY_STATUS_ORDER.filter(
+    (candidate) => DELIVERY_STATUS_RANK[candidate] < DELIVERY_STATUS_RANK[input.status]
+  );
+  const rankGuard =
+    outranked.length > 0
+      ? `delivery_status.is.null,delivery_status.in.(${outranked.join(",")})`
+      : "delivery_status.is.null";
+
+  const failure = isEmailDeliveryFailure(input.status);
+  const { data: updated, error } = await db
+    .from("email_log")
+    .update({
+      delivery_status: input.status,
+      // Only a failure carries these, and a later failure must be able to
+      // replace an earlier one's reason rather than append to it.
+      delivery_error_code: failure ? (input.errorCode ?? null) : null,
+      delivery_error_message: failure ? (input.errorMessage ?? null) : null,
+      delivery_updated_at: input.timestamp ?? new Date().toISOString()
+    })
+    .eq("id", row.id)
+    .or(rankGuard)
+    // A PostgREST update matching zero rows is NOT an error, so the returned
+    // rows are the only way to tell "written" from "lost the race".
+    .select("id");
+  if (error) throw new Error(`${label}: ${error.message}`);
+  return {
+    outcome: (updated ?? []).length > 0 ? "applied" : "stale",
+    businessId: row.business_id
+  };
+}
+
 /**
  * Apply a Resend receipt to the outbound row it belongs to, keyed by the
  * provider message id the send stored.
@@ -171,53 +242,78 @@ export async function applyEmailDeliveryStatus(
   if (readError) throw new Error(`applyEmailDeliveryStatus: ${readError.message}`);
   const existing = (matches ?? [])[0];
   if (!existing) return { outcome: "not_found", businessId: null };
-  const row = existing as {
-    id: string;
-    business_id: string;
-    delivery_status: EmailDeliveryStatus | null;
-  };
-  // Fast path only: skips a pointless write. It is NOT what makes the
-  // ordering safe, because the row can change between this read and the
-  // update below. The predicate on the update is what actually enforces it.
-  if (!emailDeliveryOutranks(input.status, row.delivery_status)) {
-    return { outcome: "stale", businessId: row.business_id };
-  }
-
-  // Resend fires sent/delivered within milliseconds, and separate webhook
-  // POSTs run as separate concurrent invocations. Two of them reading the
-  // same snapshot would both pass the check above, and last-write-wins could
-  // then drop a `delivered` back to `sent`, or bury a `bounced`. Re-checking
-  // the rank in the UPDATE's own WHERE clause closes that: Postgres evaluates
-  // it under the row lock, so the loser of a race matches zero rows instead
-  // of overwriting the winner. (Bugbot caught exactly this on the WhatsApp
-  // receipt path, PR #1609.)
-  const outranked = DELIVERY_STATUS_ORDER.filter(
-    (candidate) => DELIVERY_STATUS_RANK[candidate] < DELIVERY_STATUS_RANK[input.status]
+  return writeDeliveryStatus(
+    db,
+    existing as MatchedEmailLogRow,
+    input,
+    "applyEmailDeliveryStatus"
   );
-  const rankGuard =
-    outranked.length > 0
-      ? `delivery_status.is.null,delivery_status.in.(${outranked.join(",")})`
-      : "delivery_status.is.null";
+}
 
-  const failure = isEmailDeliveryFailure(input.status);
-  const { data: updated, error } = await db
+/**
+ * How far back the recipient fallback will look for the send it is a receipt
+ * for. Resend retries a transiently-refused message for up to 72 hours before
+ * it reports the bounce (the live case that motivated this arrived 38 hours
+ * after its send), so the window has to cover that plus margin. It must NOT
+ * be unbounded: recipient + subject is a heuristic key, and an old row with
+ * the same pair (a re-sent pitch, a recurring report) is likelier to be a
+ * different message the further back it sits.
+ */
+export const EMAIL_RECEIPT_RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
+
+/** Escape `%`, `_`, and `\` so an address is an exact ILIKE match, not a pattern. */
+function escapeIlike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+export type ApplyEmailDeliveryByRecipientInput = {
+  to: string;
+  subject: string;
+} & ReceiptDetail;
+
+/**
+ * Fallback attribution for receipts whose provider id matches nothing: the
+ * newest recent outbound row to the same recipient with the same subject.
+ *
+ * Why this exists: mail can leave through Resend under an id we never see.
+ * The live case is HQ's Gmail, whose default send-as identity relays through
+ * smtp.resend.com, so an outreach pitch is logged with its GMAIL message id
+ * while Resend delivers it under a fresh UUID. Without this, every such
+ * bounce surfaces as `email_delivery_failed_unattributed` with no tenant.
+ *
+ * The key is heuristic, so it is deliberately conservative: exact subject,
+ * case-insensitive exact recipient, outbound only, and a bounded recency
+ * window. A first pitch and its follow-up nudge share a subject by design;
+ * either row names the same tenant and the same conversation, and newest
+ * wins, which is the row the receipt most plausibly belongs to.
+ */
+export async function applyEmailDeliveryStatusByRecipient(
+  input: ApplyEmailDeliveryByRecipientInput,
+  client?: SupabaseClient
+): Promise<{ outcome: ApplyEmailDeliveryOutcome; businessId: string | null }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const cutoff = new Date(Date.now() - EMAIL_RECEIPT_RECIPIENT_WINDOW_MS).toISOString();
+  const { data: matches, error: readError } = await db
     .from("email_log")
-    .update({
-      delivery_status: input.status,
-      // Only a failure carries these, and a later failure must be able to
-      // replace an earlier one's reason rather than append to it.
-      delivery_error_code: failure ? (input.errorCode ?? null) : null,
-      delivery_error_message: failure ? (input.errorMessage ?? null) : null,
-      delivery_updated_at: input.timestamp ?? new Date().toISOString()
-    })
-    .eq("id", row.id)
-    .or(rankGuard)
-    // A PostgREST update matching zero rows is NOT an error, so the returned
-    // rows are the only way to tell "written" from "lost the race".
-    .select("id");
-  if (error) throw new Error(`applyEmailDeliveryStatus: ${error.message}`);
-  return {
-    outcome: (updated ?? []).length > 0 ? "applied" : "stale",
-    businessId: row.business_id
-  };
+    .select("id, business_id, delivery_status")
+    // ILIKE with a fully escaped pattern: addresses are matched
+    // case-insensitively but never treated as wildcards (an `_` in a real
+    // localpart must not match a different character).
+    .ilike("to_email", escapeIlike(input.to))
+    .eq("subject", input.subject)
+    .eq("direction", "outbound")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (readError) {
+    throw new Error(`applyEmailDeliveryStatusByRecipient: ${readError.message}`);
+  }
+  const existing = (matches ?? [])[0];
+  if (!existing) return { outcome: "not_found", businessId: null };
+  return writeDeliveryStatus(
+    db,
+    existing as MatchedEmailLogRow,
+    input,
+    "applyEmailDeliveryStatusByRecipient"
+  );
 }

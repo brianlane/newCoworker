@@ -12,9 +12,15 @@ const applyEmailDeliveryStatus = vi.fn(async (_input: unknown) => ({
   outcome: "applied",
   businessId: null as string | null
 }));
+const applyEmailDeliveryStatusByRecipient = vi.fn(async (_input: unknown) => ({
+  outcome: "not_found",
+  businessId: null as string | null
+}));
 vi.mock("@/lib/email/delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email/delivery")>()),
-  applyEmailDeliveryStatus: (input: unknown) => applyEmailDeliveryStatus(input)
+  applyEmailDeliveryStatus: (input: unknown) => applyEmailDeliveryStatus(input),
+  applyEmailDeliveryStatusByRecipient: (input: unknown) =>
+    applyEmailDeliveryStatusByRecipient(input)
 }));
 
 const recordSystemLog = vi.fn(async (_input: unknown) => {});
@@ -279,6 +285,11 @@ describe("processResendDeliveryEvent", () => {
 
   beforeEach(() => {
     applyEmailDeliveryStatus.mockReset();
+    applyEmailDeliveryStatusByRecipient.mockReset();
+    applyEmailDeliveryStatusByRecipient.mockResolvedValue({
+      outcome: "not_found",
+      businessId: null
+    });
     recordSystemLog.mockClear();
     warn.mockClear();
   });
@@ -365,6 +376,73 @@ describe("processResendDeliveryEvent", () => {
       providerMessageId: "re_1"
     }));
     applyEmailDeliveryStatus.mockRejectedValue("not an error");
+    expect(await processResendDeliveryEvent(event)).toBe(false);
+  });
+
+  it("attributes a failure by recipient and subject when the provider id matches nothing", async () => {
+    // The relay case: Gmail's default send-as identity hands the message to
+    // smtp.resend.com, so the row holds the Gmail id and the receipt a Resend
+    // UUID. The bounce still belongs to a tenant, and the feed should say so.
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    applyEmailDeliveryStatusByRecipient.mockResolvedValue({ outcome: "applied", businessId: BIZ });
+    expect(await processResendDeliveryEvent(event)).toBe(true);
+    expect(applyEmailDeliveryStatusByRecipient).toHaveBeenCalledWith({
+      to: "owner@example.com",
+      subject: "Urgent: new lead",
+      status: "bounced",
+      errorCode: "Permanent",
+      errorMessage: "Mailbox does not exist",
+      timestamp: "2026-08-26T06:00:00.000Z"
+    });
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        event: "email_delivery_failed",
+        payload: expect.objectContaining({ attributedBy: "recipient_subject" })
+      })
+    );
+  });
+
+  it("stays quiet when the fallback matched a row that already recorded this failure", async () => {
+    // Same contract as a stale provider-id match: the first receipt logged
+    // it, a duplicate webhook delivery must not log it twice.
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    applyEmailDeliveryStatusByRecipient.mockResolvedValue({ outcome: "stale", businessId: BIZ });
+    expect(await processResendDeliveryEvent(event)).toBe(false);
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
+  it("skips the fallback when the receipt lacks a recipient or subject", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    await processResendDeliveryEvent({ ...event, to: null });
+    await processResendDeliveryEvent({ ...event, subject: null });
+    expect(applyEmailDeliveryStatusByRecipient).not.toHaveBeenCalled();
+    // Both still surfaced, just unattributed.
+    expect(recordSystemLog).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not run the fallback for a routine unattributed non-failure", async () => {
+    // Resend fires sent/delivered for every unlogged message on the account
+    // (verification mail, provisioning notices); querying email_log for each
+    // would be a per-event tax for rows that are not there.
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    await processResendDeliveryEvent({ ...event, status: "delivered" });
+    expect(applyEmailDeliveryStatusByRecipient).not.toHaveBeenCalled();
+  });
+
+  it("degrades a fallback fault to the unattributed log rather than losing the failure", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    applyEmailDeliveryStatusByRecipient.mockRejectedValue(new Error("lookup down"));
+    expect(await processResendDeliveryEvent(event)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "resend delivery recipient fallback failed",
+      expect.objectContaining({ providerMessageId: "re_1", error: "lookup down" })
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "email_delivery_failed_unattributed" })
+    );
+
+    applyEmailDeliveryStatusByRecipient.mockRejectedValue("not an error");
     expect(await processResendDeliveryEvent(event)).toBe(false);
   });
 });

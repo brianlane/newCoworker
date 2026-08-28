@@ -207,6 +207,22 @@ describe("extractEmails", () => {
     expect(extractEmails(html, "acme.com")).toEqual(["real@acme.com"]);
     expect(extractEmails("nothing here", "acme.com")).toEqual([]);
   });
+
+  it("never reads a Sentry DSN or another machine key as a contact address", () => {
+    // The live miss: a Wix site's page JavaScript carries its Sentry DSN
+    // (`https://<32-hex-key>@sentry.wixpress.com/<id>`), the key@host half
+    // matches the address regex, and the pitch to it bounced (2026-08-27,
+    // sunlandautomesa.com). wixpress.com is Wix's internal domain and
+    // `@sentry.` covers self-hosted Sentry on any host.
+    const dsn = "dd0a55ccb8124b9c9d938e3acf41f8aa@sentry.wixpress.com";
+    expect(extractEmails(`${dsn} real@acme.com`, "acme.com")).toEqual(["real@acme.com"]);
+    expect(extractEmails("abc123@sentry.acme.com", "acme.com")).toEqual([]);
+    // A long hex localpart is a credential even on an otherwise clean host,
+    // and even on the prospect's own domain.
+    expect(extractEmails("deadbeefdeadbeefdead@tracking.acme.com", "acme.com")).toEqual([]);
+    // A short hex-looking mailbox is still a plausible human address.
+    expect(extractEmails("abc123@acme.com", "acme.com")).toEqual(["abc123@acme.com"]);
+  });
 });
 
 describe("probeSite", () => {

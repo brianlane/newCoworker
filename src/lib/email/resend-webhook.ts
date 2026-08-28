@@ -10,6 +10,7 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import {
   applyEmailDeliveryStatus,
+  applyEmailDeliveryStatusByRecipient,
   isEmailDeliveryFailure,
   resendEventToStatus,
   type EmailDeliveryStatus
@@ -173,6 +174,24 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
     return false;
   }
 
+  // Mail can be DELIVERED by Resend under an id our ledger never saw: HQ's
+  // Gmail default send-as identity relays through smtp.resend.com, so an
+  // outreach pitch is logged with its GMAIL message id while Resend delivers
+  // it under a fresh UUID (see the hq-gmail-sendas-resend-relay memory; two
+  // live bounces surfaced unattributed this way on 2026-08-26/28). Recipient
+  // plus subject recovers those. Failures only, deliberately: Resend fires
+  // for every message on the account, and running the fallback query on
+  // routine unlogged traffic (verification mail, provisioning notices) would
+  // hammer email_log for rows that are not there.
+  let attributedByRecipient = false;
+  if (result.outcome === "not_found" && isEmailDeliveryFailure(event.status)) {
+    const fallback = await attributeFailureByRecipient(event);
+    if (fallback) {
+      result = fallback;
+      attributedByRecipient = true;
+    }
+  }
+
   if (result.outcome !== "applied") {
     // A failure we could not attribute is still a failure worth seeing.
     //
@@ -227,9 +246,48 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
         to: event.to,
         subject: event.subject,
         errorCode: event.errorCode,
-        errorMessage: event.errorMessage
+        errorMessage: event.errorMessage,
+        // Flagged so an operator reading the feed knows this receipt was
+        // matched heuristically (recipient + subject in a recent window)
+        // rather than by provider id.
+        ...(attributedByRecipient ? { attributedBy: "recipient_subject" } : {})
       }
     });
   }
   return true;
+}
+
+/**
+ * The recipient+subject fallback, wrapped so its own faults can never mask
+ * the failure it was trying to attribute: any error degrades to "no match"
+ * and the unattributed log above still fires.
+ *
+ * Returns null when the receipt lacks a recipient or subject, when nothing
+ * matched, or on a lookup fault; otherwise the apply outcome for the matched
+ * row. A `stale` outcome is a real match (an earlier receipt already
+ * recorded this failure), so the caller stays quiet exactly as it does for a
+ * stale provider-id match.
+ */
+async function attributeFailureByRecipient(
+  event: ResendDeliveryEvent
+): Promise<{ outcome: "applied" | "stale"; businessId: string | null } | null> {
+  if (!event.to || !event.subject) return null;
+  try {
+    const fallback = await applyEmailDeliveryStatusByRecipient({
+      to: event.to,
+      subject: event.subject,
+      status: event.status,
+      errorCode: event.errorCode,
+      errorMessage: event.errorMessage,
+      timestamp: event.occurredAt
+    });
+    if (fallback.outcome === "not_found") return null;
+    return { outcome: fallback.outcome, businessId: fallback.businessId };
+  } catch (err) {
+    logger.warn("resend delivery recipient fallback failed", {
+      providerMessageId: event.providerMessageId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
 }
