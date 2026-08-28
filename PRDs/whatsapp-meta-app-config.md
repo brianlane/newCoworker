@@ -82,21 +82,27 @@ postMessage) first.
   `pages_user_*` trio, and the marketing-messaging permissions). No code path
   touches any of them, and asking for permissions you cannot demonstrate is
   itself a rejection reason. The tier threshold is 500 Marketing API calls in
-  the PAST 15 DAYS, and ~600 were made Aug 10-11, so submit before ~Aug 25 or
-  they age out.
+  the PAST 15 DAYS. DONE: the Aug 17 submission (trimmed to exactly this
+  cart) was decided Aug 25, 2026 and the tier plus `ads_management`,
+  `business_management`, `instagram_manage_comments`, and
+  `instagram_content_publish` are all live at Advanced Access, so the
+  keep-warm grind is retired.
 - **`page_events` / `pages_events` is NOT needed and cannot be obtained.**
   See the README's direct-connection section: the dataset endpoint that
   demands it is undocumented, and the permission belongs to no use case.
-- **Rejected in the same submission: `instagram_content_publish`**
-  ("Screencast Not Aligned with Use Case Details", Developer Policy 1.6).
-  The use case is allowed; the screencast did not show it end to end. To
-  regain it: re-record showing the complete Meta login flow, the grant
-  screen with the permission, composing and publishing a post from the
-  dashboard, ending on the live Instagram post (English UI with captions
-  per the Screen Recording Guide, and note in the submission that
-  background jobs perform the server-side publish), then "Request again"
-  on the submission feedback page. Until then Instagram publishing stays
-  app-role-only (HQ's blog cross-posting is unaffected: HQ holds a role).
+- **`instagram_content_publish` was rejected Aug 11 and CLEARED Aug 25,
+  2026** on resubmission: Instagram publishing is open to any connected
+  account, no app role needed. The only rejection still standing is
+  `ads_read` ("Screencast Not Aligned with Use Case Details", Developer
+  Policy 1.6), and it blocks nothing: `ads_management`, which is approved,
+  authorizes every ads read the code makes. To regain it anyway: re-record
+  showing the complete Meta login flow, the grant screen with the
+  permission, and the end-to-end use case (English UI with captions per the
+  Screen Recording Guide), state per Meta's own rejection guidance that the
+  app reads ads data server-to-server with stored tokens so no frontend
+  login appears in normal operation, then "Request again" on the submission
+  feedback page. Its Testing row stays warm until ~Sep 23 from the Aug 24
+  test calls.
 - Template review: the two stock utility templates (`nc_owner_alert`,
   `nc_contact_followup`) are auto-registered per tenant WABA at connect
   and typically clear Meta review in minutes; out-of-window sends are
