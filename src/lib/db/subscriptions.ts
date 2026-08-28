@@ -1,6 +1,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import type { MembershipPackAddonsRow } from "@/lib/billing/membership-pack-addons";
+import { stripeSubscriptionPeriodSeconds } from "../../../supabase/functions/_shared/stripe_voice_period";
 
 export type { BillingPeriod };
 
@@ -133,14 +134,12 @@ export type SubscriptionPeriodStripeCache = ReturnType<typeof subscriptionPeriod
 /**
  * Stripe SDK typings omit period fields on some Subscription shapes; narrow at runtime.
  *
- * Stripe API version `2025-03-31.basil` moved `current_period_start` /
- * `current_period_end` off the top-level Subscription and onto each
- * `SubscriptionItem`. This helper now reads both shapes:
- *
- *   1. Top-level `sub.current_period_{start,end}` (legacy / pinned API ≤ 2025-03-30).
- *   2. `sub.items.data[].current_period_{start,end}` (basil and later), taking the
- *      subscription-wide window as `[min(start), max(end)]` across items. For
- *      the common single-item subscription this is identical to the old fields.
+ * The shape rule itself (top-level fields on the legacy API, per-item fields on
+ * `2025-03-31.basil` and later) lives in ONE place,
+ * `stripeSubscriptionPeriodSeconds` in
+ * `supabase/functions/_shared/stripe_voice_period.ts`, which the voice Edge
+ * reader also uses. Keeping a second copy here is what let the Edge reader sit
+ * on the dead top-level-only shape for a month while this one was correct.
  *
  * Returns `{}` when neither shape yields two finite integer seconds. Idempotent
  * and call-safe for unknown inputs.
@@ -148,47 +147,13 @@ export type SubscriptionPeriodStripeCache = ReturnType<typeof subscriptionPeriod
 export function stripeSubscriptionPeriodCache(
   sub: unknown
 ): SubscriptionPeriodStripeCache | Record<string, never> {
-  if (sub == null || typeof sub !== "object") {
-    return {};
-  }
-  const s = sub as {
-    current_period_start?: unknown;
-    current_period_end?: unknown;
-    items?: { data?: Array<{ current_period_start?: unknown; current_period_end?: unknown }> };
-  };
-
-  let start: number | null = null;
-  let end: number | null = null;
-
-  if (typeof s.current_period_start === "number" && typeof s.current_period_end === "number") {
-    start = s.current_period_start;
-    end = s.current_period_end;
-  }
-
-  const items = s.items?.data;
-  if (Array.isArray(items) && items.length > 0) {
-    const starts: number[] = [];
-    const ends: number[] = [];
-    for (const it of items) {
-      if (typeof it.current_period_start === "number") starts.push(it.current_period_start);
-      if (typeof it.current_period_end === "number") ends.push(it.current_period_end);
-    }
-    if (starts.length > 0 && ends.length > 0) {
-      const itemStart = Math.min(...starts);
-      const itemEnd = Math.max(...ends);
-      if (start == null || end == null) {
-        start = itemStart;
-        end = itemEnd;
-      }
-    }
-  }
-
-  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) {
+  const period = stripeSubscriptionPeriodSeconds(sub);
+  if (!period) {
     return {};
   }
   return subscriptionPeriodCacheFromStripe({
-    current_period_start: start,
-    current_period_end: end
+    current_period_start: period.start,
+    current_period_end: period.end
   });
 }
 

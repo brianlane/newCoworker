@@ -23,7 +23,9 @@ import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
 import {
   cacheLooksValidForQuotaAfterJitFailure,
   STRIPE_PERIOD_ROLLOVER_GRACE_MS,
+  stripeSubscriptionPeriodSeconds,
   subscriptionPeriodNeedsRefresh,
+  type SubscriptionBillingPeriod,
   type SubscriptionPeriodRow
 } from "./stripe_voice_period.ts";
 
@@ -98,13 +100,18 @@ async function fetchStripeSubscriptionPeriods(
       console.error("Stripe subscription HTTP", res.status, (await res.text()).slice(0, 500));
       return null;
     }
-    const j = (await res.json()) as { current_period_start?: unknown; current_period_end?: unknown };
-    if (typeof j.current_period_start !== "number" || typeof j.current_period_end !== "number") {
+    // Both Stripe shapes, top-level and per-item. See
+    // stripeSubscriptionPeriodSeconds: the account default API version no
+    // longer returns the top-level fields at all, so reading only those
+    // silently fails every refresh.
+    const period = stripeSubscriptionPeriodSeconds(await res.json());
+    if (!period) {
+      console.error("Stripe subscription carried no period on either shape", { stripeSubscriptionId });
       return null;
     }
     return {
-      start: new Date(j.current_period_start * 1000).toISOString(),
-      end: new Date(j.current_period_end * 1000).toISOString()
+      start: new Date(period.start * 1000).toISOString(),
+      end: new Date(period.end * 1000).toISOString()
     };
   } catch (e) {
     // Timeout (abort) or network error → treat as a failed JIT refresh so the
@@ -205,7 +212,7 @@ export async function reserveVoiceBudget(
   const { data: sub, error: subErr } = await supabase
     .from("subscriptions")
     .select(
-      "id, stripe_subscription_id, stripe_current_period_start, stripe_current_period_end, stripe_subscription_cached_at"
+      "id, stripe_subscription_id, stripe_current_period_start, stripe_current_period_end, stripe_subscription_cached_at, billing_period"
     )
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
@@ -221,11 +228,18 @@ export async function reserveVoiceBudget(
     stripe_current_period_start?: unknown;
     stripe_current_period_end?: unknown;
     stripe_subscription_cached_at?: unknown;
+    billing_period?: unknown;
   } | null;
   if (!subRow?.id) {
     console.error("voice_reserve: no subscription row", { businessId });
     return { ok: false, reason: "no_subscription" };
   }
+
+  // Selects the max cache age the §4.2 fallback will honor: a prepaid term
+  // plan gets no renewal webhook for a year or more, so the monthly 30-day
+  // yardstick would refuse calls from a tenant paid in full through 2028.
+  const billingPeriod: SubscriptionBillingPeriod =
+    typeof subRow.billing_period === "string" ? subRow.billing_period : null;
 
   let periodRow: SubscriptionPeriodRow = {
     id: subRow.id as string,
@@ -267,7 +281,7 @@ export async function reserveVoiceBudget(
   }
 
   if (jitFailed) {
-    if (cacheLooksValidForQuotaAfterJitFailure(periodRow, Date.now())) {
+    if (cacheLooksValidForQuotaAfterJitFailure(periodRow, Date.now(), billingPeriod)) {
       await telemetryRecord(supabase, "jit_stripe_fail_proceed_cached", { business_id: businessId });
     } else {
       await telemetryRecord(supabase, "jit_stripe_fail_block", { business_id: businessId });

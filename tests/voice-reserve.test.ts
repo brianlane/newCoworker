@@ -269,13 +269,27 @@ describe("reserveVoiceBudget", () => {
     expect(r).toEqual({ ok: false, reason: "period_cache_stale" });
   });
 
-  it("JIT-refreshes missing bounds, persists cache, then reserves", async () => {
+  it("JIT-refreshes missing bounds from the per-item shape, persists cache, then reserves", async () => {
+    // The shape the LIVE Stripe API actually returns. The account default API
+    // version (2026-03-25.dahlia) moved current_period_* off the Subscription
+    // and onto its items, so the top-level fields are absent entirely. A
+    // fixture that still sends them describes an API that no longer exists,
+    // which is how this path passed at 100% coverage while failing on every
+    // real call for a month.
     stubFetch(() => ({
       ok: true,
       status: 200,
       json: async () => ({
-        current_period_start: Math.floor((NOW - 86_400_000) / 1000),
-        current_period_end: Math.floor((NOW + 86_400_000) / 1000)
+        id: "si_1",
+        status: "active",
+        items: {
+          data: [
+            {
+              current_period_start: Math.floor((NOW - 86_400_000) / 1000),
+              current_period_end: Math.floor((NOW + 86_400_000) / 1000)
+            }
+          ]
+        }
       })
     }));
     const { supabase } = makeSupabase({
@@ -294,7 +308,9 @@ describe("reserveVoiceBudget", () => {
     expect(r).toEqual({ ok: true, grantSeconds: 120, duplicate: false });
   });
 
-  it("logs but proceeds when JIT cache persist write fails", async () => {
+  it("logs but proceeds when JIT cache persist write fails (legacy top-level shape)", async () => {
+    // Legacy shape, still accepted for an account pinned to an API version
+    // at or below 2025-03-30.
     stubFetch(() => ({
       ok: true,
       status: 200,
@@ -357,6 +373,108 @@ describe("reserveVoiceBudget", () => {
           stripe_current_period_start: PAST_START,
           stripe_current_period_end: PAST_END,
           stripe_subscription_cached_at: new Date(NOW - 60_000).toISOString()
+        },
+        error: null
+      }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc1",
+      stripeSecret: "sk_live"
+    });
+    expect(r).toEqual({ ok: false, reason: "jit_stripe_fail_block" });
+    expect(telemetry.map((t) => t.p_event_type)).toContain("jit_stripe_fail_block");
+  });
+
+  it("refreshes a stale cache from the live per-item shape instead of failing the JIT", async () => {
+    // Regression for the Aug 2026 outage: a stale-but-valid cache triggers the
+    // JIT, Stripe answers 200 with the modern shape, and the refresh must
+    // SUCCEED. Reading only the top level returned null here, which degraded
+    // every call to the cached-period fallback and stopped re-stamping
+    // stripe_subscription_cached_at, until the cache aged out and calls were
+    // refused outright.
+    stubFetch(() => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: {
+          data: [
+            {
+              current_period_start: Math.floor((NOW - 86_400_000) / 1000),
+              current_period_end: Math.floor((NOW + 30 * 86_400_000) / 1000)
+            }
+          ]
+        }
+      })
+    }));
+    const { supabase, telemetry } = makeSupabase({
+      business: bizStarter,
+      subscription: {
+        data: {
+          id: "sub_1",
+          stripe_subscription_id: "si_1",
+          stripe_current_period_start: PAST_START,
+          stripe_current_period_end: FUTURE_END,
+          stripe_subscription_cached_at: new Date(NOW - 7 * 3600 * 1000).toISOString()
+        },
+        error: null
+      },
+      reserve: { data: { ok: true, grant_seconds: 60, duplicate: false }, error: null }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc1",
+      stripeSecret: "sk_live"
+    });
+    expect(r.ok).toBe(true);
+    // No fallback telemetry at all: the refresh worked.
+    expect(telemetry.map((t) => t.p_event_type)).not.toContain("jit_stripe_fail_proceed_cached");
+    expect(telemetry.map((t) => t.p_event_type)).not.toContain("jit_stripe_fail_block");
+  });
+
+  it("honors a >30d cache for a prepaid biennial plan when the JIT fails", async () => {
+    // A term plan gets no renewal webhook for two years, so nothing but the
+    // JIT re-stamps its cache. Judging it by the monthly 30-day yardstick
+    // refuses calls from a tenant paid in full through 2028.
+    stubFetch(() => ({ ok: false, status: 500, text: async () => "stripe down" }));
+    const { supabase, telemetry } = makeSupabase({
+      business: bizStarter,
+      subscription: {
+        data: {
+          id: "sub_1",
+          stripe_subscription_id: "si_1",
+          stripe_current_period_start: PAST_START,
+          stripe_current_period_end: FUTURE_END,
+          stripe_subscription_cached_at: new Date(NOW - 40 * 24 * 3600 * 1000).toISOString(),
+          billing_period: "biennial"
+        },
+        error: null
+      },
+      reserve: { data: { ok: true, grant_seconds: 60, duplicate: false }, error: null }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc1",
+      stripeSecret: "sk_live"
+    });
+    expect(r.ok).toBe(true);
+    expect(telemetry.map((t) => t.p_event_type)).toContain("jit_stripe_fail_proceed_cached");
+  });
+
+  it("still blocks a >30d cache for a monthly plan when the JIT fails", async () => {
+    // The monthly rule is unchanged: a renewal webhook re-stamps every cycle,
+    // so a cache older than a full cycle really does mean something is broken.
+    stubFetch(() => ({ ok: false, status: 500, text: async () => "stripe down" }));
+    const { supabase, telemetry } = makeSupabase({
+      business: bizStarter,
+      subscription: {
+        data: {
+          id: "sub_1",
+          stripe_subscription_id: "si_1",
+          stripe_current_period_start: PAST_START,
+          stripe_current_period_end: FUTURE_END,
+          stripe_subscription_cached_at: new Date(NOW - 40 * 24 * 3600 * 1000).toISOString(),
+          billing_period: "monthly"
         },
         error: null
       }
