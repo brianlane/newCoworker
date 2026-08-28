@@ -354,6 +354,21 @@ from public.slack_messages m
 where exists (
   select 1 from public.coworker_conversations c where c.id = m.conversation_id
 )
+-- All-or-nothing guard, because ON CONFLICT alone cannot make this
+-- idempotent: the arbiter index is partial, so a message with no provider
+-- event id (an assistant row posted without one) conflicts with nothing and
+-- would be inserted again on a re-run. Measured, not assumed: without this
+-- a second application took a four-message thread to five.
+and not exists (
+  select 1 from public.coworker_messages x where x.channel = 'slack'
+)
+-- ORDER BY IS LOAD-BEARING, not tidiness. coworker_messages.id is an
+-- identity column, assigned in the order this SELECT produces rows, and
+-- listCoworkerMessages reads a thread's history by id. Without this the
+-- planner is free to return rows by the event-id index (or any other
+-- order), which would replay a live thread out of chronological order and
+-- leave the turn treating the wrong line as the one to answer.
+order by m.id
 -- The arbiter index is PARTIAL (external_event_id is not null), and a
 -- partial index only arbitrates when the statement repeats its predicate.
 -- Without this Postgres rejects the whole migration with "no unique or
@@ -362,38 +377,29 @@ on conflict (business_id, channel, external_event_id)
   where external_event_id is not null
   do nothing;
 
--- Queued and processing work only: `done` and `error` rows are history, and
--- the new worker would have nothing to do with them. A processing row comes
--- across as queued, because its claim died with the old worker.
-insert into public.coworker_jobs (
-  id, business_id, channel, conversation_id, user_message_id, status, attempts,
-  error_code, error_detail, created_at
-)
-select
-  j.id, j.business_id, 'slack', j.conversation_id,
-  -- The message ids are new (identity columns), so the old pointer cannot
-  -- come across. Resolve it through the event id, which is stable, and fall
-  -- back to 0 (supersedes nothing) rather than dropping the job.
-  coalesce(
-    (
-      select nm.id
-      from public.coworker_messages nm
-      join public.slack_messages om on om.id = j.user_message_id
-      where nm.business_id = j.business_id
-        and nm.channel = 'slack'
-        and nm.external_event_id is not distinct from om.slack_event_id
-        and nm.conversation_id = j.conversation_id
-      limit 1
-    ),
-    0
-  ),
-  'queued', j.attempts, j.error_code, j.error_detail, j.created_at
-from public.slack_jobs j
-where j.status in ('queued', 'processing')
-  and exists (
-    select 1 from public.coworker_conversations c where c.id = j.conversation_id
-  )
-on conflict (id) do nothing;
+-- IN-FLIGHT JOBS ARE DELIBERATELY NOT COPIED, and this is the safer of two
+-- imperfect options rather than an oversight.
+--
+-- Copying them would mint a second, independently claimable copy of work
+-- the OLD worker can still finish: the migration unschedules the Slack
+-- cron, but it cannot stop a webhook kick already in flight or an
+-- /api/internal/slack-worker run already executing, and the app deploy is
+-- not atomic with this migration. The result would be two answers to one
+-- message in the workspace. A `processing` row already at attempts = 3
+-- would be worse still: copied as `queued` with that counter, it can never
+-- be claimed (claim takes attempts < 3) and never reclaimed (reclaim only
+-- touches `processing`), so it would sit queued forever.
+--
+-- Not copying them costs at most a handful of in-flight messages going
+-- unanswered across the cutover window. Their CONTENT is safe either way,
+-- because the messages above did come across, so the thread reads
+-- correctly and the next turn replays them as context. An unanswered
+-- message is recoverable by asking again; a duplicate reply and a
+-- permanently wedged conversation head are not.
+--
+-- slack_jobs stays readable, so anything stranded is visible afterwards:
+--   select id, conversation_id, status, attempts, created_at
+--   from public.slack_jobs where status in ('queued','processing');
 
 -- ---------------------------------------------------------------------
 -- Cron retry net. The webhook kicks the worker inline on every enqueue;
