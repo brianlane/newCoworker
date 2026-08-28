@@ -1620,7 +1620,11 @@ async function acquireVps(args: {
           sleep,
           now,
           minCreatedAtMs: orphanMinCreatedAtMs,
-          maxCreatedAtMs: orphanMaxCreatedAtMs
+          maxCreatedAtMs: orphanMaxCreatedAtMs,
+          // A named box is waited for by id. Otherwise the loop would stop on
+          // the first same-size orphan to appear, which after a long
+          // post-charge failure can easily be a concurrent business's.
+          ...(chargedVmId !== null ? { awaitVmId: chargedVmId } : {})
         });
         const sizeMatches = pooled.filter((orphan) =>
           orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs, orphanMaxCreatedAtMs)
@@ -1629,17 +1633,28 @@ async function acquireVps(args: {
         // Concurrent same-size fail-but-charges: the earlier materialization
         // belongs to the earlier purchase; taking newest can steal a later
         // caller's term-priced box.
-        // When the failure named its box, that IS the box: Hostinger told us
-        // which VM the charge bought, so there is nothing for the size and
-        // age heuristics to infer. It still has to have been POOLED to be
-        // adoptable, so an unhealthy box the reconciler refused (a terminal
-        // `error` state, say) correctly falls through to the original error
-        // and the daily sweep's human report.
+        // When the failure named its box, that IS the box and the ONLY box.
+        // Hostinger told us which VM the charge bought, so the age heuristics
+        // have nothing to infer, and falling back to them would be dangerous
+        // rather than merely redundant: the created-at ceiling is stamped when
+        // the failure surfaced, which after a 15-minute ready-poll is 15
+        // minutes wide, so a concurrent business's same-size fail-but-charge
+        // sits comfortably inside it. Adopting that would take a box someone
+        // else just paid for. Size is still checked, so a box that somehow
+        // came back the wrong plan stays pooled as spare capacity of its real
+        // size instead of putting this tenant on the wrong hardware.
+        //
+        // The named box still has to have been POOLED to be adoptable, so one
+        // the reconciler refused (a terminal `error` state, say) falls through
+        // to the original error and the daily sweep's human report.
         const namedMatch =
           chargedVmId !== null ? pooled.find((orphan) => orphan.vmId === chargedVmId) ?? null : null;
         const sizeMatch =
-          namedMatch ??
-          sizeMatches.slice().sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
+          chargedVmId !== null
+            ? namedMatch && orphanMatchesPurchaseAttempt(namedMatch, vpsSize)
+              ? namedMatch
+              : undefined
+            : sizeMatches.slice().sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
         if (sizeMatch) {
           if (skipPoolAdopt) {
             // Term-alignment path: THIS orphan is the term-bought box. Claim
