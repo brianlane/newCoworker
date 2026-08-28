@@ -184,7 +184,7 @@ export async function claimContractTermNudge(
  * it and leaves the row unstamped so the next daily pass retries, which keeps
  * a Stripe outage from either sending a wrong email or burning the one nudge.
  */
-export async function autoRenewIsLiveInStripe(
+async function autoRenewIsLiveInStripe(
   stripeSubscriptionId: string | null
 ): Promise<boolean> {
   if (!stripeSubscriptionId) return false;
