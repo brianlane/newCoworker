@@ -187,12 +187,15 @@ describe("edge cron timeouts cover the budget their chain can actually use", () 
  * removed. Shrinking this list is the goal.
  */
 const KNOWN_ABOVE_EDGE_CEILING = [
-  // Batch workers with DIRECT callers: the Meta and Slack webhooks kick
-  // these fire-and-forget, and on that path maxDuration genuinely governs.
-  // Their budgets are per-turn design (8 turns x 30s Gemini / 8 x 60s inline
-  // engine), which a quiet week's p95 of ~170ms cannot refute.
+  // Batch workers with DIRECT callers: the Meta webhook and every team-chat
+  // channel's webhook kick these fire-and-forget, and on that path
+  // maxDuration genuinely governs. Their budgets are per-turn design (8
+  // turns x 30s Gemini / 8 x 60s inline engine), which a quiet week's p95 of
+  // ~170ms cannot refute.
   "messenger-worker",
-  "slack-worker",
+  // One queue for every team-chat channel, so this replaces slack-worker
+  // rather than joining it.
+  "coworker-worker",
   // Vendor-latency sweeps whose own comments size the budget for slow days
   // (Telnyx MDR paging over a 90-day backfill; ~10 worst-case tenants at 30s
   // each). Background completion past the bridge's 504 is load-bearing here.

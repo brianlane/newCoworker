@@ -239,9 +239,12 @@ async function lastOwnerSlackAt(
   db: SupabaseClient
 ): Promise<string | null> {
   const { data, error } = await db
-    .from("slack_conversations")
+    .from("coworker_conversations")
     .select("is_owner, user_email, last_user_message_at")
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)
+    // The shared pipeline holds every team-chat channel, so this MUST pin
+    // the channel. Without it a live Telegram thread would certify Slack.
+    .eq("channel", "slack");
   if (error) throw new Error(`lastOwnerSlackAt: ${error.message}`);
   const emails = new Set(audience.emails);
   let at: string | null = null;

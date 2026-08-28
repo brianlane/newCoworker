@@ -129,7 +129,7 @@ function answer(q: Query, legs: Legs): Fixture {
   if (q.table === "sms_inbound_jobs") return legs.sms ?? { data: [] };
   if (q.table === "notification_link_clicks") return legs.clicks ?? { data: [] };
   if (q.table === "messenger_conversations") return legs.whatsapp ?? { data: [] };
-  if (q.table === "slack_conversations") return legs.slack ?? { data: [] };
+  if (q.table === "coworker_conversations") return legs.slack ?? { data: [] };
   return legs.email ?? { data: [] };
 }
 
@@ -367,6 +367,22 @@ describe("the WhatsApp signal", () => {
 describe("the Slack signal", () => {
   const withOwnerEmail: Legs = { business: { data: { owner_email: "owner@example.com" } } };
 
+  it("reads only the SLACK rows out of the shared coworker pipeline", async () => {
+    // coworker_conversations holds every team-chat channel now. Without the
+    // channel filter, a live Telegram or Teams thread would certify Slack
+    // as healthy, which is the same class of bug as reading the newest
+    // WhatsApp thread instead of the owner's own.
+    const { query } = await judgeOne({
+      ...withOwnerEmail,
+      slack: { data: [{ is_owner: true, last_user_message_at: daysAgo(3) }] }
+    });
+    expect(query("coworker_conversations")?.filters).toContainEqual([
+      "eq",
+      "channel",
+      "slack"
+    ]);
+  });
+
   it("accepts the is_owner flag the Slack pipeline already stamps", async () => {
     const { by } = await judgeOne({
       ...withOwnerEmail,
@@ -409,7 +425,7 @@ describe("the Slack signal", () => {
   it("tolerates a null result set and reports an error", async () => {
     const nulls = await judgeOne({ slack: { data: null } });
     expect(nulls.by("slack").silentDays).toBeNull();
-    const failed = await judgeOne({}, { fail: (q) => q.table === "slack_conversations" });
+    const failed = await judgeOne({}, { fail: (q) => q.table === "coworker_conversations" });
     expect(failed.row.outcome === "failed" && failed.row.error).toBe(`lastOwnerSlackAt: ${READ_FAILED}`);
   });
 });
