@@ -142,6 +142,42 @@ export function isLapseRiskFinding(finding: Pick<BillingPostureFinding, "kind">)
   return !ADVISORY_FINDING_KINDS.has(finding.kind);
 }
 
+/**
+ * Findings that are ROUTINE once the check has healed them, so a run that
+ * found nothing else is not worth an email.
+ *
+ * Only two kinds can ever carry `autoHealed: true`, and they are not equally
+ * boring. A healed `tenant_auto_renew_off` means the check just SPENT MONEY
+ * on the account's behalf, re-enabling a renewal charge because something had
+ * turned it off on a live tenant's box; that is worth waking up for even
+ * though it is fixed. A healed `pool_box_lapsed_retired` is the pool reaper
+ * doing its ordinary job: a box nobody was using reached the end of the period
+ * it was already paid through, and its row was retired. Nothing changed that a
+ * human could have changed, and nothing was spent.
+ *
+ * This is the same judgement the module already applies to a lapsed box that
+ * gets claimed mid-run ("an ops email that reports non-problems is one nobody
+ * reads on the day it is right"), extended to the run that reaps it.
+ */
+const ROUTINE_WHEN_HEALED_KINDS: ReadonlySet<BillingPostureFinding["kind"]> = new Set([
+  "pool_box_lapsed_retired"
+]);
+
+/**
+ * True when this finding alone justifies sending the ops digest.
+ *
+ * Deliberately keyed on `autoHealed` and not on kind alone: a
+ * `pool_box_lapsed_retired` whose retire FAILED arrives with
+ * `autoHealed: false`, and that one does need a human (the row still reads
+ * `available` and overstates the pool).
+ */
+export function warrantsOpsEmail(
+  finding: Pick<BillingPostureFinding, "kind" | "autoHealed">
+): boolean {
+  if (!finding.autoHealed) return true;
+  return !ROUTINE_WHEN_HEALED_KINDS.has(finding.kind);
+}
+
 export type BillingPostureResult = {
   checkedTenantVms: number;
   checkedPoolBoxes: number;
