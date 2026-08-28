@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   provisionVpsForBusiness,
   buildDefaultPostInstallScript,
+  chargedVirtualMachineId,
   resolvePriceItemId,
   hostingerTermForBillingPeriod,
   hostingerTermMonths,
@@ -906,6 +907,121 @@ describe("provisionVpsForBusiness", () => {
     const req = client.purchaseVirtualMachine.mock.calls[0][0];
     expect(req.payment_method_id).toBe(42333536);
     expect(req.coupons).toEqual(["WELCOME5"]);
+  });
+
+  // Everything from `purchaseVirtualMachine` returning onward runs on a box
+  // the account is ALREADY paying for. A bare throw there abandons it, and
+  // the orchestrator's fail-but-charge reconciler used to key only on the
+  // purchase CALL failing, so this whole window was invisible to it.
+  describe("failures after the charge lands", () => {
+    async function failAfterPurchase(
+      clientDeps: Record<string, unknown>,
+      extra: Record<string, unknown> = {}
+    ): Promise<unknown> {
+      const client = makeClientStub(clientDeps);
+      try {
+        await provisionVpsForBusiness(
+          { businessId: "biz-1", tier: "starter", pollIntervalMs: 1 },
+          {
+            client: client as unknown as HostingerClient,
+            generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+            sleep: vi.fn(),
+            ...extra
+          }
+        );
+      } catch (err) {
+        return err;
+      }
+      throw new Error("should have thrown");
+    }
+
+    it("names the paid VM when the ready-poll gives up", async () => {
+      const err = await failAfterPurchase({
+        getVirtualMachine: vi
+          .fn()
+          .mockResolvedValueOnce({ id: 42, state: "installing", ipv4: [] })
+          .mockResolvedValueOnce({ id: 42, state: "error", ipv4: [] })
+      });
+      expect(chargedVirtualMachineId(err)).toBe(42);
+      // The operator has to be able to read "money moved" off the message
+      // alone: this is what reaches the dashboard row and the ops email.
+      expect((err as Error).message).toMatch(/charge has already landed/);
+      // The original cause survives for whoever debugs the actual failure.
+      expect((err as Error).message).toMatch(/state=error/);
+      expect(((err as Error).cause as Error).message).toMatch(/state=error/);
+    });
+
+    // The LAST post-purchase step, and the one that matters most: without a
+    // persisted key the box is running, paid for, and permanently unreachable
+    // by us. KIN's stranded VM 1936826 was exactly this shape, Aug 2026.
+    it("names the paid VM when the ssh-key write fails", async () => {
+      const err = await failAfterPurchase(
+        {
+          // Healthy box, so the ready-poll passes and the WRITE is what fails.
+          getVirtualMachine: vi
+            .fn()
+            .mockResolvedValue({ id: 42, state: "running", ipv4: [{ id: 1, address: "1.2.3.4" }] })
+        },
+        { db: { insertVpsSshKey: vi.fn().mockRejectedValue(new Error("unique index violation")) } }
+      );
+      expect(chargedVirtualMachineId(err)).toBe(42);
+      expect((err as Error).message).toMatch(/charge has already landed/);
+      expect((err as Error).message).toMatch(/unique index violation/);
+    });
+
+    it("stays null for a failure BEFORE the purchase, where no money moved", async () => {
+      const client = makeClientStub({
+        createPublicKey: vi.fn().mockRejectedValue(new Error("token lacks public-keys scope"))
+      });
+      let caught: unknown;
+      try {
+        await provisionVpsForBusiness(
+          { businessId: "biz-1", tier: "starter", pollIntervalMs: 1 },
+          {
+            client: client as unknown as HostingerClient,
+            generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+            sleep: vi.fn()
+          }
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
+      expect(chargedVirtualMachineId(caught)).toBeNull();
+    });
+
+    it("stays null for an unrelated error object", () => {
+      expect(chargedVirtualMachineId(new Error("nope"))).toBeNull();
+      expect(chargedVirtualMachineId(null)).toBeNull();
+      expect(chargedVirtualMachineId("string")).toBeNull();
+    });
+
+    // The guard is duck-typed on `name` so it survives the module boundary,
+    // which means anything can claim the name. The id is re-validated, so a
+    // borrowed name cannot smuggle a bogus VM into an adopt.
+    it("stays null when something borrows the name without a usable VM id", () => {
+      const borrow = (virtualMachineId: unknown): Error => {
+        const e = new Error("borrowed");
+        e.name = "PostPurchaseProvisionError";
+        return Object.assign(e, { virtualMachineId });
+      };
+      expect(chargedVirtualMachineId(borrow(undefined))).toBeNull();
+      expect(chargedVirtualMachineId(borrow("1936826"))).toBeNull();
+      expect(chargedVirtualMachineId(borrow(0))).toBeNull();
+      expect(chargedVirtualMachineId(borrow(-1))).toBeNull();
+      expect(chargedVirtualMachineId(borrow(12.5))).toBeNull();
+      expect(chargedVirtualMachineId(borrow(1936826))).toBe(1936826);
+    });
+
+    it("still names the VM when the underlying failure was not an Error", async () => {
+      const err = await failAfterPurchase({
+        // A rejected non-Error (a bare string from some client path) must not
+        // cost us the VM id: that id is the whole point of the wrapper.
+        getVirtualMachine: vi.fn().mockRejectedValue("hostinger said no")
+      });
+      expect(chargedVirtualMachineId(err)).toBe(42);
+      expect((err as Error).message).toMatch(/hostinger said no/);
+    });
   });
 
   it("bails when getVirtualMachine eventually reports state=error", async () => {

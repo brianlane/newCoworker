@@ -334,6 +334,16 @@ export async function reconcileUntilSizeMatch(args: {
   minCreatedAtMs?: number;
   /** See {@link orphanMatchesPurchaseAttempt}; bounds attribution forward. */
   maxCreatedAtMs?: number;
+  /**
+   * Wait for THIS VM specifically, ignoring the size/age heuristics.
+   *
+   * Set when the failure named the box Hostinger charged for. The heuristics
+   * exist to guess which orphan belongs to this attempt; when the id is known
+   * there is nothing to guess, and guessing is actively harmful: a concurrent
+   * business's same-size fail-but-charge would otherwise end the wait before
+   * our own box materializes, and the caller would adopt theirs.
+   */
+  awaitVmId?: number;
 }): Promise<ReconciledOrphan[]> {
   const nowFn = args.now ?? Date.now;
   const intervalMs = args.intervalMs ?? ORPHAN_RECONCILE_RETRY_INTERVAL_MS;
@@ -371,11 +381,18 @@ export async function reconcileUntilSizeMatch(args: {
     }
     for (const orphan of batch) byId.set(orphan.vmId, orphan);
     const pooled = [...byId.values()];
-    if (
-      pooled.some((orphan) =>
-        orphanMatchesPurchaseAttempt(orphan, args.vpsSize, args.minCreatedAtMs, args.maxCreatedAtMs)
-      )
-    ) {
+    const satisfied =
+      args.awaitVmId !== undefined
+        ? pooled.some((orphan) => orphan.vmId === args.awaitVmId)
+        : pooled.some((orphan) =>
+            orphanMatchesPurchaseAttempt(
+              orphan,
+              args.vpsSize,
+              args.minCreatedAtMs,
+              args.maxCreatedAtMs
+            )
+          );
+    if (satisfied) {
       return pooled;
     }
     if (nowFn() >= deadline) return pooled;
