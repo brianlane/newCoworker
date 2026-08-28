@@ -128,12 +128,19 @@ try {
   // subscription id the inventory row recorded.
   oldSub = subs.find((s) => s.id === oldRowBefore?.hostinger_billing_subscription_id) ?? null;
 }
+// `releaseVpsToPool` writes this column unconditionally, so omitting it stores
+// null and ERASES the link on an existing row. The pooled box's whole purpose
+// is to stay auditable against Hostinger (never_renew has to be checkable, and
+// the pool/adopt path needs the subscription to disable renewal later), so the
+// id has to be carried through explicitly, preferring the live lookup and
+// falling back to whatever the row already recorded.
+const oldBillingId = oldSub?.id ?? oldRowBefore?.hostinger_billing_subscription_id ?? null;
 
 console.log(`== migrated VPS inventory reconcile ==`);
 console.log(`business : ${biz.name} (${biz.id})`);
 console.log(`new box  : ${NEW_VM_ID} plan=${newPlan} state=${newVm.state} sub=${newSub?.id ?? "unknown"}`);
 console.log(`           auto_renew=${newSub?.is_auto_renewed ?? "?"} next=${newSub?.next_billing_at ?? "?"}`);
-console.log(`old box  : ${OLD_VM_ID} plan=${oldPlan} sub=${oldSub?.id ?? "unknown"}`);
+console.log(`old box  : ${OLD_VM_ID} plan=${oldPlan} sub=${oldBillingId ?? "unknown"}`);
 console.log(`           auto_renew=${oldSub?.is_auto_renewed ?? "?"} next=${oldSub?.next_billing_at ?? "?"}`);
 console.log(`old row  : ${oldRowBefore ? `${oldRowBefore.state} (assigned=${oldRowBefore.assigned_business_id ?? "none"})` : "none"}`);
 
@@ -167,6 +174,8 @@ console.log(`[new] vm ${NEW_VM_ID} recorded assigned`);
 await releaseVpsToPool({
   vmId: OLD_VM_ID,
   plan: oldPlan,
+  hostname: oldRowBefore?.hostname ?? null,
+  hostingerBillingSubscriptionId: oldBillingId,
   ...(oldSub ? { expiresAt: paidThroughFromBillingSub(oldSub) } : {}),
   notes: `released after ${BUSINESS_ID} cut over to ${NEW_VM_ID}; auto-renew off, lapses at period end`
 });
@@ -184,13 +193,20 @@ console.log(
 );
 console.log(
   `[verify] old ${OLD_VM_ID}: state=${oldRow?.state} assigned=${oldRow?.assigned_business_id ?? "none"} ` +
-    `never_renew=${oldRow?.never_renew} expires=${oldRow?.expires_at ?? "none"}`
+    `sub=${oldRow?.hostinger_billing_subscription_id ?? "none"} never_renew=${oldRow?.never_renew} ` +
+    `expires=${oldRow?.expires_at ?? "none"}`
 );
 if (newRow?.state !== "assigned" || newRow.assigned_business_id !== BUSINESS_ID) {
   throw new Error(`new box row did not land as assigned to ${BUSINESS_ID}`);
 }
 if (oldRow?.state !== "available" || oldRow.never_renew !== true) {
   throw new Error(`old box row did not land as available + never_renew`);
+}
+if (oldBillingId && oldRow.hostinger_billing_subscription_id !== oldBillingId) {
+  throw new Error(
+    `old box row lost its billing subscription id (expected ${oldBillingId}, ` +
+      `got ${oldRow.hostinger_billing_subscription_id ?? "null"})`
+  );
 }
 
 await recordOneshotApplied(db, {
