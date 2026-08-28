@@ -161,7 +161,9 @@ export function BillingControlsPanel({
             <p className="text-xs text-parchment/70">
               Pause collection on this tenant
               {resumeOn ? ` until ${resumeOn}` : " until you resume it"}? They keep full service
-              and are not charged.
+              and their plan is not charged. Pack auto-reloads the tenant enabled still charge
+              their card (their own top-up instruction); comp packs separately if the favor
+              should cover usage too.
             </p>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => submitPause("pause")} loading={pauseBusy}>
