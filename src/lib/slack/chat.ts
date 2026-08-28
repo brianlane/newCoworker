@@ -15,7 +15,10 @@
  * UI language choice, never Accept-Language.
  */
 import type { AppLocale } from "@/i18n/routing";
-import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
+import {
+  NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE
+} from "../../../supabase/functions/_shared/sms_prompt_lines";
 
 /** Replies must fit chat; Slack renders ~4k chars of text reliably. */
 export const SLACK_REPLY_MAX_CHARS = 3900;
@@ -32,7 +35,8 @@ export const SLACK_TEAM_PREAMBLE = `You are the business's AI coworker, talking 
 Help them the way a sharp colleague would: answer questions about the business, look things up, check the calendar, draft copy, and take the actions your tools allow.
 You are NOT talking to the business owner: account settings, notification preferences, roster changes, spam flags, and sending email are owner-only actions on this surface. If asked, say plainly that the owner can do it from the dashboard or by asking you in their own Slack DM.
 Ground everything in what your tools return; when you do not know, say so instead of guessing.
-${NO_EM_DASH_PROMPT_LINE}`;
+${NO_EM_DASH_PROMPT_LINE}
+${US_SPELLING_PROMPT_LINE}`;
 
 const ONBOARDING: Record<AppLocale, string> = {
   en: "👋 I'm your business's New Coworker. Ask me about customers, bookings, and business questions, or have me draft something. Mention me in a channel with @New Coworker, or just DM me here.",

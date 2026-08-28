@@ -14,6 +14,7 @@ import {
   UNKNOWN_SITE,
   UNKNOWN_SITE_REF,
   decideSiteHeal,
+  refIsStaleSpelling,
   siteRefFor
 } from "../scripts/oneshot/amy-heal-parked-cadence-lead-site";
 
@@ -26,7 +27,7 @@ describe("decideSiteHeal", () => {
     ).toEqual({
       outcome: "set",
       site: "ReferralExchange",
-      ref: "your enquiry through ReferralExchange",
+      ref: "your inquiry through ReferralExchange",
       changed: ["lead_site", "lead_site_ref"]
     });
   });
@@ -37,7 +38,7 @@ describe("decideSiteHeal", () => {
     expect(decideSiteHeal({ lead_site: "Clever" }, "ReferralExchange")).toEqual({
       outcome: "set",
       site: "Clever",
-      ref: "your enquiry through Clever",
+      ref: "your inquiry through Clever",
       changed: ["lead_site_ref"]
     });
   });
@@ -74,16 +75,31 @@ describe("decideSiteHeal", () => {
     ).toEqual({
       outcome: "set",
       site: "Clever",
-      ref: "your enquiry through Clever",
+      ref: "your inquiry through Clever",
       changed: ["lead_site", "lead_site_ref"]
     });
     // A phrase that already names a site is kept verbatim.
     expect(
       decideSiteHeal(
-        { lead_site: "Clever", lead_site_ref: "your enquiry through Clever" },
+        { lead_site: "Clever", lead_site_ref: "your inquiry through Clever" },
         "ReferralExchange"
       )
     ).toEqual({ outcome: "already_right" });
+    // ...unless it carries the pre-2026-08-28 British spelling, which is
+    // exactly what the fifteen runs parked on that date held. Kept verbatim
+    // it would have been spoken as "your enquiry through Clever" on the next
+    // call, which is the wording this whole spelling change exists to stop.
+    expect(
+      decideSiteHeal(
+        { lead_site: "Clever", lead_site_ref: "your enquiry through Clever" },
+        "ReferralExchange"
+      )
+    ).toEqual({
+      outcome: "set",
+      site: "Clever",
+      ref: "your inquiry through Clever",
+      changed: ["lead_site_ref"]
+    });
   });
 
   it("is idempotent: its own output decides already_right on the next pass", () => {
@@ -105,21 +121,33 @@ describe("decideSiteHeal", () => {
     expect(decideSiteHeal({ lead_site: " Clever " }, "  ")).toEqual({
       outcome: "set",
       site: "Clever",
-      ref: "your enquiry through Clever",
+      ref: "your inquiry through Clever",
       changed: ["lead_site", "lead_site_ref"]
     });
   });
 });
 
 describe("the constants the templates lean on", () => {
-  it("keeps the spoken fallback identical to the pre-fix value, on purpose", () => {
-    // "your recent enquiry" was always the right thing to SAY; it was only
-    // wrong as the object of "through". Parked runs healed to this value and
-    // new runs extracting it must read the same.
-    expect(UNKNOWN_SITE_REF).toBe(OLD_SITE_FALLBACK);
+  it("keeps the spoken fallback's WORDS, and only its words, from the pre-fix value", () => {
+    // Saying "your recent inquiry" was always the right thing to SAY; it was
+    // only wrong as the object of "through". Parked runs healed to this value
+    // and new runs extracting it must read the same, so the only permitted
+    // difference from the pre-fix constant is the banned British spelling.
+    expect(UNKNOWN_SITE_REF).toBe("your recent inquiry");
+    expect(UNKNOWN_SITE_REF).not.toBe(OLD_SITE_FALLBACK);
+    expect(OLD_SITE_FALLBACK.replace(/enquir/g, "inquir")).toBe(UNKNOWN_SITE_REF);
+  });
+
+  it("nothing the healer writes carries the British spelling", () => {
+    expect(refIsStaleSpelling(UNKNOWN_SITE_REF)).toBe(false);
+    expect(refIsStaleSpelling(siteRefFor("Clever"))).toBe(false);
+    // The matcher for rows written before the change still recognizes them.
+    expect(refIsStaleSpelling(OLD_SITE_FALLBACK)).toBe(true);
+    expect(refIsStaleSpelling("your Enquiry through Clever")).toBe(true);
+    expect(refIsStaleSpelling("")).toBe(false);
   });
 
   it("derives the phrase the way the extraction field describes it", () => {
-    expect(siteRefFor("Clever")).toBe("your enquiry through Clever");
+    expect(siteRefFor("Clever")).toBe("your inquiry through Clever");
   });
 });

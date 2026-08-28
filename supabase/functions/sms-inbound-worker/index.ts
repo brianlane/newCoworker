@@ -53,6 +53,7 @@ import { escalateToHuman } from "../_shared/needs_human.ts";
 import { sendCustomerReplyAlert } from "../_shared/customer_reply_alert.ts";
 import {
   NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE,
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE,
@@ -1695,6 +1696,7 @@ serve(async (req: Request) => {
         SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
         emojiIntensityLine,
         NO_EM_DASH_PROMPT_LINE,
+        US_SPELLING_PROMPT_LINE,
         dateLine
       ];
       customerPreamble = staffLines.join("\n\n");
@@ -1816,7 +1818,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, SMS_TIME_HONESTY_LINE, emojiIntensityLine, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, SMS_TIME_HONESTY_LINE, emojiIntensityLine, NO_EM_DASH_PROMPT_LINE, US_SPELLING_PROMPT_LINE, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]

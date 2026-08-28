@@ -42,11 +42,11 @@
  * THE SITE IS TWO VARS, NOT ONE, because its two audiences need different
  * grammar and different fallbacks. The one-var version composed the fallback
  * into gibberish on live calls (call 68ca8cdb, Sandy Baldwin, 2026-08-26:
- * "following up on your enquiry through your recent enquiry about your move
+ * "following up on your inquiry through your recent inquiry about your move
  * in the area"). `lead_site` is the bare network name for team-facing copy
  * ("source: Clever", fallback "source: unknown"); `lead_site_ref` is the
- * phrase spoken TO the lead ("your enquiry through Clever", fallback "your
- * recent enquiry"), so the sentence stays grammatical when nothing is known.
+ * phrase spoken TO the lead ("your inquiry through Clever", fallback "your
+ * recent inquiry"), so the sentence stays grammatical when nothing is known.
  * The intent and city fallbacks ("your move", "the area") already compose in
  * place, and the fallback case is the COMMON one, not the edge: lead_city
  * fell back on 14 of 14 in-flight runs on 2026-08-27.
@@ -277,9 +277,9 @@ export const READ_FIELDS = [
   {
     name: "lead_site_ref",
     description:
-      "How to refer to the enquiry when speaking with the lead: the words 'your enquiry " +
-      "through' followed by the same site as lead_site (e.g. your enquiry through Clever). " +
-      "When lead_site is unknown, answer exactly: your recent enquiry"
+      "How to refer to the inquiry when speaking with the lead: the words 'your inquiry " +
+      "through' followed by the same site as lead_site (e.g. your inquiry through Clever). " +
+      "When lead_site is unknown, answer exactly: your recent inquiry"
   },
   {
     name: "lead_city",
@@ -350,7 +350,7 @@ function roundSteps(n: number): Step[] {
       toVar: "lead_phone",
       personaTemplate: persona(n),
       contextTemplate:
-        "Their name: {{vars.lead_name}}. They enquired about {{vars.lead_intent}} in " +
+        "Their name: {{vars.lead_name}}. They inquired about {{vars.lead_intent}} in " +
         "{{vars.lead_city}} (source: {{vars.lead_site}}). Do not ask them for details we already have.",
       voicemailTemplate: copyForRound(VOICEMAILS, n),
       notifyOwner: true,
@@ -486,7 +486,7 @@ function roundSteps(n: number): Step[] {
           nameVar: "lead_name",
           message:
             "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
-            "follow-up sequence. They enquired about {{vars.lead_intent}} in {{vars.lead_city}} " +
+            "follow-up sequence. They inquired about {{vars.lead_intent}} in {{vars.lead_city}} " +
             '(source: {{vars.lead_site}}). They said: "{{vars.lead_reply}}"',
           // Nobody owns this lead, so the TEAM hears it rather than Amy. Her
           // roster row already says team_broadcast_enabled false, so she is

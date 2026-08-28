@@ -705,7 +705,7 @@ verdict stamped the session, `Lead: <name> (<number>)` plus
 `Lead email:` / `Lead source:` from the central contacts row for the dialed
 number (signed caller only), and `Call briefing:` with the flow's
 `contextTemplate` note verbatim, which is where buyer/seller intent and the
-source site live (the cadence note reads "They enquired about
+source site live (the cadence note reads "They inquired about
 {{vars.lead_intent}} in {{vars.lead_city}} (source: {{vars.lead_site}})"
 since the Aug 27 2026 fallback-composition fix).
 Inbound live-transfer alerts are byte-identical to before.
@@ -1016,12 +1016,16 @@ with on call 68ca8cdb (Sandy Baldwin, Aug 26 2026,
 `voice_handoff_sessions.context`). The fallback case is the COMMON one:
 `lead_city` fell back on 14 of 14 in-flight runs that day.
 
+(The quotes in this paragraph keep their original British spelling of
+"inquiry" because that is what the flow actually said at the time. The
+spelling itself was fixed platform-wide on Aug 28 2026, see below.)
+
 The fix splits the site into two vars, because its two audiences need
 different grammar and different fallbacks. `lead_site` stays the bare network
 name for team-facing copy ("source: Clever"), now falling back to "unknown"
 instead of a sentence fragment; the new `lead_site_ref` is the phrase spoken
-TO the lead ("your enquiry through Clever"), falling back to "your recent
-enquiry", so the sentence survives an unknown source. Spoken surfaces
+TO the lead ("your inquiry through Clever"), falling back to "your recent
+inquiry", so the sentence survives an unknown source. Spoken surfaces
 (persona, round-1 voicemail and text) read the phrase var; team surfaces
 (`contextTemplate`, which the outbound call summary quotes as "Call
 briefing", the FOLLOW-UP REPLY notice, the promote offer and owner fallback)
@@ -1031,7 +1035,8 @@ ROUNDS=3, live again the day ROUNDS grows). Step ids and count are unchanged,
 so parked runs keep their `current_step`; the flatten-live-vs-new check still
 ran before the apply, per the standing rule. A composition test now renders
 every template against the full fallback scope and fails on "through your
-recent enquiry", double spaces, or a `vars.*` placeholder nothing produces.
+recent inquiry" (and on the pre-Aug-28 British spelling of it), double
+spaces, or a `vars.*` placeholder nothing produces.
 
 Apply order matters: `amy-heal-parked-cadence-lead-site.ts --apply` FIRST,
 then `seed-amy-needs-follow-up-aiflow.ts --apply`. The heal seeds
@@ -1045,6 +1050,41 @@ of reading naturally but vaguely. Evidence first, fallback second: a run
 whose extraction produced a real site keeps it, the contact row only fills
 gaps. Revision-CAS like the lead-type heal above; idempotent, dry-run by
 default, ledger-recorded.
+
+**`heal-inquiry-spelling.ts` (Aug 28 2026, platform):** Amy's leads were being
+called about "your enquiry through Clever". "Enquiry" is the British spelling;
+to an Arizona homeowner it reads as a typo, and it was being spoken aloud on
+every cadence call that knew its source site. It came from two independent
+places, so it needed two fixes.
+
+The stored copy is what this one-shot fixes. Both of Amy's ENABLED flows had
+the spelling baked in: "Needs Follow Up (AI cadence)" carried it in the spoken
+persona, the round-1 voicemail script, three team `contextTemplate` notes, the
+follow-up email body, and the `lead_site_ref` extraction-field instruction
+that literally told the model "answer exactly: your recent enquiry".
+"ReferralExchange Lead" carried it in two spoken personas and its team note.
+Seventeen strings across three flows in all (KIN's disabled "New Lead Intake"
+was swept in the same pass). Fifteen runs parked in `awaiting_reply` also held
+`lead_site_ref` "your enquiry through <site>" in their variable bags, written
+by the pre-fix extraction, and those would have spoken the old wording on
+their next call no matter what the definition said.
+
+It is a text substitution, not a re-seed: the definition modules regenerate a
+whole flow, which is the wrong tool for a six-letter change on a live
+automation. The script walks the stored JSON and rewrites only the matching
+substrings, leaving structure and ids untouched. Flow writes stamp
+`edit_source`/`edit_actor`, so the definition-versions trigger snapshots the
+prior bytes and the change is reversible; run writes are revision-CAS.
+Idempotent, dry-run by default, ledger-recorded.
+
+The models' own drift is the other half, and a one-shot cannot fix it: the AI
+also produced the spelling on turns no template scripts. `US_SPELLING_PROMPT_LINE`
+(`supabase/functions/_shared/sms_prompt_lines.ts`) now rides every AI surface's
+system prompt, with lockstep copies in the voice bridge (`usSpellingLine`, the
+surface this was heard on) and the document agents.
+`tests/inquiry-spelling.test.ts` fails CI if the spelling reappears in a
+guarded copy-first surface, including every `scripts/oneshot/*-definition.ts`,
+so a re-seed cannot put it back.
 
 **`amy-clever-lead-type.ts` (Aug 24 2026):** "Clever Lead - Accept" could not
 tell a buyer from a seller, and that is structural rather than careless: Clever

@@ -62,7 +62,10 @@ import type { PlanTier } from "@/lib/plans/tier";
 import { logger } from "@/lib/logger";
 import edgeEn from "../../../messages/edge-en.json";
 import edgeEs from "../../../messages/edge-es.json";
-import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
+import {
+  NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE
+} from "../../../supabase/functions/_shared/sms_prompt_lines";
 
 /** Same honest copy as the webchat engine's over-cap refusal. */
 export const MESSENGER_ENGINE_OVER_CAP_REFUSAL = edgeEn.MESSENGER_OVER_CAP;
@@ -427,7 +430,8 @@ export async function runMessengerGeminiTurn(
     bookingStatus,
     // Platform-wide writing rule (README "NO EM DASHES"): AI output on every
     // surface carries the punctuation instruction.
-    NO_EM_DASH_PROMPT_LINE
+    NO_EM_DASH_PROMPT_LINE,
+    US_SPELLING_PROMPT_LINE
   ]
     .filter(Boolean)
     .join("\n\n");

@@ -65,7 +65,7 @@ export const FOLLOW_UPS: ReadonlyArray<{ subject: string; body: string }> = [
     subject: "About your home search, {{vars.lead_name}}",
     body:
       "Hi {{vars.lead_name}},\n\n" +
-      "I saw your enquiry come through and wanted to reach out personally.\n\n" +
+      "I saw your inquiry come through and wanted to reach out personally.\n\n" +
       "I do not have a phone number for you, so email is the best way for us to start. " +
       "If you just reply to this message with a good time and a number, I will call you myself.\n\n" +
       "A few things I can send over in the meantime, whichever is useful:\n" +

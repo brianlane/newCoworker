@@ -124,7 +124,7 @@ Routing happens twice, because a lead can say what they need at two moments:
    worker will nurture"). It reads the same table out of `identity.md`.
 
 **Counselling pages turn away the wrong age group**, so a counselling
-enquiry with no usable age answer is NEVER guessed into one: the flow sends
+inquiry with no usable age answer is NEVER guessed into one: the flow sends
 the general page and asks whether it is for a child, a teenager or an adult,
 and the coworker is told to ask before sending any counselling link.
 

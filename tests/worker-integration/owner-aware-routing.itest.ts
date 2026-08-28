@@ -101,8 +101,8 @@ function noLeadPhoneFlow(): Record<string, unknown> {
       {
         id: "route",
         type: "route_to_team",
-        offerTemplate: "New enquiry. Reply 1 to claim or 2 to pass.",
-        ownerFallbackTemplate: "No one claimed the enquiry.",
+        offerTemplate: "New inquiry. Reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed the inquiry.",
         responseMinutes: 10
       }
     ]

@@ -20,3 +20,36 @@ Scope note: this bans the specific product label "AI receptionist". Standalone
 the product, e.g. the voice persona's system instruction ("You are the phone
 receptionist for {business}", which tests assert on) and pricing copy comparing
 cost against "a receptionist or answering service".
+
+# Spelling: "inquiry", never "enquiry"
+
+Write American English everywhere: user-facing copy, SMS/email text, AI
+prompts, seeded AiFlow definitions, code comments, and docs. The specific ban
+is the British "enquiry" family. Amy Laidlaw's follow-up cadence spent weeks
+opening calls by naming the lead's source site with the British spelling,
+read aloud to Arizona homeowners, because the seeded flow copy told the model
+to say it (fixed 2026-08-28).
+
+```text
+BAD:  We're following up on your enquiry through Clever
+GOOD: We're following up on your inquiry through Clever
+```
+
+Two mechanisms back this up, and a change to AI copy needs both:
+
+1. `US_SPELLING_PROMPT_LINE` in
+   `supabase/functions/_shared/sms_prompt_lines.ts` rides every AI
+   worker/model prompt, so the models do not drift into it on unscripted
+   turns. The voice bridge (`usSpellingLine`) and the document agents carry
+   lockstep copies.
+2. `tests/inquiry-spelling.test.ts` fails CI when the spelling appears in a
+   guarded copy-first surface (prompt-line modules, preambles, message
+   catalogs, email templates, and every `scripts/oneshot/*-definition.ts`).
+
+The only unguarded places the old spelling may appear are ones that READ old
+data rather than write new copy: `OLD_SITE_FALLBACK` in
+`scripts/oneshot/amy-heal-parked-cadence-lead-site.ts` and the rewrite rule in
+`scripts/oneshot/heal-inquiry-spelling.ts` are both matchers for rows written
+before the change, and captured production transcripts under `tests/e2e/` are
+replayed verbatim. Recognizing the spelling is not writing it. Anything that
+produces new text belongs inside the guard.

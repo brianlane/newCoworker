@@ -160,3 +160,29 @@ export const SMS_CONVERSATION_QUALITY_LINE =
 export const NO_EM_DASH_PROMPT_LINE =
   "Punctuation: never use an em dash in anything you write. Use a comma, " +
   "a period, or a colon instead.";
+
+/**
+ * Spelling: American English, and specifically "inquiry" (Amy Laidlaw,
+ * 2026-08-28). Amy's follow-up cadence was opening calls by naming the
+ * lead's source site with the British spelling of inquiry, which reads as a
+ * typo to an Arizona homeowner. It came from two places at once: the seeded
+ * flow copy that literally told the model to say it (healed by
+ * scripts/oneshot/heal-inquiry-spelling.ts) and the models' own drift on the
+ * turns no template scripts. Fixing the copy alone leaves the second source
+ * open, so the instruction rides every AI worker/model prompt the same way
+ * NO_EM_DASH_PROMPT_LINE does (SMS, dashboard/owner chat, Slack, messenger,
+ * webchat, AiFlow extraction; the voice bridge and the document agents carry
+ * lockstep copies).
+ *
+ * The banned spelling appears nowhere in this file except the explicit
+ * "Never write" clause below, which tests/inquiry-spelling.test.ts strips as a
+ * single contiguous literal before scanning. Keep that clause on one source
+ * line so the strip keeps working.
+ */
+export const US_SPELLING_PROMPT_LINE =
+  "Spelling: write in American English. " +
+  "Never write enquiry, enquiries, or enquire; " +
+  "the American spellings are inquiry, inquiries, and inquire. " +
+  "The same goes for other British spellings: write canceled, scheduling, " +
+  "organize, recognize, apologize, neighbor, center, favorite, and " +
+  "traveling.";

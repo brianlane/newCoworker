@@ -51,7 +51,9 @@ export async function draftBlogPostWithAi(
       "Structure the body with '## ' section headings and keep it focused " +
       "(500-900 words). Markdown pipe tables are supported, use one when " +
       "comparing options or listing structured facts. Never use em dashes; " +
-      "use commas or periods instead. The excerpt is 1-2 " +
+      "use commas or periods instead. " +
+      "Write in American English; the spelling is inquiry, never enquiry. " +
+      "The excerpt is 1-2 " +
       "friendly sentences (it doubles as " +
       "an Instagram caption, so no links and no markdown). Pick the best " +
       `category from: ${BLOG_CATEGORIES.join(", ")}. ` +

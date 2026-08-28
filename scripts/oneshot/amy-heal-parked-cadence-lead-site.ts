@@ -21,7 +21,7 @@
  * flow, and on 2026-08-27 all twelve parked runs' contacts carried a real
  * one (ReferralExchange or Clever). Only a lead whose contact row has no
  * `lead_source` gets the composable fallbacks ("unknown" for team copy,
- * "your recent enquiry" for spoken copy). A run whose extraction already
+ * "your recent inquiry" for spoken copy). A run whose extraction already
  * produced a real site keeps it; the contact row fills gaps, it does not
  * overrule the run.
  *
@@ -58,15 +58,28 @@ export const OLD_SITE_FALLBACK = "your recent enquiry";
 export const UNKNOWN_SITE = "unknown";
 
 /**
- * The post-fix spoken fallback. The same words as OLD_SITE_FALLBACK on
- * purpose: "your recent enquiry" was always the right thing to SAY, it was
- * only ever wrong as the object of "through".
+ * The post-fix spoken fallback. Same words as OLD_SITE_FALLBACK apart from
+ * the spelling: saying "your recent inquiry" was always the right thing to
+ * SAY, it was only ever wrong as the object of "through". The British
+ * "enquiry" this used to write is now banned platform-wide
+ * (US_SPELLING_PROMPT_LINE, tests/inquiry-spelling.test.ts), so OLD_SITE_FALLBACK
+ * above survives ONLY as the matcher for rows written before 2026-08-28.
  */
-export const UNKNOWN_SITE_REF = "your recent enquiry";
+export const UNKNOWN_SITE_REF = "your recent inquiry";
 
 /** The spoken reference for a known site, matching the extraction's wording. */
 export function siteRefFor(site: string): string {
-  return `your enquiry through ${site}`;
+  return `your inquiry through ${site}`;
+}
+
+/**
+ * A ref carrying the pre-2026-08-28 British spelling is stale no matter which
+ * site it names, so it gets recomposed rather than kept. Without this a
+ * parked run healed after the spelling change would keep saying "your
+ * enquiry through Clever" on its next call.
+ */
+export function refIsStaleSpelling(ref: string): boolean {
+  return /enquir/i.test(ref);
 }
 
 export type SiteHealDecision =
@@ -95,9 +108,10 @@ export function decideSiteHeal(
   const runKnows =
     currentSite !== "" && currentSite !== OLD_SITE_FALLBACK && currentSite !== UNKNOWN_SITE;
   const site = runKnows ? currentSite : (truth ?? UNKNOWN_SITE);
-  // A ref that already names a site is kept; the bare fallback ref is
-  // upgraded whenever a real site is available to name.
-  const refKnows = currentRef !== "" && currentRef !== UNKNOWN_SITE_REF;
+  // A ref that already names a site is kept; the bare fallback ref, and any
+  // ref still spelled the British way, is recomposed from the site above.
+  const refKnows =
+    currentRef !== "" && currentRef !== UNKNOWN_SITE_REF && !refIsStaleSpelling(currentRef);
   const ref = refKnows ? currentRef : site === UNKNOWN_SITE ? UNKNOWN_SITE_REF : siteRefFor(site);
   // Compared against the RAW stored values, so a whitespace-padded var is
   // normalized on write (templates render var values verbatim, padding

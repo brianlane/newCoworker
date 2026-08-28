@@ -12,7 +12,10 @@ import {
 } from "@/lib/webchat/gemini-engine";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
 import { customerLanguageLine } from "@/lib/i18n/customer-language";
-import { NO_EM_DASH_PROMPT_LINE } from "../supabase/functions/_shared/sms_prompt_lines";
+import {
+  NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE
+} from "../supabase/functions/_shared/sms_prompt_lines";
 import { WEBCHAT_TOOL_DECLARATIONS } from "@/lib/webchat/engine-tools";
 import type { GeminiChatStepResult } from "@/lib/gemini-chat";
 import type { ConfigRow } from "@/lib/db/configs";
@@ -199,7 +202,8 @@ describe("runWebchatGeminiTurn", () => {
         customerLanguageLine({ defaultLang: "en" }),
         INPUT[0].content,
         INPUT[1].content,
-        NO_EM_DASH_PROMPT_LINE
+        NO_EM_DASH_PROMPT_LINE,
+        US_SPELLING_PROMPT_LINE
       ]
         .filter(Boolean)
         .join("\n\n")
