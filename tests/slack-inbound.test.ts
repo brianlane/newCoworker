@@ -8,11 +8,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/slack-connections", () => ({ getSlackConnectionByTeamId: vi.fn() }));
-vi.mock("@/lib/db/slack-chat", () => ({
-  getOrCreateSlackConversation: vi.fn(),
-  insertSlackUserMessage: vi.fn(),
-  listSlackMessages: vi.fn(),
-  markSlackHelloSent: vi.fn()
+vi.mock("@/lib/db/coworker-chat", () => ({
+  getOrCreateCoworkerConversation: vi.fn(),
+  insertCoworkerUserMessage: vi.fn(),
+  listCoworkerMessages: vi.fn(),
+  markCoworkerHelloSent: vi.fn()
 }));
 vi.mock("@/lib/slack/client", () => ({ slackPostMessage: vi.fn(), slackUsersInfo: vi.fn() }));
 vi.mock("@/lib/slack/approvals", async () => {
@@ -34,11 +34,11 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: 
 import { handleSlackChatEvent, handleSlackHomeOpened } from "@/lib/slack/inbound";
 import { getSlackConnectionByTeamId } from "@/lib/db/slack-connections";
 import {
-  getOrCreateSlackConversation,
-  insertSlackUserMessage,
-  listSlackMessages,
-  markSlackHelloSent
-} from "@/lib/db/slack-chat";
+  getOrCreateCoworkerConversation,
+  insertCoworkerUserMessage,
+  listCoworkerMessages,
+  markCoworkerHelloSent
+} from "@/lib/db/coworker-chat";
 import { slackPostMessage } from "@/lib/slack/client";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
@@ -64,10 +64,10 @@ beforeEach(async () => {
   const approvals = await import("@/lib/slack/approvals");
   vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue(null);
   vi.mocked(getSlackConnectionByTeamId).mockResolvedValue(CONNECTION as never);
-  vi.mocked(getOrCreateSlackConversation).mockResolvedValue(CONVERSATION as never);
-  vi.mocked(insertSlackUserMessage).mockResolvedValue({ messageId: 7, jobId: "job-1" });
-  vi.mocked(listSlackMessages).mockResolvedValue([]);
-  vi.mocked(markSlackHelloSent).mockResolvedValue(true);
+  vi.mocked(getOrCreateCoworkerConversation).mockResolvedValue(CONVERSATION as never);
+  vi.mocked(insertCoworkerUserMessage).mockResolvedValue({ messageId: 7, jobId: "job-1" });
+  vi.mocked(listCoworkerMessages).mockResolvedValue([]);
+  vi.mocked(markCoworkerHelloSent).mockResolvedValue(true);
   vi.mocked(slackPostMessage).mockResolvedValue({ ok: true, ts: "1.2", channel: "D-1" });
   vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("en" as never);
 });
@@ -86,11 +86,11 @@ describe("handleSlackChatEvent", () => {
   it("stores a DM and its job (null thread) and asks for a kick", async () => {
     const out = await handleSlackChatEvent({ teamId: "T-1", eventId: "Ev-1", event: dm() as never });
     expect(out).toEqual({ enqueued: true });
-    expect(vi.mocked(getOrCreateSlackConversation)).toHaveBeenCalledWith(
-      expect.objectContaining({ businessId: BIZ, channelId: "D-1", threadTs: null, slackUserId: "U-1" })
+    expect(vi.mocked(getOrCreateCoworkerConversation)).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: BIZ, externalConversationId: "D-1", threadKey: null, externalUserId: "U-1" })
     );
-    expect(vi.mocked(insertSlackUserMessage)).toHaveBeenCalledWith(
-      expect.objectContaining({ content: "hello there", slackEventId: "Ev-1", slackTs: "100.1" })
+    expect(vi.mocked(insertCoworkerUserMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "hello there", externalEventId: "Ev-1", externalTs: "100.1" })
     );
   });
 
@@ -107,10 +107,10 @@ describe("handleSlackChatEvent", () => {
       } as never
     });
     expect(out.enqueued).toBe(true);
-    expect(vi.mocked(getOrCreateSlackConversation)).toHaveBeenCalledWith(
-      expect.objectContaining({ channelId: "C-9", threadTs: "200.1" })
+    expect(vi.mocked(getOrCreateCoworkerConversation)).toHaveBeenCalledWith(
+      expect.objectContaining({ externalConversationId: "C-9", threadKey: "200.1" })
     );
-    expect(vi.mocked(insertSlackUserMessage)).toHaveBeenCalledWith(
+    expect(vi.mocked(insertCoworkerUserMessage)).toHaveBeenCalledWith(
       expect.objectContaining({ content: "what's on the calendar?" })
     );
   });
@@ -128,8 +128,8 @@ describe("handleSlackChatEvent", () => {
         thread_ts: "200.1"
       } as never
     });
-    expect(vi.mocked(getOrCreateSlackConversation)).toHaveBeenCalledWith(
-      expect.objectContaining({ threadTs: "200.1" })
+    expect(vi.mocked(getOrCreateCoworkerConversation)).toHaveBeenCalledWith(
+      expect.objectContaining({ threadKey: "200.1" })
     );
   });
 
@@ -182,7 +182,7 @@ describe("handleSlackChatEvent", () => {
   });
 
   it("acks a redelivery quietly when the event id already exists", async () => {
-    vi.mocked(insertSlackUserMessage).mockResolvedValue(null);
+    vi.mocked(insertCoworkerUserMessage).mockResolvedValue(null);
     const out = await handleSlackChatEvent({ teamId: "T-1", eventId: "Ev-1", event: dm() as never });
     expect(out).toEqual({ enqueued: false, reason: "duplicate_delivery" });
   });
@@ -208,16 +208,16 @@ describe("handleSlackHomeOpened", () => {
   });
 
   it("never greets a conversation that already has messages", async () => {
-    vi.mocked(listSlackMessages).mockResolvedValue([
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
       { id: 1, role: "user", content: "already chatting" }
     ] as never);
     await handleSlackHomeOpened({ teamId: "T-1", event: opened() as never });
-    expect(vi.mocked(markSlackHelloSent)).not.toHaveBeenCalled();
+    expect(vi.mocked(markCoworkerHelloSent)).not.toHaveBeenCalled();
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
   });
 
   it("only the marker winner speaks when two opens race", async () => {
-    vi.mocked(markSlackHelloSent).mockResolvedValue(false);
+    vi.mocked(markCoworkerHelloSent).mockResolvedValue(false);
     await handleSlackHomeOpened({ teamId: "T-1", event: opened() as never });
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
   });
@@ -301,8 +301,8 @@ describe("drop-condition partial sides", () => {
         thread_ts: ""
       } as never
     });
-    expect(vi.mocked(getOrCreateSlackConversation)).toHaveBeenCalledWith(
-      expect.objectContaining({ threadTs: "300.1" })
+    expect(vi.mocked(getOrCreateCoworkerConversation)).toHaveBeenCalledWith(
+      expect.objectContaining({ threadKey: "300.1" })
     );
   });
 
@@ -379,7 +379,7 @@ describe("approval-thread mentions", () => {
       "C-9",
       "300.1"
     );
-    expect(vi.mocked(insertSlackUserMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(insertCoworkerUserMessage)).not.toHaveBeenCalled();
     expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
       "xoxb-1",
       expect.objectContaining({ thread_ts: "300.1", text: expect.stringContaining("Approved") })

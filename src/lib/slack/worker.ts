@@ -19,15 +19,13 @@
  */
 import { getActiveSlackConnection } from "@/lib/db/slack-connections";
 import {
-  claimSlackJob,
-  completeSlackJob,
-  failSlackJob,
-  getSlackConversationById,
-  listSlackMessages,
-  reclaimStaleSlackJobs,
-  updateSlackConversationIdentity,
-  type SlackConversationRow
-} from "@/lib/db/slack-chat";
+  completeCoworkerJob,
+  failCoworkerJob,
+  getCoworkerConversationById,
+  listCoworkerMessages,
+  updateCoworkerConversationIdentity,
+  type CoworkerJobRow
+} from "@/lib/db/coworker-chat";
 import {
   slackPostMessage,
   slackSetAssistantStatus,
@@ -50,6 +48,7 @@ import { runOwnerSurfaceTurn } from "@/lib/owner-surfaces/run-turn";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
+import type { CoworkerChannelAdapter } from "@/lib/coworker-channels/types";
 import { logger } from "@/lib/logger";
 
 /** Recent thread messages replayed for continuity (owner-SMS convention). */
@@ -61,56 +60,19 @@ const MAX_JOBS_PER_RUN = 8;
 /** A potential EMAIL_SEND block start; streamed text is withheld from it. */
 const STREAM_WITHHOLD_MARKER = "<<";
 
-export type SlackWorkerResult = {
-  reclaimed: number;
-  processed: number;
-  failed: number;
+/**
+ * Slack's entry in the shared queue.
+ *
+ * The claim loop, the bounded batch, the stale reclaim and the crash
+ * handling all moved to `coworker-channels/worker.ts`, which drains one
+ * queue for every channel. What is left here is what is actually Slack:
+ * streaming, the thread status indicator, the approval gate, and the
+ * workspace-profile identity branch.
+ */
+export const slackChannelAdapter: CoworkerChannelAdapter = {
+  channel: "slack",
+  runJob: (job) => runOneSlackJob(job.id, job.business_id, job.conversation_id, job.attempts)
 };
-
-export async function processSlackJobs(): Promise<SlackWorkerResult> {
-  const workerId = `slack-worker-${Math.random().toString(36).slice(2, 10)}`;
-  let reclaimed = 0;
-  try {
-    reclaimed = await reclaimStaleSlackJobs();
-  } catch (err) {
-    logger.warn("slack-worker: stale reclaim failed", {
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
-
-  let processed = 0;
-  let failed = 0;
-  for (let i = 0; i < MAX_JOBS_PER_RUN; i += 1) {
-    let job;
-    try {
-      job = await claimSlackJob(workerId);
-    } catch (err) {
-      logger.error("slack-worker: claim failed", {
-        error: err instanceof Error ? err.message : String(err)
-      });
-      break;
-    }
-    if (!job) break;
-    try {
-      const ok = await runOneSlackJob(job.id, job.business_id, job.conversation_id, job.attempts);
-      if (ok) processed += 1;
-      else failed += 1;
-    } catch (err) {
-      failed += 1;
-      logger.error("slack-worker: job crashed", {
-        jobId: job.id,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      await failSlackJob({
-        jobId: job.id,
-        errorCode: "worker_crash",
-        errorDetail: err instanceof Error ? err.message : String(err),
-        terminal: false
-      }).catch(() => undefined);
-    }
-  }
-  return { reclaimed, processed, failed };
-}
 
 async function runOneSlackJob(
   jobId: string,
@@ -119,22 +81,22 @@ async function runOneSlackJob(
   attempts: number
 ): Promise<boolean> {
   const lastAttempt = attempts >= 3;
-  const conversation = await getSlackConversationById(conversationId);
+  const conversation = await getCoworkerConversationById(conversationId);
   if (!conversation) {
-    await failSlackJob({ jobId, errorCode: "conversation_missing", terminal: true });
+    await failCoworkerJob({ jobId, errorCode: "conversation_missing", terminal: true });
     return false;
   }
 
   const connection = await getActiveSlackConnection(businessId);
   if (!connection) {
     // Uninstalled mid-queue: nothing to post with, nothing to retry into.
-    await failSlackJob({ jobId, errorCode: "no_connection", terminal: true });
+    await failCoworkerJob({ jobId, errorCode: "no_connection", terminal: true });
     return false;
   }
   const botToken = connection.botToken;
   const replyTarget = {
-    channel: conversation.channel_id,
-    thread_ts: conversation.thread_ts ?? undefined
+    channel: conversation.external_conversation_id,
+    thread_ts: conversation.thread_key ?? undefined
   };
 
   const business = await getBusiness(businessId).catch(() => null);
@@ -142,11 +104,11 @@ async function runOneSlackJob(
     ? await resolveOwnerUiLocaleForEmail(business.owner_email).catch(() => "en" as const)
     : ("en" as const);
 
-  const history = await listSlackMessages(conversationId, SLACK_HISTORY_MESSAGES);
+  const history = await listCoworkerMessages(conversationId, SLACK_HISTORY_MESSAGES);
   const historyMaxMessageId = history.length > 0 ? history[history.length - 1].id : 0;
   const latestUser = [...history].reverse().find((m) => m.role === "user");
   if (!latestUser) {
-    await failSlackJob({ jobId, errorCode: "no_user_message", terminal: true });
+    await failCoworkerJob({ jobId, errorCode: "no_user_message", terminal: true });
     return false;
   }
 
@@ -156,10 +118,10 @@ async function runOneSlackJob(
   // indicator spins forever after the reply lands. Clear it explicitly at
   // every terminal outcome; retryable failures keep it, honestly, since the
   // sweep will run the turn again.
-  const statusThreadTs = conversation.thread_ts ?? latestUser.slack_ts ?? "";
+  const statusThreadTs = conversation.thread_key ?? latestUser.external_ts ?? "";
   const clearAssistantStatus = async () => {
     await slackSetAssistantStatus(botToken, {
-      channel_id: conversation.channel_id,
+      channel_id: conversation.external_conversation_id,
       thread_ts: statusThreadTs,
       status: ""
     }).catch(() => false);
@@ -174,7 +136,7 @@ async function runOneSlackJob(
       text: slackTierBlockedMessage(locale)
     }).catch(() => undefined);
     await clearAssistantStatus();
-    await failSlackJob({ jobId, errorCode: "tier_blocked", terminal: true });
+    await failCoworkerJob({ jobId, errorCode: "tier_blocked", terminal: true });
     return false;
   }
 
@@ -187,12 +149,12 @@ async function runOneSlackJob(
   // lookup raced a Slack hiccup, must be able to graduate to owner powers on
   // a later message instead of being frozen by the first answer.
   if (!conversation.user_email) {
-    const identity = await slackUsersInfo(botToken, conversation.slack_user_id).catch(() => null);
+    const identity = await slackUsersInfo(botToken, conversation.external_user_id).catch(() => null);
     if (identity) {
       if (identity.isBot) {
         // Belt and braces: the webhook already drops bot messages.
         await clearAssistantStatus();
-        await failSlackJob({ jobId, errorCode: "bot_user", terminal: true });
+        await failCoworkerJob({ jobId, errorCode: "bot_user", terminal: true });
         return false;
       }
       const ownerEmail = (business?.owner_email ?? "").trim().toLowerCase();
@@ -200,7 +162,7 @@ async function runOneSlackJob(
         ownerEmail.length > 0 &&
         (identity.email ?? "").trim().toLowerCase() === ownerEmail;
       displayName = identity.displayName;
-      await updateSlackConversationIdentity(conversationId, {
+      await updateCoworkerConversationIdentity(conversationId, {
         displayName: identity.displayName,
         // null (not "") when Slack exposed no email, so the next message
         // retries the lookup rather than trusting an empty cache forever.
@@ -262,7 +224,7 @@ async function runOneSlackJob(
     // `slack-owner-operator` default: Slack is the one surface with a real
     // per-user id, and this string is what the MCP bridge files against
     // every tool call made from the workspace.
-    bridgeUserId: `slack:${conversation.slack_user_id}`,
+    bridgeUserId: `slack:${conversation.external_user_id}`,
     // Already read above for the owner's UI locale, so hand it over rather
     // than making the context load fetch the same row again.
     businessMeta: {
@@ -274,7 +236,7 @@ async function runOneSlackJob(
       // Best-effort: a refusal (free plan, non-agent context) degrades to a
       // single post at the end.
       await slackSetAssistantStatus(botToken, {
-        channel_id: conversation.channel_id,
+        channel_id: conversation.external_conversation_id,
         thread_ts: statusThreadTs,
         status: "is thinking..."
       });
@@ -301,11 +263,11 @@ async function runOneSlackJob(
     const text = slackOverCapMessage(locale);
     const posted = await slackPostMessage(botToken, { ...replyTarget, text });
     await clearAssistantStatus();
-    await completeSlackJob({
+    await completeCoworkerJob({
       jobId,
       content: text,
       historyMaxMessageId: 0,
-      slackTs: posted.ok ? posted.ts : null
+      externalTs: posted.ok ? posted.ts : null
     });
     return true;
   }
@@ -318,7 +280,7 @@ async function runOneSlackJob(
     // the owner switches it back on, so it must not burn the retry ladder.
     await stopStream();
     await clearAssistantStatus();
-    await failSlackJob({ jobId, errorCode: outcome.reason, terminal: true });
+    await failCoworkerJob({ jobId, errorCode: outcome.reason, terminal: true });
     return false;
   }
 
@@ -328,7 +290,7 @@ async function runOneSlackJob(
       // Nothing to answer. Saying "something went wrong" would be a reply
       // to a message that was never really a question.
       await clearAssistantStatus();
-      await failSlackJob({
+      await failCoworkerJob({
         jobId,
         errorCode: outcome.code,
         errorDetail: outcome.detail,
@@ -340,15 +302,15 @@ async function runOneSlackJob(
       const text = slackTurnFailedMessage(locale);
       const posted = await slackPostMessage(botToken, { ...replyTarget, text });
       await clearAssistantStatus();
-      await completeSlackJob({
+      await completeCoworkerJob({
         jobId,
         content: text,
         historyMaxMessageId,
-        slackTs: posted.ok ? posted.ts : null
+        externalTs: posted.ok ? posted.ts : null
       });
       return false;
     }
-    await failSlackJob({
+    await failCoworkerJob({
       jobId,
       errorCode: outcome.code,
       errorDetail: outcome.detail,
@@ -383,7 +345,7 @@ async function runOneSlackJob(
     const posted = await slackPostMessage(botToken, { ...replyTarget, text: finalContent });
     if (!posted.ok) {
       // Retryable: keep the status spinning, the sweep will run this again.
-      await failSlackJob({
+      await failCoworkerJob({
         jobId,
         errorCode: "post_failed",
         errorDetail: posted.error,
@@ -406,7 +368,12 @@ async function runOneSlackJob(
     });
   }
 
-  await completeSlackJob({ jobId, content: finalContent, historyMaxMessageId, slackTs: postedTs });
+  await completeCoworkerJob({
+    jobId,
+    content: finalContent,
+    historyMaxMessageId,
+    externalTs: postedTs
+  });
   logger.info("slack-worker: replied", {
     businessId,
     conversationId,

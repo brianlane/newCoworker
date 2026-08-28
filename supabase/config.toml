@@ -255,7 +255,7 @@ verify_jwt = false
 [functions.blog-weekly-digest]
 verify_jwt = false
 
-[functions.slack-jobs-sweep]
+[functions.coworker-jobs-sweep]
 verify_jwt = false
 
 # AMD resolution sweep bridge (pg_cron every 15s, gated by an EXISTS so it

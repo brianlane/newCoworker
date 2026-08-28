@@ -1,5 +1,5 @@
 /**
- * Tests for the Slack chat store (src/lib/db/slack-chat.ts). What matters:
+ * Tests for the Slack chat store (src/lib/db/coworker-chat.ts). What matters:
  * the event-id dedupe returns null (redelivery ≠ error), the conversation
  * find-or-create survives its unique-scope race, and job failure is
  * terminal vs retryable exactly as asked.
@@ -12,17 +12,17 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
-  claimSlackJob,
-  completeSlackJob,
-  failSlackJob,
-  getOrCreateSlackConversation,
-  getSlackConversationById,
-  insertSlackUserMessage,
-  listSlackMessages,
-  markSlackHelloSent,
-  reclaimStaleSlackJobs,
-  updateSlackConversationIdentity
-} from "@/lib/db/slack-chat";
+  claimCoworkerJob,
+  completeCoworkerJob,
+  failCoworkerJob,
+  getOrCreateCoworkerConversation,
+  getCoworkerConversationById,
+  insertCoworkerUserMessage,
+  listCoworkerMessages,
+  markCoworkerHelloSent,
+  reclaimStaleCoworkerJobs,
+  updateCoworkerConversationIdentity
+} from "@/lib/db/coworker-chat";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -50,36 +50,37 @@ function makeDb(chains: unknown[], rpcResults: QueryResult[] = []) {
 const CONV = {
   id: "conv-1",
   business_id: BIZ,
-  team_id: "T-1",
-  channel_id: "D-1",
-  thread_ts: null,
-  slack_user_id: "U-1"
+  external_workspace_id: "T-1",
+  external_conversation_id: "D-1",
+  thread_key: null,
+  external_user_id: "U-1"
 };
 
 const INPUT = {
   businessId: BIZ,
-  teamId: "T-1",
-  channelId: "D-1",
-  threadTs: null as string | null,
-  slackUserId: "U-1"
+  channel: "slack" as const,
+  externalWorkspaceId: "T-1",
+  externalConversationId: "D-1",
+  threadKey: null as string | null,
+  externalUserId: "U-1"
 };
 
-describe("getOrCreateSlackConversation", () => {
+describe("getOrCreateCoworkerConversation", () => {
   it("returns an existing conversation without inserting", async () => {
     const db = makeDb([chain({ data: CONV, error: null })]);
-    expect((await getOrCreateSlackConversation(INPUT, db)).id).toBe("conv-1");
+    expect((await getOrCreateCoworkerConversation(INPUT, db)).id).toBe("conv-1");
   });
 
   it("creates when absent (null-thread and threaded variants)", async () => {
     const db = makeDb([chain({ data: null, error: null }), chain({ data: CONV, error: null })]);
-    expect((await getOrCreateSlackConversation(INPUT, db)).id).toBe("conv-1");
+    expect((await getOrCreateCoworkerConversation(INPUT, db)).id).toBe("conv-1");
 
     const threaded = makeDb([
       chain({ data: null, error: null }),
-      chain({ data: { ...CONV, thread_ts: "9.9" }, error: null })
+      chain({ data: { ...CONV, thread_key: "9.9" }, error: null })
     ]);
     expect(
-      (await getOrCreateSlackConversation({ ...INPUT, threadTs: "9.9" }, threaded)).id
+      (await getOrCreateCoworkerConversation({ ...INPUT, threadKey: "9.9" }, threaded)).id
     ).toBe("conv-1");
   });
 
@@ -89,30 +90,30 @@ describe("getOrCreateSlackConversation", () => {
       chain({ data: null, error: { message: "dup", code: "23505" } }),
       chain({ data: CONV, error: null })
     ]);
-    expect((await getOrCreateSlackConversation(INPUT, db)).id).toBe("conv-1");
+    expect((await getOrCreateCoworkerConversation(INPUT, db)).id).toBe("conv-1");
 
     const threaded = makeDb([
       chain({ data: null, error: null }),
       chain({ data: null, error: { message: "dup", code: "23505" } }),
-      chain({ data: { ...CONV, thread_ts: "9.9" }, error: null })
+      chain({ data: { ...CONV, thread_key: "9.9" }, error: null })
     ]);
     expect(
-      (await getOrCreateSlackConversation({ ...INPUT, threadTs: "9.9" }, threaded)).id
+      (await getOrCreateCoworkerConversation({ ...INPUT, threadKey: "9.9" }, threaded)).id
     ).toBe("conv-1");
   });
 
   it("throws on read errors, insert errors, and a race re-read that finds nothing", async () => {
     await expect(
-      getOrCreateSlackConversation(INPUT, makeDb([chain({ data: null, error: { message: "r" } })]))
-    ).rejects.toThrow(/getOrCreateSlackConversation: r/);
+      getOrCreateCoworkerConversation(INPUT, makeDb([chain({ data: null, error: { message: "r" } })]))
+    ).rejects.toThrow(/getOrCreateCoworkerConversation: r/);
     await expect(
-      getOrCreateSlackConversation(
+      getOrCreateCoworkerConversation(
         INPUT,
         makeDb([chain({ data: null, error: null }), chain({ data: null, error: { message: "i" } })])
       )
-    ).rejects.toThrow(/getOrCreateSlackConversation: i/);
+    ).rejects.toThrow(/getOrCreateCoworkerConversation: i/);
     await expect(
-      getOrCreateSlackConversation(
+      getOrCreateCoworkerConversation(
         INPUT,
         makeDb([
           chain({ data: null, error: null }),
@@ -125,14 +126,51 @@ describe("getOrCreateSlackConversation", () => {
 
   it("falls back to the default service client", async () => {
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: CONV, error: null })]));
-    expect((await getOrCreateSlackConversation(INPUT)).id).toBe("conv-1");
+    expect((await getOrCreateCoworkerConversation(INPUT)).id).toBe("conv-1");
   });
 });
 
-describe("updateSlackConversationIdentity", () => {
+describe("updateCoworkerConversationIdentity", () => {
+  it("leaves a phone alone unless the caller says something about it", async () => {
+    // Slack and Google Chat resolve an EMAIL and know nothing about a
+    // phone; Telegram establishes a phone through a shared contact card and
+    // has no email. Writing null for the field a channel cannot speak to
+    // would have each one wipe the other's identity on every message.
+    const emailOnly = chain({ data: null, error: null });
+    await updateCoworkerConversationIdentity(
+      "conv-1",
+      { displayName: "Amy", email: "a@x.co", isOwner: true },
+      makeDb([emailOnly])
+    );
+    expect(
+      (emailOnly as { update: ReturnType<typeof vi.fn> }).update.mock.calls[0][0]
+    ).not.toHaveProperty("user_phone_e164");
+
+    const withPhone = chain({ data: null, error: null });
+    await updateCoworkerConversationIdentity(
+      "conv-1",
+      { displayName: "Sam", email: null, phoneE164: "+15145188192", isOwner: false },
+      makeDb([withPhone])
+    );
+    expect((withPhone as { update: ReturnType<typeof vi.fn> }).update.mock.calls[0][0]).toMatchObject(
+      { user_phone_e164: "+15145188192" }
+    );
+
+    // And an explicit null still clears it, for an unlink.
+    const cleared = chain({ data: null, error: null });
+    await updateCoworkerConversationIdentity(
+      "conv-1",
+      { displayName: null, email: null, phoneE164: null, isOwner: false },
+      makeDb([cleared])
+    );
+    expect((cleared as { update: ReturnType<typeof vi.fn> }).update.mock.calls[0][0]).toMatchObject(
+      { user_phone_e164: null }
+    );
+  });
+
   it("caches the verdict and throws on errors", async () => {
     const c = chain({ data: null, error: null });
-    await updateSlackConversationIdentity(
+    await updateCoworkerConversationIdentity(
       "conv-1",
       { displayName: "Amy", email: "a@x.co", isOwner: true },
       makeDb([c])
@@ -141,14 +179,14 @@ describe("updateSlackConversationIdentity", () => {
       expect.objectContaining({ user_email: "a@x.co", is_owner: true })
     );
     await expect(
-      updateSlackConversationIdentity(
+      updateCoworkerConversationIdentity(
         "conv-1",
         { displayName: null, email: null, isOwner: false },
         makeDb([chain({ data: null, error: { message: "e" } })])
       )
-    ).rejects.toThrow(/updateSlackConversationIdentity: e/);
+    ).rejects.toThrow(/updateCoworkerConversationIdentity: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: null, error: null })]));
-    await updateSlackConversationIdentity("conv-1", {
+    await updateCoworkerConversationIdentity("conv-1", {
       displayName: null,
       email: null,
       isOwner: false
@@ -156,13 +194,14 @@ describe("updateSlackConversationIdentity", () => {
   });
 });
 
-describe("insertSlackUserMessage", () => {
+describe("insertCoworkerUserMessage", () => {
   const MSG_INPUT = {
     conversationId: "conv-1",
     businessId: BIZ,
+    channel: "slack" as const,
     content: "hi",
-    slackEventId: "Ev-1",
-    slackTs: "1.1"
+    externalEventId: "Ev-1",
+    externalTs: "1.1"
   };
 
   it("stores message + job + bumps the conversation", async () => {
@@ -171,31 +210,31 @@ describe("insertSlackUserMessage", () => {
       chain({ data: { id: "job-1" }, error: null }),
       chain({ data: null, error: null })
     ]);
-    expect(await insertSlackUserMessage(MSG_INPUT, db)).toEqual({ messageId: 7, jobId: "job-1" });
+    expect(await insertCoworkerUserMessage(MSG_INPUT, db)).toEqual({ messageId: 7, jobId: "job-1" });
   });
 
   it("returns null on the event-id dedupe and throws on real failures", async () => {
     expect(
-      await insertSlackUserMessage(
+      await insertCoworkerUserMessage(
         MSG_INPUT,
         makeDb([chain({ data: null, error: { message: "dup", code: "23505" } })])
       )
     ).toBeNull();
 
     await expect(
-      insertSlackUserMessage(MSG_INPUT, makeDb([chain({ data: null, error: { message: "m" } })]))
-    ).rejects.toThrow(/insertSlackUserMessage: m/);
+      insertCoworkerUserMessage(MSG_INPUT, makeDb([chain({ data: null, error: { message: "m" } })]))
+    ).rejects.toThrow(/insertCoworkerUserMessage: m/);
     await expect(
-      insertSlackUserMessage(
+      insertCoworkerUserMessage(
         MSG_INPUT,
         makeDb([
           chain({ data: { id: 7 }, error: null }),
           chain({ data: null, error: { message: "j" } })
         ])
       )
-    ).rejects.toThrow(/insertSlackUserMessage: j/);
+    ).rejects.toThrow(/insertCoworkerUserMessage: j/);
     await expect(
-      insertSlackUserMessage(
+      insertCoworkerUserMessage(
         MSG_INPUT,
         makeDb([
           chain({ data: { id: 7 }, error: null }),
@@ -203,7 +242,7 @@ describe("insertSlackUserMessage", () => {
           chain({ data: null, error: { message: "b" } })
         ])
       )
-    ).rejects.toThrow(/insertSlackUserMessage: b/);
+    ).rejects.toThrow(/insertCoworkerUserMessage: b/);
     defaultClientSpy.mockReturnValueOnce(
       makeDb([
         chain({ data: { id: 7 }, error: null }),
@@ -211,47 +250,47 @@ describe("insertSlackUserMessage", () => {
         chain({ data: null, error: null })
       ])
     );
-    expect(await insertSlackUserMessage(MSG_INPUT)).toEqual({ messageId: 7, jobId: "job-1" });
+    expect(await insertCoworkerUserMessage(MSG_INPUT)).toEqual({ messageId: 7, jobId: "job-1" });
   });
 });
 
 describe("job primitives", () => {
   it("claims 0 or 1 rows via RPC and throws on errors", async () => {
     expect(
-      await claimSlackJob("w1", makeDb([], [{ data: [{ id: "job-1" }], error: null }]))
+      await claimCoworkerJob("w1", makeDb([], [{ data: [{ id: "job-1" }], error: null }]))
     ).toMatchObject({ id: "job-1" });
-    expect(await claimSlackJob("w1", makeDb([], [{ data: [], error: null }]))).toBeNull();
-    expect(await claimSlackJob("w1", makeDb([], [{ data: null, error: null }]))).toBeNull();
+    expect(await claimCoworkerJob("w1", makeDb([], [{ data: [], error: null }]))).toBeNull();
+    expect(await claimCoworkerJob("w1", makeDb([], [{ data: null, error: null }]))).toBeNull();
     await expect(
-      claimSlackJob("w1", makeDb([], [{ data: null, error: { message: "c" } }]))
-    ).rejects.toThrow(/claimSlackJob: c/);
+      claimCoworkerJob("w1", makeDb([], [{ data: null, error: { message: "c" } }]))
+    ).rejects.toThrow(/claimCoworkerJob: c/);
     defaultClientSpy.mockReturnValueOnce(makeDb([], [{ data: [], error: null }]));
-    expect(await claimSlackJob("w1")).toBeNull();
+    expect(await claimCoworkerJob("w1")).toBeNull();
   });
 
   it("completes via RPC and throws on errors", async () => {
     const db = makeDb([], [{ data: 9, error: null }]);
-    await completeSlackJob(
-      { jobId: "job-1", content: "done", historyMaxMessageId: 7, slackTs: "2.2" },
+    await completeCoworkerJob(
+      { jobId: "job-1", content: "done", historyMaxMessageId: 7, externalTs: "2.2" },
       db
     );
     expect((db as { rpc: ReturnType<typeof vi.fn> }).rpc).toHaveBeenCalledWith(
-      "slack_job_complete",
+      "coworker_job_complete",
       expect.objectContaining({ p_job_id: "job-1", p_history_max_message_id: 7 })
     );
     await expect(
-      completeSlackJob(
-        { jobId: "job-1", content: "x", historyMaxMessageId: 0, slackTs: null },
+      completeCoworkerJob(
+        { jobId: "job-1", content: "x", historyMaxMessageId: 0, externalTs: null },
         makeDb([], [{ data: null, error: { message: "e" } }])
       )
-    ).rejects.toThrow(/completeSlackJob: e/);
+    ).rejects.toThrow(/completeCoworkerJob: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([], [{ data: 9, error: null }]));
-    await completeSlackJob({ jobId: "j", content: "x", historyMaxMessageId: 0, slackTs: null });
+    await completeCoworkerJob({ jobId: "j", content: "x", historyMaxMessageId: 0, externalTs: null });
   });
 
   it("fails terminal vs retryable and throws on errors", async () => {
     const terminal = chain({ data: null, error: null });
-    await failSlackJob(
+    await failCoworkerJob(
       { jobId: "job-1", errorCode: "tier_blocked", terminal: true },
       makeDb([terminal])
     );
@@ -260,7 +299,7 @@ describe("job primitives", () => {
     );
 
     const retry = chain({ data: null, error: null });
-    await failSlackJob(
+    await failCoworkerJob(
       { jobId: "job-1", errorCode: "post_failed", errorDetail: "d", terminal: false },
       makeDb([retry])
     );
@@ -269,39 +308,39 @@ describe("job primitives", () => {
     );
 
     await expect(
-      failSlackJob(
+      failCoworkerJob(
         { jobId: "j", errorCode: "x", terminal: false },
         makeDb([chain({ data: null, error: { message: "e" } })])
       )
-    ).rejects.toThrow(/failSlackJob: e/);
+    ).rejects.toThrow(/failCoworkerJob: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: null, error: null })]));
-    await failSlackJob({ jobId: "j", errorCode: "x", terminal: true });
+    await failCoworkerJob({ jobId: "j", errorCode: "x", terminal: true });
   });
 
   it("reclaims via RPC with a numeric result and throws on errors", async () => {
-    expect(await reclaimStaleSlackJobs(makeDb([], [{ data: 3, error: null }]))).toBe(3);
-    expect(await reclaimStaleSlackJobs(makeDb([], [{ data: null, error: null }]))).toBe(0);
+    expect(await reclaimStaleCoworkerJobs(makeDb([], [{ data: 3, error: null }]))).toBe(3);
+    expect(await reclaimStaleCoworkerJobs(makeDb([], [{ data: null, error: null }]))).toBe(0);
     await expect(
-      reclaimStaleSlackJobs(makeDb([], [{ data: null, error: { message: "e" } }]))
-    ).rejects.toThrow(/reclaimStaleSlackJobs: e/);
+      reclaimStaleCoworkerJobs(makeDb([], [{ data: null, error: { message: "e" } }]))
+    ).rejects.toThrow(/reclaimStaleCoworkerJobs: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([], [{ data: 1, error: null }]));
-    expect(await reclaimStaleSlackJobs()).toBe(1);
+    expect(await reclaimStaleCoworkerJobs()).toBe(1);
   });
 });
 
 describe("reads", () => {
   it("fetches a conversation by id (found, missing, error, default client)", async () => {
     expect(
-      (await getSlackConversationById("conv-1", makeDb([chain({ data: CONV, error: null })])))?.id
+      (await getCoworkerConversationById("conv-1", makeDb([chain({ data: CONV, error: null })])))?.id
     ).toBe("conv-1");
     expect(
-      await getSlackConversationById("conv-x", makeDb([chain({ data: null, error: null })]))
+      await getCoworkerConversationById("conv-x", makeDb([chain({ data: null, error: null })]))
     ).toBeNull();
     await expect(
-      getSlackConversationById("conv-1", makeDb([chain({ data: null, error: { message: "e" } })]))
-    ).rejects.toThrow(/getSlackConversationById: e/);
+      getCoworkerConversationById("conv-1", makeDb([chain({ data: null, error: { message: "e" } })]))
+    ).rejects.toThrow(/getCoworkerConversationById: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: null, error: null })]));
-    expect(await getSlackConversationById("conv-1")).toBeNull();
+    expect(await getCoworkerConversationById("conv-1")).toBeNull();
   });
 
   it("lists the bounded window oldest-first (and errors honestly)", async () => {
@@ -310,51 +349,51 @@ describe("reads", () => {
       { id: 7, role: "user", content: "a" }
     ];
     expect(
-      (await listSlackMessages("conv-1", 12, makeDb([chain({ data: rows, error: null })]))).map(
+      (await listCoworkerMessages("conv-1", 12, makeDb([chain({ data: rows, error: null })]))).map(
         (m) => m.id
       )
     ).toEqual([7, 9]);
     expect(
-      await listSlackMessages("conv-1", 12, makeDb([chain({ data: null, error: null })]))
+      await listCoworkerMessages("conv-1", 12, makeDb([chain({ data: null, error: null })]))
     ).toEqual([]);
     await expect(
-      listSlackMessages("conv-1", 12, makeDb([chain({ data: null, error: { message: "e" } })]))
-    ).rejects.toThrow(/listSlackMessages: e/);
+      listCoworkerMessages("conv-1", 12, makeDb([chain({ data: null, error: { message: "e" } })]))
+    ).rejects.toThrow(/listCoworkerMessages: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: [], error: null })]));
-    expect(await listSlackMessages("conv-1", 12)).toEqual([]);
+    expect(await listCoworkerMessages("conv-1", 12)).toEqual([]);
   });
 });
 
-describe("markSlackHelloSent", () => {
+describe("markCoworkerHelloSent", () => {
   it("claims once, yields to the racing winner, throws on real failures", async () => {
     const c = chain({ data: null, error: null });
     expect(
-      await markSlackHelloSent(
-        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+      await markCoworkerHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, channel: "slack", content: "hi" },
         makeDb([c])
       )
     ).toBe(true);
     expect((c as { insert: ReturnType<typeof vi.fn> }).insert).toHaveBeenCalledWith(
-      expect.objectContaining({ slack_event_id: "hello:conv-1", role: "assistant" })
+      expect.objectContaining({ external_event_id: "hello:conv-1", role: "assistant" })
     );
 
     expect(
-      await markSlackHelloSent(
-        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+      await markCoworkerHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, channel: "slack", content: "hi" },
         makeDb([chain({ data: null, error: { message: "dup", code: "23505" } })])
       )
     ).toBe(false);
 
     await expect(
-      markSlackHelloSent(
-        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+      markCoworkerHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, channel: "slack", content: "hi" },
         makeDb([chain({ data: null, error: { message: "e" } })])
       )
-    ).rejects.toThrow(/markSlackHelloSent: e/);
+    ).rejects.toThrow(/markCoworkerHelloSent: e/);
 
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: null, error: null })]));
     expect(
-      await markSlackHelloSent({ conversationId: "conv-1", businessId: BIZ, content: "hi" })
+      await markCoworkerHelloSent({ conversationId: "conv-1", businessId: BIZ, channel: "slack", content: "hi" })
     ).toBe(true);
   });
 });

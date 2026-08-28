@@ -45,12 +45,12 @@ export const dynamic = "force-dynamic";
  * Fire-and-forget kick of the reply worker (same bearer the cron bridge
  * uses). Missing secret/base URL just defers to the sweep.
  */
-async function kickSlackWorker(): Promise<void> {
+async function kickCoworkerWorker(): Promise<void> {
   const secret = process.env.INTERNAL_CRON_SECRET?.trim();
   const base = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (!secret || !base) return;
   try {
-    await fetch(new URL("/api/internal/slack-worker", base).toString(), {
+    await fetch(new URL("/api/internal/coworker-worker", base).toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
         event
       });
       if (outcome.enqueued) {
-        after(() => kickSlackWorker());
+        after(() => kickCoworkerWorker());
       }
       return successResponse(outcome);
     } catch (err) {

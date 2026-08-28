@@ -259,11 +259,23 @@ const EXEMPT: Record<string, string> = {
   integrations: "tenant integration state",
   meta_connections: "tenant Page tokens",
   slack_connections: "tenant OAuth grants (workspace bot token, no end-customer data)",
+  // The slack_* chat trio is SUPERSEDED by the coworker_* pipeline below and
+  // is retained, unread, for one release so a rollback is a code revert
+  // rather than a database restore. Same footing as before either way.
   slack_conversations:
-    "internal team chat threads (no end-customer identifiers to erase by); business-scoped, removed with the business cascade",
+    "superseded by coworker_conversations; internal team chat threads (no end-customer identifiers to erase by); business-scoped, removed with the business cascade",
   slack_messages:
+    "superseded by coworker_messages; internal team chat content; business-scoped, removed with the business cascade",
+  slack_jobs:
+    "superseded by coworker_jobs; reply-queue bookkeeping for internal team chat; cascades with the conversation",
+  coworker_connections:
+    "tenant credentials for a team-chat channel (bot token, webhook secret), no end-customer data",
+  coworker_conversations:
+    "internal team chat threads across every channel (no end-customer identifiers to erase by); business-scoped, removed with the business cascade",
+  coworker_messages:
     "internal team chat content; business-scoped, removed with the business cascade",
-  slack_jobs: "reply-queue bookkeeping for internal team chat; cascades with the conversation",
+  coworker_jobs:
+    "reply-queue bookkeeping for internal team chat; cascades with the conversation",
   vagaro_connections: "tenant credentials",
   whatsapp_connections: "the tenant's own WABA connection",
   workspace_oauth_connections: "tenant OAuth grants",

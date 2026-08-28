@@ -43,7 +43,7 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "email-campaign-sweep": { maxGapMinutes: 15, schedule: "* * * * *" },
   "messenger-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
   "meta-capi-drain": { maxGapMinutes: 15, schedule: "* * * * *" },
-  "slack-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
+  "coworker-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
   // residency-replay is deliberately absent: 20260812000200 unscheduled the
   // job while zero tenants use residency, so "no run recorded" is its
   // designed state, not an outage. The migration that re-schedules it will

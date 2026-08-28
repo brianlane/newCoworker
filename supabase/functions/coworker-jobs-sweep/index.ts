@@ -1,15 +1,20 @@
 /**
- * Supabase Edge Function: slack-jobs-sweep
+ * Supabase Edge Function: coworker-jobs-sweep
  *
- * Cron bridge for the Slack reply queue. pg_cron hits
- * this every minute with Authorization: Bearer <INTERNAL_CRON_SECRET>;
- * we validate the bearer, then forward to the Next.js internal worker
- * (which needs the Node runtime for the inline engine + Slack Web API), same
- * indirection as the data-retention and grace sweeps.
+ * Cron bridge for the shared coworker reply queue: Slack today, and every
+ * team-chat channel added after it. pg_cron hits this every minute with
+ * Authorization: Bearer <INTERNAL_CRON_SECRET>; we validate the bearer,
+ * then forward to the Next.js internal worker (which needs the Node runtime
+ * for the inline engine and the provider SDKs), the same indirection as the
+ * data-retention and grace sweeps.
  *
- * The webhook route already kicks the worker inline on every enqueue, so
- * this sweep is the retry net: stale-claim reclaims and anything the
- * inline kick missed.
+ * ONE bridge for every channel, replacing slack-jobs-sweep. A channel is an
+ * adapter behind the shared queue, not a second cron job plus a second edge
+ * function plus a second watchdog entry.
+ *
+ * A channel's webhook route already kicks the worker inline on every
+ * enqueue, so this sweep is the retry net: stale-claim reclaims and
+ * anything the inline kick missed.
  *
  * Environment:
  *   INTERNAL_CRON_SECRET    (required): shared with cron and Next.js app
@@ -18,7 +23,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 
-const TARGET_PATH = "/api/internal/slack-worker";
+const TARGET_PATH = "/api/internal/coworker-worker";
 // Matches the Next route's maxDuration ceiling.
 const REQUEST_TIMEOUT_MS = 290_000;
 
@@ -56,7 +61,7 @@ serve(async (req: Request) => {
         // Attribution for public.cron_sweep_runs: marks this run as
         // pg_cron-driven, so a route that also accepts the same bearer from
         // elsewhere cannot mask a dead cron job. See src/lib/cron/sweep-run.ts.
-        "X-Cron-Job": "slack-jobs-sweep",
+        "X-Cron-Job": "coworker-jobs-sweep",
         // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs only
         // when Origin matches NEXT_PUBLIC_APP_URL.
         Origin: appUrl
@@ -72,7 +77,7 @@ serve(async (req: Request) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("slack-jobs-sweep bridge failure", { target, message });
+    console.error("coworker-jobs-sweep bridge failure", { target, message });
     return json({ ok: false, error: "bridge_failure" }, 502);
   } finally {
     clearTimeout(timeout);

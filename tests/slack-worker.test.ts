@@ -11,14 +11,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/slack-connections", () => ({ getActiveSlackConnection: vi.fn() }));
-vi.mock("@/lib/db/slack-chat", () => ({
-  claimSlackJob: vi.fn(),
-  completeSlackJob: vi.fn(),
-  failSlackJob: vi.fn(),
-  getSlackConversationById: vi.fn(),
-  listSlackMessages: vi.fn(),
-  reclaimStaleSlackJobs: vi.fn(),
-  updateSlackConversationIdentity: vi.fn()
+vi.mock("@/lib/db/coworker-chat", () => ({
+  completeCoworkerJob: vi.fn(),
+  failCoworkerJob: vi.fn(),
+  getCoworkerConversationById: vi.fn(),
+  listCoworkerMessages: vi.fn(),
+  updateCoworkerConversationIdentity: vi.fn()
 }));
 vi.mock("@/lib/slack/client", () => ({
   slackPostMessage: vi.fn(),
@@ -65,17 +63,15 @@ vi.mock("@/lib/i18n/owner-locale", () => ({
 }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-import { processSlackJobs } from "@/lib/slack/worker";
+import { slackChannelAdapter } from "@/lib/slack/worker";
 import { getActiveSlackConnection } from "@/lib/db/slack-connections";
 import {
-  claimSlackJob,
-  completeSlackJob,
-  failSlackJob,
-  getSlackConversationById,
-  listSlackMessages,
-  reclaimStaleSlackJobs,
-  updateSlackConversationIdentity
-} from "@/lib/db/slack-chat";
+  completeCoworkerJob,
+  failCoworkerJob,
+  getCoworkerConversationById,
+  listCoworkerMessages,
+  updateCoworkerConversationIdentity
+} from "@/lib/db/coworker-chat";
 import {
   slackPostMessage,
   slackSetAssistantStatus,
@@ -106,10 +102,11 @@ const JOB = {
 const CONVERSATION = {
   id: "conv-1",
   business_id: BIZ,
-  team_id: "T-1",
-  channel_id: "D-1",
-  thread_ts: null,
-  slack_user_id: "U-1",
+  channel: "slack",
+  external_workspace_id: "T-1",
+  external_conversation_id: "D-1",
+  thread_key: null,
+  external_user_id: "U-1",
   user_display_name: null,
   user_email: null,
   is_owner: false
@@ -118,19 +115,32 @@ const CONVERSATION = {
 const CONNECTION = { business_id: BIZ, bot_user_id: "U-BOT", botToken: "xoxb-1", is_active: true };
 
 const HISTORY = [
-  { id: 5, role: "assistant", content: "earlier reply", slack_ts: "1.0" },
-  { id: 7, role: "user", content: "what's tomorrow look like?", slack_ts: "2.0" }
+  { id: 5, role: "assistant", content: "earlier reply", external_ts: "1.0" },
+  { id: 7, role: "user", content: "what's tomorrow look like?", external_ts: "2.0" }
 ];
 
+/**
+ * The claim loop, the batch and the crash handling moved to the shared
+ * worker (see coworker-worker.test.ts). These tests drive ONE job through
+ * Slack's adapter, which is where every behaviour below actually lives.
+ *
+ * The result is reshaped into the old batch summary so the assertions keep
+ * saying what they always said: `processed: 1` means the speaker got an
+ * answer, `failed: 1` means they did not.
+ */
+let pendingJob: typeof JOB = JOB;
 function claimOnce(job = JOB) {
-  vi.mocked(claimSlackJob).mockResolvedValueOnce(job as never).mockResolvedValue(null);
+  pendingJob = job;
+}
+async function processSlackJobs() {
+  const answered = await slackChannelAdapter.runJob(pendingJob as never);
+  pendingJob = JOB;
+  return { reclaimed: 0, processed: answered ? 1 : 0, failed: answered ? 0 : 1 };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(reclaimStaleSlackJobs).mockResolvedValue(0);
-  vi.mocked(claimSlackJob).mockResolvedValue(null);
-  vi.mocked(getSlackConversationById).mockResolvedValue(CONVERSATION as never);
+  vi.mocked(getCoworkerConversationById).mockResolvedValue(CONVERSATION as never);
   vi.mocked(getActiveSlackConnection).mockResolvedValue(CONNECTION as never);
   vi.mocked(getBusiness).mockResolvedValue({
     id: BIZ,
@@ -145,12 +155,12 @@ beforeEach(() => {
     email: "dave@x.co",
     isBot: false
   });
-  vi.mocked(updateSlackConversationIdentity).mockResolvedValue(undefined);
+  vi.mocked(updateCoworkerConversationIdentity).mockResolvedValue(undefined);
   vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValue({
     spendMicros: 0,
     effectiveCapMicros: 10_000_000
   } as never);
-  vi.mocked(listSlackMessages).mockResolvedValue(HISTORY as never);
+  vi.mocked(listCoworkerMessages).mockResolvedValue(HISTORY as never);
   vi.mocked(getAgentToolStates).mockImplementation(
     async (_biz: string, _agent: string, keys: readonly string[]) =>
       Object.fromEntries(keys.map((k) => [k, true]))
@@ -163,53 +173,24 @@ beforeEach(() => {
   vi.mocked(slackPostMessage).mockResolvedValue({ ok: true, ts: "3.1", channel: "D-1" });
   vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: true, content: "Tomorrow is clear." } as never);
   vi.mocked(fulfillOwnerEmailBlocks).mockImplementation(async ({ content }) => ({ content }) as never);
-  vi.mocked(completeSlackJob).mockResolvedValue(undefined);
-  vi.mocked(failSlackJob).mockResolvedValue(undefined);
-});
-
-describe("processSlackJobs", () => {
-  it("reclaims, drains the queue, and reports the batch", async () => {
-    claimOnce();
-    vi.mocked(reclaimStaleSlackJobs).mockResolvedValue(2);
-    const result = await processSlackJobs();
-    expect(result).toEqual({ reclaimed: 2, processed: 1, failed: 0 });
-  });
-
-  it("survives a reclaim failure, a claim failure, and a job crash", async () => {
-    vi.mocked(reclaimStaleSlackJobs).mockRejectedValue(new Error("rpc down"));
-    vi.mocked(claimSlackJob).mockRejectedValue(new Error("claim down"));
-    expect(await processSlackJobs()).toEqual({ reclaimed: 0, processed: 0, failed: 0 });
-
-    vi.mocked(reclaimStaleSlackJobs).mockResolvedValue(0);
-    claimOnce();
-    vi.mocked(getSlackConversationById).mockRejectedValue(new Error("boom"));
-    const result = await processSlackJobs();
-    expect(result.failed).toBe(1);
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ errorCode: "worker_crash", terminal: false })
-    );
-
-    // The crash-path failSlackJob failing too must not take the batch down.
-    claimOnce();
-    vi.mocked(failSlackJob).mockRejectedValue(new Error("also down"));
-    expect((await processSlackJobs()).failed).toBe(1);
-  });
+  vi.mocked(completeCoworkerJob).mockResolvedValue(undefined);
+  vi.mocked(failCoworkerJob).mockResolvedValue(undefined);
 });
 
 describe("one job, terminal shapes", () => {
   it("errors terminally when the conversation or connection is gone", async () => {
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue(null);
+    vi.mocked(getCoworkerConversationById).mockResolvedValue(null);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "conversation_missing", terminal: true })
     );
 
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue(CONVERSATION as never);
+    vi.mocked(getCoworkerConversationById).mockResolvedValue(CONVERSATION as never);
     vi.mocked(getActiveSlackConnection).mockResolvedValue(null);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "no_connection", terminal: true })
     );
   });
@@ -222,7 +203,7 @@ describe("one job, terminal shapes", () => {
       "xoxb-1",
       expect.objectContaining({ text: expect.stringContaining("Standard and Enterprise") })
     );
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "tier_blocked", terminal: true })
     );
     expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
@@ -239,7 +220,7 @@ describe("one job, terminal shapes", () => {
     claimOnce();
     vi.mocked(slackUsersInfo).mockResolvedValue({ displayName: "B", email: null, isBot: true });
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "bot_user", terminal: true })
     );
 
@@ -249,11 +230,11 @@ describe("one job, terminal shapes", () => {
       email: "d@x.co",
       isBot: false
     });
-    vi.mocked(listSlackMessages).mockResolvedValue([
-      { id: 5, role: "assistant", content: "only me", slack_ts: "1.0" }
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
+      { id: 5, role: "assistant", content: "only me", external_ts: "1.0" }
     ] as never);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "no_user_message", terminal: true })
     );
   });
@@ -266,8 +247,8 @@ describe("one job, terminal shapes", () => {
     } as never);
     await processSlackJobs();
     expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ content: expect.stringContaining("AI budget"), slackTs: "3.1" })
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("AI budget"), externalTs: "3.1" })
     );
   });
 });
@@ -291,7 +272,7 @@ describe("identity and tool powers", () => {
       edit_aiflow: false,
       generate_image: false
     });
-    expect(vi.mocked(updateSlackConversationIdentity)).toHaveBeenCalledWith(
+    expect(vi.mocked(updateCoworkerConversationIdentity)).toHaveBeenCalledWith(
       "conv-1",
       expect.objectContaining({ isOwner: false })
     );
@@ -319,7 +300,7 @@ describe("identity and tool powers", () => {
       expect.objectContaining({ source: "slack_assistant", agentKey: "slack" })
     );
     expect(vi.mocked(scheduleCaptureOwnerRuleInline)).toHaveBeenCalled();
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ content: "Sent it." })
     );
   });
@@ -368,7 +349,7 @@ describe("identity and tool powers", () => {
 
   it("re-resolves an empty cached email so an owner can graduate later", async () => {
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue({
+    vi.mocked(getCoworkerConversationById).mockResolvedValue({
       ...CONVERSATION,
       user_email: "",
       is_owner: false
@@ -387,7 +368,7 @@ describe("identity and tool powers", () => {
 
   it("reuses the cached identity and degrades to TEAM when the lookup fails", async () => {
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue({
+    vi.mocked(getCoworkerConversationById).mockResolvedValue({
       ...CONVERSATION,
       user_email: "dave@x.co",
       user_display_name: "Dave",
@@ -400,7 +381,7 @@ describe("identity and tool powers", () => {
     );
 
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue(CONVERSATION as never);
+    vi.mocked(getCoworkerConversationById).mockResolvedValue(CONVERSATION as never);
     vi.mocked(slackUsersInfo).mockRejectedValue(new Error("slack down"));
     await processSlackJobs();
     expect(vi.mocked(runInlineChatTurn).mock.calls[1][0].systemInstruction).toContain(
@@ -428,8 +409,8 @@ describe("streaming and posting", () => {
       "Tomorrow is clear."
     );
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ slackTs: "3.0", historyMaxMessageId: 7 })
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ externalTs: "3.0", historyMaxMessageId: 7 })
     );
   });
 
@@ -452,8 +433,8 @@ describe("streaming and posting", () => {
       "xoxb-1",
       expect.objectContaining({ text: "Tomorrow is clear." })
     );
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ slackTs: "3.1" })
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ externalTs: "3.1" })
     );
 
     claimOnce();
@@ -465,10 +446,10 @@ describe("streaming and posting", () => {
 
   it("threads replies for mention conversations", async () => {
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue({
+    vi.mocked(getCoworkerConversationById).mockResolvedValue({
       ...CONVERSATION,
-      channel_id: "C-9",
-      thread_ts: "200.1"
+      external_conversation_id: "C-9",
+      thread_key: "200.1"
     } as never);
     vi.mocked(slackStartStream).mockResolvedValue(null);
     await processSlackJobs();
@@ -484,7 +465,7 @@ describe("streaming and posting", () => {
     vi.mocked(slackPostMessage).mockResolvedValue({ ok: false, error: "channel_not_found" });
     const result = await processSlackJobs();
     expect(result.failed).toBe(1);
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "post_failed", terminal: false })
     );
   });
@@ -499,7 +480,7 @@ describe("turn failure", () => {
       detail: "boom"
     } as never);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "model_failed", terminal: false })
     );
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
@@ -514,7 +495,7 @@ describe("turn failure", () => {
       "xoxb-1",
       expect.objectContaining({ text: expect.stringContaining("Something went wrong") })
     );
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalled();
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalled();
   });
 });
 
@@ -522,7 +503,7 @@ describe("failure-tolerant plumbing (coverage of the catch arrows)", () => {
   it("survives every best-effort read failing at once", async () => {
     claimOnce();
     vi.mocked(getBusiness).mockRejectedValue(new Error("biz down"));
-    vi.mocked(updateSlackConversationIdentity).mockRejectedValue(new Error("cache down"));
+    vi.mocked(updateCoworkerConversationIdentity).mockRejectedValue(new Error("cache down"));
     vi.mocked(getChatSpendSnapshotForBusiness).mockRejectedValue(new Error("spend down"));
     vi.mocked(getPublicWhatsAppConnection).mockRejectedValue(new Error("wa down"));
     const result = await processSlackJobs();
@@ -536,7 +517,7 @@ describe("failure-tolerant plumbing (coverage of the catch arrows)", () => {
     vi.mocked(slackAllowedForBusiness).mockResolvedValue(false);
     vi.mocked(slackPostMessage).mockRejectedValue(new Error("post down"));
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "tier_blocked", terminal: true })
     );
   });
@@ -550,7 +531,7 @@ describe("failure-tolerant plumbing (coverage of the catch arrows)", () => {
     });
     vi.mocked(slackAppendStream).mockResolvedValue(false);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "model_failed", terminal: false })
     );
   });
@@ -573,7 +554,7 @@ describe("nullish fallbacks", () => {
     const { resolveOwnerUiLocaleForEmail } = await import("@/lib/i18n/owner-locale");
     vi.mocked(resolveOwnerUiLocaleForEmail).mockRejectedValue(new Error("locale down"));
     vi.mocked(slackUsersInfo).mockResolvedValue({ displayName: null, email: null, isBot: false });
-    vi.mocked(listSlackMessages).mockResolvedValue([
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
       { id: 7, role: "user", content: "hola", slack_ts: null }
     ] as never);
     vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValue({
@@ -582,14 +563,14 @@ describe("nullish fallbacks", () => {
     } as never);
     vi.mocked(slackPostMessage).mockResolvedValue({ ok: false, error: "channel_not_found" });
     await processSlackJobs();
-    expect(vi.mocked(updateSlackConversationIdentity)).toHaveBeenCalledWith(
+    expect(vi.mocked(updateCoworkerConversationIdentity)).toHaveBeenCalledWith(
       "conv-1",
       expect.objectContaining({ email: null, isOwner: false })
     );
     // Over-cap reply attempted, post refused: the job still closes honestly
     // with a null ts rather than wedging.
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ slackTs: null })
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ externalTs: null })
     );
   });
 
@@ -598,7 +579,7 @@ describe("nullish fallbacks", () => {
     vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: false } as never);
     vi.mocked(slackStartStream).mockResolvedValue(null);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "model_failed", terminal: false })
     );
   });
@@ -618,8 +599,8 @@ describe("sparse-context turns", () => {
       timezone: null,
       tier: "standard"
     } as never);
-    vi.mocked(listSlackMessages).mockResolvedValue([
-      { id: 7, role: "user", content: "first message ever", slack_ts: "2.0" }
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
+      { id: 7, role: "user", content: "first message ever", external_ts: "2.0" }
     ] as never);
     await processSlackJobs();
     const sys = vi.mocked(runInlineChatTurn).mock.calls[0][0].systemInstruction;
@@ -633,48 +614,41 @@ describe("sparse-context turns", () => {
     vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: false, error: "model_failed" } as never);
     vi.mocked(slackPostMessage).mockResolvedValue({ ok: false, error: "down" });
     await processSlackJobs();
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ slackTs: null })
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ externalTs: null })
     );
   });
 
-  it("stringifies a non-Error job crash", async () => {
+  it("lets an unreadable conversation throw, for the shared worker to file", async () => {
+    // The adapter deliberately does NOT catch this: the shared worker turns
+    // a throw into a retryable worker_crash, and swallowing it here would
+    // report a job as handled when nobody was answered.
     claimOnce();
-    vi.mocked(getSlackConversationById).mockRejectedValue("string blowup");
-    const result = await processSlackJobs();
-    expect(result.failed).toBe(1);
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
-      expect.objectContaining({ errorCode: "worker_crash", errorDetail: "string blowup" })
-    );
+    vi.mocked(getCoworkerConversationById).mockRejectedValue("string blowup");
+    await expect(slackChannelAdapter.runJob(JOB as never)).rejects.toBe("string blowup");
   });
 });
 
 describe("final branch sweep", () => {
-  it("stringifies non-Error reclaim and claim failures", async () => {
-    vi.mocked(reclaimStaleSlackJobs).mockRejectedValue("reclaim string");
-    vi.mocked(claimSlackJob).mockRejectedValue("claim string");
-    expect(await processSlackJobs()).toEqual({ reclaimed: 0, processed: 0, failed: 0 });
-  });
-
   it("empty history closes as no_user_message with a zero cutoff", async () => {
     claimOnce();
-    vi.mocked(listSlackMessages).mockResolvedValue([] as never);
+    vi.mocked(listCoworkerMessages).mockResolvedValue([] as never);
     await processSlackJobs();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "no_user_message", terminal: true })
     );
   });
 
   it("a nameless owner with back-to-back messages and no ts anchors still runs", async () => {
     claimOnce();
-    vi.mocked(getSlackConversationById).mockResolvedValue({
+    vi.mocked(getCoworkerConversationById).mockResolvedValue({
       ...CONVERSATION,
       user_email: "owner@x.co",
       user_display_name: null,
       is_owner: true
     } as never);
-    vi.mocked(listSlackMessages).mockResolvedValue([
-      { id: 5, role: "user", content: "first ask", slack_ts: "1.0" },
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
+      { id: 5, role: "user", content: "first ask", external_ts: "1.0" },
       { id: 7, role: "user", content: "second ask", slack_ts: null }
     ] as never);
     await processSlackJobs();
@@ -763,8 +737,8 @@ describe("verdicts that are not failures", () => {
     expect(result.failed).toBe(1);
     expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
-    expect(vi.mocked(completeSlackJob)).not.toHaveBeenCalled();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(completeCoworkerJob)).not.toHaveBeenCalled();
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "staff_mode_off", terminal: true })
     );
     // Silent means SILENT in the workspace, not just "no reply text". A
@@ -782,15 +756,15 @@ describe("verdicts that are not failures", () => {
     // wrong" would be replying to something nobody asked, and retrying it
     // three times would dead-letter the job under a misleading code.
     claimOnce();
-    vi.mocked(listSlackMessages).mockResolvedValue([
-      { id: 9, role: "user", content: "   ", slack_ts: "2.0" }
+    vi.mocked(listCoworkerMessages).mockResolvedValue([
+      { id: 9, role: "user", content: "   ", external_ts: "2.0" }
     ] as never);
     const result = await processSlackJobs();
 
     expect(result.failed).toBe(1);
     expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
-    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+    expect(vi.mocked(failCoworkerJob)).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "no_input", terminal: true })
     );
     expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
@@ -814,7 +788,7 @@ describe("verdicts that are not failures", () => {
       "xoxb-1",
       expect.objectContaining({ text: expect.any(String) })
     );
-    expect(vi.mocked(completeSlackJob)).toHaveBeenCalled();
+    expect(vi.mocked(completeCoworkerJob)).toHaveBeenCalled();
   });
 
   it("opens the stream only once the turn is really going to run", async () => {

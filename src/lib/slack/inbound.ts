@@ -10,11 +10,11 @@
  */
 import { getSlackConnectionByTeamId } from "@/lib/db/slack-connections";
 import {
-  getOrCreateSlackConversation,
-  insertSlackUserMessage,
-  listSlackMessages,
-  markSlackHelloSent
-} from "@/lib/db/slack-chat";
+  getOrCreateCoworkerConversation,
+  insertCoworkerUserMessage,
+  listCoworkerMessages,
+  markCoworkerHelloSent
+} from "@/lib/db/coworker-chat";
 import { slackPostMessage, slackUsersInfo } from "@/lib/slack/client";
 import { slackOnboardingMessage } from "@/lib/slack/chat";
 import {
@@ -132,20 +132,22 @@ export async function handleSlackChatEvent(input: {
     }
   }
 
-  const conversation = await getOrCreateSlackConversation({
+  const conversation = await getOrCreateCoworkerConversation({
     businessId: connection.business_id,
-    teamId: input.teamId,
-    channelId: channel,
-    threadTs,
-    slackUserId: user
+    channel: "slack",
+    externalWorkspaceId: input.teamId,
+    externalConversationId: channel,
+    threadKey: threadTs,
+    externalUserId: user
   });
 
-  const stored = await insertSlackUserMessage({
+  const stored = await insertCoworkerUserMessage({
     conversationId: conversation.id,
     businessId: connection.business_id,
+    channel: "slack",
     content,
-    slackEventId: input.eventId,
-    slackTs: ts
+    externalEventId: input.eventId,
+    externalTs: ts
   });
   if (stored === null) {
     // Slack's 0/1/5-min redelivery of an event we already own: ack quietly.
@@ -176,17 +178,18 @@ export async function handleSlackHomeOpened(input: {
     const connection = await getSlackConnectionByTeamId(input.teamId);
     if (!connection || !connection.is_active || connection.botToken.length === 0) return;
 
-    const conversation = await getOrCreateSlackConversation({
+    const conversation = await getOrCreateCoworkerConversation({
       businessId: connection.business_id,
-      teamId: input.teamId,
-      channelId: channel,
-      threadTs: null,
-      slackUserId: user
+      channel: "slack",
+      externalWorkspaceId: input.teamId,
+      externalConversationId: channel,
+      threadKey: null,
+      externalUserId: user
     });
     // Any existing message (theirs, ours, or an earlier hello marker) means
     // this is not a first meeting; no repeat welcomes, and never a welcome
     // injected into a thread that already started.
-    const existing = await listSlackMessages(conversation.id, 1);
+    const existing = await listCoworkerMessages(conversation.id, 1);
     if (existing.length > 0) return;
 
     const business = await getBusiness(connection.business_id).catch(() => null);
@@ -196,9 +199,10 @@ export async function handleSlackHomeOpened(input: {
     const hello = slackOnboardingMessage(locale);
     // Claim the marker BEFORE posting: two rapid opens race here, exactly
     // one wins the unique index, and only the winner speaks.
-    const claimed = await markSlackHelloSent({
+    const claimed = await markCoworkerHelloSent({
       conversationId: conversation.id,
       businessId: connection.business_id,
+      channel: "slack",
       content: hello
     });
     if (!claimed) return;
