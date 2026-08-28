@@ -3319,7 +3319,24 @@ async function applyPendingFollowUp(
       `aiflow-fu-pending:${run.id}:${contact.id}`
     );
   } catch (e) {
+    // An unexpected throw is an outcome too, and the contract above says every
+    // outcome reaches the asker. Leaving this one to the log was the last
+    // silent hole on the path: upsert_customer still succeeds, so the worker
+    // never retries the step, and the teammate was already told there was
+    // nothing else for them to do (Bugbot, PR #1702).
+    //
+    // Guarded on the applied marker, because past that point the tag HAS
+    // landed and "the AI is NOT calling them yet" would be the opposite
+    // untruth. Today the catch is only reachable before it (everything after
+    // swallows its own errors), and this guard is what keeps that from being
+    // a requirement.
     console.error("pending follow-up apply", e);
+    if (scope.vars[FOLLOW_UP_PENDING_DONE_VAR] !== true) {
+      await couldNotApply(
+        "something went wrong on our side",
+        "an unexpected error stopped the tag from being applied"
+      );
+    }
   }
 }
 
