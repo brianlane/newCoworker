@@ -30,12 +30,8 @@
 
 import {
   VOICE_RATE_ZONES,
-  VOICE_RATE_DECK_SHA256,
   type VoiceRateZone
 } from "@/lib/plans/voice-zone-rates.generated";
-
-export { VOICE_RATE_DECK_SHA256 };
-export type { VoiceRateZone };
 
 /**
  * US lower-48 Zone 1, the deck's NANP catch-all and the rate every minute
@@ -44,27 +40,7 @@ export type { VoiceRateZone };
  */
 export const NANP_BASELINE_CENTS_PER_MINUTE = 0.5;
 
-/**
- * What we ACTUALLY paid per outbound minute before the 2026-08-31 rate deck
- * took effect, measured from `telnyx_cost_daily` (record_type
- * `sip-trunking`, direction `outbound`) over 2026-06-29 to 2026-08-27:
- * 12,600 billed seconds costing $1.12, with `carrier_fee_micros` zero, so
- * this is pure termination.
- *
- * It sits a little above the 0.5c Zone 1 rate because a small amount of
- * traffic did leave the baseline; the excess over a pure-Zone-1 $1.05 is
- * about 14 Zone 4 minutes.
- *
- * This is the COMPARISON POINT for the post-cutover measurement, not an
- * input to any price. `.github/workflows/telnyx-voice-rate-cutover.yml`
- * measures the same figure after the new deck is live and opens a PR when
- * it has moved. Telnyx never sends a diff of a rate deck, so measuring our
- * own effective rate on both sides of the boundary is the only way to learn
- * what the change actually did to us.
- */
-export const PRE_CUTOVER_TERMINATION_CENTS_PER_MINUTE = 0.5333;
-
-export type VoiceZoneMatch = {
+type VoiceZoneMatch = {
   iso: string;
   label: string;
   centsPerMinute: number;
@@ -136,7 +112,7 @@ function index(): ZoneIndex {
  * countries are real, but we do not originate to them, so pretending to
  * price them would be a number nobody has ever checked against an invoice.
  */
-export function nanpDigits(e164: string | null | undefined): string | null {
+function nanpDigits(e164: string | null | undefined): string | null {
   if (!e164) return null;
   const digits = e164.replace(/\D/g, "");
   if (digits.length === 10) return `1${digits}`;
@@ -184,23 +160,20 @@ export function voiceZoneFor(e164: string | null | undefined): VoiceZoneMatch | 
   return null;
 }
 
-/**
- * Termination cost in cents per minute for one destination, or null when
- * the number is not NANP and the caller must fall back to its own figure.
- */
-export function voiceTerminationCentsPerMinute(
-  e164: string | null | undefined
-): number | null {
-  return voiceZoneFor(e164)?.centsPerMinute ?? null;
-}
-
-export type BlendedVoiceRate = {
+type BlendedVoiceRate = {
   /** Mean termination cents/min across the priced destinations. */
   centsPerMinute: number;
   /** Destinations that resolved to a zone. */
   priced: number;
   /** Destinations that did not (non-NANP), excluded from the mean. */
   unpriced: number;
+  /**
+   * The most expensive zone anywhere in the list, or null if nothing
+   * priced. A blend alone cannot distinguish "every number is slightly
+   * above baseline" from "one number is Zone 6", and those are different
+   * problems, so the caller gets to name the worst one.
+   */
+  priciestZone: { label: string; iso: string; centsPerMinute: number } | null;
 };
 
 /**
@@ -222,28 +195,37 @@ export function blendedVoiceTerminationRate(
   let total = 0;
   let priced = 0;
   let unpriced = 0;
+  let priciestZone: BlendedVoiceRate["priciestZone"] = null;
   for (const destination of destinations) {
-    const cents = voiceTerminationCentsPerMinute(destination);
-    if (cents === null) {
+    const zone = voiceZoneFor(destination);
+    if (zone === null) {
       unpriced += 1;
       continue;
     }
-    total += cents;
+    total += zone.centsPerMinute;
     priced += 1;
+    if (priciestZone === null || zone.centsPerMinute > priciestZone.centsPerMinute) {
+      priciestZone = {
+        label: zone.label,
+        iso: zone.iso,
+        centsPerMinute: zone.centsPerMinute
+      };
+    }
   }
   if (priced === 0) {
-    return { centsPerMinute: NANP_BASELINE_CENTS_PER_MINUTE, priced, unpriced };
+    return {
+      centsPerMinute: NANP_BASELINE_CENTS_PER_MINUTE,
+      priced,
+      unpriced,
+      priciestZone: null
+    };
   }
   // 4 decimal places of a cent: enough to keep a 0.619c blend distinct from
   // the 0.5c baseline, without carrying float dust into a rendered price.
   return {
     centsPerMinute: Math.round((total / priced) * 10_000) / 10_000,
     priced,
-    unpriced
+    unpriced,
+    priciestZone
   };
-}
-
-/** Test seam: drop the memoised index so a test can rebuild it. */
-export function resetVoiceZoneIndexForTests(): void {
-  cachedIndex = null;
 }

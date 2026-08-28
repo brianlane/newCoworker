@@ -32,10 +32,10 @@ import { Client } from "pg";
 import { loadEnv, sessionDbUrl } from "./_shared.ts";
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
-  VOICE_RATE_DECK_SHA256,
   blendedVoiceTerminationRate,
   voiceZoneFor
 } from "../src/lib/plans/voice-zone-rates.ts";
+import { VOICE_RATE_DECK_SHA256 } from "../src/lib/plans/voice-zone-rates.generated.ts";
 
 loadEnv();
 

@@ -1,19 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
-  VOICE_RATE_DECK_SHA256,
   blendedVoiceTerminationRate,
-  nanpDigits,
-  resetVoiceZoneIndexForTests,
-  voiceTerminationCentsPerMinute,
   voiceZoneFor
 } from "@/lib/plans/voice-zone-rates";
-import { VOICE_RATE_ZONES } from "@/lib/plans/voice-zone-rates.generated";
-
-beforeEach(() => {
-  resetVoiceZoneIndexForTests();
-});
+import {
+  VOICE_RATE_DECK_SHA256,
+  VOICE_RATE_ZONES
+} from "@/lib/plans/voice-zone-rates.generated";
 
 describe("the generated deck itself", () => {
   // Assert the PRODUCER, not a fixture: these numbers come off the real
@@ -63,23 +58,23 @@ describe("the generated deck itself", () => {
   });
 });
 
-describe("nanpDigits", () => {
-  it("normalizes the shapes a stored number actually arrives in", () => {
-    expect(nanpDigits("+16028384497")).toBe("16028384497");
-    expect(nanpDigits("16028384497")).toBe("16028384497");
-    expect(nanpDigits("(602) 838-4497")).toBe("16028384497");
-    expect(nanpDigits("6028384497")).toBe("16028384497");
+describe("number normalization, through the public lookup", () => {
+  it("accepts the shapes a stored number actually arrives in", () => {
+    // All four are the same Phoenix number; all four must price identically.
+    for (const form of ["+16028384497", "16028384497", "(602) 838-4497", "6028384497"]) {
+      expect(voiceZoneFor(form)?.centsPerMinute).toBe(0.5);
+    }
   });
 
-  it("returns null for empty, missing and non-NANP input", () => {
-    expect(nanpDigits(null)).toBeNull();
-    expect(nanpDigits(undefined)).toBeNull();
-    expect(nanpDigits("")).toBeNull();
+  it("declines empty, missing and non-NANP input rather than guessing", () => {
+    expect(voiceZoneFor(null)).toBeNull();
+    expect(voiceZoneFor(undefined)).toBeNull();
+    expect(voiceZoneFor("")).toBeNull();
     // A UK mobile: 11 digits after stripping, but not a NANP 1.
-    expect(nanpDigits("+447700900123")).toBeNull();
+    expect(voiceZoneFor("+447700900123")).toBeNull();
     // 11 digits that do not start with 1.
-    expect(nanpDigits("20123456789")).toBeNull();
-    expect(nanpDigits("12345")).toBeNull();
+    expect(voiceZoneFor("20123456789")).toBeNull();
+    expect(voiceZoneFor("12345")).toBeNull();
   });
 });
 
@@ -137,13 +132,6 @@ describe("voiceZoneFor", () => {
     const first = voiceZoneFor("+16028384497");
     const second = voiceZoneFor("+16028384497");
     expect(second).toEqual(first);
-  });
-});
-
-describe("voiceTerminationCentsPerMinute", () => {
-  it("returns the zone rate, or null when it cannot price the number", () => {
-    expect(voiceTerminationCentsPerMinute("+16055235555")).toBe(7);
-    expect(voiceTerminationCentsPerMinute("+447700900123")).toBeNull();
   });
 });
 
@@ -218,8 +206,9 @@ describe("a deck with no catch-all", () => {
         }
       ]
     }));
+    // A fresh import gives a fresh module scope, so the memoised index is
+    // rebuilt from the mock without needing a reset seam in production code.
     const mod = await import("@/lib/plans/voice-zone-rates");
-    mod.resetVoiceZoneIndexForTests();
 
     expect(mod.voiceZoneFor("+16025551234")?.matchedPrefix).toBe("1602");
     // 480 is absent and there is no catch-all behind it.

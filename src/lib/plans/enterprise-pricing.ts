@@ -325,7 +325,10 @@ export function estimateEnterpriseMonthlyCost(
   // Insert ahead of the tax line so the itemization reads cost-then-tax.
   if (zoneSurcharge > 0 && zoneBlend) {
     items.splice(items.length - 1, 0, {
-      label: `Voice high-cost zones (${zoneBlend.centsPerMinute}c/min blended over the ${NANP_BASELINE_CENTS_PER_MINUTE}c baseline, ${zoneBlend.priced} destination${zoneBlend.priced === 1 ? "" : "s"})`,
+      // Name the worst zone, not just the blend. A 0.6c blend can mean
+      // "everything is slightly rural" or "one number is Zone 6", and an
+      // operator quoting a deal needs to tell those apart.
+      label: `Voice high-cost zones (${zoneBlend.centsPerMinute}c/min blended over the ${NANP_BASELINE_CENTS_PER_MINUTE}c baseline, ${zoneBlend.priced} destination${zoneBlend.priced === 1 ? "" : "s"}, priciest ${zoneBlend.priciestZone?.iso} ${zoneBlend.priciestZone?.label} at ${zoneBlend.priciestZone?.centsPerMinute}c)`,
       cents: zoneSurcharge
     });
   }

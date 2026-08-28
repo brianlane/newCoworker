@@ -58,6 +58,9 @@ describe("estimateEnterpriseMonthlyCost", () => {
     expect(surcharge?.cents).toBe(500 * 3.25);
     expect(surcharge?.label).toContain("3.75c/min");
     expect(surcharge?.label).toContain("2 destinations");
+    // Naming the worst zone is the point: a blend alone cannot tell an
+    // operator whether one number or all of them is the problem.
+    expect(surcharge?.label).toContain("priciest US High Cost (Zone 5) at 7c");
   });
 
   it("puts the surcharge before the tax line and taxes it as voice", () => {
@@ -88,7 +91,7 @@ describe("estimateEnterpriseMonthlyCost", () => {
     });
     expect(
       est.items.find((i) => i.label.startsWith("Voice high-cost zones"))?.label
-    ).toContain("1 destination)");
+    ).toContain("1 destination,");
   });
 
   it("itemizes hosting + SMS + voice + DID and totals them", () => {
