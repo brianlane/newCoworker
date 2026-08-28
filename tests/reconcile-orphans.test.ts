@@ -11,6 +11,7 @@ import {
   ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES
 } from "@/lib/provisioning/reconcile-orphans";
 import type { VirtualMachine } from "@/lib/hostinger/client";
+import { defaultPurchaseHostname } from "@/lib/hostinger/provision";
 
 const NOW = Date.parse("2026-07-08T23:00:00Z");
 
@@ -308,6 +309,108 @@ describe("reconcileOrphanedPurchases", () => {
       listVirtualMachines: vi.fn().mockResolvedValue([
         vm({ id: 220, template: { id: 1121, name: "Ubuntu 24.04 with Docker" } })
       ])
+    });
+
+    expect(await reconcileOrphanedPurchases(args)).toEqual([]);
+    expect(args.release).not.toHaveBeenCalled();
+  });
+
+  // 2026-08-28, KIN Integrated Child Health: the purchase SUCCEEDED, Hostinger
+  // applied the setup payload, and only our reply parsing failed. VM 1936826
+  // was therefore `running` with a template, which the never-set-up signature
+  // refuses, so the box we had just paid for was invisible to its own
+  // recovery. The hostname is what makes it safely identifiable: it is derived
+  // from the business id, so no other business's purchase asks for it.
+  it("pools a running, set-up VM wearing THIS business's own purchase hostname", async () => {
+    const args = makeArgs({
+      businessId: "a912aff5-dd87-49fb-ad6a-477acefb66c0",
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        vm({
+          id: 1936826,
+          state: "running",
+          hostname: "nc-a912aff5-dd8.newcoworker.com",
+          template: { id: 1121, name: "Ubuntu 24.04 with Docker" },
+          subscription_id: "Azyp34VTaWZDIBG8"
+        })
+      ])
+    });
+
+    const result = await reconcileOrphanedPurchases(args);
+
+    expect(result.map((r) => r.vmId)).toEqual([1936826]);
+    expect(args.release).toHaveBeenCalledTimes(1);
+    // Pin the literal hostname the live box wears, so a change to the
+    // derivation cannot quietly stop matching real boxes.
+    expect(defaultPurchaseHostname("a912aff5-dd87-49fb-ad6a-477acefb66c0")).toBe(
+      "nc-a912aff5-dd8.newcoworker.com"
+    );
+  });
+
+  it.each(["initial", "installing", "running"])(
+    "pools our own set-up purchase hostname at state=%s",
+    async (state) => {
+      const args = makeArgs({
+        listVirtualMachines: vi.fn().mockResolvedValue([
+          vm({
+            id: 1936826,
+            state,
+            hostname: defaultPurchaseHostname("biz-orphan-1"),
+            template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+          })
+        ])
+      });
+
+      expect((await reconcileOrphanedPurchases(args)).map((r) => r.vmId)).toEqual([1936826]);
+    }
+  );
+
+  it.each(["stopped", "suspended", "destroyed", "error"])(
+    "leaves our purchase hostname alone at state=%s (leftover, not this purchase's box)",
+    async (state) => {
+      const args = makeArgs({
+        listVirtualMachines: vi.fn().mockResolvedValue([
+          vm({
+            id: 1936826,
+            state,
+            hostname: defaultPurchaseHostname("biz-orphan-1"),
+            template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+          })
+        ])
+      });
+
+      expect(await reconcileOrphanedPurchases(args)).toEqual([]);
+      expect(args.release).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves a running, set-up VM wearing ANOTHER business's hostname alone", async () => {
+    const args = makeArgs({
+      businessId: "a912aff5-dd87-49fb-ad6a-477acefb66c0",
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        vm({
+          id: 1869876,
+          state: "running",
+          hostname: defaultPurchaseHostname("056034a7-e84c-444d-8d15-747eeb1fa899"),
+          template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+        })
+      ])
+    });
+
+    expect(await reconcileOrphanedPurchases(args)).toEqual([]);
+    expect(args.release).not.toHaveBeenCalled();
+  });
+
+  it("leaves a tracked VM alone even when it wears our purchase hostname", async () => {
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        vm({
+          id: 1864812,
+          state: "running",
+          hostname: defaultPurchaseHostname("biz-orphan-1"),
+          template: { id: 1121, name: "Ubuntu 24.04 with Docker" }
+        })
+      ]),
+      listInventory: vi.fn().mockResolvedValue([{ vm_id: 1864812 }])
     });
 
     expect(await reconcileOrphanedPurchases(args)).toEqual([]);

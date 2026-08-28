@@ -181,7 +181,9 @@ describe("HostingerClient (real API)", () => {
       }) as typeof globalThis.setTimeout);
 
     try {
-      const fetchMock = vi.fn(async () => ok({ order_id: "o1", virtual_machines: [] }));
+      const fetchMock = vi.fn(async () =>
+        ok({ order: { id: 1 }, virtual_machine: { id: 123, state: "initial" } })
+      );
       const client = makeClient(fetchMock);
       await client.purchaseVirtualMachine({
         item_id: "hostingercom-vps-kvm2-usd-1m",
@@ -232,9 +234,86 @@ describe("HostingerClient (real API)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("purchaseVirtualMachine posts the full payload to /api/vps/v1/virtual-machines", async () => {
+  // Hostinger's live purchase reply is `BillingV1OrderVirtualMachineOrderResource`:
+  // an `order` object and a SINGULAR `virtual_machine`. This client shipped
+  // reading `{ order_id, virtual_machines: [] }`, a shape the API does not
+  // send, so every purchase threw on a reply that had succeeded. KIN
+  // Integrated Child Health, 2026-08-28: VM 1936826 bought, $15.15 charged,
+  // reported as a failure, and stranded. These cases pin the real shape.
+  it("purchaseVirtualMachine reads Hostinger's live { order, virtual_machine } reply", async () => {
+    const fetchMock = vi.fn(async () =>
+      ok({
+        order: { id: 49658724, subscription_id: "Azyp34VTaWZDIBG8" },
+        virtual_machine: {
+          id: 1936826,
+          state: "initial",
+          hostname: "nc-a912aff5-dd8.newcoworker.com"
+        }
+      })
+    );
+    const order = await makeClient(fetchMock).purchaseVirtualMachine({
+      item_id: "hostingercom-vps-kvm2-usd-1m",
+      setup: { data_center_id: 24, template_id: 1121 }
+    });
+    expect(order.orderId).toBe("49658724");
+    expect(order.virtualMachines).toHaveLength(1);
+    expect(order.virtualMachines[0].id).toBe(1936826);
+  });
+
+  it("purchaseVirtualMachine still reads the legacy { order_id, virtual_machines } reply", async () => {
     const fetchMock = vi.fn(async () =>
       ok({ order_id: "o1", virtual_machines: [{ id: 123, state: "initial" }] })
+    );
+    const order = await makeClient(fetchMock).purchaseVirtualMachine({
+      item_id: "hostingercom-vps-kvm2-usd-1m",
+      setup: { data_center_id: 24, template_id: 1121 }
+    });
+    expect(order.orderId).toBe("o1");
+    expect(order.virtualMachines[0].id).toBe(123);
+  });
+
+  it("purchaseVirtualMachine returns the VM even when the reply carries no order id", async () => {
+    const fetchMock = vi.fn(async () => ok({ virtual_machine: { id: 555, state: "initial" } }));
+    const order = await makeClient(fetchMock).purchaseVirtualMachine({
+      item_id: "hostingercom-vps-kvm2-usd-1m",
+      setup: { data_center_id: 24, template_id: 1121 }
+    });
+    expect(order.orderId).toBeNull();
+    expect(order.virtualMachines[0].id).toBe(555);
+  });
+
+  // An unreadable 200 must throw a HostingerApiError at the purchase endpoint,
+  // not a bare Error: the orchestrator's fail-but-charge reconciler keys on
+  // exactly that to go find the box the money already bought.
+  it.each([
+    ["an empty legacy array", { order_id: "o1", virtual_machines: [] }],
+    ["a VM with no numeric id", { order: { id: 7 }, virtual_machine: { state: "initial" } }],
+    ["an unrecognized envelope", { status: "queued" }],
+    ["a non-object body", "accepted"]
+  ])("purchaseVirtualMachine throws a reconcilable error on %s", async (_label, body) => {
+    const fetchMock = vi.fn(async () => ok(body));
+    try {
+      await makeClient(fetchMock).purchaseVirtualMachine({
+        item_id: "hostingercom-vps-kvm2-usd-1m",
+        setup: { data_center_id: 24, template_id: 1121 }
+      });
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(HostingerApiError);
+      const err = e as HostingerApiError;
+      // The reconciler gate is `name === "HostingerApiError"` plus this exact
+      // endpoint; both have to survive or the recovery never runs.
+      expect(err.name).toBe("HostingerApiError");
+      expect(err.endpoint).toBe("/api/vps/v1/virtual-machines");
+      expect(err.message).toMatch(/charge may still have gone through/);
+      // The raw body is the only record of what Hostinger actually sent.
+      expect(err.body).toEqual(body);
+    }
+  });
+
+  it("purchaseVirtualMachine posts the full payload to /api/vps/v1/virtual-machines", async () => {
+    const fetchMock = vi.fn(async () =>
+      ok({ order: { id: 987 }, virtual_machine: { id: 123, state: "initial" } })
     );
     const client = makeClient(fetchMock);
     await client.purchaseVirtualMachine({

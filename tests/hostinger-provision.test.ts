@@ -33,8 +33,8 @@ function makeClientStub<T extends Record<string, unknown> = Record<string, never
       .fn()
       .mockResolvedValue({ id: 555, name: "pis", content: "#!/bin/bash" }),
     purchaseVirtualMachine: vi.fn().mockResolvedValue({
-      order_id: "o1",
-      virtual_machines: [{ id: 42, state: "initial" }]
+      orderId: "o1",
+      virtualMachines: [{ id: 42, state: "initial" }]
     }),
     getVirtualMachine: vi.fn(),
     installMonarx: vi.fn().mockResolvedValue({ id: 1, name: "a", state: "initiated" }),
@@ -284,8 +284,8 @@ describe("provisionVpsForBusiness", () => {
   it("uses Hostinger subscription_id from the purchase response when present", async () => {
     const client = makeClientStub({
       purchaseVirtualMachine: vi.fn().mockResolvedValue({
-        order_id: "o1",
-        virtual_machines: [{ id: 42, state: "initial", subscription_id: "billing-direct" }]
+        orderId: "o1",
+        virtualMachines: [{ id: 42, state: "initial", subscription_id: "billing-direct" }]
       }),
       getVirtualMachine: vi.fn().mockResolvedValueOnce({
         id: 42,
@@ -908,28 +908,6 @@ describe("provisionVpsForBusiness", () => {
     expect(req.coupons).toEqual(["WELCOME5"]);
   });
 
-  it("bails with a clear error when purchase returns no virtual_machines", async () => {
-    const client = makeClientStub({
-      purchaseVirtualMachine: vi
-        .fn()
-        .mockResolvedValue({ order_id: "o1", virtual_machines: [] })
-    });
-    await expect(
-      provisionVpsForBusiness(
-        {
-          businessId: "biz-1",
-          tier: "starter",
-          pollIntervalMs: 1
-        },
-        {
-          client: client as unknown as HostingerClient,
-          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
-          sleep: vi.fn()
-        }
-      )
-    ).rejects.toThrow(/no virtual_machines/);
-  });
-
   it("bails when getVirtualMachine eventually reports state=error", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi
@@ -1090,8 +1068,8 @@ describe("provisionVpsForBusiness", () => {
         ipv4: [{ id: 1, address: "9.9.9.9" }]
       }),
       purchaseVirtualMachine: vi.fn().mockResolvedValue({
-        order_id: "o2",
-        virtual_machines: [{ id: 99, state: "initial" }]
+        orderId: "o2",
+        virtualMachines: [{ id: 99, state: "initial" }]
       }),
       // This test overrides itemId to prove the override reaches the payload,
       // so the catalog has to contain it or the pre-charge SKU check refuses.
@@ -1148,8 +1126,8 @@ describe("provisionVpsForBusiness", () => {
   it("accepts pollIntervalMs default when omitted (uses injected sleep)", async () => {
     const client = makeClientStub({
       purchaseVirtualMachine: vi.fn().mockResolvedValue({
-        order_id: "o",
-        virtual_machines: [{ id: 66, state: "initial" }]
+        orderId: "o",
+        virtualMachines: [{ id: 66, state: "initial" }]
       }),
       getVirtualMachine: vi.fn().mockResolvedValueOnce({
         id: 66,

@@ -395,7 +395,7 @@ export async function provisionVpsForBusiness(
   // "[VPS:2004] Wrong hostname FQDN format" exactly like the standalone
   // setup endpoint always did (see adopt.ts). Same `nc-<uuid12>.<domain>`
   // shape the adopt path uses.
-  const hostname = input.hostname ?? `nc-${truncateBusinessId(input.businessId)}.newcoworker.com`;
+  const hostname = input.hostname ?? defaultPurchaseHostname(input.businessId);
   const pollInterval = input.pollIntervalMs ?? 10_000;
   const readyTimeout = input.readyTimeoutMs ?? 15 * 60 * 1000;
 
@@ -541,17 +541,14 @@ export async function provisionVpsForBusiness(
     postInstallScriptId
   });
 
+  // The client validates the response shape and throws a HostingerApiError
+  // carrying the raw body when it cannot find a VM, so there is exactly one
+  // place that knows what a purchase reply looks like.
   const order = await client.purchaseVirtualMachine(purchaseReq);
-  if (!order.virtual_machines || order.virtual_machines.length === 0) {
-    throw new Error(
-      /* c8 ignore next -- order.order_id is always present in Hostinger responses */
-      `Hostinger purchase returned no virtual_machines (orderId=${order.order_id ?? "?"})`
-    );
-  }
-  const vm = order.virtual_machines[0];
+  const vm = order.virtualMachines[0];
   onProgress?.("purchase_completed", {
     virtualMachineId: vm.id,
-    orderId: order.order_id
+    orderId: order.orderId
   });
 
   // 5. Poll for `running` + public IPv4. Hostinger's API returns the VPS
@@ -944,6 +941,19 @@ export function truncateBusinessId(id: string): string {
     .slice(0, 12)
     .replace(/-+$/, "");
   return truncated || "unknown";
+}
+
+/**
+ * The hostname a purchase for `businessId` asks Hostinger for.
+ *
+ * Exported because the fail-but-charge reconciler identifies a stranded box
+ * by it: the hostname encodes the business id, so a box wearing this name
+ * that no `vps_inventory` row knows about was bought by this business's
+ * purchase and nobody else's. Both sides must derive it the same way or the
+ * reconciler silently stops matching.
+ */
+export function defaultPurchaseHostname(businessId: string): string {
+  return `nc-${truncateBusinessId(businessId)}.newcoworker.com`;
 }
 
 /* c8 ignore next 3 -- trivial default; tests inject a mock sleep */
