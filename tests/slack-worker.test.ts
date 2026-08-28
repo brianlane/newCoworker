@@ -29,6 +29,7 @@ vi.mock("@/lib/slack/client", () => ({
   slackUsersInfo: vi.fn()
 }));
 vi.mock("@/lib/slack/tier-gate", () => ({ slackAllowedForBusiness: vi.fn() }));
+vi.mock("@/lib/owner-surfaces/staff-mode", () => ({ staffModeEnabled: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/agent-tool-settings", () => ({ getAgentToolStates: vi.fn() }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
@@ -84,6 +85,7 @@ import {
   slackUsersInfo
 } from "@/lib/slack/client";
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
+import { staffModeEnabled } from "@/lib/owner-surfaces/staff-mode";
 import { getBusiness } from "@/lib/db/businesses";
 import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
@@ -137,6 +139,7 @@ beforeEach(() => {
     tier: "standard"
   } as never);
   vi.mocked(slackAllowedForBusiness).mockResolvedValue(true);
+  vi.mocked(staffModeEnabled).mockResolvedValue(true);
   vi.mocked(slackUsersInfo).mockResolvedValue({
     displayName: "Dave",
     email: "dave@x.co",
@@ -743,6 +746,84 @@ describe("final branch sweep", () => {
     expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
       "xoxb-1",
       expect.objectContaining({ thread_ts: "2.0", status: "" })
+    );
+  });
+});
+
+describe("verdicts that are not failures", () => {
+  it("says NOTHING when the owner switched this surface off", async () => {
+    // "Answer them as a customer" is not a thing inside a workspace, and a
+    // line explaining the setting would only nag a teammate who cannot
+    // change it. Terminal, so a switched-off surface does not spend three
+    // attempts per message forever.
+    claimOnce();
+    vi.mocked(staffModeEnabled).mockResolvedValue(false);
+    const result = await processSlackJobs();
+
+    expect(result.failed).toBe(1);
+    expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(completeSlackJob)).not.toHaveBeenCalled();
+    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "staff_mode_off", terminal: true })
+    );
+    // Silent means SILENT in the workspace, not just "no reply text". A
+    // stream opened up front leaves an empty assistant message, and a
+    // "thinking" indicator announces a surface the owner switched off.
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackSetAssistantStatus)).not.toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ status: "is thinking..." })
+    );
+  });
+
+  it("errors terminally, and silently, when there is nothing to answer", async () => {
+    // A whitespace-only message is not a question. Posting "something went
+    // wrong" would be replying to something nobody asked, and retrying it
+    // three times would dead-letter the job under a misleading code.
+    claimOnce();
+    vi.mocked(listSlackMessages).mockResolvedValue([
+      { id: 9, role: "user", content: "   ", slack_ts: "2.0" }
+    ] as never);
+    const result = await processSlackJobs();
+
+    expect(result.failed).toBe(1);
+    expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(failSlackJob)).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "no_input", terminal: true })
+    );
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+  });
+
+  it("posts the over-cap line without ever opening a stream", async () => {
+    // The pre-extraction behaviour, and worth pinning: over-cap decides
+    // BEFORE the model call, so a stream opened in advance would leave an
+    // empty streamed message sitting above the explanation.
+    claimOnce();
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValue({
+      spendMicros: 10,
+      effectiveCapMicros: 1
+    } as never);
+    const result = await processSlackJobs();
+
+    expect(result.processed).toBe(1);
+    expect(vi.mocked(slackStartStream)).not.toHaveBeenCalled();
+    expect(vi.mocked(runInlineChatTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ text: expect.any(String) })
+    );
+    expect(vi.mocked(completeSlackJob)).toHaveBeenCalled();
+  });
+
+  it("opens the stream only once the turn is really going to run", async () => {
+    claimOnce();
+    await processSlackJobs();
+    expect(vi.mocked(slackStartStream)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ status: "is thinking..." })
     );
   });
 });

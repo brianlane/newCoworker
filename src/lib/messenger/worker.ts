@@ -298,7 +298,7 @@ export async function processMessengerJobs(
         // Everything else is thrown so the existing retry ladder owns it. A
         // failed staff turn must never degrade into a customer reply.
         if (staff.terminal) {
-          await failJob(staff.detail, staff.detail);
+          await failJob(staff.code, staff.detail);
           continue;
         }
         throw new Error(staff.detail);

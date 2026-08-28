@@ -45,31 +45,15 @@ import {
 } from "@/lib/slack/chat";
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
 import { getBusiness } from "@/lib/db/businesses";
-import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
-import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
-import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
-import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
-import { ownerSurfaceToolGates } from "@/lib/owner-surfaces/gates";
-import { buildOwnerSurfaceSystem } from "@/lib/owner-surfaces/system";
-import { ownerTurnSurface } from "@/lib/owner-surfaces/turn-surfaces";
-import {
-  buildBusinessContextBlock,
-  buildIntegrationsStatusLine
-} from "@/lib/dashboard-chat/context-blocks";
+import { runOwnerSurfaceTurn } from "@/lib/owner-surfaces/run-turn";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
-import { buildMcpBridgeExtraTools } from "@/lib/dashboard-chat/mcp-bridge";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
-import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { logger } from "@/lib/logger";
 
 /** Recent thread messages replayed for continuity (owner-SMS convention). */
 const SLACK_HISTORY_MESSAGES = 12;
-
-/** Same engine budget as the owner-SMS turn: streaming makes waiting visible. */
-/** Prompt blocks, budget, and gate policy for this surface. */
-const SURFACE = ownerTurnSurface("slack");
 
 /** Claim ceiling per sweep pass; the inline kick handles the common case. */
 const MAX_JOBS_PER_RUN = 8;
@@ -154,7 +138,6 @@ async function runOneSlackJob(
   };
 
   const business = await getBusiness(businessId).catch(() => null);
-  const tier = (business?.tier ?? null) as PlanTier | null;
   const locale = business?.owner_email
     ? await resolveOwnerUiLocaleForEmail(business.owner_email).catch(() => "en" as const)
     : ("en" as const);
@@ -229,12 +212,92 @@ async function runOneSlackJob(
     }
   }
 
-  // Over the shared AI cap: an honest line instead of a silent model refusal
-  // (there is no Rowboat fallback on this surface). Fails open on a read blip.
-  const spend = await getChatSpendSnapshotForBusiness(businessId, undefined, tier).catch(
-    () => null
-  );
-  if (spend !== null && spend.spendMicros >= spend.effectiveCapMicros) {
+  // The turn itself is the shared runner now: staff mode, the context
+  // reads, the spend fuse, the prompt assembly, the tool gates and the
+  // failure taxonomy. What stays here is the part that is actually Slack,
+  // namely the streaming handle, the thread status indicator, and how each
+  // verdict gets voiced in the workspace.
+  const speaker = displayName ?? "Teammate";
+  // Answer the NEWEST user message and replay only what came before it.
+  // Slicing at that index rather than handing over the whole window keeps
+  // the previous behaviour exactly: a trailing assistant row must not make
+  // us re-answer an older question.
+  const answeredIndex = history.indexOf(latestUser);
+
+  // Streaming and the "is thinking" indicator are opened from onTurnStart
+  // below, NOT here. Both are visible in the workspace, and the verdicts
+  // that come back without a reply (staff mode off, over the cap, nothing
+  // to answer) are all supposed to leave no trace: opening either one up
+  // front would have a switched-off surface announce itself with a spinner
+  // and an empty streamed message.
+  // Held on an object rather than in a plain `let`: it is assigned inside
+  // the onTurnStart callback, and the compiler cannot see across that, so a
+  // bare local narrows to `null` for the rest of the function.
+  const streaming: { handle: SlackStreamHandle | null } = { handle: null };
+  let streamedChars = 0;
+  const stopStream = async () => {
+    if (streaming.handle) {
+      await slackStopStream(botToken, streaming.handle, undefined).catch(() => false);
+    }
+  };
+
+  const outcome = await runOwnerSurfaceTurn({
+    businessId,
+    surfaceKey: "slack",
+    // Identity comes from the Slack profile email, matched against the
+    // business owner email upstream in this function.
+    speaker: {
+      kind: isOwner ? "owner" : "teammate",
+      name: displayName || null,
+      readFailed: false
+    },
+    speakerRef: speaker,
+    history: history.slice(0, answeredIndex + 1).map((m) => ({
+      role: m.role,
+      content: m.content
+    })),
+    speakerLabel: speaker,
+    userLabel: `Slack from ${isOwner ? "owner" : "team member"} ${speaker}`,
+    // Kept verbatim rather than the runner's generic
+    // `slack-owner-operator` default: Slack is the one surface with a real
+    // per-user id, and this string is what the MCP bridge files against
+    // every tool call made from the workspace.
+    bridgeUserId: `slack:${conversation.slack_user_id}`,
+    // Already read above for the owner's UI locale, so hand it over rather
+    // than making the context load fetch the same row again.
+    businessMeta: {
+      timezone: business?.timezone ?? null,
+      tier: (business?.tier ?? null) as PlanTier | null,
+      ownerEmail: business?.owner_email?.trim() || null
+    },
+    onTurnStart: async () => {
+      // Best-effort: a refusal (free plan, non-agent context) degrades to a
+      // single post at the end.
+      await slackSetAssistantStatus(botToken, {
+        channel_id: conversation.channel_id,
+        thread_ts: statusThreadTs,
+        status: "is thinking..."
+      });
+      streaming.handle = await slackStartStream(botToken, replyTarget);
+    },
+    // The append is withheld the moment a potential EMAIL_SEND marker shows
+    // up, so raw blocks never render mid-stream.
+    onTextDelta: (text: string) => {
+      const handle = streaming.handle;
+      if (!handle) return;
+      if (text.includes(STREAM_WITHHOLD_MARKER)) return;
+      void slackAppendStream(botToken, handle, text.slice(0, SLACK_REPLY_MAX_CHARS)).then(
+        (ok) => {
+          if (ok) streamedChars += text.length;
+        }
+      );
+    }
+  });
+
+  if (outcome.kind === "over_cap") {
+    // An honest line instead of a silent model refusal: there is no Rowboat
+    // fallback on this surface, so silence here reads as "broken".
+    await stopStream();
     const text = slackOverCapMessage(locale);
     const posted = await slackPostMessage(botToken, { ...replyTarget, text });
     await clearAssistantStatus();
@@ -247,175 +310,32 @@ async function runOneSlackJob(
     return true;
   }
 
-  const speaker = displayName ?? "Teammate";
-  const transcript = history
-    .slice(0, -1)
-    .map((m) => `[${m.role === "user" ? speaker : "Coworker"}]: ${m.content.slice(0, 500)}`)
-    .join("\n");
+  if (outcome.kind === "silent") {
+    // The owner switched this surface off in Settings > Coworker. Post
+    // NOTHING: "answer them as a customer" is not a thing in a workspace,
+    // and a line explaining the setting would only nag a teammate who
+    // cannot change it. Terminal, because the answer cannot change until
+    // the owner switches it back on, so it must not burn the retry ladder.
+    await stopStream();
+    await clearAssistantStatus();
+    await failSlackJob({ jobId, errorCode: outcome.reason, terminal: true });
+    return false;
+  }
 
-  // Same per-turn gates as the owner-SMS operator, keyed to THIS surface's
-  // agent settings so Settings → Coworker → Slack coworker is authoritative.
-  // Batched: one settings query instead of fifteen round-trips per message.
-  const [toolStates, integrationsLine, businessContextBlock, bookingLinkLine] =
-    await Promise.all([
-      getAgentToolStates(businessId, "slack", [
-        "business_knowledge_lookup",
-        "send_sms",
-        "send_whatsapp",
-        "calendar_find_slots",
-        "calendar_book_appointment",
-        "calendar_reschedule_appointment",
-        "calendar_cancel_appointment",
-        "calendar_join_waitlist",
-        "run_aiflow",
-        "edit_aiflow",
-        "update_notification_preferences",
-        "flag_contact_spam",
-        "set_contact_reply_mode",
-        "manage_employee",
-        "send_email",
-        "read_business_data",
-        "manage_contacts",
-        "manage_flows",
-        "manage_agents",
-        "update_business_profile",
-        "update_business_knowledge",
-        "manage_coworker_tools",
-        "custom_table_read",
-        "custom_table_write",
-        "custom_table_manage"
-      ] as const),
-      buildIntegrationsStatusLine(businessId),
-      buildBusinessContextBlock(businessId, {}, { includeCustomTables: true }),
-      bookingLinkPromptLine(businessId)
-    ]);
-  const {
-    business_knowledge_lookup: knowledgeToolEnabled,
-    send_sms: smsToolEnabled,
-    send_whatsapp: whatsappToolEnabled,
-    calendar_find_slots: calFindEnabled,
-    calendar_book_appointment: calBookEnabled,
-    calendar_reschedule_appointment: calRescheduleEnabled,
-    calendar_cancel_appointment: calCancelEnabled,
-    calendar_join_waitlist: calWaitlistEnabled,
-    run_aiflow: runAiflowEnabled,
-    edit_aiflow: editAiflowEnabled,
-    update_notification_preferences: notificationPrefsToolEnabled,
-    flag_contact_spam: flagSpamToolEnabled,
-    set_contact_reply_mode: replyModeToolEnabled,
-    manage_employee: manageEmployeeToolEnabled,
-    custom_table_read: customTableReadEnabled,
-    custom_table_write: customTableWriteEnabled,
-    custom_table_manage: customTableManageEnabled,
-    send_email: emailToolEnabled
-  } = toolStates;
-
-  // MCP-bridge tools: OWNER-VERIFIED turns only, the same double gate as
-  // the other owner-power tools on this surface. A teammate never sees the
-  // declarations, and even a smuggled call would refuse inside the handler
-  // (requireMcpBusinessRole re-checks the caller email per call).
-  const verifiedOwnerEmail = (business?.owner_email ?? "").trim();
-  const bridgeExtraTools =
-    isOwner && verifiedOwnerEmail
-      ? buildMcpBridgeExtraTools(
-          businessId,
-          { userId: `slack:${conversation.slack_user_id}`, email: verifiedOwnerEmail },
-          {
-            read_business_data: toolStates.read_business_data,
-            manage_contacts: toolStates.manage_contacts,
-            manage_flows: toolStates.manage_flows,
-            manage_agents: toolStates.manage_agents,
-            update_business_profile: toolStates.update_business_profile,
-            update_business_knowledge: toolStates.update_business_knowledge,
-            manage_coworker_tools: toolStates.manage_coworker_tools
-          },
-          "owner"
-        )
-      : null;
-
-  const systemInstruction = buildOwnerSurfaceSystem({
-    surface: SURFACE,
-    // Identity comes from the Slack profile email, matched against the
-    // business owner email upstream in this function.
-    speaker: {
-      kind: isOwner ? "owner" : "teammate",
-      name: displayName || null,
-      readFailed: false
-    },
-    speakerRef: speaker,
-    emailToolEnabled,
-    timezone: business?.timezone ?? null,
-    integrationsLine,
-    bookingLinkLine,
-    businessContextBlock,
-    bridgeToolsDeclared: Boolean(bridgeExtraTools),
-    transcript
-  });
-
-  // Streaming: start best-effort; refusals (free plan, non-agent context)
-  // degrade to a single post. The append is withheld the moment a potential
-  // EMAIL_SEND marker shows up, so raw blocks never render mid-stream.
-  await slackSetAssistantStatus(botToken, {
-    channel_id: conversation.channel_id,
-    thread_ts: statusThreadTs,
-    status: "is thinking..."
-  });
-  const stream: SlackStreamHandle | null = await slackStartStream(botToken, replyTarget);
-  let streamedChars = 0;
-
-  const inline = await runInlineChatTurn({
-    businessId,
-    systemInstruction,
-    userMessage: `[Slack from ${isOwner ? "owner" : "team member"} ${speaker}] ${latestUser.content}`,
-    knowledgeToolEnabled,
-    includeCreationTools: false,
-    extraTools: bridgeExtraTools,
-    // Bridged read chains need headroom; the turn budget still bounds the
-    // wall clock regardless of the step count.
-    maxToolSteps: SURFACE.maxToolSteps,
-    budgetMs: SURFACE.budgetMs,
-    spendSurface: SURFACE.spendSurface,
-    flowEditSource: SURFACE.flowEditSource,
-    flowEditActor: speaker,
-    onTextDelta: (text) => {
-      if (!stream) return;
-      if (text.includes(STREAM_WITHHOLD_MARKER)) return;
-      void slackAppendStream(botToken, stream, text.slice(0, SLACK_REPLY_MAX_CHARS)).then(
-        (ok) => {
-          if (ok) streamedChars += text.length;
-        }
-      );
-    },
-    actionToolGates: ownerSurfaceToolGates({
-      toolStates: {
-        send_sms: smsToolEnabled,
-        send_whatsapp: whatsappToolEnabled,
-        calendar_find_slots: calFindEnabled,
-        calendar_book_appointment: calBookEnabled,
-        calendar_reschedule_appointment: calRescheduleEnabled,
-        calendar_cancel_appointment: calCancelEnabled,
-        calendar_join_waitlist: calWaitlistEnabled,
-        run_aiflow: runAiflowEnabled,
-        edit_aiflow: editAiflowEnabled,
-        update_notification_preferences: notificationPrefsToolEnabled,
-        flag_contact_spam: flagSpamToolEnabled,
-        set_contact_reply_mode: replyModeToolEnabled,
-        manage_employee: manageEmployeeToolEnabled,
-        custom_table_read: customTableReadEnabled,
-        custom_table_write: customTableWriteEnabled,
-        custom_table_manage: customTableManageEnabled
-      },
-      // A team member in the workspace can read and act, never reconfigure.
-      isOwner,
-      // Connection-aware, like dashboard chat: never declare a tool that
-      // can only fail.
-      whatsappConnected:
-        (await getPublicWhatsAppConnection(businessId).catch(() => null))?.is_active === true
-    })
-  });
-
-  if (!inline.ok) {
-    if (stream) await slackStopStream(botToken, stream, undefined).catch(() => false);
+  if (outcome.kind === "failed") {
+    await stopStream();
+    if (outcome.terminal) {
+      // Nothing to answer. Saying "something went wrong" would be a reply
+      // to a message that was never really a question.
+      await clearAssistantStatus();
+      await failSlackJob({
+        jobId,
+        errorCode: outcome.code,
+        errorDetail: outcome.detail,
+        terminal: true
+      });
+      return false;
+    }
     if (lastAttempt) {
       const text = slackTurnFailedMessage(locale);
       const posted = await slackPostMessage(botToken, { ...replyTarget, text });
@@ -430,8 +350,8 @@ async function runOneSlackJob(
     }
     await failSlackJob({
       jobId,
-      errorCode: inline.error ?? "model_failed",
-      errorDetail: inline.detail,
+      errorCode: outcome.code,
+      errorDetail: outcome.detail,
       terminal: false
     });
     return false;
@@ -439,22 +359,25 @@ async function runOneSlackJob(
 
   // Fulfil EMAIL_SEND blocks BEFORE any clip or final send: raw JSON must
   // never reach the workspace (owner branch only; team turns carry none).
+  // The runner hands back `unclipped` for exactly this: clipping first
+  // could cut an EMAIL_SEND block into an unparseable fragment that then
+  // renders as raw JSON in the workspace.
   const emailOutcome = isOwner
     ? await fulfillOwnerEmailBlocks({
         businessId,
-        content: inline.content,
+        content: outcome.unclipped,
         source: "slack_assistant",
         // The SAME toggle the preamble above was built from, so the
         // authoritative check can never contradict what the model was told.
         agentKey: "slack"
       })
-    : { content: inline.content };
+    : { content: outcome.unclipped };
   const finalContent = emailOutcome.content.slice(0, SLACK_REPLY_MAX_CHARS);
 
   let postedTs: string | null = null;
-  if (stream) {
-    const stopped = await slackStopStream(botToken, stream, finalContent);
-    if (stopped) postedTs = stream.ts;
+  if (streaming.handle) {
+    const stopped = await slackStopStream(botToken, streaming.handle, finalContent);
+    if (stopped) postedTs = streaming.handle.ts;
   }
   if (postedTs === null) {
     const posted = await slackPostMessage(botToken, { ...replyTarget, text: finalContent });
