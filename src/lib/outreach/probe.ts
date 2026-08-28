@@ -174,7 +174,7 @@ export function detectFindings(html: string): ProbeFinding[] {
   if (weekend) {
     findings.push({
       code: "closed_weekends",
-      detail: `The site states "${weekend[0].trim()}", so weekend enquiries wait until Monday.`
+      detail: `The site states "${weekend[0].trim()}", so weekend inquiries wait until Monday.`
     });
   }
   const hours = WEEKDAY_HOURS_RE.exec(html);
@@ -293,7 +293,7 @@ export function hoursFindings(hours: PlacesOpeningHours | null): ProbeFinding[] 
   if (openDays.size > 0 && !openDays.has(SATURDAY) && !openDays.has(SUNDAY)) {
     findings.push({
       code: "closed_weekends",
-      detail: "Google lists the business as closed on Saturday and Sunday, so weekend enquiries wait until Monday."
+      detail: "Google lists the business as closed on Saturday and Sunday, so weekend inquiries wait until Monday."
     });
   }
 

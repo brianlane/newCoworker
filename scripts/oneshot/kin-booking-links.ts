@@ -108,7 +108,7 @@ export const KIN_BOOKING_SERVICES: readonly KinBookingService[] = [
     link: "https://kinintegrated.janeapp.com/#/psychological-assessment",
     // "psycholog" covers psychological / psychology / psychologist. Bare
     // "assessment" is deliberately NOT the token: OT, speech and psychology
-    // all run assessments, so it would steal OT enquiries.
+    // all run assessments, so it would steal OT inquiries.
     flowMatch: "psycholog",
     aliases: ["psychoeducational", "psych-ed", "adhd", "autism", "testing", "school report"]
   },

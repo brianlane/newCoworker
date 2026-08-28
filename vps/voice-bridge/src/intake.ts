@@ -349,7 +349,7 @@ export interface IntakeKnownLead {
  *
  * `contextNote` is the flow's briefing for the call (`place_ai_call`'s
  * rendered `contextTemplate`, kept current by `voice_brief` rewrites), so it
- * holds whatever the flow knew: the lead's name, the site they enquired
+ * holds whatever the flow knew: the lead's name, the site they inquired
  * through, buying vs selling intent, price when the flow had one. Rendering
  * it in the alert is how the flow's knowledge reaches the owner.
  *

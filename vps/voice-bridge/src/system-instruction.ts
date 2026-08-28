@@ -135,6 +135,22 @@ export function systemInstructionForBusiness(
     "Punctuation: never use an em dash in anything you write. Use a comma, " +
     "a period, or a colon instead.";
 
+  // Spelling: lockstep copy of US_SPELLING_PROMPT_LINE
+  // (supabase/functions/_shared/sms_prompt_lines.ts), keep in sync. This is
+  // the surface the problem was HEARD on: Amy Laidlaw's cadence calls named
+  // the lead's source site using the British spelling of inquiry, read aloud
+  // to Arizona homeowners. The seeded flow copy that told the model to say it
+  // is healed separately; this line closes the model's own drift on the turns
+  // no template scripts. Keep the "Never write" clause on one source line,
+  // tests/inquiry-spelling.test.ts strips it as a single contiguous literal.
+  const usSpellingLine =
+    "Spelling: write in American English. " +
+    "Never write enquiry, enquiries, or enquire; " +
+    "the American spellings are inquiry, inquiries, and inquire. " +
+    "The same goes for other British spellings: write canceled, scheduling, " +
+    "organize, recognize, apologize, neighbor, center, favorite, and " +
+    "traveling.";
+
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
   const isStaff = callerIdentity != null && callerIdentity.kind !== "customer";
@@ -157,6 +173,7 @@ export function systemInstructionForBusiness(
       RECORDED_SYSTEM_LINE,
       NO_INVENTED_CONTACT_LINE,
       noEmDashLine,
+      usSpellingLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
   } else {
@@ -192,6 +209,7 @@ export function systemInstructionForBusiness(
       RECORDED_SYSTEM_LINE,
       NO_INVENTED_CONTACT_LINE,
       noEmDashLine,
+      usSpellingLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
   }

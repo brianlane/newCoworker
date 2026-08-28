@@ -8,7 +8,10 @@
  * (supabase/functions/ai-flow-worker/index.ts), which calls these helpers to
  * decide what to do and to transform fetched page text.
  */
-import { NO_EM_DASH_PROMPT_LINE } from "../sms_prompt_lines.ts";
+import {
+  NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE
+} from "../sms_prompt_lines.ts";
 import { AI_FLOW_DEFINITION_VERSION } from "./types.ts";
 import { emailContactKey } from "../contact_key.ts";
 import type {
@@ -960,6 +963,7 @@ export function buildExtractionPrompt(
     // bodies. SMS is normalized by gsmSafeSmsText on the way out, but email
     // never is, so an em dash the model wrote here ships as-is.
     NO_EM_DASH_PROMPT_LINE,
+    US_SPELLING_PROMPT_LINE,
     "",
     "Fields:",
     fieldLines,

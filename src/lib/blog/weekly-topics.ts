@@ -62,6 +62,7 @@ const SHARED_RULES =
   "section headings. The excerpt is 1-2 friendly sentences (it doubles as an " +
   "Instagram caption, so no links and no markdown). Never use em dashes; use " +
   "commas or periods instead. " +
+  "Write in American English; the spelling is inquiry, never enquiry. " +
   'Respond with JSON: {"title": string, "excerpt": string, "content": string} ' +
   "where content is markdown.";
 

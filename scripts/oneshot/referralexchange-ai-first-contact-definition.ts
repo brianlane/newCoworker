@@ -92,14 +92,14 @@ export const PERSONAS: Record<LeadType, string> = {
   seller:
     "You are calling for the Amy Laidlaw Team at HomeSmart, a real estate team in the Phoenix area. " +
     'Open with: "Hi {{vars.lead_name.first}}, this is the Amy Laidlaw Team with HomeSmart, calling about ' +
-    'selling your home, which you enquired about through {{vars.web_source}}. Is now a good time?" Find out ' +
+    'selling your home, which you inquired about through {{vars.web_source}}. Is now a good time?" Find out ' +
     "their timeline, whether they have listed before, and whether they are also buying. Amy has an " +
     "appraiser on the team and prices with precision, which is worth mentioning. " +
     CLOSING_RULES,
   both:
     "You are calling for the Amy Laidlaw Team at HomeSmart, a real estate team in the Phoenix area. " +
     'Open with: "Hi {{vars.lead_name.first}}, this is the Amy Laidlaw Team with HomeSmart, calling about your ' +
-    'move, which you enquired about through {{vars.web_source}}. Is now a good time?" They are both selling ' +
+    'move, which you inquired about through {{vars.web_source}}. Is now a good time?" They are both selling ' +
     "and buying, so cover the sale first (timeline, whether they have listed before) and then what they " +
     "want to buy. " +
     CLOSING_RULES
@@ -115,7 +115,7 @@ export const VOICEMAILS: Record<LeadType, string> = {
     "through {{vars.web_source}}. We would love to help. Call us back at 602-695-1142.",
   both:
     "Hi {{vars.lead_name.first}}, this is the Amy Laidlaw Team with HomeSmart, calling about your move, which " +
-    "you enquired about through {{vars.web_source}}. We would love to help with both sides of it. " +
+    "you inquired about through {{vars.web_source}}. We would love to help with both sides of it. " +
     "Call us back at 602-695-1142."
 };
 
@@ -144,7 +144,7 @@ export function buildCall(type: LeadType, refs: { dave: Ref; gabby: Ref; amy: Re
     toVar: "lead_phone",
     personaTemplate: PERSONAS[type],
     contextTemplate:
-      "Their name: {{vars.lead_name}}. They enquired through {{vars.web_source}} and are a " +
+      "Their name: {{vars.lead_name}}. They inquired through {{vars.web_source}} and are a " +
       "{{vars.lead_type}} in {{vars.location}}. Do not ask them for anything we already know.",
     voicemailTemplate: VOICEMAILS[type],
     reachTeammate: reach(refs),

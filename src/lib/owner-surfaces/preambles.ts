@@ -16,7 +16,10 @@
  */
 
 import { EMAIL_SEND_OPEN, EMAIL_SEND_CLOSE } from "@/lib/dashboard-chat/email-blocks";
-import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
+import {
+  NO_EM_DASH_PROMPT_LINE,
+  US_SPELLING_PROMPT_LINE
+} from "../../../supabase/functions/_shared/sms_prompt_lines";
 
 export const OWNER_PREAMBLE = `OWNER MODE: READ FIRST
 
@@ -46,7 +49,9 @@ BE PROACTIVE WITH TOOLS. When the owner asks how to do something you can do your
 
 PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything unless a tool result in THIS turn confirms the save; a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.
 
-${NO_EM_DASH_PROMPT_LINE}`;
+${NO_EM_DASH_PROMPT_LINE}
+
+${US_SPELLING_PROMPT_LINE}`;
 
 
 export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL: ENABLED.

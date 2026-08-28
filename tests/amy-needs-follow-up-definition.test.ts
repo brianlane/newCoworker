@@ -588,6 +588,11 @@ describe("fallback composition", () => {
     // templates, which the worker renders without collapseEmpty.
     for (const { where, template } of allTemplates()) {
       const rendered = renderTemplate(template, FALLBACK_SCOPE);
+      // Both spellings of the fallback phrase. UNKNOWN_SITE_REF is what the
+      // templates compose TODAY; OLD_SITE_FALLBACK is the pre-2026-08-28
+      // British spelling, kept so this guard still covers a template that
+      // regressed to the old wording as well as one that regressed to the new.
+      expect(rendered, where).not.toContain(`through ${UNKNOWN_SITE_REF}`);
       expect(rendered, where).not.toContain(`through ${OLD_SITE_FALLBACK}`);
       expect(rendered, where).not.toContain("through unknown");
       expect(rendered, where).not.toMatch(/\bthe the\b/i);
@@ -599,10 +604,10 @@ describe("fallback composition", () => {
   it("renders the persona naturally in both the unknown and the known case", () => {
     const persona = String(byId("r1_call").personaTemplate);
     expect(renderTemplate(persona, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
-      "We're following up on your recent enquiry about your move in the area. Is now a good moment?"
+      "We're following up on your recent inquiry about your move in the area. Is now a good moment?"
     );
     expect(renderTemplate(persona, KNOWN_SCOPE, { collapseEmpty: true })).toContain(
-      "We're following up on your enquiry through Clever about selling your home in Mesa. Is now a good moment?"
+      "We're following up on your inquiry through Clever about selling your home in Mesa. Is now a good moment?"
     );
   });
 
@@ -610,13 +615,13 @@ describe("fallback composition", () => {
     const vm = String(byId("r1_call").voicemailTemplate);
     const text = String(byId("r1_text").body);
     expect(renderTemplate(vm, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
-      "following up on your recent enquiry about your move in the area."
+      "following up on your recent inquiry about your move in the area."
     );
     expect(renderTemplate(vm, KNOWN_SCOPE, { collapseEmpty: true })).toContain(
-      "following up on your enquiry through Clever about selling your home in Mesa."
+      "following up on your inquiry through Clever about selling your home in Mesa."
     );
     expect(renderTemplate(text, FALLBACK_SCOPE, { collapseEmpty: true })).toContain(
-      "voicemail about your recent enquiry regarding your move in the area."
+      "voicemail about your recent inquiry regarding your move in the area."
     );
   });
 

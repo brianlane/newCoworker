@@ -674,7 +674,7 @@ export function newLeadIntakeTemplate(): LibraryStarterTemplate {
           toVar: "lead_phone",
           personaTemplate:
             "Hi, is this {{vars.lead_name.first}}? I'm calling on behalf of the team " +
-            "about your enquiry. Is now a good time for a couple of quick questions?",
+            "about your inquiry. Is now a good time for a couple of quick questions?",
           contextTemplate:
             "Their name: {{vars.lead_name}}. What they are looking for: " +
             "{{vars.lead_details}}. Never ask for details you were already given.",

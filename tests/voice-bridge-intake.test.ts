@@ -369,7 +369,7 @@ describe("composeIntakeLeadSms: outbound calls the platform placed", () => {
 
   it("renders the flow briefing verbatim, so the flow's knowledge reaches the owner", () => {
     const note =
-      "Their name: Isiah Perez. They enquired through listwithclever.com about selling in Phoenix.";
+      "Their name: Isiah Perez. They inquired through listwithclever.com about selling in Phoenix.";
     const text = composeIntakeLeadSms({ ...base, flowContextNote: note });
     expect(text).toContain(`Call briefing: ${note}`);
   });

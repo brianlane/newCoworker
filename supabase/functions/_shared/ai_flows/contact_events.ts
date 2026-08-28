@@ -122,8 +122,8 @@ export function contactEventText(input: ContactEventInput): string {
     // it a flow reading this event can only guess the network from whatever
     // happens to be in `tags:`, and a lead whose source is a column rather
     // than a tag reads as unknown: on Amy Laidlaw's follow-up cadence, 23 of
-    // 42 runs fell back to "your recent enquiry" while the contact row said
-    // "ReferralExchange" the whole time.
+    // 42 runs fell back to the unknown-source phrase while the contact row
+    // said "ReferralExchange" the whole time.
     source ? `source: ${source}` : "",
     input.kind === "tag_changed" ? `tag: ${input.tag ?? ""}` : "",
     input.kind === "tag_changed" ? `change: ${input.change ?? "added"}` : "",
