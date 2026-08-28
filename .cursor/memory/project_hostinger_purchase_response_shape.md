@@ -1,6 +1,6 @@
 ---
 name: project-hostinger-purchase-response-shape
-description: Hostinger's VPS purchase returns { order, virtual_machine } singular; we read the wrong shape for months, so "fail-but-charge" was partly our own bug
+description: Hostinger's VPS purchase returns { order, virtual_machine } singular; we read the wrong shape for months, so "fail-but-charge" was partly our own bug; both recovery gates now cover post-charge failures
 metadata:
   type: project
 ---
@@ -22,7 +22,9 @@ An `order` OBJECT and a SINGULAR `virtual_machine`. Hostinger's OpenAPI spec has
 1. `isHostingerPurchaseFailure` (`src/lib/provisioning/orchestrate.ts`) requires `err.name === "HostingerApiError"` AND `endpoint === "/api/vps/v1/virtual-machines"`. A plain `Error` thrown anywhere in the purchase path skips the reconciler entirely. This is why the client now throws `HostingerApiError` (status 200) carrying the raw body on an unreadable reply.
 2. `carriesOrphanSignature` (`src/lib/provisioning/reconcile-orphans.ts`) accepts a box that is `initial` with no template (purchase errored BEFORE setup ran) or one wearing this business's own purchase hostname `nc-<uuid12>.newcoworker.com` via `defaultPurchaseHostname`. Signature 1 alone cannot see a box stranded by a SUCCESSFUL purchase, because that box is running with a template.
 
-**Still open:** a failure between the purchase returning and the inventory write (e.g. `waitForVpsReady` timing out) strands a box the same way, and gate 1 will not recognize it either.
+Gate 1 also opens for a failure AFTER the purchase returned (the ready-poll, the IPv4 guard, the `vps_ssh_keys` write). Those steps run inside a wrapper that retags any throw as `PostPurchaseProvisionError` carrying the VM id, read back by `chargedVirtualMachineId`. Closed 2026-08-28 in [#1709](https://github.com/brianlane/newCoworker/pull/1709); before it, a 15-minute ready-poll timeout abandoned a paid, running box and nothing went looking.
+
+**When the failure names a VM, the age heuristics must not run.** `orphanMinCreatedAtMs`/`orphanMaxCreatedAtMs` bound "which orphan is mine", and the ceiling is stamped when the failure SURFACES. That is safe only while the window is seconds wide, which it was when the only covered failure was the purchase call itself. A post-charge failure stretches it to ~15 minutes, so a concurrent business's same-size fail-but-charge falls inside it. Two consequences, both fixed in #1709 after Bugbot flagged them: `reconcileUntilSizeMatch` takes `awaitVmId` and waits for THAT vm (it otherwise stops on the first size match, so a decoy ends the wait before your own box materializes), and selection takes the named box or nothing. Never re-add a heuristic fallback on the named path: it would hand this tenant a box another customer just paid for.
 
 **Recovering a stranded paid box** (KIN Integrated Child Health, 2026-08-28, VM 1936826): the private key is only persisted AFTER the purchase, so a stranded box is un-SSH-able. Do not try to repair it in place. Instead:
 
