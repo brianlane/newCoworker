@@ -129,5 +129,5 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [c8 ignore fails on awaited defaults](feedback_c8_ignore_fails_on_awaited_default.md) - `?? (await createServiceClient())` stays uncovered; mock the module
 - [Font taste: no quirky display faces](feedback_font_taste_no_quirky_display.md) - Geist+Inter; restrained beats distinctive
 - [Fleet fallback-composition audit](project_fleet_fallback_composition_audit.md) - Aug 27: every finding FIXED same day (#1673 cadence, #1680 KYP gates/Clever Budget/HomeLight labels); sweep method inside
-- [Stripe period fields moved to items](project_stripe_period_moved_to_items.md) - Edge voice JIT reads only the dead top-level shape; term plans age out at 30d and get blocked
+- [Stripe period fields moved to items](project_stripe_period_moved_to_items.md) - FIXED #1698; one shared parser, term plans get a wider cache cap; backfill script re-stamps
 - [Amy's term runs on a canceled Stripe sub BY DESIGN](project_provision_fail_cancels_sub_keeps_payment.md) - failed-but-charged recovery, documented; only contract_auto_renew=true lies
