@@ -1521,7 +1521,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.direction === "outbound",
             intake.contextNote,
             opts.languagePrefs,
-            hasVoicemailTool
+            hasVoicemailTool,
+            Boolean(ivrGate)
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1791,6 +1792,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     // `endCallRequested`: the entry guard alone cannot see it (Bugbot,
     // PR #1672).
     const batchRequestsEndCall = calls.some((c) => c.name === "end_call");
+    // Same shape, same turn, for the accept press: a `press_digits` +
+    // `voicemail_reached` pair means the model is STILL in the partner's menu
+    // and the press has not even reached Telnyx yet, so the voicemail guard
+    // below must refuse rather than read a mailbox script into that menu
+    // (Bugbot, PR #1716).
+    const batchRequestsAcceptPress = calls.some((c) => c.name === "press_digits");
     for (const call of calls) {
       const name = call.name ?? "unknown";
       // Debug: which tool the model invoked + its arg keys (not values, to
@@ -2148,6 +2155,36 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             detail: "the call is already ending: leave no message and say nothing"
           });
           emitDiag("voice_bridge_voicemail_after_end_call", {});
+          continue;
+        }
+        // A gated session is ANSWERED INTO a recording by design: the partner's
+        // own menu ("press one to agree to our referral fee", "connecting you
+        // now") plays before the person we want is dialled in at all. Every
+        // word of it matches "you reached a machine", so before the accept
+        // digit lands a voicemail verdict cannot be about the seller, and
+        // acting on it would stamp the call a machine and hang up on a
+        // referral that had not started. Refuse until the press is in.
+        // Deterministic on purpose: the rule enumerates mailbox phrasing and
+        // the partner's menu is not in that list, but the whole reason this
+        // exists is that a prompt line alone does not hold
+        // ([[ai-invents-callback-numbers-on-voicemail]]). Counted so a spike
+        // reads as a model mistiming, not as this guard being wrong.
+        //
+        // The test is `acceptPressCount`, NOT `acceptPressed`: the latter is
+        // claimed synchronously before the Telnyx request is even sent, and
+        // is only cleared once a failed press returns, so it reads true
+        // throughout the window where nothing has been accepted. The count
+        // rises only after Telnyx returns ok, which is the real "we are
+        // through the gate" moment; the batch check states the same-turn case
+        // outright rather than resting on the loop staying synchronous
+        // (Bugbot, PR #1716).
+        if (ivrGate && (acceptPressCount === 0 || batchRequestsAcceptPress)) {
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail:
+              "that is the referral service's own menu, not a mailbox: stay silent, press the accept digit, and wait to be connected"
+          });
+          emitDiag("voice_bridge_voicemail_before_accept", {});
           continue;
         }
         // Answered on its own task so the model's turn completes promptly: it

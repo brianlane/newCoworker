@@ -5,10 +5,12 @@ import {
   extractIntakeAlertContext,
   INBOUND_VOICEMAIL_RECOGNITION_LINE,
   inboundVoicemailMessageLine,
+  inboundVoicemailScript,
   intakeSystemInstruction,
   iosScreeningLine,
   OUTBOUND_VOICEMAIL_TOOL_LINE,
-  STAR_ROW
+  STAR_ROW,
+  TRANSFER_PARTNER_MENU_LINE
 } from "../vps/voice-bridge/src/intake";
 import {
   NO_INVENTED_CONTACT_LINE,
@@ -425,18 +427,53 @@ describe("composeIntakeLeadSms: outbound calls the platform placed", () => {
     expect(text).not.toContain("Call briefing:");
   });
 
-  it("the inbound shape is untouched: no Outcome line, Transferred via kept", () => {
-    const text = composeIntakeLeadSms({
-      businessName: "Acme",
-      lead: { name: "Javier" },
-      transferFromE164: "+14159851909",
-      transcript: "AI: Hi",
-      maxChars: 3000,
-      voicemail: { detected: true, messageLeft: true }
-    });
+  const inboundTransfer = {
+    businessName: "Acme",
+    lead: { name: "Javier" },
+    transferFromE164: "+14159851909",
+    transcript: "AI: Hi",
+    maxChars: 3000
+  };
+
+  it("the ordinary inbound shape is untouched: no Outcome line, Transferred via kept", () => {
+    const text = composeIntakeLeadSms(inboundTransfer);
     expect(text).toContain("New live-transfer lead (AI intake)");
     expect(text).toContain("Transferred via: +14159851909");
     expect(text).not.toContain("Outcome:");
+  });
+
+  /**
+   * This assertion used to read the other way, and its premise is gone.
+   *
+   * It pinned "an inbound alert ignores the voicemail flag" because the flag
+   * could not honestly be set on one: `voicemail_reached` was registered for
+   * outbound calls only, so a verdict on an inbound row could only be leakage
+   * from the outbound feature. A partner live transfer bridges the CLIENT's
+   * own line into the call we answered, carrier AMD cannot see that leg at
+   * all, and 5 of the 8 HomeLight transfers on record reached her mailbox
+   * (measured 2026-08-28). The tool ships on those calls now, so the verdict
+   * is real, and suppressing it left the owner reading "I captured this on
+   * the call" under an empty capture.
+   */
+  it("says the client's line went to voicemail instead of claiming a capture", () => {
+    const text = composeIntakeLeadSms({
+      ...inboundTransfer,
+      voicemail: { detected: true, messageLeft: true }
+    });
+    expect(text).toContain("went to voicemail, so there was nobody to capture");
+    expect(text).toContain("Outcome: reached voicemail, left the scripted message.");
+    // The claim that replaced it must be gone, not merely joined.
+    expect(text).not.toContain("I captured this on the call");
+    // Still the partner's line, still never presented as the seller's number.
+    expect(text).toContain("Transferred via: +14159851909");
+  });
+
+  it("distinguishes a message left from one the transfer could not leave", () => {
+    const text = composeIntakeLeadSms({
+      ...inboundTransfer,
+      voicemail: { detected: true, messageLeft: false }
+    });
+    expect(text).toContain("Outcome: reached voicemail, no message left.");
   });
 
   // An INBOUND session's `ai_takeover.context_note` is model-only instruction
@@ -832,6 +869,137 @@ describe("intakeSystemInstruction: reporting a recording", () => {
   it("carries no em dash and never says receptionist", () => {
     expect(OUTBOUND_VOICEMAIL_TOOL_LINE).not.toMatch(/—/);
     expect(OUTBOUND_VOICEMAIL_TOOL_LINE.toLowerCase()).not.toContain("receptionist");
+  });
+});
+
+/**
+ * The partner LIVE TRANSFER carve-out.
+ *
+ * A gated call is answered into the referral service's own menu before the
+ * seller is dialled at all, so the recording rule above describes that menu
+ * word for word. Measured 2026-08-28: 5 of the 8 HomeLight live transfers on
+ * record landed in the seller's mailbox, none of them recorded as such, which
+ * is why the tool ships here at all. This exception is what stops that same
+ * tool ending a referral during the partner's menu, before the seller has
+ * even been dialled.
+ */
+describe("intakeSystemInstruction: the partner menu is not a mailbox", () => {
+  const gated = intakeSystemInstruction(
+    "Amy Laidlaw",
+    undefined,
+    "America/Phoenix",
+    [],
+    true,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    true,
+    true
+  );
+
+  it("ships the carve-out on a gated session", () => {
+    expect(gated).toContain(TRANSFER_PARTNER_MENU_LINE);
+  });
+
+  /**
+   * The tool REPLACES the direct read, it does not sit beside it.
+   *
+   * `inboundVoicemailMessageLine` is a complete procedure that never reports
+   * the recording (leave the message, then end the call) and it lands earlier
+   * in the prompt than the tool rule. Shipping both leaves the model exactly
+   * the unstamped path it took on Aug 24 and Aug 28: message delivered,
+   * session never marked as a machine, owner alerted that a lead was
+   * captured. Recognition stays; only the bypass goes.
+   */
+  it("drops the direct-read procedure once the tool can carry the verdict", () => {
+    expect(gated).toContain(INBOUND_VOICEMAIL_RECOGNITION_LINE);
+    expect(gated).not.toContain("leave EXACTLY this one message");
+    expect(gated).toContain("`voicemail_reached`");
+  });
+
+  it("keeps the direct read where no tool can exist", () => {
+    const noTool = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true);
+    expect(noTool).toContain("leave EXACTLY this one message");
+    expect(noTool).not.toContain("`voicemail_reached`");
+  });
+
+  it("bounds the exception by the keypress, not by the menu's wording", () => {
+    // Partners reword their menus; "before the keypress" and "after it" hold.
+    expect(TRANSFER_PARTNER_MENU_LINE).toContain("Until you have pressed the accept digit");
+    expect(TRANSFER_PARTNER_MENU_LINE).toContain("Only what you hear AFTER that");
+    expect(TRANSFER_PARTNER_MENU_LINE).toContain("do not call `voicemail_reached`");
+  });
+
+  it("states the exception AFTER the rule it narrows", () => {
+    expect(gated.indexOf(OUTBOUND_VOICEMAIL_TOOL_LINE)).toBeGreaterThanOrEqual(0);
+    expect(gated.indexOf(TRANSFER_PARTNER_MENU_LINE)).toBeGreaterThan(
+      gated.indexOf(OUTBOUND_VOICEMAIL_TOOL_LINE)
+    );
+  });
+
+  it("never ships without the rule and tool it narrows", () => {
+    // An exception to a rule the model was never given reads as permission.
+    const gatedNoTool = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      false,
+      true
+    );
+    expect(gatedNoTool).not.toContain(TRANSFER_PARTNER_MENU_LINE);
+    expect(gatedNoTool).not.toContain("voicemail_reached");
+  });
+
+  it("stays off an ordinary outbound call, which has no partner menu", () => {
+    const outbound = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      true
+    );
+    expect(outbound).toContain(OUTBOUND_VOICEMAIL_TOOL_LINE);
+    expect(outbound).not.toContain(TRANSFER_PARTNER_MENU_LINE);
+  });
+
+  it("carries no em dash", () => {
+    expect(TRANSFER_PARTNER_MENU_LINE).not.toMatch(/—/);
+  });
+
+  /**
+   * The tool's answer and the persona's rule must be the SAME sentence.
+   *
+   * On a gated call the bridge hands `inboundVoicemailScript` back through
+   * `voicemail_reached`, while the persona already carries the same text
+   * under "leave EXACTLY this one message". The model is told to read
+   * whichever it was handed word for word, so two copies would let a reworded
+   * rule and a stale tool answer put two different messages on one mailbox.
+   */
+  it("hands back the same message the persona already scripts", () => {
+    const script = inboundVoicemailScript("Amy Laidlaw Real Estate");
+    expect(inboundVoicemailMessageLine("Amy Laidlaw Real Estate", true)).toContain(`"${script}"`);
+  });
+
+  it("keeps the script safe on a stranger's mailbox", () => {
+    const script = inboundVoicemailScript("Amy Laidlaw Real Estate");
+    // No callback number to invent against, no price, no address: the same
+    // ban the recordings rule states, enforced on the copy itself.
+    expect(script).not.toMatch(/\d{3}[ .-]?\d{3}[ .-]?\d{4}/);
+    expect(script).not.toMatch(/\$/);
+    expect(script).not.toMatch(/—/);
+    expect(script).toContain("Amy Laidlaw Real Estate");
   });
 });
 
