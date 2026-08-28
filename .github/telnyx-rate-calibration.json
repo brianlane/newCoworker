@@ -1,0 +1,5 @@
+{
+  "terminationCentsPerMinute": 0.5333,
+  "measuredThrough": "2026-08-27",
+  "note": "Effective outbound termination we actually paid, measured from telnyx_cost_daily (record_type sip-trunking, direction outbound): 12,600 billed seconds costing $1.12 over 2026-06-29..2026-08-27, carrier_fee_micros zero, so this is pure termination. It sits a little above the deck's 0.5c Zone 1 rate because a small amount of traffic left the baseline. .github/scripts/telnyx-rate-drift.ts compares each post-cutover measurement against this value AND REWRITES IT in the same commit, so a merged recalibration moves the comparison point with it. Without that the next weekly run would re-apply the same delta on top of the already-updated constant, forever."
+}

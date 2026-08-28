@@ -1421,6 +1421,8 @@ src/lib/plans/tier-display.ts :: pickFeatures
 src/lib/plans/tier.ts :: PlanPricing
 src/lib/plans/tier.ts :: getTierPricing
 src/lib/plans/tier.ts :: isPaidTier
+src/lib/plans/voice-zone-rates.generated.ts :: VOICE_RATE_DECK_SHA256
+src/lib/plans/voice-zone-rates.ts :: voiceZoneFor
 src/lib/plans/white-glove.ts :: WhiteGlovePackageId
 src/lib/plans/white-glove.ts :: hasPrioritySupport
 src/lib/pptx/from-markdown.ts :: PPTX_MAX_BULLETS_PER_SLIDE
