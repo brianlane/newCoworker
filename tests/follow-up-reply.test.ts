@@ -323,10 +323,40 @@ describe("followUpRunCandidatesFrom", () => {
       ).toBe("claimed");
     });
 
-    it("reads the flow's own claimed_agent 'none' as unclaimed", () => {
+    /**
+     * The trap Bugbot caught: the worker seeds claimed_agent="none" into EVERY
+     * run of EVERY flow at context setup, so it is a default, not a fact. 363
+     * of 400 recent production runs carried it with no routing at all, across
+     * 18 flows with no claim concept. Reading it as "unclaimed" told nine
+     * teammates in ten to reply "1" to an offer that does not exist, and a
+     * bare "1" claims the most recent live offer, potentially a different
+     * lead entirely.
+     */
+    it("does NOT read the seeded claimed_agent 'none' as unclaimed", () => {
       expect(
         followUpRunCandidatesFrom([run("r1", { lead_name: "Rhonda", claimed_agent: "none" })])[0]!
           .claimState
+      ).toBe("unknown");
+    });
+
+    /**
+     * `routing` is the honest tell: it exists only once a route_to_team has
+     * actually offered this lead, so its presence proves there IS something to
+     * claim, and no claimed_by on it proves nobody has.
+     */
+    it("reads an offered-but-unclaimed run as unclaimed", () => {
+      expect(
+        followUpRunCandidatesFrom([
+          {
+            id: "r1",
+            revision: 1,
+            status: "queued",
+            context: {
+              vars: { lead_name: "Rhonda", claimed_agent: "none" },
+              routing: { claimed_by: null }
+            }
+          }
+        ])[0]!.claimState
       ).toBe("unclaimed");
     });
 
@@ -348,6 +378,18 @@ describe("followUpRunCandidatesFrom", () => {
       expect(
         followUpRunCandidatesFrom([
           { id: "r2", revision: 1, context: { vars: { lead_name: "R" }, routing: null } }
+        ])[0]!.claimState
+      ).toBe("unknown");
+      // The shape 91% of production runs actually have: seeded sentinel, no
+      // routing, ordinary status. Must stay "unknown".
+      expect(
+        followUpRunCandidatesFrom([
+          {
+            id: "r4",
+            revision: 1,
+            status: "queued",
+            context: { vars: { lead_name: "R", claimed_agent: "none", claimed_agent_phone: "none" } }
+          }
         ])[0]!.claimState
       ).toBe("unknown");
       // A non-string claimed_agent is not a claim either.

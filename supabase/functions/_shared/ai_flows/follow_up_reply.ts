@@ -344,19 +344,35 @@ export type FollowUpClaimState = "claimed" | "unclaimed" | "unknown";
  *
  *   claimed   - `routing.claimed_by` (stamped by the claim reply itself) or a
  *               real `claimed_agent` (what the flow's own steps branch on).
- *   unclaimed - an offer is parked awaiting a claim (`awaiting_agent`), or the
- *               flow says so outright by writing `claimed_agent: "none"`.
- *   unknown   - neither. Plenty of flows track no claim at all.
+ *   unclaimed - there is demonstrably an offer TO claim and nobody holds it:
+ *               a park awaiting a claim (`awaiting_agent`), or a `routing`
+ *               object with no claimer on it.
+ *   unknown   - neither. Most runs land here, and that is correct.
+ *
+ * `claimed_agent === "none"` is NOT evidence of anything. The worker seeds
+ * that sentinel into EVERY run of EVERY flow at context setup, so a flow can
+ * carry it having never offered a claim to anyone: 363 of 400 recent
+ * production runs held it with no `routing` at all, across 18 flows with no
+ * claim concept whatsoever ("Needs Follow Up (AI cadence)", "Pre-call
+ * reminder", "Clever Update Leads"). Reading it as "unclaimed" would have
+ * told nine teammates in ten to reply "1" to an offer that does not exist,
+ * and a bare "1" claims the most recent live offer, which could hand them a
+ * completely different lead (Bugbot, PR #1702).
+ *
+ * `routing` is the honest tell: it exists only once a route_to_team has
+ * actually offered this lead, so its presence proves there is something to
+ * claim and its missing `claimed_by` proves nobody has.
  */
 function runClaimState(
   row: FollowUpRunRow,
   vars: Record<string, unknown>
 ): FollowUpClaimState {
-  if (row.context?.routing?.claimed_by) return "claimed";
+  const routing = row.context?.routing;
+  if (routing?.claimed_by) return "claimed";
   const agent = typeof vars.claimed_agent === "string" ? vars.claimed_agent.trim() : "";
   if (agent && agent.toLowerCase() !== "none") return "claimed";
-  if (agent.toLowerCase() === "none") return "unclaimed";
   if ((row.status ?? "") === "awaiting_agent") return "unclaimed";
+  if (routing) return "unclaimed";
   return "unknown";
 }
 
