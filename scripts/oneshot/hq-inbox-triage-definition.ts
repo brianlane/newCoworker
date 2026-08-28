@@ -236,8 +236,46 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           },
           {
             value: "automated_important",
+            /**
+             * "or incident" earns its two words. Nightly 2026-08-28:
+             * "Incident: elevated API error rates / We are investigating ...
+             * Updates to follow" classified `automated_notice`, and repeated
+             * sampling put the case at 31/44 (about 70%) rather than a
+             * one-off wobble. The tier BELOW opens with "asks nothing of us",
+             * and an incident notice asks nothing, so both tiers had a fair
+             * claim and the model split. Naming the case here settles it
+             * without touching the neighbour, which stayed 12/12 throughout.
+             *
+             * Category descriptions are capped at 200 characters by the
+             * schema, and this one was already 192, so "incident" had to be
+             * PAID FOR. It cost the words "broken integration", which become
+             * "breakage".
+             *
+             * The obvious cheaper trade, dropping "we are in" from the
+             * conversation clause, scored identically on all seven cases and
+             * is still WRONG: "teaches every tier that an ongoing
+             * conversation is not routine" pins that phrase deliberately
+             * across all three automated tiers, as the wording-independent
+             * half of the Aug 17 OAuth fix. The test caught it. A measured
+             * tie is not permission to break a property nothing measured.
+             *
+             * "breakage" costs nothing that could be measured: the broken
+             * integration case below scores 12/12 with the shorter word.
+             *
+             * 12 samples per case, before -> after:
+             *   incident/outage      11/12 -> 12/12
+             *   security alert       12/12 -> 12/12
+             *   broken integration   12/12 -> 12/12
+             *   hosting renewal      12/12 -> 12/12  (neighbour, must hold)
+             *   hosting EXPIRED      12/12 -> 12/12  (neighbour, the Aug 6
+             *                                         Hostinger regression)
+             *   Slack digest         12/12 -> 12/12  (neighbour, must hold)
+             *
+             * See [[project_new_classify_tier_needs_both_neighbours]]: both
+             * neighbours were scored before and after, in both directions.
+             */
             description:
-              "Automated mail we must act on: asks us to do, verify or respond, reports an outage, security alert, suspension or broken integration, OR continues a conversation we are in. NOT hosting notices"
+              "Automated mail we must act on: asks us to do, verify or respond, reports an outage, incident, security alert, suspension or breakage, OR continues a conversation we are in. NOT hosting notices"
           },
           {
             value: "billing_receipt",

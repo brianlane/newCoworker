@@ -132,12 +132,31 @@ describe('"inquiry", never "enquiry"', () => {
       // Messenger / Instagram DM / WhatsApp conversations.
       "src/lib/messenger/engine.ts",
       // Website webchat.
-      "src/lib/webchat/gemini-engine.ts",
-      // AiFlow field extraction, whose output is pasted verbatim into owner
-      // SMS and send_email bodies. This is the surface that wrote the
-      // "your enquiry through Clever" value onto Amy's parked runs.
-      "supabase/functions/_shared/ai_flows/engine.ts"
+      "src/lib/webchat/gemini-engine.ts"
     ];
+    // AiFlow field extraction is wired to the SHORT constant, deliberately.
+    // Its output is pasted verbatim into owner SMS and send_email bodies, so
+    // it needs the guard, but the full line's trailing list of other British
+    // spellings measurably breaks the person-role disambiguation instruction
+    // that sits above it in the same prompt: 5/24 correct against 8/8 without
+    // it, answering with our own agent's name (the Pamela replay, nightly
+    // 2026-08-28). Asserting the EXACT constant matters here: a bare
+    // "US_SPELLING_PROMPT_LINE" substring check passes on the extraction
+    // constant by accident, which would let a future edit swap either one for
+    // the other unnoticed.
+    const extractionSurface = readFileSync(
+      join(ROOT, "supabase/functions/_shared/ai_flows/engine.ts"),
+      "utf8"
+    );
+    expect(
+      extractionSurface,
+      "AiFlow extraction must inject US_SPELLING_PROMPT_LINE_EXTRACTION"
+    ).toContain("US_SPELLING_PROMPT_LINE_EXTRACTION");
+    expect(
+      /US_SPELLING_PROMPT_LINE(?!_EXTRACTION)/.test(extractionSurface),
+      "AiFlow extraction must NOT take the full line: its word list breaks person-role disambiguation"
+    ).toBe(false);
+
     for (const rel of importWired) {
       const text = readFileSync(join(ROOT, rel), "utf8");
       expect(text, `${rel} must inject US_SPELLING_PROMPT_LINE`).toContain(
