@@ -8,7 +8,8 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/push/db", () => ({
   upsertPushSubscription: vi.fn(),
   revokePushSubscription: vi.fn(),
-  findLivePushSubscription: vi.fn(),
+  listLivePushSubscriptions: vi.fn(),
+  repointPushSubscription: vi.fn(),
   recordPushClick: vi.fn()
 }));
 
@@ -19,7 +20,10 @@ vi.mock("@/lib/push/tier-gate", async () => {
   return { ...actual, pushAllowedForBusiness: vi.fn() };
 });
 
-vi.mock("@/lib/db/notifications", () => ({ markNotificationRead: vi.fn() }));
+vi.mock("@/lib/db/notifications", () => ({
+  markNotificationRead: vi.fn(),
+  notificationBusinessId: vi.fn()
+}));
 
 import { POST as subscribe } from "@/app/api/push/subscribe/route";
 import { POST as unsubscribe } from "@/app/api/push/unsubscribe/route";
@@ -27,13 +31,14 @@ import { POST as receipt } from "@/app/api/push/receipt/route";
 import { GET as vapidKey } from "@/app/api/push/vapid-key/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
-  findLivePushSubscription,
+  listLivePushSubscriptions,
+  repointPushSubscription,
   recordPushClick,
   revokePushSubscription,
   upsertPushSubscription
 } from "@/lib/push/db";
 import { pushAllowedForBusiness } from "@/lib/push/tier-gate";
-import { markNotificationRead } from "@/lib/db/notifications";
+import { markNotificationRead, notificationBusinessId } from "@/lib/db/notifications";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -156,6 +161,54 @@ describe("api/push/subscribe", () => {
     expect(upsertPushSubscription).not.toHaveBeenCalled();
   });
 
+  describe("rotation (pushsubscriptionchange)", () => {
+    /**
+     * The worker cannot know which business the device was registered
+     * against, and guessing the platform scope 403s every tenant device.
+     * So it sends the old endpoint and the server moves whatever scopes the
+     * CALLER already had, preserving them.
+     */
+    it("moves the caller's existing scopes without needing a businessId", async () => {
+      vi.mocked(repointPushSubscription).mockResolvedValue(2 as never);
+      const res = await subscribe(
+        post({ previousEndpoint: "https://fcm.googleapis.com/fcm/send/old", subscription: SUBSCRIPTION })
+      );
+      expect(res.status).toBe(200);
+      expect((await json(res)).data).toEqual({ subscribed: true, rotated: 2 });
+      expect(repointPushSubscription).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "user-1" })
+      );
+      // A rotation never CREATES a registration, so no scope check applies.
+      expect(upsertPushSubscription).not.toHaveBeenCalled();
+      expect(requireBusinessRole).not.toHaveBeenCalled();
+    });
+
+    it("still requires a session, so an endpoint alone rotates nothing", async () => {
+      vi.mocked(getAuthUser).mockResolvedValue(null as never);
+      const res = await subscribe(
+        post({ previousEndpoint: "https://fcm.googleapis.com/fcm/send/old", subscription: SUBSCRIPTION })
+      );
+      expect(res.status).toBe(401);
+      expect(repointPushSubscription).not.toHaveBeenCalled();
+    });
+
+    it("reports nothing moved when the caller owned no rows at that endpoint", async () => {
+      vi.mocked(repointPushSubscription).mockResolvedValue(0 as never);
+      const res = await subscribe(
+        post({ previousEndpoint: "https://fcm.googleapis.com/fcm/send/someone-elses", subscription: SUBSCRIPTION })
+      );
+      expect((await json(res)).data).toEqual({ subscribed: false, rotated: 0 });
+    });
+  });
+
+  it("refuses a plain registration that omits the scope entirely", async () => {
+    // Only a rotation may leave businessId out; a first registration without
+    // one has no scope to attach to and must not silently pick.
+    const res = await subscribe(post({ subscription: SUBSCRIPTION }));
+    expect(res.status).toBe(400);
+    expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
+
   describe("platform scope", () => {
     it("lets an admin register for platform alerts", async () => {
       vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
@@ -195,7 +248,8 @@ describe("api/push/unsubscribe", () => {
 });
 
 describe("api/push/receipt", () => {
-  const LIVE_SUB = { id: "sub-1", business_id: BIZ, user_id: "user-1", endpoint: ENDPOINT };
+  const tenantSub = { id: "s1", business_id: BIZ, user_id: "user-1", endpoint: ENDPOINT };
+  const platformSub = { id: "s2", business_id: null, user_id: "user-1", endpoint: ENDPOINT };
 
   /**
    * No session by design: authentication is possession of the endpoint (a
@@ -205,7 +259,8 @@ describe("api/push/receipt", () => {
    */
   it("records a tap with no session at all", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null as never);
-    vi.mocked(findLivePushSubscription).mockResolvedValue(LIVE_SUB as never);
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([tenantSub] as never);
+    vi.mocked(notificationBusinessId).mockResolvedValue(BIZ);
 
     const res = await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
     expect(res.status).toBe(200);
@@ -214,48 +269,79 @@ describe("api/push/receipt", () => {
   });
 
   it("records nothing for an unknown or revoked endpoint, without erroring", async () => {
-    vi.mocked(findLivePushSubscription).mockResolvedValue(null as never);
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([] as never);
     const res = await receipt(post({ endpoint: ENDPOINT }));
     expect(res.status).toBe(200);
     expect((await json(res)).data).toEqual({ recorded: false });
     expect(recordPushClick).not.toHaveBeenCalled();
   });
 
-  it("marks read against the subscription's own business, never a caller-supplied one", async () => {
-    // The business id comes from the SUBSCRIPTION, so a notification id
-    // belonging to another tenant cannot be marked read through this route.
-    vi.mocked(findLivePushSubscription).mockResolvedValue(
-      { ...LIVE_SUB, business_id: OTHER_BIZ } as never
-    );
-    await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
-    expect(markNotificationRead).toHaveBeenCalledWith(NOTIF, OTHER_BIZ, "owner");
+  it("uses the single scope when no notification id was sent", async () => {
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([tenantSub] as never);
+    await receipt(post({ endpoint: ENDPOINT }));
+    expect(recordPushClick).toHaveBeenCalledWith({
+      businessId: BIZ,
+      notificationId: undefined
+    });
+    expect(markNotificationRead).not.toHaveBeenCalled();
   });
 
-  it("records the click but marks nothing read when no notification id was sent", async () => {
-    vi.mocked(findLivePushSubscription).mockResolvedValue(LIVE_SUB as never);
-    await receipt(post({ endpoint: ENDPOINT }));
-    expect(recordPushClick).toHaveBeenCalledWith({ businessId: BIZ, notificationId: undefined });
+  /**
+   * THE DUAL-SCOPE CASE. A person who is both an owner and an HQ admin,
+   * subscribed in the same browser, has a tenant row and a platform row on the
+   * SAME endpoint. Choosing between them arbitrarily would either drop the
+   * receipt or file a PLATFORM alert as that tenant's liveness evidence, and
+   * manufacturing liveness is the exact failure this check exists to prevent.
+   */
+  it("resolves the scope from the notification when one endpoint spans two", async () => {
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([
+      platformSub,
+      tenantSub
+    ] as never);
+    vi.mocked(notificationBusinessId).mockResolvedValue(BIZ);
+
+    await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
+    expect(recordPushClick).toHaveBeenCalledWith({ businessId: BIZ, notificationId: NOTIF });
+  });
+
+  it("records nothing when a dual-scope tap carries no notification id", async () => {
+    // Ambiguous, and a guess here is a fabricated liveness signal.
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([
+      platformSub,
+      tenantSub
+    ] as never);
+    const res = await receipt(post({ endpoint: ENDPOINT }));
+    expect((await json(res)).data).toEqual({ recorded: false });
+    expect(recordPushClick).not.toHaveBeenCalled();
+  });
+
+  it("refuses a notification belonging to a scope this device is not subscribed under", async () => {
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([tenantSub] as never);
+    vi.mocked(notificationBusinessId).mockResolvedValue(OTHER_BIZ);
+    const res = await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
+    expect((await json(res)).data).toEqual({ recorded: false });
+    expect(recordPushClick).not.toHaveBeenCalled();
+    expect(markNotificationRead).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for an HQ admin device, which is not a tenant's evidence", async () => {
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([platformSub] as never);
+    vi.mocked(notificationBusinessId).mockResolvedValue(null);
+    const res = await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
+    expect(res.status).toBe(200);
+    expect(recordPushClick).not.toHaveBeenCalled();
     expect(markNotificationRead).not.toHaveBeenCalled();
   });
 
   it("keeps the receipt when marking read fails", async () => {
     // The liveness signal is the valuable half and it already landed; failing
     // to clear an unread badge must not discard it.
-    vi.mocked(findLivePushSubscription).mockResolvedValue(LIVE_SUB as never);
+    vi.mocked(listLivePushSubscriptions).mockResolvedValue([tenantSub] as never);
+    vi.mocked(notificationBusinessId).mockResolvedValue(BIZ);
     vi.mocked(markNotificationRead).mockRejectedValue(new Error("pg down"));
     const res = await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
     expect(res.status).toBe(200);
     expect(recordPushClick).toHaveBeenCalled();
-  });
-
-  it("records nothing for an HQ admin device, which is not a tenant's evidence", async () => {
-    vi.mocked(findLivePushSubscription).mockResolvedValue(
-      { ...LIVE_SUB, business_id: null } as never
-    );
-    const res = await receipt(post({ endpoint: ENDPOINT, notificationId: NOTIF }));
-    expect(res.status).toBe(200);
-    expect(recordPushClick).not.toHaveBeenCalled();
-    expect(markNotificationRead).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed body", async () => {

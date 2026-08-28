@@ -6,6 +6,7 @@ import {
   getUnreadNotificationCount,
   hasRecentNotificationForContact,
   markNotificationRead,
+  notificationBusinessId,
   markAllNotificationsRead,
   softDeleteNotification
 } from "@/lib/db/notifications";
@@ -227,6 +228,50 @@ describe("db/notifications", () => {
     await expect(getUnreadNotificationCount("biz-uuid-1")).rejects.toThrow(
       "getUnreadNotificationCount"
     );
+  });
+
+  /**
+   * The push receipt uses this to answer "which scope did this tap belong
+   * to?" when one browser holds subscriptions under two scopes on the same
+   * endpoint. Guessing there would file a platform alert as a tenant's
+   * liveness evidence, which is the exact failure the liveness check exists
+   * to prevent, so the notification is asked rather than inferred.
+   */
+  it("notificationBusinessId resolves the owning business", async () => {
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { business_id: "biz-uuid-1" }, error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    expect(await notificationBusinessId("notif-uuid-1")).toBe("biz-uuid-1");
+    expect(chain.eq).toHaveBeenCalledWith("id", "notif-uuid-1");
+  });
+
+  it("notificationBusinessId returns null for an unknown notification", async () => {
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      from: vi.fn().mockReturnValue(chain)
+    } as never);
+    expect(await notificationBusinessId("nope")).toBeNull();
+  });
+
+  it("notificationBusinessId throws with context on error", async () => {
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      from: vi.fn().mockReturnValue(chain)
+    } as never);
+    await expect(notificationBusinessId("x")).rejects.toThrow("notificationBusinessId: boom");
   });
 
   it("markNotificationRead returns the updated row", async () => {

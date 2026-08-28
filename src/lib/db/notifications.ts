@@ -242,6 +242,28 @@ export async function listRecentAlertsAbout(
  */
 export type NotificationReadActor = "owner" | "admin" | "system";
 
+/**
+ * Which business a notification belongs to, or null if there is no such row.
+ *
+ * Used by the push receipt to resolve WHICH scope a tap belongs to when the
+ * tapping browser holds more than one subscription on the same endpoint (an
+ * HQ admin who is also an owner). The notification is the only thing that
+ * knows, so it is asked rather than guessed.
+ */
+export async function notificationBusinessId(
+  notificationId: string,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("notifications")
+    .select("business_id")
+    .eq("id", notificationId)
+    .maybeSingle();
+  if (error) throw new Error(`notificationBusinessId: ${error.message}`);
+  return (data as { business_id?: string } | null)?.business_id ?? null;
+}
+
 export async function markNotificationRead(
   notificationId: string,
   businessId: string,

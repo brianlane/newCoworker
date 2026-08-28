@@ -168,6 +168,67 @@ export async function revokePushSubscriptionsForUser(
 }
 
 /**
+ * Move a rotated subscription onto its new endpoint, KEEPING its scopes.
+ *
+ * `pushsubscriptionchange` fires when a browser rotates a subscription, and
+ * the service worker has no idea which business the device was registered
+ * against. It cannot guess: the platform scope is admin-only, so guessing
+ * `null` gets a tenant device a 403 and the rotated endpoint is never stored,
+ * leaving that device silent until the owner happens to open the dashboard.
+ *
+ * So the worker sends the OLD endpoint and this re-points every row the
+ * caller owns at it. The old endpoint is a SELECTOR here, never proof of
+ * identity: the session cookie authenticates, and `user_id` is part of the
+ * predicate, so possessing a leaked endpoint buys nothing. That distinction
+ * is the whole reason this is safe and a `previousEndpoint`-as-auth scheme
+ * would not be.
+ *
+ * Returns how many scopes moved, so the route can tell "rotated" from
+ * "nothing of yours was there".
+ */
+export async function repointPushSubscription(
+  input: {
+    previousEndpoint: string;
+    userId: string;
+    subscription: ParsedPushSubscription;
+    userAgent: string | null;
+  },
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("push_subscriptions")
+    .select("business_id")
+    .eq("endpoint", input.previousEndpoint)
+    .eq("user_id", input.userId)
+    .is("revoked_at", null);
+  if (error) throw new Error(`repointPushSubscription: ${error.message}`);
+
+  const scopes = (data as { business_id: string | null }[] | null) ?? [];
+  if (scopes.length === 0) return 0;
+
+  // Upsert rather than UPDATE the endpoint in place: the same browser may
+  // already hold a row at the new endpoint for this scope, and the unique
+  // index would refuse a plain update.
+  for (const { business_id } of scopes) {
+    await upsertPushSubscription(
+      {
+        scope: { businessId: business_id },
+        userId: input.userId,
+        subscription: input.subscription,
+        userAgent: input.userAgent
+      },
+      db
+    );
+  }
+  await revokePushSubscription(input.previousEndpoint, "expired", {
+    userId: input.userId,
+    client: db
+  });
+  return scopes.length;
+}
+
+/**
  * "Is push applicable to this business at all?" for the dispatcher.
  *
  * FAILS TOWARD TRUE, matching slackAlertTargetState. This value decides
@@ -201,30 +262,33 @@ export async function pushTargetState(
 }
 
 /**
- * Resolve one live subscription by endpoint, for the click receipt.
+ * Every live subscription for an endpoint, for the click receipt.
  *
- * The service worker posts back an endpoint it holds, and this is what turns
- * that into "which scope, and whose device". A revoked row resolves to null:
- * a tap on a notification delivered before an uninstall is not evidence the
- * channel is alive now.
+ * Returns a LIST, not one row, and that is the whole point. One endpoint can
+ * legitimately exist under two scopes at once: a person who is both a business
+ * owner and an HQ admin, subscribed in the same browser, has a tenant row and
+ * a platform row sharing an endpoint. Taking `limit(1)` off an unordered read
+ * picked between them arbitrarily, which meant a tap either recorded nothing
+ * (platform row won) or was filed as that TENANT's liveness evidence when the
+ * banner was actually a platform alert (tenant row won). Neither is a thing
+ * this check is allowed to guess at, so the caller resolves the scope from the
+ * notification instead.
+ *
+ * Revoked rows are excluded: a tap on a notification delivered before an
+ * uninstall is not evidence the channel is alive now.
  */
-export async function findLivePushSubscription(
+export async function listLivePushSubscriptions(
   endpoint: string,
   client?: SupabaseClient
-): Promise<PushSubscriptionRow | null> {
+): Promise<PushSubscriptionRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("push_subscriptions")
     .select(SUBSCRIPTION_COLUMNS)
     .eq("endpoint", endpoint)
-    .is("revoked_at", null)
-    // One endpoint can legitimately exist under two scopes (a person who is
-    // both an owner and an HQ admin in one browser), so this is limit(1), not
-    // maybeSingle: maybeSingle ERRORS on a second row, which would turn a
-    // supported state into a 500.
-    .limit(1);
-  if (error) throw new Error(`findLivePushSubscription: ${error.message}`);
-  return ((data ?? []) as PushSubscriptionRow[])[0] ?? null;
+    .is("revoked_at", null);
+  if (error) throw new Error(`listLivePushSubscriptions: ${error.message}`);
+  return (data ?? []) as PushSubscriptionRow[];
 }
 
 /**

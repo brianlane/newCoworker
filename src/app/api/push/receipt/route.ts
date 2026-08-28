@@ -29,8 +29,8 @@ import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
-import { findLivePushSubscription, recordPushClick } from "@/lib/push/db";
-import { markNotificationRead } from "@/lib/db/notifications";
+import { listLivePushSubscriptions, recordPushClick } from "@/lib/push/db";
+import { markNotificationRead, notificationBusinessId } from "@/lib/db/notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,36 +51,58 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse("VALIDATION_ERROR", "Too many receipts", 429);
     }
 
-    const subscription = await findLivePushSubscription(body.endpoint);
+    const subscriptions = await listLivePushSubscriptions(body.endpoint);
     // An unknown or revoked endpoint records nothing and is not an error: the
     // tap is real but we have no scope to attribute it to, and a 4xx here
     // would only produce noise in a service worker that cannot act on it.
-    if (!subscription) return successResponse({ recorded: false });
+    if (subscriptions.length === 0) return successResponse({ recorded: false });
+
+    /**
+     * WHICH SCOPE DID THIS TAP BELONG TO?
+     *
+     * Usually there is one answer. But a person who is both a business owner
+     * and an HQ admin, subscribed in the same browser, holds a tenant row AND
+     * a platform row on the SAME endpoint, so the endpoint alone cannot say.
+     * Picking arbitrarily would either drop the receipt (platform row wins) or
+     * file a platform alert as that tenant's liveness evidence (tenant row
+     * wins), and manufacturing liveness is the exact failure this whole check
+     * exists to prevent.
+     *
+     * The notification knows, so it is asked. Without one, only an
+     * unambiguous single scope is trusted.
+     */
+    const scopes = [...new Set(subscriptions.map((s) => s.business_id))];
+    let businessId: string | null = null;
+    if (body.notificationId) {
+      const owner = await notificationBusinessId(body.notificationId);
+      // Must be a scope this device is actually subscribed under, so a known
+      // endpoint cannot be used to stamp a click on an unrelated tenant.
+      businessId = owner && scopes.includes(owner) ? owner : null;
+    } else if (scopes.length === 1) {
+      businessId = scopes[0];
+    }
 
     // The platform scope (HQ admin) has no business_id, and
     // notification_link_clicks is business-scoped by design. An admin tap is
-    // not a tenant's liveness evidence, so there is nothing to record.
-    if (subscription.business_id !== null) {
-      await recordPushClick({
-        businessId: subscription.business_id,
-        notificationId: body.notificationId
-      });
+    // not a tenant's liveness evidence, so there is nothing to record. The
+    // same is true of an ambiguous tap we could not attribute.
+    if (businessId === null) return successResponse({ recorded: false });
 
-      if (body.notificationId) {
-        // Marking it read is correct and separate from the liveness signal
-        // above: the owner has genuinely seen this alert, so it should stop
-        // showing as unread. markNotificationRead scopes by business_id, so a
-        // notification id from another tenant matches zero rows.
-        try {
-          await markNotificationRead(body.notificationId, subscription.business_id, "owner");
-        } catch (err) {
-          // The receipt is the valuable half and it already landed. A failure
-          // to clear the unread badge must not discard it.
-          logger.warn("push receipt: mark-read failed", {
-            businessId: subscription.business_id,
-            error: err instanceof Error ? err.message : String(err)
-          });
-        }
+    await recordPushClick({ businessId, notificationId: body.notificationId });
+
+    if (body.notificationId) {
+      // Marking it read is correct and separate from the liveness signal
+      // above: the owner has genuinely seen this alert, so it should stop
+      // showing as unread.
+      try {
+        await markNotificationRead(body.notificationId, businessId, "owner");
+      } catch (err) {
+        // The receipt is the valuable half and it already landed. A failure
+        // to clear the unread badge must not discard it.
+        logger.warn("push receipt: mark-read failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
       }
     }
 

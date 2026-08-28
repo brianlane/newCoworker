@@ -138,12 +138,31 @@ describe("service worker contract", () => {
   });
 
   /**
-   * An endpoint is a bearer capability. Accepting one as proof of identity
+   * Re-subscription must authenticate on the SESSION, never on the endpoint.
+   *
+   * An endpoint is a bearer capability, so accepting one as proof of identity
    * would let anybody holding a leaked endpoint rebind the owner's alerts to
-   * their own browser, so re-subscription authenticates on the session cookie.
+   * their own browser. The worker does send the old endpoint, but only as a
+   * SELECTOR: the server scopes the move by the session's user id, so it
+   * identifies WHICH of the caller's own rows to move and grants nothing on
+   * its own. The credentials flag is what makes that distinction hold, which
+   * is why it is asserted rather than assumed.
    */
-  it("re-subscribes with credentials, never with the old endpoint as proof", () => {
+  it("re-subscribes with the session cookie, not on the endpoint alone", () => {
     expect(source).toContain('credentials: "same-origin"');
-    expect(source).not.toContain("previousEndpoint");
+    const resubscribe = source.slice(source.indexOf("async function resubscribe"));
+    expect(resubscribe).toContain('credentials: "same-origin"');
+  });
+
+  /**
+   * The worker must not guess a scope. `businessId: null` is the admin-only
+   * platform scope, so a tenant device sending it is refused and its rotated
+   * endpoint is never stored, leaving that device silent until its owner next
+   * opens the dashboard.
+   */
+  it("never guesses a business scope when re-subscribing", () => {
+    const resubscribe = source.slice(source.indexOf("async function resubscribe"));
+    expect(resubscribe).not.toContain("businessId");
+    expect(resubscribe).toContain("previousEndpoint");
   });
 });

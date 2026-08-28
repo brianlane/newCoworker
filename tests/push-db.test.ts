@@ -4,7 +4,8 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
-  findLivePushSubscription,
+  listLivePushSubscriptions,
+  repointPushSubscription,
   pushTargetState,
   listDeliverablePushSubscriptions,
   recordPushClick,
@@ -261,52 +262,123 @@ describe("push/db: pushTargetState", () => {
   });
 });
 
-describe("push/db: findLivePushSubscription", () => {
+describe("push/db: listLivePushSubscriptions", () => {
   /**
-   * maybeSingle() ERRORS on a second row, and one endpoint legitimately
-   * exists under two scopes when a person is both an owner and an HQ admin in
-   * the same browser. Copying the Slack leg's maybeSingle here would turn a
-   * supported state into a 500 on every receipt.
+   * Returns a LIST, not one row. A person who is both an owner and an HQ
+   * admin, subscribed in the same browser, holds a tenant row AND a platform
+   * row on the same endpoint. An unordered limit(1) picked between them
+   * arbitrarily, which either dropped the receipt or filed a platform alert as
+   * that tenant's liveness. The caller resolves the scope instead.
    */
-  it("uses limit(1), not maybeSingle, because one endpoint can span two scopes", async () => {
-    const { db, calls, builder } = makeDb({ data: [] });
+  it("returns every live scope for an endpoint", async () => {
+    const { db } = makeDb({
+      data: [
+        { id: "tenant", business_id: BIZ },
+        { id: "platform", business_id: null }
+      ]
+    });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await findLivePushSubscription("https://fcm.googleapis.com/fcm/send/abc");
-    expect(calls).toContainEqual(["limit", 1]);
-    expect(builder.maybeSingle).toBeUndefined();
+    const rows = await listLivePushSubscriptions("e");
+    expect(rows.map((r) => r.business_id)).toEqual([BIZ, null]);
   });
 
-  it("ignores a revoked row", async () => {
+  it("ignores revoked rows", async () => {
     const { db, calls } = makeDb({ data: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await findLivePushSubscription("e");
+    await listLivePushSubscriptions("e");
     expect(calls).toContainEqual(["is", "revoked_at", null]);
   });
 
-  it("returns null when nothing matches", async () => {
+  it("returns an empty array when nothing matches", async () => {
     const { db } = makeDb({ data: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await findLivePushSubscription("e")).toBeNull();
+    expect(await listLivePushSubscriptions("e")).toEqual([]);
   });
 
-  it("returns null when PostgREST answers with null data rather than an empty array", async () => {
+  it("returns an empty array when PostgREST answers null", async () => {
     const { db } = makeDb({ data: null });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await findLivePushSubscription("e")).toBeNull();
-  });
-
-  it("returns the row when one matches", async () => {
-    const { db } = makeDb({ data: [{ id: "sub-1", business_id: BIZ }] });
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect((await findLivePushSubscription("e"))?.id).toBe("sub-1");
+    expect(await listLivePushSubscriptions("e")).toEqual([]);
   });
 
   it("throws with context on error", async () => {
     const { db } = makeDb({ error: { message: "boom" } });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await expect(findLivePushSubscription("e")).rejects.toThrow(
-      "findLivePushSubscription: boom"
+    await expect(listLivePushSubscriptions("e")).rejects.toThrow(
+      "listLivePushSubscriptions: boom"
     );
+  });
+});
+
+describe("push/db: repointPushSubscription", () => {
+  /**
+   * A rotated subscription must keep the scopes it already had. The service
+   * worker cannot know them: guessing the platform scope 403s every tenant
+   * device, so the device would stay on a dead endpoint until its owner next
+   * opened the dashboard.
+   */
+  it("moves every scope the caller held onto the new endpoint", async () => {
+    const { db, payloads, calls } = makeDb({
+      data: [{ business_id: BIZ }, { business_id: null }]
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const moved = await repointPushSubscription({
+      previousEndpoint: "https://fcm.googleapis.com/fcm/send/old",
+      userId: "user-1",
+      subscription: SUB,
+      userAgent: null
+    });
+
+    expect(moved).toBe(2);
+    const upserted = payloads.filter((p) => (p as Record<string, unknown>).endpoint);
+    expect(upserted.map((p) => (p as Record<string, unknown>).business_id)).toEqual([BIZ, null]);
+    // The old endpoint is retired, scoped to the caller.
+    expect(calls).toContainEqual(["eq", "user_id", "user-1"]);
+  });
+
+  /**
+   * The old endpoint is a SELECTOR, not authentication. The session identifies
+   * the caller and user_id is in the predicate, so holding a leaked endpoint
+   * moves nothing.
+   */
+  it("scopes the lookup to the caller, so a leaked endpoint moves nothing", async () => {
+    const { db, calls } = makeDb({ data: [] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const moved = await repointPushSubscription({
+      previousEndpoint: "https://fcm.googleapis.com/fcm/send/someone-elses",
+      userId: "attacker",
+      subscription: SUB,
+      userAgent: null
+    });
+    expect(moved).toBe(0);
+    expect(calls).toContainEqual(["eq", "user_id", "attacker"]);
+  });
+
+  it("moves nothing when PostgREST answers null rather than an empty array", async () => {
+    const { db } = makeDb({ data: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(
+      await repointPushSubscription({
+        previousEndpoint: "e",
+        userId: "u",
+        subscription: SUB,
+        userAgent: null
+      })
+    ).toBe(0);
+  });
+
+  it("throws with context on a read error", async () => {
+    const { db } = makeDb({ error: { message: "boom" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(
+      repointPushSubscription({
+        previousEndpoint: "e",
+        userId: "u",
+        subscription: SUB,
+        userAgent: null
+      })
+    ).rejects.toThrow("repointPushSubscription: boom");
   });
 });
 

@@ -56,9 +56,20 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
             userVisibleOnly: true,
             applicationServerKey
           });
-        } catch {
-          // Key rotated under us: drop the dead subscription and take a fresh
-          // one against the current key.
+        } catch (err) {
+          /**
+           * ONLY a key mismatch may discard a working subscription.
+           *
+           * `subscribe()` with the same applicationServerKey returns the
+           * existing subscription; with a DIFFERENT one it throws
+           * InvalidStateError, which is the rotation signal. Every other
+           * throw here is transient (offline, a permission race, a push
+           * service hiccup), and unsubscribing on those would destroy a
+           * perfectly live subscription the owner already granted. They would
+           * then receive nothing until they noticed and opted in again, and
+           * the next send would 410-revoke the stored row on the way past.
+           */
+          if ((err as { name?: string } | null)?.name !== "InvalidStateError") throw err;
           await existing.unsubscribe();
           subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,

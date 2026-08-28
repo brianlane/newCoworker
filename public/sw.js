@@ -134,7 +134,9 @@ self.addEventListener("notificationclick", (event) => {
  * load re-subscribes, and any send in between gets a 410 and revokes cleanly.
  */
 self.addEventListener("pushsubscriptionchange", (event) => {
-  event.waitUntil(resubscribe());
+  // event.oldSubscription is present in Chrome and absent in Safari; fall
+  // back to whatever the registration still reports.
+  event.waitUntil(resubscribe(event.oldSubscription));
 });
 
 /**
@@ -211,8 +213,11 @@ async function focusOrOpen(path) {
   await self.clients.openWindow(path);
 }
 
-async function resubscribe() {
+async function resubscribe(oldSubscription) {
   try {
+    const previous = oldSubscription ?? (await self.registration.pushManager.getSubscription());
+    const oldEndpoint = previous ? previous.endpoint : null;
+    if (!oldEndpoint) return;
     const res = await fetch(VAPID_KEY_PATH, { credentials: "same-origin" });
     if (!res.ok) return;
     const json = await res.json();
@@ -229,7 +234,13 @@ async function resubscribe() {
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify({
-        businessId: null,
+        // The old endpoint, so the server can move whatever scopes this
+        // person already had onto the new one. A worker cannot know the
+        // business id, and guessing null (the platform scope) would 403 every
+        // tenant device and leave it silent. This value is a SELECTOR: the
+        // session cookie above is what authenticates, and the server scopes
+        // the move by user id, so a leaked endpoint grants nothing.
+        previousEndpoint: oldEndpoint,
         subscription: subscription.toJSON()
       })
     });

@@ -47,10 +47,19 @@ function describeKind(row: NotificationRow): string {
 }
 
 function describeReason(payload: Record<string, unknown>): string | null {
-  const reason = payload?.reason;
-  if (typeof reason !== "string" || reason.length === 0) return null;
-  const categoryMatch = /^category_(.+)_disabled$/.exec(reason);
+  const raw = payload?.reason;
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  const categoryMatch = /^category_(.+)_disabled$/.exec(raw);
   if (categoryMatch) return `Skipped: the ${categoryMatch[1]} alerts category is off`;
+  /**
+   * Several producers append a diagnostic detail as `<reason>:<detail>`
+   * (`push_all_expired:2 expired`, `push_send_failed:http_500`). Switching on
+   * the raw string meant those never matched their own case and always fell
+   * through to the default arm, so the owner-actionable copy was written but
+   * could never be shown. Match on the token, keep the detail for the
+   * fallback.
+   */
+  const reason = raw.split(":")[0];
   switch (reason) {
     case "unsubscribed":
       return "Skipped: you've unsubscribed from all alerts";
@@ -94,7 +103,9 @@ function describeReason(payload: Record<string, unknown>): string | null {
     case "connection_inactive":
       return "Skipped: the WhatsApp connection is inactive; reconnect it under Integrations";
     default:
-      return `Skipped: ${reason}`;
+      // `raw`, not the token: an unrecognised reason is exactly the case where
+      // its detail is the useful half.
+      return `Skipped: ${raw}`;
   }
 }
 
