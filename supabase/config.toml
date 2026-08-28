@@ -119,6 +119,12 @@ verify_jwt = false
 [functions.contract-term-nudge-sweep]
 verify_jwt = false
 
+# Channel-liveness check bridge (pg_cron daily at 06:41 UTC). Auth is the
+# plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
+# JWT check must stay OFF, same rationale as the cron workers above.
+[functions.channel-liveness-sweep]
+verify_jwt = false
+
 # Priority support expiry nudge (pg_cron daily at 15:35 UTC). Same plain-hex
 # INTERNAL_CRON_SECRET bearer as the other nudge sweeps, so the gateway JWT
 # check must stay OFF.

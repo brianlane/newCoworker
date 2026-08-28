@@ -220,15 +220,39 @@ export async function listRecentAlertsAbout(
   return { events: seen.size + unstamped, summaries: [...summaries.values()] };
 }
 
+/**
+ * Who stamped `read_at`, per `notifications.read_by_actor`.
+ *
+ * This is an ATTRIBUTION, not an audit trail. The only question it answers
+ * is whether the stamp counts as evidence that the tenant's alert audience
+ * is still alive, which is why it is three coarse values and not a user id
+ * on a table the tenant can read through RLS.
+ *
+ * `"admin"` is the whole reason the column exists. Admin view-as has full
+ * tenant access, so before this a support session opening a tenant's
+ * notifications wrote a stamp indistinguishable from the owner's, and the
+ * channel-liveness check would have accepted our own investigation as proof
+ * the customer was fine. See `src/lib/notifications/channel-liveness.ts`.
+ */
+export type NotificationReadActor = "owner" | "admin" | "system";
+
 export async function markNotificationRead(
   notificationId: string,
   businessId: string,
+  /**
+   * Optional so the ~dozen existing test call sites and any future
+   * background path keep working unchanged. Omitting it writes `system`,
+   * never `owner`: an unlabelled caller must not be able to vouch for the
+   * customer by default, which is the same fail-closed direction the NULL
+   * legacy rows take.
+   */
+  actor: NotificationReadActor = "system",
   client?: SupabaseClient
 ): Promise<NotificationRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("notifications")
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: new Date().toISOString(), read_by_actor: actor })
     .eq("id", notificationId)
     .eq("business_id", businessId)
     .is("read_at", null)
@@ -243,12 +267,14 @@ export async function markNotificationRead(
 
 export async function markAllNotificationsRead(
   businessId: string,
+  /** Same attribution and same fail-closed default as markNotificationRead. */
+  actor: NotificationReadActor = "system",
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("notifications")
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: new Date().toISOString(), read_by_actor: actor })
     .eq("business_id", businessId)
     .is("read_at", null)
     // Soft-deleted rows are out of the owner's view, "mark all read" must

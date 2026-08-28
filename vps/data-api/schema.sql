@@ -596,6 +596,7 @@ create table if not exists notifications (
   summary text,
   deleted_at timestamp with time zone,
   deleted_by uuid,
+  read_by_actor text,
   constraint notifications_pkey PRIMARY KEY (id),
   constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text])))
 );
@@ -611,6 +612,7 @@ alter table notifications add column if not exists kind text;
 alter table notifications add column if not exists summary text;
 alter table notifications add column if not exists deleted_at timestamp with time zone;
 alter table notifications add column if not exists deleted_by uuid;
+alter table notifications add column if not exists read_by_actor text;
 
 do $$ declare c record; begin
   for c in select conname from pg_constraint

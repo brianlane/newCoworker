@@ -250,6 +250,52 @@ describe("db/notifications", () => {
     expect(chain.is).toHaveBeenCalledWith("read_at", null);
   });
 
+  it("markNotificationRead stamps the actor, defaulting to system rather than owner", async () => {
+    // Fail-closed on purpose: an unlabelled caller must not be able to vouch
+    // for the customer, because the channel-liveness check reads this column
+    // as evidence the alert audience is alive.
+    const chain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: MOCK_NOTIF, error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await markNotificationRead("n", "b");
+    expect(chain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ read_by_actor: "system" })
+    );
+
+    await markNotificationRead("n", "b", "owner");
+    expect(chain.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ read_by_actor: "owner" })
+    );
+  });
+
+  it("markAllNotificationsRead stamps the actor the same way", async () => {
+    const chain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "1" }], error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await markAllNotificationsRead("biz");
+    expect(chain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ read_by_actor: "system" })
+    );
+
+    await markAllNotificationsRead("biz", "admin");
+    expect(chain.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ read_by_actor: "admin" })
+    );
+  });
+
   it("markNotificationRead returns null when no row matched (already read or wrong owner)", async () => {
     const chain = {
       update: vi.fn().mockReturnThis(),

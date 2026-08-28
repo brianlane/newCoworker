@@ -11,6 +11,10 @@ vi.mock("@/lib/db/notifications", () => ({
   markAllNotificationsRead: vi.fn()
 }));
 
+vi.mock("@/lib/notifications/read-actor", () => ({
+  resolveNotificationReadActor: vi.fn()
+}));
+
 import { GET, POST } from "@/app/api/notifications/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
@@ -18,6 +22,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead
 } from "@/lib/db/notifications";
+import { resolveNotificationReadActor } from "@/lib/notifications/read-actor";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -35,6 +40,7 @@ describe("api/notifications route", () => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
     vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
+    vi.mocked(resolveNotificationReadActor).mockResolvedValue("owner");
   });
 
   it("GET 401 when not signed in", async () => {
@@ -95,9 +101,13 @@ describe("api/notifications route", () => {
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data.marked).toBe(1);
+    // The actor rides along: admin view-as reaches this route with the
+    // tenant's own permissions, and its read stamp must not be able to pass
+    // for the owner's in the channel-liveness check.
     expect(markNotificationRead).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000001",
-      BIZ
+      BIZ,
+      "owner"
     );
   });
 
@@ -110,11 +120,15 @@ describe("api/notifications route", () => {
     expect(body.data.marked).toBe(0);
   });
 
-  it("POST mark_all_read returns count", async () => {
+  it("POST mark_all_read returns count and carries the actor too", async () => {
+    // mark_all_read stamps EVERY unread row, so an unattributed admin sweep
+    // here would forge more owner presence than a single read ever could.
     vi.mocked(markAllNotificationsRead).mockResolvedValue(5);
+    vi.mocked(resolveNotificationReadActor).mockResolvedValue("admin");
     const res = await POST(jsonReq("POST", { action: "mark_all_read", businessId: BIZ }));
     const body = await res.json();
     expect(body.data.marked).toBe(5);
+    expect(markAllNotificationsRead).toHaveBeenCalledWith(BIZ, "admin");
   });
 
   it("POST 400 on invalid body", async () => {

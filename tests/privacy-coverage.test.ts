@@ -168,6 +168,8 @@ const EXEMPT: Record<string, string> = {
   messenger_jobs: "FK cascade from messenger_conversations (covered)",
   ai_flow_run_steps: "FK cascade from ai_flow_runs (covered)",
   sms_link_clicks: "FK cascade from sms_links (covered); rows carry no person columns",
+  notification_link_clicks:
+    "FK cascade from sms_links (covered), same footing as sms_link_clicks above: an owner/teammate tap on an UNTRACKED alert link, carrying link_id + channel + source + a prefetch flag and deliberately no recipient column, so it opens no erasure surface of its own",
   sms_destination_events:
     "destination-gate counters (business_id + ISO country + timestamp, no person columns); powers the velocity brake and first-country alert, cascades with the business",
 
