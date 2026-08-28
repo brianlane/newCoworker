@@ -34,7 +34,9 @@ Two more traps, both live:
 - A failure that matches no row still logs, as
   `email_delivery_failed_unattributed` with a null business_id. Lots of Resend
   traffic writes no email_log row (verification, password set, provisioning),
-  and an instant rejection can beat our own insert on the alert path.
+  and an instant rejection can beat our own insert on the alert path. A third
+  source, found 2026-08-28: HQ's Gmail sends deliver through Resend SMTP under
+  an id we never log, see [[hq-gmail-sendas-resend-relay]].
 - `RESEND_WEBHOOK_SECRET` must be set or the receiver refuses EVERY delivery.
   Unconfigured must not mean "trust anyone": a forged receipt could mark a
   delivered alert as bounced.
