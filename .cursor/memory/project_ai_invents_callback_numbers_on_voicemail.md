@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: f92ec33f-e800-4569-9e1b-d63077b2e8c1
-  modified: 2026-08-27T16:09:25.814Z
+  modified: 2026-08-27T21:20:08.206Z
 ---
 
 Found 2026-08-25 from Amy's own question ("whose phone number is this? I
@@ -118,14 +118,27 @@ so this is the model disobeying a deployed rule, not a stale deploy. Per
 [[feedback_score_prompt_changes_against_outcomes]], the next fix must be
 deterministic, not a fourth prompt line.
 
+Caveat on "same ~25% rate as before": the comparison is confounded by the
+AMD collapse date ([[telnyx-premium-amd-event-collapse]]). Pre-Aug-25, some
+machine calls were handled by the deterministic Edge speak before the model
+could ad-lib; post-collapse every voicemail is model-driven, a strictly
+harder condition. The conclusion stands (the prompt line alone is
+insufficient), but do not read the two rates as a controlled A/B.
+
 **Three structural facts learned from the same investigation:**
 
-1. **Telnyx premium AMD events mostly never arrive.** Across those 10
-   flow-placed outbound calls (Telnyx `webhook_deliveries` is the proof):
-   `detection.ended` on only 3 (one `machine`, two `not_sure`), and ZERO
-   greeting/beep events ever. So the Edge `speakVoicemail` path
-   (`telnyx-voice-call-end`), designed as the deterministic primary, never
-   fires; the model's `voicemail_reached` tool carries every voicemail.
+1. **Telnyx premium AMD events collapsed on 2026-08-25, platform-side.**
+   Corrected 2026-08-27 after a full recount: events were healthy and
+   roughly 1:1 with answered calls through Aug 24 (last greeting.ended
+   2026-08-24T21:30:48Z), then greeting/beep went to ZERO and detection to
+   a trickle (Aug 26-27: detection on 4 of 10 answered calls, two of them
+   `not_sure` at the 30s timeout). Arming, app config, deploys, and
+   delivery failures are all ruled out; evidence and ticket draft in
+   [[telnyx-premium-amd-event-collapse]]. Consequence unchanged: the Edge
+   `speakVoicemail` path (`telnyx-voice-call-end`), designed as the
+   deterministic primary, cannot fire (no greeting event ever resolves the
+   provisional machine verdict), so the model's `voicemail_reached` tool
+   carries every voicemail.
 2. **`voicemail_left: true` overstates.** The `[Voicemail]` transcript turn
    is a BADGE written when the tool hands the script over, and
    `voicemail_spoken` is stamped by the `end_call` handler, so both land
@@ -143,6 +156,36 @@ deterministic, not a fourth prompt line.
 
 Fleet check 2026-08-27: only 4 non-Amy calls in 7 days, none fabricated;
 this is an Amy-volume problem today.
+
+## SHIPPED 2026-08-27, structural fixes for all three facts
+
+- **PR #1671** (edge, auto-deployed): the daily call-integrity sweep gained
+  an `invented_contact_number` rule sharing the audit script's allowlist via
+  `_shared/call_integrity.ts` (fail-open on any source-query error). First
+  live run flagged Matt's 480-331-9100 call and emailed the admin inbox, so
+  fabrications now page within a day instead of waiting for a human to read
+  transcripts. The scheduled 13:40Z run dedupes anything a manual run
+  already reported.
+- **PR #1672** (vps/voice-bridge, fleet-redeployed): `voicemail_left` stops
+  overstating. `voicemail_reached` is refused when end_call was requested or
+  rides the same model turn (no claim, no badge, no stamp;
+  `voice_bridge_voicemail_after_end_call` diag), and `confirmSpoken` stamps
+  only when the line was up long enough after the script handover for half
+  the read (`voicemail-timing.ts`, window anchored to the FIRST end_call's
+  hangup moment per Bugbot's #1672 finding;
+  `voice_bridge_voicemail_cut_short` diag counts refusals, baseline
+  matters: a spike means reads are being cut, not that the guard is wrong).
+- **PR #1674** (edge + migration + bridge alert copy, all deployed): the
+  deterministic answer. A 15s sweep forces resolution of a machine verdict
+  25s after the stamp (speak the script through the shared claim, or hang
+  up scriptless legs), so a verdict-backed voicemail no longer depends on
+  the model at all, and `voicemail_spoken` is now stamped on completed
+  playout or wall-clock plausibility, never on command accept. Dark-shipped
+  behind `voice_amd_resolution`; Amy enrolled for measurement. Full detail
+  in [[telnyx-premium-amd-event-collapse]]. Scope limit: the sweep only
+  helps calls where Telnyx delivered a verdict (about half right now);
+  verdict-less machine calls (Sandy's shape) remain model-only until the
+  Telnyx ticket resolves.
 
 ## Original fix direction (superseded by the above)
 

@@ -1,11 +1,11 @@
 ---
 name: browser-pane-vs-real-chrome-for-console-work
-description: "In-app Browser pane: hidden pane means 0x0 viewport where real input drops SILENTLY; resize_window desyncs clicks; drive third-party consoles with synthetic DOM events verified server-side, hand off to real Chrome, or (for OUR OWN pages) script headless Chromium from the ms-playwright cache"
+description: "In-app Browser pane: hidden pane means 0x0 viewport where real input drops SILENTLY and screenshots freeze on one stale frame while LAYOUT APIs stay live; resize_window desyncs clicks; drive third-party consoles with synthetic DOM events verified server-side, hand off to real Chrome, or (for OUR OWN pages) script headless Chromium from the ms-playwright cache (CLI --screenshot needs no npm install)"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: 14523852-41c5-4e84-a67a-f3e2fdce32aa
-  modified: 2026-08-11T09:15:12.609Z
+  modified: 2026-08-27T21:41:09.338Z
 ---
 
 On 2026-07-31, an hour was lost driving marketplace.zoom.us in the in-app
@@ -64,3 +64,26 @@ This buys `deviceScaleFactor: 2`, element-clipped shots, per-locale cookies,
 and, most valuable, ASSERTIONS: reading `getBoundingClientRect().top` for
 each card's CTA caught a 2px button misalignment and a Spanish string
 truncation that eyeballing screenshots missed.
+
+**2026-08-27 (features-grid ship), the split behavior made precise:** in a
+hidden pane the compositor freezes on ONE frame. `computer` screenshots keep
+returning that same stale frame after any JS scroll (or pure black beyond
+it), `computer` scroll input times out after 30s, and fronting the tab with
+`tabs_select` does NOT unfreeze it. But LAYOUT stays fully live:
+`getBoundingClientRect`, `scrollIntoView`, `scrollHeight`, and
+`resize_window` viewport emulation all compute correctly. So in a hidden
+pane, verify geometry by JS measurement and capture pixels out-of-band.
+
+Zero-install capture route (even lighter than the scratchpad
+`playwright-core` install above): run the cached binary DIRECTLY,
+`~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell
+--headless --screenshot=<out.png> --window-size=1280,<scrollHeight>
+--hide-scrollbars --force-device-scale-factor=1 --virtual-time-budget=15000
+<url>`, then crop per-section with `sips -c <H> <W> --cropOffset <Y> 0`
+using document-coordinate rects measured in the (hidden) pane. A
+window-size as tall as the whole page also completes
+`animation-timeline: view()` scroll reveals at load, so those pages capture
+fully opaque. Against PRODUCTION, Cloudflare serves a blank white page to
+the default HeadlessChrome UA: pass a real `--user-agent` plus
+`--accept-lang=en-US,en`, same family as
+[[cloudflare-scraper-rules-block-googlebot]].
