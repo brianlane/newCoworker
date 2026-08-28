@@ -2315,17 +2315,26 @@ async function tryPendingFollowUp(args: {
   const { supabase, businessId, from, parsed, ack } = args;
   const { data: runRows, error: runErr } = await supabase
     .from("ai_flow_runs")
-    .select("id, revision, context")
+    .select("id, status, revision, context")
     .eq("business_id", businessId)
     // Every status a run can sit in while still holding a lead it has not
     // filed yet. "done" is excluded on purpose: a finished run will never
     // reach another upsert_customer step, so a marker on it could not fire.
+    // "running" is excluded too: the worker owns a claimed run, and a context
+    // write underneath it would be clobbered by its next persist.
     .in("status", ["queued", "awaiting_agent", "awaiting_approval", "awaiting_reply"])
     .order("updated_at", { ascending: false })
     .limit(FOLLOW_UP_RUN_SCAN);
   if (runErr) {
+    // "Could not check" is not "nothing to tag", and answering a failed read
+    // as "no lead" is the exact swallowed-error shape this whole change
+    // exists to fix. Ask for the retry instead (Bugbot, PR #1702).
     console.error("follow-up live-run lookup", runErr);
-    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+    return await ack(
+      "Could not check the leads we're still working just now, so nothing was " +
+        "marked for follow-up. Please try again.",
+      "fu-pending-lookup-error"
+    );
   }
   const runCandidates = followUpRunCandidatesFrom((runRows ?? []) as FollowUpRunRow[]);
   const runMatch = matchFollowUpRun(runCandidates, parsed.name);
@@ -2342,7 +2351,10 @@ async function tryPendingFollowUp(args: {
   // Already parked (a teammate texting "F" twice, as Amy did): confirm rather
   // than rewriting, so a second ack never reads as a second enrollment.
   if (target.alreadyPending) {
-    return await ack(followUpPendingText(target.leadName), "fu-pending-already");
+    return await ack(
+      followUpPendingText(target.leadName, { claimState: target.claimState }),
+      "fu-pending-already"
+    );
   }
   // Re-find the ROW, not just the candidate: the write below replaces the
   // whole context column, so handing withPendingFollowUp an undefined context
@@ -2354,7 +2366,10 @@ async function tryPendingFollowUp(args: {
   ) as { context?: Record<string, unknown> | null } | undefined;
   if (!targetRow) {
     console.error("follow-up park: run row vanished", target.runId);
-    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+    return await ack(
+      "Could not note that follow-up request just now. Please try again.",
+      "fu-pending-lookup-error"
+    );
   }
   const { data: parked, error: parkErr } = await supabase
     .from("ai_flow_runs")
@@ -2384,7 +2399,10 @@ async function tryPendingFollowUp(args: {
       "fu-pending-raced"
     );
   }
-  return await ack(followUpPendingText(target.leadName), "fu-pending-ok");
+  return await ack(
+    followUpPendingText(target.leadName, { claimState: target.claimState }),
+    "fu-pending-ok"
+  );
 }
 
 type FollowUpTagArgs = {

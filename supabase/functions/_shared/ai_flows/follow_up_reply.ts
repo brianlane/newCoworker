@@ -189,11 +189,35 @@ export function followUpNoLeadText(name: string): string {
  * that window is technically true and completely useless, so the request is
  * parked on the run instead and applied the moment the details land.
  */
-export function followUpPendingText(name: string): string {
-  return `${name} is claimed but the referral site hasn't released their contact ` +
-    "details to us yet, so there's no one to call yet. I've noted the request: the " +
-    "moment their details land they go straight into follow-up, and I'll text you " +
-    "to confirm. Nothing else for you to do.";
+export function followUpPendingText(
+  name: string,
+  opts: { claimState: FollowUpClaimState }
+): string {
+  const noted =
+    "I've noted the request: the moment their details land they go straight into " +
+    "follow-up, and I'll text you to confirm.";
+  // Only a lead somebody has actually taken may be answered with "nothing else
+  // for you to do". On HomeLight the CLAIM is what releases the contact
+  // details, so telling a teammate to sit tight on an unclaimed lead is
+  // telling them to do the one thing that guarantees the details never arrive
+  // and this parked request never fires (Bugbot, PR #1702).
+  if (opts.claimState === "claimed") {
+    return `${name} is claimed but the referral site hasn't released their contact ` +
+      `details to us yet, so there's no one to call yet. ${noted} Nothing else for ` +
+      "you to do.";
+  }
+  if (opts.claimState === "unclaimed") {
+    return `${name} hasn't been claimed by anyone yet, and the referral site only ` +
+      `releases their contact details once someone claims. ${noted} To make that ` +
+      'happen, claim the lead: reply "1" to the offer, or claim it in the portal.';
+  }
+  // Not every flow tracks a claim at all, so a third answer that asserts
+  // NEITHER. It still carries the nudge, conditionally, because the cost of
+  // omitting it (a lead that silently never releases) is far higher than the
+  // cost of an "if" a teammate can ignore.
+  return `${name}'s contact details haven't been released to us yet, so there's no ` +
+    `one to call yet. ${noted} If this one is still unclaimed, claiming it is what ` +
+    "releases their details.";
 }
 
 /**
@@ -283,7 +307,12 @@ export const FOLLOW_UP_PENDING_DONE_VAR = "__follow_up_requested_applied";
 export type FollowUpRunRow = {
   id: string;
   revision: number;
-  context?: { vars?: Record<string, unknown> | null } | null;
+  /** ai_flow_runs.status, so the ack can tell claimed from still-on-offer. */
+  status?: string | null;
+  context?: {
+    vars?: Record<string, unknown> | null;
+    routing?: { claimed_by?: string | null } | null;
+  } | null;
 };
 
 /** A live run a follow-up request could be about. */
@@ -294,7 +323,42 @@ export type FollowUpRunCandidate = {
   leadName: string;
   /** A request is already parked on this run. */
   alreadyPending: boolean;
+  /**
+   * Whether somebody has taken this lead, with "we cannot tell" kept as its
+   * own answer rather than folded into either side.
+   *
+   * Drives the ack, and the difference is not cosmetic: on HomeLight the
+   * claim is what RELEASES the contact details, so an unclaimed lead must be
+   * answered with "claim it", never with "nothing else for you to do".
+   * Guessing "claimed" from a run merely sitting in `queued` would recreate
+   * that bug in a narrower window, because an unclaimed offer passes through
+   * `queued` between reminder rounds.
+   */
+  claimState: FollowUpClaimState;
 };
+
+export type FollowUpClaimState = "claimed" | "unclaimed" | "unknown";
+
+/**
+ * Read claim state from a run, on positive evidence only.
+ *
+ *   claimed   - `routing.claimed_by` (stamped by the claim reply itself) or a
+ *               real `claimed_agent` (what the flow's own steps branch on).
+ *   unclaimed - an offer is parked awaiting a claim (`awaiting_agent`), or the
+ *               flow says so outright by writing `claimed_agent: "none"`.
+ *   unknown   - neither. Plenty of flows track no claim at all.
+ */
+function runClaimState(
+  row: FollowUpRunRow,
+  vars: Record<string, unknown>
+): FollowUpClaimState {
+  if (row.context?.routing?.claimed_by) return "claimed";
+  const agent = typeof vars.claimed_agent === "string" ? vars.claimed_agent.trim() : "";
+  if (agent && agent.toLowerCase() !== "none") return "claimed";
+  if (agent.toLowerCase() === "none") return "unclaimed";
+  if ((row.status ?? "") === "awaiting_agent") return "unclaimed";
+  return "unknown";
+}
 
 /**
  * Which live runs name a lead we could park a follow-up request on.
@@ -324,7 +388,8 @@ export function followUpRunCandidatesFrom(
       runId: r.id,
       revision: r.revision,
       leadName,
-      alreadyPending: flowVarText(vars[FOLLOW_UP_PENDING_BY_VAR]) !== ""
+      alreadyPending: flowVarText(vars[FOLLOW_UP_PENDING_BY_VAR]) !== "",
+      claimState: runClaimState(r, vars)
     });
   }
   return out;

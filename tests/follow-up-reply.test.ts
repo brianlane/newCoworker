@@ -178,10 +178,36 @@ describe("reply copy", () => {
    * that will actually happen and tell the teammate to stop worrying about it.
    */
   it("explains the withheld-details case and promises the follow-through", () => {
-    const t = followUpPendingText("Rhonda J.");
+    const t = followUpPendingText("Rhonda J.", { claimState: "claimed" });
     expect(t).toContain("Rhonda J.");
     expect(t).toContain("hasn't released");
     expect(t).toContain("I'll text you");
+    expect(t).toContain("Nothing else for you to do");
+  });
+
+  /**
+   * The one thing this text must never do on an UNCLAIMED lead is say "nothing
+   * else for you to do". On HomeLight the claim is what releases the contact
+   * details, so standing the teammate down guarantees the details never arrive
+   * and the request they just made can never fire.
+   */
+  it("tells an unclaimed lead's asker to claim, and never to stand down", () => {
+    const t = followUpPendingText("Rhonda J.", { claimState: "unclaimed" });
+    expect(t).toContain("hasn't been claimed");
+    expect(t).toContain('reply "1"');
+    expect(t).not.toContain("Nothing else for you to do");
+  });
+
+  /**
+   * Plenty of flows track no claim at all. Asserting either way there would be
+   * a guess, so this one asserts neither, and still carries the nudge.
+   */
+  it("asserts neither way when the flow tracks no claim", () => {
+    const t = followUpPendingText("Rhonda J.", { claimState: "unknown" });
+    expect(t).not.toContain("is claimed");
+    expect(t).not.toContain("hasn't been claimed");
+    expect(t).not.toContain("Nothing else for you to do");
+    expect(t).toContain("still unclaimed");
   });
 
   it("confirms by name once the parked request actually fires", () => {
@@ -220,7 +246,13 @@ describe("followUpRunCandidatesFrom", () => {
       run("r1", { lead_name: "Rhonda J.", lead_phone: "none" })
     ]);
     expect(out).toEqual([
-      { runId: "r1", revision: 1, leadName: "Rhonda J.", alreadyPending: false }
+      {
+        runId: "r1",
+        revision: 1,
+        leadName: "Rhonda J.",
+        alreadyPending: false,
+        claimState: "unknown"
+      }
     ]);
   });
 
@@ -264,6 +296,67 @@ describe("followUpRunCandidatesFrom", () => {
     ).toBe("Rhonda");
   });
 
+  /**
+   * Claim state on POSITIVE evidence only. Guessing "claimed" from a run
+   * merely sitting in `queued` would tell a teammate to stand down on a lead
+   * nobody has taken, and an unclaimed offer passes through `queued` between
+   * reminder rounds (Bugbot, PR #1702).
+   */
+  describe("claim state", () => {
+    it("reads the claim reply's own stamp as claimed", () => {
+      const out = followUpRunCandidatesFrom([
+        {
+          id: "r1",
+          revision: 1,
+          status: "queued",
+          context: { vars: { lead_name: "Rhonda" }, routing: { claimed_by: "+16026951142" } }
+        }
+      ]);
+      expect(out[0]!.claimState).toBe("claimed");
+    });
+
+    it("reads a named claimed_agent as claimed", () => {
+      expect(
+        followUpRunCandidatesFrom([
+          run("r1", { lead_name: "Rhonda", claimed_agent: "Amy Laidlaw" })
+        ])[0]!.claimState
+      ).toBe("claimed");
+    });
+
+    it("reads the flow's own claimed_agent 'none' as unclaimed", () => {
+      expect(
+        followUpRunCandidatesFrom([run("r1", { lead_name: "Rhonda", claimed_agent: "none" })])[0]!
+          .claimState
+      ).toBe("unclaimed");
+    });
+
+    it("reads a parked offer as unclaimed", () => {
+      expect(
+        followUpRunCandidatesFrom([
+          { id: "r1", revision: 1, status: "awaiting_agent", context: { vars: { lead_name: "R" } } }
+        ])[0]!.claimState
+      ).toBe("unclaimed");
+    });
+
+    // The trap: queued does NOT mean claimed.
+    it("does not read a queued run as claimed on its own", () => {
+      expect(
+        followUpRunCandidatesFrom([
+          { id: "r1", revision: 1, status: "queued", context: { vars: { lead_name: "R" } } }
+        ])[0]!.claimState
+      ).toBe("unknown");
+      expect(
+        followUpRunCandidatesFrom([
+          { id: "r2", revision: 1, context: { vars: { lead_name: "R" }, routing: null } }
+        ])[0]!.claimState
+      ).toBe("unknown");
+      // A non-string claimed_agent is not a claim either.
+      expect(
+        followUpRunCandidatesFrom([run("r3", { lead_name: "R", claimed_agent: 7 })])[0]!.claimState
+      ).toBe("unknown");
+    });
+  });
+
   it("reports a request already parked on the run", () => {
     const out = followUpRunCandidatesFrom([
       run("r1", { lead_name: "Rhonda", [FOLLOW_UP_PENDING_BY_VAR]: "+16026951142" })
@@ -284,7 +377,8 @@ describe("matchFollowUpRun", () => {
     runId,
     revision: 1,
     leadName,
-    alreadyPending: false
+    alreadyPending: false,
+    claimState: "unknown" as const
   });
 
   it("takes the newest live run when no name was typed", () => {
@@ -493,7 +587,9 @@ describe("Rhonda J. (Amy Laidlaw, Aug 28 2026)", () => {
           runId: "bafe79fc-86ae-49de-8804-728c8d849276",
           revision: 7,
           leadName: "Rhonda J.",
-          alreadyPending: false
+          alreadyPending: false,
+          // Amy had already claimed it, so the ack may say "nothing else to do".
+          claimState: "claimed"
         }
       });
     }

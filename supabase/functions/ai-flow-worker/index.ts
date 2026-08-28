@@ -2976,6 +2976,20 @@ async function upsertCustomerStep(
     { runId: run.id, flowId: run.flow_id, flowName: scope.flowName },
     isEmailContactKey(action.e164) ? "email" : "sms"
   );
+  // A follow-up a teammate asked for BEFORE we had this lead's details.
+  // Referral networks withhold the phone and email until the claim is
+  // confirmed on their side, so "F, Rhonda" can legitimately arrive while the
+  // lead exists only as this run. The SMS webhook parked the request here;
+  // this is the moment it becomes possible to honor, because the line above
+  // is what files the contact.
+  //
+  // Placed BEFORE the duplicate-lead return, not after it. That return exits
+  // with endRun once the contact has already been enriched, so a re-referred
+  // withheld lead would file the contact and then end the run with the parked
+  // request never applied and the teammate never told, having been promised
+  // in writing that it would be (Bugbot, PR #1702). Best-effort by contract:
+  // filing must not fail because a courtesy tag could not be written.
+  await applyPendingFollowUp(supabase, run, scope, action.e164);
   if (duplicateOfRunId) {
     const label = action.name ? `${action.name} (${action.e164})` : action.e164;
     appendActionTaken(
@@ -3053,14 +3067,6 @@ async function upsertCustomerStep(
       console.error("upsert_customer contact_created verify", e);
     }
   }
-  // A follow-up a teammate asked for BEFORE we had this lead's details.
-  // Referral networks withhold the phone and email until the claim is
-  // confirmed on their side, so "F, Rhonda" can legitimately arrive while the
-  // lead exists only as this run. The SMS webhook parked the request here;
-  // this is the moment it becomes possible to honor, because this is the step
-  // that files the contact. Best-effort by contract: filing must not fail
-  // because a courtesy tag could not be written.
-  await applyPendingFollowUp(supabase, run, scope, action.e164);
   // Language: persist what the flow was told (as a DETECTION, so the lead's
   // own replies can still correct it), then refresh
   // {{vars.contact_language}} for this contact so LATER steps can branch on
