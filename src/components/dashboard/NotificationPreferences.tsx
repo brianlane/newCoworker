@@ -62,7 +62,18 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   const [googleChatUrgent, setGoogleChatUrgent] = useState(initial.google_chat_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
-  const [pushReplacesSms, setPushReplacesSms] = useState(initial.push_replaces_sms === true);
+  /**
+   * TRI-STATE in the form too, and that is load-bearing.
+   *
+   * Held as a boolean, an untouched form sent `false` on every save, so
+   * changing a phone number or any other toggle silently converted "nobody
+   * has decided" into "the owner said no" and locked out the liveness
+   * sweep's auto-enable forever. Undecided has to survive a save it was
+   * never part of, so null is kept and simply not submitted.
+   */
+  const [pushReplacesSms, setPushReplacesSms] = useState<boolean | null>(
+    initial.push_replaces_sms ?? null
+  );
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [emailMonthlyRecap, setEmailMonthlyRecap] = useState(initial.email_monthly_recap ?? true);
@@ -117,7 +128,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setGoogleChatUrgent(initial.google_chat_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
     setPushUrgent(initial.push_urgent ?? true);
-    setPushReplacesSms(initial.push_replaces_sms === true);
+    setPushReplacesSms(initial.push_replaces_sms ?? null);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setEmailMonthlyRecap(initial.email_monthly_recap ?? true);
@@ -149,7 +160,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setGoogleChatUrgent(prefs.google_chat_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
     setPushUrgent(prefs.push_urgent ?? true);
-    setPushReplacesSms(prefs.push_replaces_sms === true);
+    setPushReplacesSms(prefs.push_replaces_sms ?? null);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setEmailMonthlyRecap(prefs.email_monthly_recap ?? true);
@@ -189,7 +200,9 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           google_chat_urgent: googleChatUrgent,
           slack_digest: slackDigest,
           push_urgent: pushUrgent,
-          push_replaces_sms: pushReplacesSms,
+          // Omitted entirely while undecided: sending false here is what
+          // turned an untouched form into an owner decision.
+          ...(pushReplacesSms === null ? {} : { push_replaces_sms: pushReplacesSms }),
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           email_monthly_recap: emailMonthlyRecap,
@@ -333,7 +346,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
         <ToggleRow
           label="Push instead of text"
           description="Send the push and skip the text when a device can be reached. Turns itself on if we can see you reading pushes and ignoring texts, and stays exactly as you set it once you touch it."
-          checked={pushReplacesSms}
+          checked={pushReplacesSms === true}
           onChange={setPushReplacesSms}
           disabled={loading || unsubscribing}
         />
