@@ -101,6 +101,13 @@ vi.mock("@/lib/ai-flows/agent-start-flow", async (importOriginal) => {
     startAiFlowForContactTool: vi.fn()
   };
 });
+vi.mock("@/lib/sms/schedule-text", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sms/schedule-text")>();
+  return {
+    scheduleTextArgsSchema: actual.scheduleTextArgsSchema,
+    scheduleTextTool: vi.fn()
+  };
+});
 
 // Notification-toggle core (behavior pinned in
 // tests/notifications-preferences-tool.test.ts).
@@ -128,6 +135,7 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 import { startAiFlowForContactTool } from "@/lib/ai-flows/agent-start-flow";
+import { scheduleTextTool } from "@/lib/sms/schedule-text";
 import { applyNotificationPreferenceToggles } from "@/lib/notifications/preferences-tool";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -1095,6 +1103,51 @@ describe("POST /api/rowboat/tool-call run-automations tools", () => {
       const res = await POST(makeRequest(content));
       expect(await res.json(), name).toEqual({ ok: false, detail: "unknown_tool" });
     }
+  });
+});
+
+describe("POST /api/rowboat/tool-call schedule_text (texting coworker)", () => {
+  it("gated on its own sms toggle and dispatched to the core with the parsed args", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(scheduleTextTool).mockResolvedValue({
+      ok: true,
+      data: { sendAtLocal: "Monday, August 31, 2026 at 6:30 PM EDT" }
+    });
+    const content = makeContent("schedule_text", {
+      phone: "+14168982100",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: your call is in 30 minutes."
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(BIZ, "sms", "schedule_text");
+    // action defaults to schedule at the schema, so the core never has to
+    // guess what an omitted action meant.
+    expect(vi.mocked(scheduleTextTool)).toHaveBeenCalledWith(BIZ, {
+      phone: "+14168982100",
+      action: "schedule",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: your call is in 30 minutes."
+    });
+  });
+
+  it("rejects a non-E.164 phone before touching the core", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    const content = makeContent("schedule_text", { phone: "416-898-2100" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(scheduleTextTool)).not.toHaveBeenCalled();
+  });
+
+  it("the owner's Settings toggle switches it off", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const content = makeContent("schedule_text", { phone: "+14168982100" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toBe("tool_disabled");
+    expect(vi.mocked(scheduleTextTool)).not.toHaveBeenCalled();
   });
 });
 

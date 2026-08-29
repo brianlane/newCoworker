@@ -168,6 +168,14 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // enrollment is never restarted (loop guard in the core). Deliberately NO
   // webchat twin: the anonymous surface must not start automations at all.
   start_aiflow_for_contact: { agentKey: "sms", toolKey: "start_aiflow_for_contact" },
+  // The texting coworker's only path to a FUTURE send. Recipient is not a
+  // parameter the model can aim: the core queues to the number it is passed
+  // and nothing else, and holds ONE pending row per contact, so a
+  // prompt-injected "text my friend at ..." has no path and a chatty thread
+  // cannot stack metered sends. No dashboard_ twin (the owner has the real
+  // composer with Send later on the Text history page) and emphatically no
+  // webchat twin (anonymous surface, no verified recipient at all).
+  schedule_text: { agentKey: "sms", toolKey: "schedule_text" },
   // Notification toggles from the texting surface (KYP, Jul 20 2026: "let
   // me know when clients text back"). ENABLE-ONLY at dispatch, the SMS
   // Coworker serves customers and staff alike, so a prompt-injected

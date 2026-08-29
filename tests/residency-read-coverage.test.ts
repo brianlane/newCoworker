@@ -84,6 +84,8 @@ const PURGED_READ_CENTRAL_BY_DESIGN: Record<SiteKey, string> = {
     "same vps skip as countSendsByChannel above, and the same reason with the sharper edge: this read IS the read_at signal the purge removes first",
   "src/lib/notifications/channel-liveness-read.ts::emailReceiptTally::email_log":
     "same vps skip as the notifications reads above. Bounded further to sends after EMAIL_RECEIPTS_LIVE_AT (2026-08-26), which is well inside the 72h purge keep floor's reach for any row that could still be acquiring a receipt",
+  "src/lib/sms/schedule-text.ts::pendingForContact::scheduled_sms":
+    "reads ONLY status = pending, and the purge predicate deletes scheduled_sms rows with status in (sent, canceled, failed): a pending row is never a purge candidate, so central is complete here by construction rather than by luck. It is also the read half of a read-modify-write whose write is central (the tool cancels that exact row to MOVE the queued text, then inserts the replacement), so routing the read alone would leave the cancel guarding a row it did not read, the same lost-update hazard the sms_owner_reply_prompts pair is left central for",
   "src/lib/db/usage.ts::getFleetCalendarMonthUsageByBusiness::voice_call_transcripts":
     "cross-tenant fleet usage rollup, no business_id filter. Degrades only peakConcurrentCalls for a residency tenant; billable minutes come from voice_settlements, which is central and does not move"
 };

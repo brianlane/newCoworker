@@ -757,6 +757,7 @@ WORKFLOW_JSON=$(jq -nc \
         "send_signup_payment_link",
         "document_share",
         "start_aiflow_for_contact",
+        "schedule_text",
         "update_notification_preferences"
       ]
     },
@@ -794,6 +795,7 @@ WORKFLOW_JSON=$(jq -nc \
         "send_signup_payment_link",
         "document_share",
         "start_aiflow_for_contact",
+        "schedule_text",
         "update_notification_preferences"
       ]
     },
@@ -1220,6 +1222,37 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["flow", "phone"]
+      }
+    },
+    {
+      name: "schedule_text",
+      description: "Queue ONE text to the person you are texting, to go out at a future time they asked for, most often a reminder before an appointment. It can only ever text THEM: pass the current texter phone from your context and never any other number. Scheduling again MOVES the one queued text instead of adding a second, and action cancel drops it. Say a later text is set ONLY after this returns ok, quoting sendAtLocal from the result; when it refuses, follow the message it gives you and do not promise a text.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          phone: {
+            type: "string",
+            description: "The current texter phone in E.164, exactly as given in your context (Current texter phone). Never any other number."
+          },
+          action: {
+            type: "string",
+            description: "schedule to queue or move the text (the default), or cancel to drop the one already queued."
+          },
+          sendAtIso: {
+            type: "string",
+            description: "When to send it, ISO 8601 with a timezone offset, for example 2026-08-31T18:30:00-04:00. Work the offset out from the date and time line in your context. Required when scheduling."
+          },
+          text: {
+            type: "string",
+            description: "The exact message to send at that time, written the way you would text it. Required when scheduling."
+          },
+          confirmed: {
+            type: "boolean",
+            description: "Pass true ONLY after the texter has said yes to an EXTRA text on top of an automatic reminder this tool told you about."
+          }
+        },
+        required: ["phone"]
       }
     },
     {

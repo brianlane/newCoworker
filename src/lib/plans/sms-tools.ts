@@ -17,6 +17,14 @@ export const SMS_TOOLS_UPGRADE_MESSAGE =
 /** Furthest-out send time we accept (guards typo'd years, keeps queues sane). */
 export const SCHEDULED_SMS_MAX_DAYS_AHEAD = 90;
 
+/**
+ * Nearest send the queue accepts. The dispatch sweep runs once a minute, so
+ * anything closer belongs on the immediate-send path. Shared by the owner's
+ * composer route and the texting coworker's schedule_text tool, so the two
+ * cannot drift into disagreeing about what "later" means.
+ */
+export const SCHEDULED_SMS_MIN_LEAD_MS = 60 * 1000;
+
 export function smsToolsAllowedForTier(tier: string | null | undefined): boolean {
   return tier === "standard" || tier === "enterprise";
 }
