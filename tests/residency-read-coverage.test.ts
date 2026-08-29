@@ -238,6 +238,8 @@ const KEPT_TABLE_ROUTED_BOX_WARD: Record<SiteKey, string> = {
     "engagement card reads the tenant's own box (PR #1563)",
   "src/lib/analytics/lead-sources.ts::fetchContacts::contacts":
     "lead sources card reads the tenant's own box (PR #1563)",
+  "src/lib/analytics/growth-report.ts::countLeads::contacts":
+    "monthly growth recap email counts leads on the tenant's own box, the same source and posture as the monthly summary card it agrees with; counting centrally would report leads the owner cannot see in their own dashboard",
   "src/lib/analytics/monthly-summary.ts::countNewContacts::contacts":
     "monthly summary card reads the tenant's own box (PR #1563)",
   "src/lib/analytics/quote-funnel.ts::fetchContacts::contacts":

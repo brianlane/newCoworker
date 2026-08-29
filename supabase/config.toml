@@ -113,6 +113,11 @@ verify_jwt = false
 [functions.monthly-intro-nudge-sweep]
 verify_jwt = false
 
+# Monthly growth recap email to owners. Same pg_cron bearer as the sweeps
+# above, so the gateway JWT check stays off.
+[functions.monthly-growth-sweep]
+verify_jwt = false
+
 [functions.abandoned-signup-sweep]
 verify_jwt = false
 

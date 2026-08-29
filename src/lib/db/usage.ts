@@ -419,3 +419,80 @@ export async function checkLimitReached(
 
   return { allowed: true };
 }
+
+/** One `daily_usage` row, reduced to the two metered SMS columns. */
+export type DailyUsageHistoryRow = {
+  business_id: string;
+  usage_date: string;
+  sms_sent: number | null;
+  sms_text_units: number | null;
+};
+
+/**
+ * Every `daily_usage` row from `startYmd` onward, oldest first.
+ *
+ * Unlike {@link getFleetCalendarMonthUsageByBusiness} this returns the DAY
+ * rows rather than one month's totals, so a caller charting several months
+ * reads the window once instead of once per month. Paged in 1000-row chunks:
+ * PostgREST silently caps a single request there, which on a multi-month
+ * window would drop the newest days with no error at all.
+ */
+export async function listDailyUsageSince(
+  startYmd: string,
+  client?: SupabaseClient
+): Promise<DailyUsageHistoryRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pageSize = 1000;
+  const all: DailyUsageHistoryRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("daily_usage")
+      .select("business_id, usage_date, sms_sent, sms_text_units")
+      .gte("usage_date", startYmd)
+      .order("usage_date", { ascending: true })
+      .order("business_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listDailyUsageSince: ${error.message}`);
+    const rows = (data ?? []) as DailyUsageHistoryRow[];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
+
+/** One settled call: the ground truth for billed voice, one row per call. */
+export type VoiceSettlementHistoryRow = {
+  business_id: string;
+  created_at: string;
+  billable_seconds: number | null;
+};
+
+/**
+ * Every settled call from `startIso` onward, oldest first.
+ *
+ * `voice_settlements` and not `daily_usage.voice_minutes_used` for the reason
+ * spelled out on {@link getFleetCalendarMonthUsageByBusiness}: the daily
+ * column has no live production writer and reads as permanent zeros.
+ */
+export async function listVoiceSettlementsSince(
+  startIso: string,
+  client?: SupabaseClient
+): Promise<VoiceSettlementHistoryRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pageSize = 1000;
+  const all: VoiceSettlementHistoryRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("voice_settlements")
+      .select("business_id, created_at, billable_seconds")
+      .gte("created_at", startIso)
+      .order("created_at", { ascending: true })
+      .order("call_control_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listVoiceSettlementsSince: ${error.message}`);
+    const rows = (data ?? []) as VoiceSettlementHistoryRow[];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}

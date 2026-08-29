@@ -941,6 +941,36 @@ contact up with it; `from_matches` lines up from the other side instead, with
 
 ## One-shots
 
+**`amy-shorten-offer-templates.ts` (Aug 29 2026, NOT YET APPLIED):** shortens
+every `route_to_team` offer template on the eight enabled flows so an unclaimed
+lead costs fewer billed SMS segments, without dropping a fact. Written while
+tracing the Telnyx jump from $30.78 (July) to $50.95 (Aug 1-28): the per-segment
+rate did not move, Amy's `agent_offer` sends did, 101 -> 464, because the Aug
+10-15 team-routing work (#1270, #1272, #1317, #1397) fans every offer out to all
+four roster members instead of one. That fan-out is what Amy asked for and the
+script does not touch it.
+
+Four mechanical transforms, all idempotent: the two-line reply-syntax
+boilerplate becomes one line, the 126-character call-summary sentence is
+shortened, non-ASCII characters are removed (a single emoji re-encodes a whole
+message as UCS-2 and cuts every segment from 153 characters to 67), and
+trailing whitespace goes. It deliberately does NOT touch the first-to-claim vs
+next-agent wording (load-bearing, see `amy-broadcast-realtor-and-offer-copy.ts`)
+or `Details: {{trigger.windowText}}` on the Clever route, which is the single
+largest line in any offer at roughly nine segments per send: cutting the raw
+vendor blob is Amy's editorial call, not a mechanical saving, and the dry run
+prints a note saying so.
+
+Measured by replaying her 450 real August offer sends through the transforms:
+2,072 billed segments -> 1,889, about $1.54 a month. TWO ENGINE FIXES ARE WORTH
+MORE and are not tenant copy, so they are not in this script: `{{offer.deadline}}`
+renders through `formatInTimeZone`, whose `Intl.DateTimeFormat` emits U+202F (a
+narrow no-break space) before "PM" on the Edge runtime's ICU, forcing UCS-2 on
+every offer that names a deadline (-475 segments, $3.99/mo for Amy alone, and it
+hits every tenant); and the final-reminder banner in
+`_shared/ai_flows/offer_reminders.ts` is an emoji, which does the same to every
+final reminder (-55 segments, $0.46/mo).
+
 **`amy-email-followup-cadence.ts` (Aug 18 2026):** appended the three-round
 email follow-up block to ReferralExchange Lead, Realtor.com Lead, New Lead
 Intake and Clever Lead - Accept. Pure append, so parked runs kept their

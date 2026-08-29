@@ -6,7 +6,9 @@ import {
   getFleetCalendarMonthUsageByBusiness,
   peakConcurrentFromIntervals,
   incrementUsage,
-  checkLimitReached
+  checkLimitReached,
+  listDailyUsageSince,
+  listVoiceSettlementsSince
 } from "@/lib/db/usage";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
@@ -780,6 +782,133 @@ describe("getBillingWindowUsageTotals", () => {
     const db = rpcClient({ data: { window_start: "2026-08-28", sms_sent: 1 } });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(getBillingWindowUsageTotals("biz-1")).resolves.toMatchObject({ sms_sent: 1 });
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Query-builder mock for the paged history readers: every chained method
+ * returns the same thenable, and each `.from()` consumes the next configured
+ * response, so a two-page read is expressed as two responses.
+ */
+function mockPagedClient(responses: Array<{ data: unknown; error: { message: string } | null }>) {
+  let next = 0;
+  const ranges: unknown[][] = [];
+  const client = {
+    from() {
+      const response = responses[Math.min(next, responses.length - 1)]!;
+      next += 1;
+      const builder: Record<string, unknown> = {
+        then(
+          onFulfilled?: (value: (typeof responses)[number]) => unknown,
+          onRejected?: (reason: unknown) => unknown
+        ) {
+          return Promise.resolve(response).then(onFulfilled, onRejected);
+        }
+      };
+      for (const method of ["select", "gte", "order"]) {
+        builder[method] = () => builder;
+      }
+      builder.range = (...args: unknown[]) => {
+        ranges.push(args);
+        return builder;
+      };
+      return builder;
+    }
+  };
+  return { client: client as never, ranges };
+}
+
+describe("listDailyUsageSince", () => {
+  it("returns the window's day rows", async () => {
+    const rows = [
+      { business_id: "biz-1", usage_date: "2026-08-04", sms_sent: 20, sms_text_units: 61 }
+    ];
+    const { client } = mockPagedClient([{ data: rows, error: null }]);
+    await expect(listDailyUsageSince("2026-07-01", client)).resolves.toEqual(rows);
+  });
+
+  it("keeps paging while a page comes back full", async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: "biz-1",
+      usage_date: "2026-08-04",
+      sms_sent: i,
+      sms_text_units: i
+    }));
+    const { client, ranges } = mockPagedClient([
+      { data: full, error: null },
+      { data: [full[0]], error: null }
+    ]);
+    const out = await listDailyUsageSince("2026-07-01", client);
+    expect(out).toHaveLength(1001);
+    expect(ranges).toEqual([
+      [0, 999],
+      [1000, 1999]
+    ]);
+  });
+
+  it("throws with the table name on a read error", async () => {
+    const { client } = mockPagedClient([{ data: null, error: { message: "boom" } }]);
+    await expect(listDailyUsageSince("2026-07-01", client)).rejects.toThrow(
+      /listDailyUsageSince: boom/
+    );
+  });
+
+  it("treats a null-but-not-an-error page as empty", async () => {
+    const { client } = mockPagedClient([{ data: null, error: null }]);
+    await expect(listDailyUsageSince("2026-07-01", client)).resolves.toEqual([]);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const { client } = mockPagedClient([{ data: [], error: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    await expect(listDailyUsageSince("2026-07-01")).resolves.toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("listVoiceSettlementsSince", () => {
+  it("returns one row per settled call", async () => {
+    const rows = [
+      { business_id: "biz-1", created_at: "2026-08-05T10:00:00Z", billable_seconds: 120 }
+    ];
+    const { client } = mockPagedClient([{ data: rows, error: null }]);
+    await expect(
+      listVoiceSettlementsSince("2026-07-01T00:00:00.000Z", client)
+    ).resolves.toEqual(rows);
+  });
+
+  it("keeps paging while a page comes back full", async () => {
+    const full = Array.from({ length: 1000 }, () => ({
+      business_id: "biz-1",
+      created_at: "2026-08-05T10:00:00Z",
+      billable_seconds: 60
+    }));
+    const { client } = mockPagedClient([
+      { data: full, error: null },
+      { data: [], error: null }
+    ]);
+    await expect(
+      listVoiceSettlementsSince("2026-07-01T00:00:00.000Z", client)
+    ).resolves.toHaveLength(1000);
+  });
+
+  it("throws with the table name on a read error", async () => {
+    const { client } = mockPagedClient([{ data: null, error: { message: "nope" } }]);
+    await expect(
+      listVoiceSettlementsSince("2026-07-01T00:00:00.000Z", client)
+    ).rejects.toThrow(/listVoiceSettlementsSince: nope/);
+  });
+
+  it("treats a null-but-not-an-error page as empty", async () => {
+    const { client } = mockPagedClient([{ data: null, error: null }]);
+    await expect(listVoiceSettlementsSince("2026-07-01T00:00:00.000Z", client)).resolves.toEqual([]);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const { client } = mockPagedClient([{ data: [], error: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    await expect(listVoiceSettlementsSince("2026-07-01T00:00:00.000Z")).resolves.toEqual([]);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });
