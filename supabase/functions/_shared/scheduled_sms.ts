@@ -22,6 +22,7 @@
  */
 
 import { telnyxSendSms } from "./telnyx_sms_compliance.ts";
+import { gsmSafeSmsText } from "./ai_flows/compliance.ts";
 import { resolveRcsAgentId } from "./channel_settings.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "./cap_alerts.ts";
 import { smsTextUnits } from "./sms_text_units.ts";
@@ -49,6 +50,12 @@ export type ScheduledSmsRow = {
   business_id: string;
   to_e164: string;
   body: string;
+  /**
+   * Who queued it: 'owner' (dashboard "Send later") or 'sms_coworker'
+   * (the schedule_text tool). Decides whether the body is encoding-normalized
+   * on the way out, see `dispatchBody`.
+   */
+  created_by?: string | null;
 };
 
 export type ScheduledSmsOutcome = {
@@ -57,6 +64,27 @@ export type ScheduledSmsOutcome = {
   /** Machine-readable detail; unset on "sent". */
   detail?: string;
 };
+
+/**
+ * The body to actually put on the wire.
+ *
+ * A body the TEXTING COWORKER queued is model output, and the model reaches
+ * for characters that are not in GSM-7: curly apostrophes, em dashes, and
+ * above all the U+202F that `Intl.DateTimeFormat` puts before AM/PM in every
+ * formatted clock time, which a reminder text quotes by definition. One of
+ * them re-encodes the whole message as UCS-2 and cuts the per-segment budget
+ * from 153 characters to 67, doubling what the send costs against the tenant's
+ * monthly allowance while looking identical. So it gets the same
+ * `gsmSafeSmsText` pass every AiFlow send has always had.
+ *
+ * A body the OWNER typed into the dashboard composer is left exactly as
+ * written. Their composer warns them about encoding as they type
+ * (SmsSegmentHint in "verbatim" mode) and quietly rewriting someone's own
+ * words is a different thing from cleaning up the model's.
+ */
+export function dispatchBody(row: ScheduledSmsRow): string {
+  return row.created_by === "sms_coworker" ? gsmSafeSmsText(row.body) : row.body;
+}
 
 /** Tiers entitled to scheduled + template SMS. */
 export function scheduledSmsTierAllowed(tier: string | null | undefined): boolean {
@@ -181,8 +209,11 @@ async function dispatchOne(
         : opts.defaultFromE164;
     if (!opts.telnyxApiKey || !messagingProfileId) return await fail("no_messaging");
 
+    // Metered on the normalized body so the units charged describe the bytes
+    // that go on the wire, not the ones the model happened to type.
+    const outboundBody = dispatchBody(row);
     const scheduledUnits =
-      smsTextUnits(row.body) * smsDestinationMultiplier(smsDestinationCountry(row.to_e164));
+      smsTextUnits(outboundBody) * smsDestinationMultiplier(smsDestinationCountry(row.to_e164));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
       { p_business_id: row.business_id, p_text_units: scheduledUnits, p_destination_e164: row.to_e164 }
@@ -221,7 +252,7 @@ async function dispatchOne(
         messagingProfileId,
         ...(fromE164 ? { fromE164 } : {}),
         toE164: row.to_e164,
-        text: row.body,
+        text: outboundBody,
         // Stale-claim retries (sweep died mid-dispatch) reuse this key, so
         // Telnyx dedupes instead of double-texting the customer.
         idempotencyKey: `scheduled_sms:${row.id}`,
@@ -254,7 +285,7 @@ async function dispatchOne(
       business_id: row.business_id,
       to_e164: row.to_e164,
       from_e164: fromE164 || null,
-      body: row.body,
+      body: outboundBody,
       source: "owner_scheduled",
       run_id: null,
       flow_id: null,

@@ -15,20 +15,28 @@
  */
 
 /**
- * Invisible characters that silently force UCS-2, replaced with a plain
+ * Characters that look like a space but are not GSM-7, replaced with a plain
  * space. The one that matters in practice is U+202F, the NARROW NO-BREAK
  * SPACE modern ICU puts before AM/PM: `Intl.DateTimeFormat` produces it in
  * every formatted clock time, so any message quoting a time carries it, and
  * one character outside GSM-7 re-encodes the WHOLE message, cutting the
  * per-segment budget from 153 to 67. Nothing looks wrong, the bill just
- * doubles (measured at $3.99/month on one tenant\'s offer sends).
+ * doubles. Measured across the fleet Jun 1 to Aug 29 2026: 834 wasted
+ * segments, 7.9% of every outbound SMS segment sent in that window.
+ *
+ * The exact set is mirrored from `GSM_UNSAFE_SPACES` in
+ * `supabase/functions/_shared/ai_flows/compliance.ts` and held in lockstep
+ * with it by tests/sms-segment-info.test.ts. Only visible-width characters
+ * are listed, so a plain space preserves the text; zero-width characters are
+ * left alone because U+200D holds family emoji together and U+200C separates
+ * letters in Persian and Indic scripts.
  *
  * Use this on any time label that will be read back to a customer in a text.
  * It is deliberately narrow: emoji are NOT stripped here, because keeping
  * them is a deliverability policy the AiFlow sender owns.
  */
 export function gsmSafeSpaces(text: string): string {
-  return text.replace(/[\u202f\u00a0]/g, " ");
+  return text.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
 }
 
 /** Longest UCS-2 message Telnyx will send (10 segments × 67 chars). */
@@ -76,12 +84,13 @@ export type SmsSegmentInfoOptions = {
 
 /** Mirrors the normalization table in `_shared/ai_flows/compliance.ts`. */
 function normalizeSmartPunctuation(text: string): string {
-  return text
-    .replace(/[\u2018\u2019\u02BC]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014]/g, "-")
-    .replace(/\u2026/g, "...")
-    .replace(/\u00A0/g, " ");
+  return gsmSafeSpaces(
+    text
+      .replace(/[\u2018\u2019\u02BC]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2013\u2014]/g, "-")
+      .replace(/\u2026/g, "...")
+  );
 }
 
 export function smsSegmentInfo(text: string, opts: SmsSegmentInfoOptions = {}): SmsSegmentInfo {

@@ -39,6 +39,33 @@ describe("gsmSafeSmsText", () => {
     );
     expect(gsmSafeSmsText("a\u00A0b \u2013 c \u02BCd")).toBe("a b - c 'd");
   });
+  it("replaces every space-like character that is not GSM-7 with a plain space", () => {
+    // U+202F is the live one: Intl.DateTimeFormat puts it before AM/PM, so a
+    // reminder text that quotes a time carries it and silently re-encodes as
+    // UCS-2. The rest of the family is covered because a formatter or a paste
+    // can produce any of them and they fail exactly the same way.
+    expect(gsmSafeSmsText("Talk at 6:30\u202FPM.")).toBe("Talk at 6:30 PM.");
+    const family = "a\u00A0b\u1680c\u2000d\u2005e\u200Af\u202Fg\u205Fh\u3000i";
+    expect(gsmSafeSmsText(family)).toBe("a b c d e f g h i");
+    expect(/[^\x00-\x7F]/.test(gsmSafeSmsText(family))).toBe(false);
+  });
+  it("keeps a time-quoting reminder on GSM-7 encoding rather than doubling it", () => {
+    // The whole point, stated as the carrier sees it: 300+ characters is two
+    // GSM segments and five UCS-2 segments, and one invisible character was
+    // the only thing standing between them.
+    const raw = `Reminder: your call with Amy is at 6:30\u202FPM today. ${"Reply here if anything changes. ".repeat(9)}`;
+    expect(raw.length).toBeGreaterThan(160);
+    expect(/[^\x00-\x7F]/.test(raw)).toBe(true);
+    expect(/[^\x00-\x7F]/.test(gsmSafeSmsText(raw))).toBe(false);
+  });
+  it("leaves zero-width characters alone so emoji and Indic text survive", () => {
+    // U+200D joins the people in a family emoji and U+200C separates letters
+    // in Persian/Indic scripts. Deleting them would corrupt content this
+    // function otherwise keeps intact, so they are deliberately not listed.
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    expect(gsmSafeSmsText(family)).toBe(family);
+    expect(gsmSafeSmsText("\u0645\u06CC\u200C\u062E\u0648\u0627\u0646\u0645")).toContain("\u200C");
+  });
   it("keeps emoji intact when the message fits the UCS-2 send cap", () => {
     expect(gsmSafeSmsText("Thanks, Amy \u{1F60A}")).toBe("Thanks, Amy \u{1F60A}");
     expect(gsmSafeSmsText("\u{1F600}\u{1F603}\u{1F604}\u{1F642}")).toBe(
