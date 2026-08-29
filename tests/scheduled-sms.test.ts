@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SCHEDULED_SMS_BATCH_SIZE,
+  dispatchBody,
   processDueScheduledSms,
   scheduledSmsTierAllowed,
   type ScheduledSmsSupabase
@@ -129,6 +130,72 @@ describe("scheduled SMS dispatch", () => {
     expect(await processDueScheduledSms(nonArray.supabase, baseOpts)).toEqual({
       claimed: 0,
       outcomes: []
+    });
+  });
+
+  describe("body encoding on the way out", () => {
+    // The reminder the schedule_text tool queues, in the shape it queues it:
+    // long enough to bill as more than one segment, and quoting a clock time,
+    // so Intl's U+202F is sitting between "6:30" and "PM".
+    const TIMED = `Reminder: your call with Amy is at 6:30\u202FPM today. ${"Reply here if anything changes. ".repeat(9)}`;
+
+    it("normalizes a body the texting coworker queued", () => {
+      const out = dispatchBody({ ...ROW, body: TIMED, created_by: "sms_coworker" });
+      expect(out).toContain("6:30 PM");
+      expect(out).not.toContain("\u202F");
+      // The point of the exercise: GSM-7 instead of UCS-2, which is 153
+      // characters per segment instead of 67.
+      expect(/[^\x00-\x7F]/.test(out)).toBe(false);
+    });
+
+    it("leaves a body the owner typed exactly as written", () => {
+      // Their composer already warns them about encoding as they type; quietly
+      // rewriting someone's own words is a different decision.
+      expect(dispatchBody({ ...ROW, body: TIMED, created_by: "owner" })).toBe(TIMED);
+      expect(dispatchBody({ ...ROW, body: TIMED })).toBe(TIMED);
+    });
+
+    it("meters, sends, and logs a coworker row on the normalized body", async () => {
+      const { supabase, rpc, insert } = makeSupabase({
+        claim: {
+          data: [{ ...ROW, body: TIMED, created_by: "sms_coworker" }],
+          error: null
+        }
+      });
+      const fetchFn = okFetch("msg_norm");
+
+      await processDueScheduledSms(supabase, { ...baseOpts, fetchFn });
+
+      const clean = TIMED.replace(/\u202F/g, " ");
+      // 3 segments, not the 6 the identical-looking text costs as UCS-2, and
+      // the meter, the wire, and the log all have to see the same string or
+      // the tenant is billed for bytes that were never sent.
+      expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+        p_business_id: "biz-1",
+        p_text_units: 3,
+        p_destination_e164: "+15551234567"
+      });
+      const [, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(JSON.parse((init as { body: string }).body).text).toBe(clean);
+      expect(insert).toHaveBeenCalledWith(expect.objectContaining({ body: clean }));
+    });
+
+    it("meters and sends an owner row verbatim, at its real UCS-2 cost", async () => {
+      const { supabase, rpc, insert } = makeSupabase({
+        claim: { data: [{ ...ROW, body: TIMED, created_by: "owner" }], error: null }
+      });
+      const fetchFn = okFetch("msg_verbatim");
+
+      await processDueScheduledSms(supabase, { ...baseOpts, fetchFn });
+
+      expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+        p_business_id: "biz-1",
+        p_text_units: 6,
+        p_destination_e164: "+15551234567"
+      });
+      const [, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(JSON.parse((init as { body: string }).body).text).toBe(TIMED);
+      expect(insert).toHaveBeenCalledWith(expect.objectContaining({ body: TIMED }));
     });
   });
 

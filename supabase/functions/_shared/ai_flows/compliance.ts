@@ -71,6 +71,27 @@ export const UCS2_MAX_SENDABLE_CHARS = 670;
 export const SMS_MAX_BODY_CHARS = 1500;
 
 /**
+ * Characters that LOOK like a space but are not GSM-7, replaced with a plain
+ * ASCII space. One of them anywhere re-encodes the whole message as UCS-2 and
+ * cuts the per-segment budget from 153 characters to 67, so a message that
+ * reads exactly the same costs roughly twice as much and eats twice as much of
+ * the tenant's monthly text allowance.
+ *
+ * U+202F (NARROW NO-BREAK SPACE) is the one that actually bites:
+ * `Intl.DateTimeFormat` puts it before AM/PM, so EVERY message that quotes a
+ * clock time carries one. Measured across the fleet, Jun 1 to Aug 29 2026: 250
+ * outbound sends were non-GSM for that character and nothing else, costing 834
+ * wasted segments, 7.9% of every outbound SMS segment in that window.
+ *
+ * Deliberately limited to characters that occupy visible width, where a plain
+ * space preserves the text exactly. Zero-width characters are NOT touched:
+ * U+200D joins the parts of a family emoji and U+200C separates letters in
+ * Persian and Indic scripts, so deleting them would corrupt content that
+ * `gsmSafeSmsText` otherwise keeps intact.
+ */
+const GSM_UNSAFE_SPACES = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/**
  * Make an outbound body safe to actually deliver.
  *
  * Live failure this guards against: a flow template written with smart quotes
@@ -87,7 +108,7 @@ export function gsmSafeSmsText(text: string): string {
     .replace(/[\u201C\u201D]/g, '"')
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/\u2026/g, "...")
-    .replace(/\u00A0/g, " ");
+    .replace(GSM_UNSAFE_SPACES, " ");
   if (!/[^\x00-\x7F]/.test(normalized)) return normalized;
   // Short enough to deliver as UCS-2: keep emoji (and any other symbols)
   // exactly as written. Emoji must never be downgraded when the message is

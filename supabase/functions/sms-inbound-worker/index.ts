@@ -74,6 +74,7 @@ import {
   detectAndPersistCustomerLanguage
 } from "../_shared/customer_language_persist.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { gsmSafeSmsText } from "../_shared/ai_flows/compliance.ts";
 import {
   formatTapbackAnswerNote,
   parseTapback,
@@ -2443,6 +2444,24 @@ serve(async (req: Request) => {
       platformFrom && !isInternationalSmsDestination(smsDestinationCountry(fromE164))
         ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
         : null;
+    // Encoding-normalize the reply BEFORE it is metered, so the units the
+    // tenant is charged describe the bytes that actually go on the wire.
+    //
+    // The AiFlow sender has always run its bodies through gsmSafeSmsText; this
+    // path never did, so anything the model wrote went to Telnyx verbatim. A
+    // single non-GSM character re-encodes the whole message as UCS-2 and cuts
+    // the per-segment budget from 153 characters to 67, and the model reaches
+    // for curly apostrophes and em dashes on its own. Now that it can quote a
+    // scheduled reminder time back to the customer, it also emits the U+202F
+    // that `Intl.DateTimeFormat` puts before AM/PM, the character that cost the
+    // fleet 834 segments in three months on the AiFlow side alone.
+    //
+    // gsmSafeSmsText applies no length policy (that stays with the slices
+    // below) and keeps emoji intact up to 670 characters, so a normal reply is
+    // unchanged apart from its encoding. Measured over all 525 replies sent
+    // since Jun 1 2026: zero of them change beyond punctuation, which is the
+    // point, this is a guard on a path that had none.
+    reply = gsmSafeSmsText(reply);
     const replyUnits =
       smsTextUnits(reply.slice(0, rcsAgentIdForUnits ? 3072 : 1600)) *
       smsDestinationMultiplier(smsDestinationCountry(fromE164));

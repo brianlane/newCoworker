@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { smsSegmentInfo, smsTextUnits, MMS_TEXT_UNITS, UCS2_MAX_SENDABLE_CHARS } from "@/lib/sms/segment-info";
+import {
+  smsSegmentInfo,
+  smsTextUnits,
+  gsmSafeSpaces,
+  MMS_TEXT_UNITS,
+  UCS2_MAX_SENDABLE_CHARS
+} from "@/lib/sms/segment-info";
+import { gsmSafeSmsText } from "../supabase/functions/_shared/ai_flows/compliance";
 import {
   smsTextUnits as edgeSmsTextUnits,
   MMS_TEXT_UNITS as EDGE_MMS_TEXT_UNITS
@@ -137,5 +144,39 @@ describe("smsTextUnits", () => {
     }
     expect(EDGE_MMS_TEXT_UNITS).toBe(MMS_TEXT_UNITS);
     expect(BRIDGE_MMS_TEXT_UNITS).toBe(MMS_TEXT_UNITS);
+  });
+});
+
+describe("gsmSafeSpaces", () => {
+  it("replaces the space-like characters that are not GSM-7", () => {
+    expect(gsmSafeSpaces("Talk at 6:30\u202FPM.")).toBe("Talk at 6:30 PM.");
+    expect(gsmSafeSpaces("a\u00A0b\u1680c\u2000d\u2005e\u200Af\u202Fg\u205Fh\u3000i")).toBe(
+      "a b c d e f g h i"
+    );
+  });
+
+  it("leaves emoji and zero-width characters alone", () => {
+    // Emoji are the AiFlow sender's call, not this helper's, and U+200D holds
+    // a family emoji together.
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    expect(gsmSafeSpaces(`Thanks ${family}`)).toBe(`Thanks ${family}`);
+  });
+
+  it("stays in lockstep with the Edge sanitiser's GSM_UNSAFE_SPACES table", () => {
+    // Two runtimes, two copies of the same table (the Deno worker cannot be
+    // imported by the dashboard bundle). If they drift, the composer's segment
+    // hint tells owners a different number than the carrier bills. Sweeping
+    // the whole BMP catches an addition on either side.
+    const differ: string[] = [];
+    for (let cp = 0x20; cp <= 0xffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue; // lone surrogates are not text
+      const ch = String.fromCodePoint(cp);
+      const here = gsmSafeSpaces(`a${ch}b`) === "a b";
+      // The Edge copy also rewrites smart punctuation, so only compare the
+      // characters it turns into a SPACE specifically.
+      const there = gsmSafeSmsText(`a${ch}b`) === "a b";
+      if (here !== there) differ.push(`U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
+    }
+    expect(differ).toEqual([]);
   });
 });
