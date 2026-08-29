@@ -380,12 +380,63 @@ describe("fetching the signing keys", () => {
     healthy = false;
     const afterWarm = fetchMock.mock.calls.length;
     for (let i = 0; i < 20; i++) {
-      expect(await verify(sign(goodPayload, { kid: `forged-${i}` }))).toMatchObject({
-        ok: false
+      // And every one of them is reported as OURS, not as a bad token. See
+      // the dedicated test below for why that distinction is the whole
+      // difference between a delayed message and a lost one.
+      expect(await verify(sign(goodPayload, { kid: `forged-${i}` }))).toEqual({
+        ok: false,
+        reason: "jwks_unavailable"
       });
     }
     // One attempt at the metadata document, which failed. Not twenty.
     expect(fetchMock.mock.calls.length - afterWarm).toBe(1);
+  });
+
+  it("keeps reporting a FAILED refresh as ours for the rest of the window", async () => {
+    /**
+     * The throttle must not convert an outage into lost messages.
+     *
+     * Once a forced refresh has failed, we do not know whether the next
+     * unknown kid is a real rotation or garbage, and the two answers are
+     * not equally safe. `unknown_key` becomes a 401, which makes Bot
+     * Framework stop retrying and DROPS the activity. `jwks_unavailable`
+     * becomes a 500, and it comes back once Microsoft recovers.
+     *
+     * So a rotation that lands during a key-endpoint outage costs a
+     * redelivery rather than a message.
+     */
+    resetTeamsJwksStateForTests();
+    let healthy = true;
+    let served = [jwkFor(publicKey, "key-1")];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (!healthy) return new Response("nope", { status: 503 });
+        return url.includes("openidconfiguration")
+          ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+          : new Response(JSON.stringify({ keys: served }));
+      })
+    );
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+
+    // Microsoft rotates and its key endpoint is down at the same moment.
+    healthy = false;
+    served = [jwkFor(other.publicKey, "key-2")];
+    const rotated = sign(
+      { ...goodPayload, exp: Math.floor(NOW / 1000) + 7200 },
+      { kid: "key-2", key: other.privateKey }
+    );
+    expect(await verify(rotated)).toEqual({ ok: false, reason: "jwks_unavailable" });
+    // Throttled, so no second fetch, and still reported as ours rather
+    // than as a bad token.
+    expect(await verify(rotated, NOW + 60_000)).toEqual({
+      ok: false,
+      reason: "jwks_unavailable"
+    });
+
+    // Microsoft recovers, and the next window picks the new key up.
+    healthy = true;
+    expect(await verify(rotated, NOW + 6 * 60 * 1000)).toMatchObject({ ok: true });
   });
 
   it("survives the refresh throwing something that is not an Error", async () => {

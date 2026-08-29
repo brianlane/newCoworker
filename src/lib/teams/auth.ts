@@ -55,6 +55,7 @@ type Jwk = { kid?: string; kty?: string; use?: string; n?: string; e?: string };
 
 let jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
 let lastForcedRefreshAt = 0;
+let lastForcedRefreshFailed = false;
 
 /**
  * Test seam, matching resetGoogleRefreshStateForTests and friends: a
@@ -65,6 +66,7 @@ let lastForcedRefreshAt = 0;
 export function resetTeamsJwksStateForTests(): void {
   jwksCache = null;
   lastForcedRefreshAt = 0;
+  lastForcedRefreshFailed = false;
 }
 
 async function loadJwks(now: number, opts: { force?: boolean } = {}): Promise<Jwk[]> {
@@ -166,7 +168,7 @@ export async function verifyTeamsToken(
   }
 
   let jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
-  if (!jwk && now - lastForcedRefreshAt >= JWKS_FORCE_REFRESH_COOLDOWN_MS) {
+  if (!jwk) {
     /**
      * A kid we do not hold is the SIGNATURE OF A KEY ROTATION, not of a
      * forged token, and treating it as the latter is how this channel would
@@ -180,21 +182,41 @@ export async function verifyTeamsToken(
      *
      * So an unknown kid buys a forced refresh, at most one per cooldown
      * window. A genuinely forged token still fails, one fetch later, and a
-     * flood of them costs one fetch rather than one each.
-     *
-     * The stamp is taken BEFORE the attempt, not after a success: a key
-     * endpoint that is down must not be retried per request either.
+     * flood of them costs one fetch rather than one each: our app id is
+     * public, so anyone can mint a token with the right issuer, audience and
+     * expiry and vary the kid, and without the throttle that turns this
+     * webhook into an amplifier against Microsoft's key endpoint.
      */
-    lastForcedRefreshAt = now;
-    try {
-      keys = await loadJwks(now, { force: true });
-    } catch (err) {
-      logger.error("teams auth: jwks refresh failed after an unknown kid", {
-        error: err instanceof Error ? err.message : String(err)
-      });
+    if (now - lastForcedRefreshAt >= JWKS_FORCE_REFRESH_COOLDOWN_MS) {
+      // Stamped BEFORE the attempt, not after a success: a key endpoint
+      // that is down must not be retried per request either, which is the
+      // worst moment to add load to it.
+      lastForcedRefreshAt = now;
+      lastForcedRefreshFailed = false;
+      try {
+        keys = await loadJwks(now, { force: true });
+      } catch (err) {
+        lastForcedRefreshFailed = true;
+        logger.error("teams auth: jwks refresh failed after an unknown kid", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return { ok: false, reason: "jwks_unavailable" };
+      }
+      jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
+    } else if (lastForcedRefreshFailed) {
+      /**
+       * Throttled, AND the last attempt to look failed. We do not know
+       * whether this kid is real, and the two answers are not equally safe:
+       * `unknown_key` becomes a 401, which makes Bot Framework stop
+       * retrying and DROPS the activity, while `jwks_unavailable` becomes a
+       * 500 and it comes back once Microsoft recovers.
+       *
+       * So an outage during a rotation costs a redelivery rather than a
+       * lost message. A forged token gets a 500 too, which costs nothing:
+       * nobody is retrying a token they made up.
+       */
       return { ok: false, reason: "jwks_unavailable" };
     }
-    jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
   }
   if (!jwk) return { ok: false, reason: "unknown_key" };
 
