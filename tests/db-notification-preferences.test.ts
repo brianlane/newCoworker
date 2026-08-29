@@ -1017,6 +1017,7 @@ describe("db/notification-preferences", () => {
       slack_urgent: false,
       telegram_urgent: false,
       teams_urgent: false,
+      google_chat_urgent: false,
       slack_digest: false,
       push_urgent: false,
       email_digest: false,

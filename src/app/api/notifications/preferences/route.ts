@@ -15,6 +15,7 @@ const patchSchema = z.object({
   slack_urgent: z.boolean().optional(),
   telegram_urgent: z.boolean().optional(),
   teams_urgent: z.boolean().optional(),
+  google_chat_urgent: z.boolean().optional(),
   slack_digest: z.boolean().optional(),
   push_urgent: z.boolean().optional(),
   email_digest: z.boolean().optional(),

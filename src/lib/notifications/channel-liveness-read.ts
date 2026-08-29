@@ -245,7 +245,7 @@ async function lastOwnerWhatsappAt(
  */
 async function lastAudienceMessageAt(
   businessId: string,
-  channel: "slack" | "telegram" | "teams",
+  channel: "slack" | "telegram" | "teams" | "google_chat",
   audience: AlertAudience,
   db: SupabaseClient
 ): Promise<string | null> {
@@ -407,7 +407,19 @@ async function gatherChannelEvidence(
 ): Promise<ChannelEvidence[]> {
   const sinceIso = windowStartIso(nowMs);
   const audience = await loadAlertAudience(businessId, db);
-  const [sends, smsReply, linkClick, pushClick, whatsapp, slack, telegram, teams, dashboard, email] =
+  const [
+    sends,
+    smsReply,
+    linkClick,
+    pushClick,
+    whatsapp,
+    slack,
+    telegram,
+    teams,
+    googleChat,
+    dashboard,
+    email
+  ] =
     await Promise.all([
       countSendsByChannel(businessId, sinceIso, db),
       lastStaffSmsAt(businessId, audience, db),
@@ -417,6 +429,7 @@ async function gatherChannelEvidence(
       lastAudienceMessageAt(businessId, "slack", audience, db),
       lastAudienceMessageAt(businessId, "telegram", audience, db),
       lastAudienceMessageAt(businessId, "teams", audience, db),
+      lastAudienceMessageAt(businessId, "google_chat", audience, db),
       lastDashboardReadAt(businessId, db),
       emailReceiptTally(businessId, sinceIso, audience, db)
     ]);
@@ -479,6 +492,18 @@ async function gatherChannelEvidence(
       // Attributed with confidence: an activity only reaches a turn at all
       // once the platform has matched it to the owner or an active roster
       // row, by Microsoft-supplied address or a recorded binding.
+      attributed: true,
+      receipted: 0,
+      hardFailures: 0
+    },
+    {
+      channel: "google_chat",
+      sends: sends.google_chat,
+      lastHumanSignalAt: googleChat,
+      // Attributed with confidence, for the same reason as Teams: an event
+      // only reaches a turn once the platform has matched it to the owner
+      // or an active roster row, by Workspace address or a recorded
+      // binding.
       attributed: true,
       receipted: 0,
       hardFailures: 0

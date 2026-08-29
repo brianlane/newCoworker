@@ -32,6 +32,7 @@ export const LIVENESS_CHANNELS = [
   "slack",
   "telegram",
   "teams",
+  "google_chat",
   "push"
 ] as const;
 
@@ -130,6 +131,11 @@ const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   // Teams row reads `unused` below the ten-send floor, so an unproven
   // number cannot raise a false alarm meanwhile.
   teams: 30,
+  // Google Chat, same reasoning as Teams and Slack: a Workspace space is a
+  // room somebody is already in, not a thread they open to say something.
+  // Uncalibrated for the same reason too, and harmless for the same reason:
+  // below the ten-send floor every row reads `unused`.
+  google_chat: 30,
   dashboard: 21,
   push: 7,
   email: null

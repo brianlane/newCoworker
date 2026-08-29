@@ -39,7 +39,7 @@ is a proxy that an attentive owner might simply never send.
 | Deno→Node bridge | `src/app/api/internal/push-send` |
 | Node dispatch leg | `src/lib/notifications/dispatch.ts` (leg 6) |
 | Deno dispatch leg | `supabase/functions/notifications/index.ts` (leg 6) |
-| Tables | `push_subscriptions` (20260829041731), `notification_link_clicks` (+20260829041733) |
+| Tables | `push_subscriptions` (20260829044304), `notification_link_clicks` (+20260829044306) |
 
 ## Env
 

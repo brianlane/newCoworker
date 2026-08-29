@@ -27,11 +27,12 @@ export type NotificationPreferencesRow = {
   slack_urgent?: boolean;
   telegram_urgent?: boolean;
   teams_urgent?: boolean;
+  google_chat_urgent?: boolean;
   /** Post the daily/weekly digest to the same Slack channel. */
   slack_digest?: boolean;
   /**
    * Deliver urgent owner alerts as a Web Push banner to every subscribed
-   * device. Optional on the type for rows read before 20260829041735.
+   * device. Optional on the type for rows read before 20260829044308.
    *
    * There is deliberately no push_digest sibling: a push is an interrupt, and
    * a daily banner nobody taps would corrode the notificationclick receipt
@@ -181,6 +182,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "slack_urgent"
     | "telegram_urgent"
     | "teams_urgent"
+    | "google_chat_urgent"
     | "slack_digest"
     | "push_urgent"
     | "email_digest"
@@ -228,6 +230,7 @@ const UPDATABLE_PREFERENCE_KEYS: Record<keyof Required<NotificationPreferencesUp
   slack_urgent: true,
   telegram_urgent: true,
   teams_urgent: true,
+  google_chat_urgent: true,
   slack_digest: true,
   push_urgent: true,
   email_digest: true,
@@ -259,6 +262,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   slack_urgent: true,
   telegram_urgent: true,
   teams_urgent: true,
+  google_chat_urgent: true,
   slack_digest: true,
   // NOT compiler-enforced, unlike UPDATABLE_PREFERENCE_KEYS above: the field
   // is optional on the row type (it postdates the table), so Omit<> does not
@@ -392,6 +396,7 @@ export async function updateNotificationPreferences(
       patch.slack_urgent === true ||
       patch.telegram_urgent === true ||
       patch.teams_urgent === true ||
+      patch.google_chat_urgent === true ||
       patch.slack_digest === true ||
       patch.push_urgent === true ||
       patch.email_digest === true ||

@@ -57,6 +57,10 @@ import { pushTargetState } from "@/lib/push/db";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
 import {
+  deliverGoogleChatAlert,
+  googleChatConnectedState
+} from "@/lib/google-chat/deliver";
+import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
 } from "../../../supabase/functions/_shared/contact_owner_target";
@@ -205,14 +209,11 @@ export type ResolvedTargets = {
   pushUrgentEnabled: boolean;
   /**
    * Whether this business has ever subscribed a device. Same never-connected
-   * silence rule, and the same fail-toward-TRUE direction, as
-   * whatsappConnected and slackConnected.
-   *
-   * There is deliberately no `pushDeliverable` twin. `whatsappDeliverable`
-   * exists only because the WhatsApp leg SUPPRESSES the SMS leg, so it needs
-   * a resolve-time verdict that fails closed. Push suppresses nothing, so a
-   * second flag here would just be a staler copy of the check deliverPush
-   * already does at send time.
+   * silence rule, and the same fail-toward-TRUE direction, as the other
+   * connection-gated channels. There is deliberately no `pushDeliverable`
+   * twin: that shape exists only for WhatsApp, which SUPPRESSES the SMS leg
+   * and so needs a resolve-time verdict that fails closed. Push suppresses
+   * nothing.
    */
   pushConnected: boolean;
   /** Telegram channel toggle (delivery still requires a picked alert chat). */
@@ -223,6 +224,11 @@ export type ResolvedTargets = {
   teamsUrgentEnabled: boolean;
   /** And again. */
   teamsConnected: boolean;
+  /** Google Chat toggle. */
+  googleChatUrgentEnabled: boolean;
+  /** And again. Unlike Teams there is no separate deliverable state: a
+   * Chat app that is a member of a space can always post into it. */
+  googleChatConnected: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -276,6 +282,7 @@ export async function resolveNotificationTargets(
   let pushUrgent = true;
   let telegramUrgent = true;
   let teamsUrgent = true;
+  let googleChatUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
   let dashboardAlerts = true;
@@ -315,10 +322,11 @@ export async function resolveNotificationTargets(
     whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
-    // ?? true: rows read before 20260829041735, same posture.
+    // ?? true: rows read before 20260829044308, same posture.
     pushUrgent = prefs.push_urgent ?? true;
     telegramUrgent = prefs.telegram_urgent ?? true;
     teamsUrgent = prefs.teams_urgent ?? true;
+    googleChatUrgent = prefs.google_chat_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
@@ -382,6 +390,7 @@ export async function resolveNotificationTargets(
   const pushState = await pushTargetState(businessId);
   const telegramState = await telegramAlertTargetState(businessId);
   const teamsState = await teamsAlertTargetState(businessId);
+  const googleChatConnected = await googleChatConnectedState(businessId);
 
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
@@ -439,6 +448,8 @@ export async function resolveNotificationTargets(
     telegramConnected: telegramState.connected,
     teamsUrgentEnabled: teamsUrgent,
     teamsConnected: teamsState.connected,
+    googleChatUrgentEnabled: googleChatUrgent,
+    googleChatConnected,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -457,9 +468,8 @@ async function recordRow(
   reason?: string,
   /**
    * Caller-supplied row id. Only the push leg passes one: the service worker
-   * posts this id back as the click receipt, so it has to be known BEFORE the
-   * send rather than minted here. Insert-then-update would need an update
-   * path the dispatcher does not have.
+   * posts this id back as the click receipt, so it must be known BEFORE the
+   * send rather than minted here.
    */
   id: string = randomUUID()
 ): Promise<DispatchChannelResult> {
@@ -640,13 +650,14 @@ export async function dispatchUrgentNotification(
       // what happened, and suppressing it is what made the eaten alert
       // invisible after the fact as well as at the time.
       const gatedChannels = (
-        ["email", "sms", "whatsapp", "slack", "telegram", "teams", "push"] as const
+        ["email", "sms", "whatsapp", "slack", "telegram", "teams", "google_chat", "push"] as const
       ).filter(
         (channel) =>
           (channel !== "whatsapp" || targets.whatsappConnected) &&
           (channel !== "slack" || targets.slackConnected) &&
           (channel !== "telegram" || targets.telegramConnected) &&
           (channel !== "teams" || targets.teamsConnected) &&
+          (channel !== "google_chat" || targets.googleChatConnected) &&
           (channel !== "push" || targets.pushConnected)
       );
       // Every row of a suppressed dispatch is stamped so the backstop count
@@ -692,14 +703,25 @@ export async function dispatchUrgentNotification(
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
     const gatedChannels = (
-      ["dashboard", "email", "sms", "whatsapp", "slack", "telegram", "teams", "push"] as const
+      [
+        "dashboard",
+        "email",
+        "sms",
+        "whatsapp",
+        "slack",
+        "telegram",
+        "teams",
+        "google_chat",
+        "push"
+      ] as const
     ).filter(
       (channel) =>
         (channel !== "whatsapp" || targets.whatsappConnected) &&
         (channel !== "slack" || targets.slackConnected) &&
-        (channel !== "telegram" || targets.telegramConnected) &&
-        (channel !== "teams" || targets.teamsConnected) &&
-        (channel !== "push" || targets.pushConnected)
+          (channel !== "telegram" || targets.telegramConnected) &&
+          (channel !== "teams" || targets.teamsConnected) &&
+          (channel !== "google_chat" || targets.googleChatConnected) &&
+          (channel !== "push" || targets.pushConnected)
     );
     for (const channel of gatedChannels) {
       results.push(
@@ -1336,7 +1358,84 @@ export async function dispatchUrgentNotification(
     }
   }
 
-  // 8) Web Push. Same never-connected silence rule as WhatsApp and Slack: a
+  // 8) Google Chat. Same never-connected silence rule.
+  //
+  // SIMPLER THAN TEAMS despite looking like it, and the difference is worth
+  // naming because the leg above is the obvious thing to copy. Teams cannot
+  // START a conversation, so it needs a captured conversation reference and
+  // has a real "connected with nowhere to deliver" state. A Chat app that is
+  // a member of a space can post into it whenever, and for this channel the
+  // space IS the connection, so connected and deliverable are one thing.
+  //
+  // `not_configured` is OUR missing service account rather than anything the
+  // tenant did, and it is recorded rather than swallowed: an owner who
+  // connected a space and hears nothing deserves a row that says why, even
+  // though the row is really addressed to us.
+  if (!targets.googleChatConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.googleChatUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "google_chat",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "google_chat_urgent_disabled"
+      )
+    );
+  } else {
+    try {
+      const delivered = await deliverGoogleChatAlert({
+        businessId: input.businessId,
+        summary: phiFree?.summary ?? summary,
+        details: phiFree ? null : (input.smsBody ?? null),
+        detailsUrl: dashboardUrl
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "google_chat", "sent", summary, kind, {
+            ...payload,
+            recipient: delivered.space
+          })
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced a disconnect since the existence check: treat as never
+        // connected, no row.
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "google_chat",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail ? `${delivered.reason}:${delivered.detail}` : delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: google chat send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "google_chat",
+          "failed",
+          summary,
+          kind,
+          payload,
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 9) Web Push. Same never-connected silence rule as WhatsApp and Slack: a
   // business that has never subscribed a device records NOTHING here.
   //
   // TWO DELIBERATE DIVERGENCES from the WhatsApp leg above, called out because

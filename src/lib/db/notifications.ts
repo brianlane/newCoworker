@@ -12,6 +12,7 @@ export type NotificationDeliveryChannel =
   | "slack"
   | "telegram"
   | "teams"
+  | "google_chat"
   | "push";
 export type NotificationStatus = "queued" | "sent" | "failed" | "skipped";
 

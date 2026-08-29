@@ -58,6 +58,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   const [slackUrgent, setSlackUrgent] = useState(initial.slack_urgent ?? true);
   const [telegramUrgent, setTelegramUrgent] = useState(initial.telegram_urgent ?? true);
   const [teamsUrgent, setTeamsUrgent] = useState(initial.teams_urgent ?? true);
+  const [googleChatUrgent, setGoogleChatUrgent] = useState(initial.google_chat_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
@@ -110,6 +111,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setSlackUrgent(initial.slack_urgent ?? true);
     setTelegramUrgent(initial.telegram_urgent ?? true);
     setTeamsUrgent(initial.teams_urgent ?? true);
+    setGoogleChatUrgent(initial.google_chat_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
     setPushUrgent(initial.push_urgent ?? true);
     setEmailDigest(initial.email_digest);
@@ -139,6 +141,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setSlackUrgent(prefs.slack_urgent ?? true);
     setTelegramUrgent(prefs.telegram_urgent ?? true);
     setTeamsUrgent(prefs.teams_urgent ?? true);
+    setGoogleChatUrgent(prefs.google_chat_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
     setPushUrgent(prefs.push_urgent ?? true);
     setEmailDigest(prefs.email_digest);
@@ -176,6 +179,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           slack_urgent: slackUrgent,
           telegram_urgent: telegramUrgent,
           teams_urgent: teamsUrgent,
+          google_chat_urgent: googleChatUrgent,
           slack_digest: slackDigest,
           push_urgent: pushUrgent,
           email_digest: emailDigest,
@@ -226,6 +230,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           slack_urgent: false,
           telegram_urgent: false,
           teams_urgent: false,
+          google_chat_urgent: false,
           slack_digest: false,
           push_urgent: false,
           email_digest: false,
@@ -320,6 +325,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Send urgent alerts to your Teams conversation (requires the Microsoft Teams integration under Integrations)."
           checked={teamsUrgent}
           onChange={setTeamsUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Google Chat: urgent alerts"
+          description="Send urgent alerts to your Google Chat space (requires the Google Chat integration under Integrations)."
+          checked={googleChatUrgent}
+          onChange={setGoogleChatUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

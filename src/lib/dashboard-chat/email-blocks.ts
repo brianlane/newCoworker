@@ -259,7 +259,8 @@ export async function fulfillOwnerEmailBlocks(args: {
     | "sms_assistant"
     | "slack_assistant"
     | "telegram_assistant"
-    | "teams_assistant";
+    | "teams_assistant"
+    | "google_chat_assistant";
   /**
    * Which surface's `send_email` Settings toggle authorizes the send.
    * Defaults to `dashboard` (dashboard chat AND the owner-SMS operator both

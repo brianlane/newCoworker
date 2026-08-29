@@ -4,7 +4,7 @@
 -- replaced wholesale, so omitting one silently drops it).
 --
 -- Delivery requires at least one live Web Push subscription for the business
--- (push_subscriptions, 20260829041731); a business that has never subscribed
+-- (push_subscriptions, 20260829044304); a business that has never subscribed
 -- a device records NO push rows at all (the WhatsApp never-connected rule
 -- from PR #1148).
 --
@@ -31,7 +31,8 @@ alter table public.notifications
   add constraint notifications_delivery_channel_check
   check (
     delivery_channel in
-      ('sms', 'email', 'dashboard', 'whatsapp', 'slack', 'telegram', 'teams', 'push')
+      ('sms', 'email', 'dashboard', 'whatsapp', 'slack', 'telegram', 'teams',
+       'google_chat', 'push')
   );
 
 alter table public.notification_preferences

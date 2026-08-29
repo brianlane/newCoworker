@@ -46,6 +46,11 @@ vi.mock("@/lib/teams/deliver", () => ({
   teamsAlertTargetState: vi.fn(async () => ({ connected: false, hasTarget: false }))
 }));
 
+vi.mock("@/lib/google-chat/deliver", () => ({
+  deliverGoogleChatAlert: vi.fn(),
+  googleChatConnectedState: vi.fn(async () => false)
+}));
+
 vi.mock("@/lib/telegram/deliver", () => ({
   deliverTelegramAlert: vi.fn(),
   telegramAlertTargetState: vi.fn(async () => ({ connected: false, hasTarget: false }))
@@ -123,6 +128,10 @@ import { pushTargetState } from "@/lib/push/db";
 import { deliverPush } from "@/lib/push/send";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
+import {
+  deliverGoogleChatAlert,
+  googleChatConnectedState
+} from "@/lib/google-chat/deliver";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -255,6 +264,9 @@ describe("notifications/dispatch", () => {
     // Default: Teams NOT connected either, same never-connected rule.
     vi.mocked(teamsAlertTargetState).mockResolvedValue({ connected: false, hasTarget: false });
     vi.mocked(deliverTeamsAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Google Chat NOT connected either, same never-connected rule.
+    vi.mocked(googleChatConnectedState).mockResolvedValue(false);
+    vi.mocked(deliverGoogleChatAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
     // English unless a test says otherwise: clearAllMocks clears calls, not
@@ -1453,6 +1465,143 @@ describe("notifications/dispatch", () => {
       const row = teamsRows()[0];
       expect(row.status).toBe("failed");
       expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+  });
+
+  describe("google chat channel", () => {
+    const googleChatRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "google_chat");
+
+    const connected = () => vi.mocked(googleChatConnectedState).mockResolvedValue(true);
+
+    it("never-connected writes no rows and never delivers", async () => {
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(googleChatRows()).toHaveLength(0);
+      expect(deliverGoogleChatAlert).not.toHaveBeenCalled();
+    });
+
+    it("sends and records the space it reached", async () => {
+      connected();
+      vi.mocked(deliverGoogleChatAlert).mockResolvedValue({
+        ok: true,
+        space: "spaces/AAQA1234",
+        messageName: "spaces/AAQA1234/messages/m1"
+      });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = googleChatRows()[0];
+      expect(row.status).toBe("sent");
+      expect((row.payload as { recipient?: string }).recipient).toBe("spaces/AAQA1234");
+    });
+
+    it("carries the summary and the dashboard link into the card", async () => {
+      connected();
+      vi.mocked(deliverGoogleChatAlert).mockResolvedValue({
+        ok: true,
+        space: "spaces/x",
+        messageName: "m"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead",
+        smsBody: "Dana called",
+        kind: "urgent_alert"
+      });
+      expect(deliverGoogleChatAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: "New lead", details: "Dana called" })
+      );
+    });
+
+    it.each([
+      // OUR missing service account, not the tenant's connection. Recorded
+      // rather than swallowed: an owner who connected a space and hears
+      // nothing deserves a row that says why, even though the row is
+      // really addressed to us.
+      ["our credential missing", { ok: false, reason: "not_configured" }, "skipped", "not_configured"],
+      [
+        "a skip with detail",
+        { ok: false, reason: "needs_reconnect", detail: "paused" },
+        "skipped",
+        "needs_reconnect:paused"
+      ],
+      ["a send failure", { ok: false, reason: "send_failed" }, "failed", "send_failed"]
+    ])("records %s honestly", async (_label, delivered, status, reason) => {
+      connected();
+      vi.mocked(deliverGoogleChatAlert).mockResolvedValue(delivered as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = googleChatRows()[0];
+      expect(row.status).toBe(status);
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+
+    it("writes NOTHING when delivery raced a disconnect", async () => {
+      connected();
+      vi.mocked(deliverGoogleChatAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(googleChatRows()).toHaveLength(0);
+    });
+
+    it.each([
+      ["a toggle-off", { google_chat_urgent: false }, "google_chat_urgent_disabled"],
+      ["an unsubscribe", { unsubscribed_at: "2026-08-01T00:00:00Z" }, "unsubscribed"]
+    ])("records %s as a skip without delivering", async (_label, prefs, reason) => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        ...prefs
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect((googleChatRows()[0].payload as { reason?: string }).reason).toBe(reason);
+      expect(deliverGoogleChatAlert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["an Error", new Error("boom"), "boom"],
+      ["a non-Error", "boom", "send_failed"]
+    ])("records a thrown send that was %s", async (_label, thrown, reason) => {
+      connected();
+      vi.mocked(deliverGoogleChatAlert).mockRejectedValue(thrown);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = googleChatRows()[0];
+      expect(row.status).toBe("failed");
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+
+    it("is gated by the event category like every other transport", async () => {
+      // A connected channel joins the gated set, so a suppressed category
+      // leaves an honest skipped row here rather than silence.
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead captured",
+        kind: "voice_capture"
+      });
+      expect(deliverGoogleChatAlert).not.toHaveBeenCalled();
+      expect((googleChatRows()[0].payload as { reason?: string }).reason).toBe(
+        "category_leads_disabled"
+      );
+    });
+
+    it("is left OUT of the gated set when it was never connected", async () => {
+      // The never-connected silence rule holds through the category gate
+      // too: an unavailable channel has nothing to report about an alert it
+      // was never going to carry.
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead captured",
+        kind: "voice_capture"
+      });
+      expect(googleChatRows()).toHaveLength(0);
     });
   });
 
