@@ -14,8 +14,10 @@ import {
 } from "../vps/voice-bridge/src/intake";
 import {
   NO_INVENTED_CONTACT_LINE,
+  NO_INVENTED_FIGURE_LINE,
   RECORDED_SYSTEM_LINE
 } from "../vps/voice-bridge/src/call-integrity-lines";
+import { systemInstructionForBusiness } from "../vps/voice-bridge/src/system-instruction";
 
 describe("intakeSystemInstruction", () => {
   it("leads with the configured persona and lists the capture fields", () => {
@@ -1093,5 +1095,63 @@ describe("voice personas never invent a contact detail", () => {
   it("carries no em dash and never says receptionist", () => {
     expect(NO_INVENTED_CONTACT_LINE).not.toMatch(/—/);
     expect(NO_INVENTED_CONTACT_LINE.toLowerCase()).not.toContain("receptionist");
+  });
+});
+
+/**
+ * The money-figure rule (call 60a64ddd, 2026-08-20).
+ *
+ * Calling Luis Castillo about 6826 W Pierson St, the AI said "the offers on
+ * your file are 375k and 395k". The real offers were $320,097, $342,000 and
+ * $325,000 and they arrived four minutes AFTER the call. At the moment it
+ * spoke, the AI held a referral text reading "Est. home value: $425,000.00"
+ * and no offers at all.
+ *
+ * Same honest limit as the block above: these pin the DEPLOYED strings, and
+ * the detector in _shared/call_integrity.ts is what actually catches a
+ * recurrence, because #1612 proved a prompt rule alone does not close this
+ * class.
+ */
+describe("voice personas never invent a money figure", () => {
+  it("bans the attributed figure and says what to do instead", () => {
+    expect(NO_INVENTED_FIGURE_LINE).toContain("NEVER invent a money figure");
+    // The incident's exact shape: an amount presented as coming from the
+    // person's own file.
+    expect(NO_INVENTED_FIGURE_LINE).toContain("the person's own file");
+    // A forbidden action with no alternative is an instruction the model
+    // cannot follow, so the replacement behaviour is spelled out.
+    expect(NO_INVENTED_FIGURE_LINE).toContain("do not have the numbers in front of you");
+    expect(NO_INVENTED_FIGURE_LINE).toContain("never a range you assembled yourself");
+  });
+
+  /**
+   * NO_INVENTED_CONTACT_LINE deliberately left prices alone, reasoning that
+   * they are "legitimate and frequent". That reasoning still holds for
+   * unattributed price talk, and a rule broad enough to catch it would be one
+   * the personas cannot follow: intake discusses what homes are going for,
+   * and receptionists quote the rates they were given.
+   */
+  it("leaves ordinary priced conversation alone", () => {
+    expect(NO_INVENTED_FIGURE_LINE).toContain("only amounts you attribute to a source");
+    expect(NO_INVENTED_FIGURE_LINE).toContain("repeating back a number the person just said");
+  });
+
+  it("rides both prompt builders, not just the one that failed", () => {
+    // The whole point of call-integrity-lines.ts: a rule added to one builder
+    // silently does not exist on the other half of the fleet's calls. The
+    // incident was an OUTBOUND intake call; the receptionist persona takes
+    // price questions just as often.
+    const intake = intakeSystemInstruction(
+      "Amy Laidlaw Real Estate",
+      "Hi, this is Amy Laidlaw's office.",
+      "America/Phoenix",
+      ["name", "phone"],
+      false,
+      undefined,
+      true
+    );
+    expect(intake).toContain(NO_INVENTED_FIGURE_LINE);
+    const receptionist = systemInstructionForBusiness("Amy Laidlaw Real Estate", false, false);
+    expect(receptionist).toContain(NO_INVENTED_FIGURE_LINE);
   });
 });

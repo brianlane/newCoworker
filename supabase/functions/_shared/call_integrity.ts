@@ -28,6 +28,27 @@
  *   never noticed). The AI greeted a looping "Press one to be connected" menu
  *   three times and never pressed.
  *
+ *   `gate_never_cleared` (call 3578b1a7, 2026-07-30, Amy Laidlaw). A
+ *   HomeLight live transfer opened on the partner's accept menu and the
+ *   referral was never accepted: the partner repeated "press one to agree"
+ *   TEN times and the call ended still asking. The AI behaved perfectly, so
+ *   every other rule here stayed silent, and nothing else did either. The
+ *   lead ($800K, 85213) was simply lost, and it took a month and a hand
+ *   audit to notice. See `isAcceptPrompt` for why the signature is the LAST
+ *   caller turn rather than a repeat count.
+ *
+ *   `invented_amount` (call 60a64ddd, 2026-08-20, Amy Laidlaw). Calling a
+ *   Clever seller lead, the AI said "the offers on your file are 375k and
+ *   395k". The only offers ever sent for that lead were $320,097, $342,000
+ *   and $325,000, and they arrived four minutes AFTER the call ended. At the
+ *   moment it spoke, the AI held one referral text reading "Est. home value:
+ *   $425,000.00" and no offers at all, so both figures were invented, and
+ *   both were tens of thousands high. NO_INVENTED_CONTACT_LINE deliberately
+ *   scoped itself to details "a person will ACT on, by dialling or writing to
+ *   them", excluding prices as "legitimate and frequent". This call is the
+ *   counter-example: a seller acts on a number like that by deciding whether
+ *   to list, and unlike a wrong phone number it never fails visibly.
+ *
  *   `invented_contact_number` (calls 68ca8cdb 2026-08-26 and 5b335fc8
  *   2026-08-27, again Amy Laidlaw). Ad-libbing a voicemail sign-off, the
  *   model told leads to "give us a call back at 480-269-7977" and
@@ -49,7 +70,12 @@
 /** One transcript turn, narrowed to what detection needs. */
 export type IntegrityTurn = { role: string | null; content: string | null };
 
-export type CallIntegrityKind = "role_leak" | "talked_to_recording" | "invented_contact_number";
+export type CallIntegrityKind =
+  | "role_leak"
+  | "talked_to_recording"
+  | "invented_contact_number"
+  | "gate_never_cleared"
+  | "invented_amount";
 
 export type CallIntegrityFinding = {
   kind: CallIntegrityKind;
@@ -94,6 +120,127 @@ const MACHINE_PHRASES = [
  * menu is deliberately not reported.
  */
 export const DEFAULT_MIN_ASSISTANT_TURNS = 3;
+
+/**
+ * The partner's "press a key to accept this referral" announcement.
+ *
+ * The signature for a forfeited gate is that this prompt is the LAST thing
+ * the caller side ever said: once the digit lands, the partner stops asking
+ * and connects. Deliberately NOT a repeat count, which does not separate the
+ * cases. Measured over every HomeLight transfer on Amy Laidlaw's account:
+ * the connected calls repeated the prompt 0, 0, 1, 1, 1, 2 and 2 times, and
+ * the three forfeits repeated it 3, 4 and 10 times. A threshold anywhere in
+ * that overlap either misses a lost referral or fires on a won one, while
+ * "was the partner still asking when the call ended" is exactly right on all
+ * ten.
+ *
+ * Precision matters more than reach here, because a VOICEMAIL menu is also a
+ * keypad menu and two of the connected calls END on one. Both of these are
+ * real last-caller-turns from calls that worked, and neither may match:
+ *
+ *   "Replay your message. Press one. To continue recording, press two."
+ *   "To review, re-record or add to your message, press one. To mark your
+ *    message urgent, press two."
+ *
+ * So the accept verb has to follow the keypress in the SAME sentence. The
+ * `[^.!?]` window is what does that: in both mailbox menus the option ends
+ * at a full stop before any other word, whereas the partner's prompt reads
+ * "press one to agree ... and to be connected to the client" unbroken.
+ */
+const ACCEPT_PROMPT =
+  /press\s+(?:\d+|one|two|three|four|five|zero|pound|star)\b[^.!?]{0,90}?\b(?:agree|be\s+connected|connect\s+you|connected\s+to)\b/i;
+
+/** True when this caller turn is a partner accept prompt (see ACCEPT_PROMPT). */
+export function isAcceptPrompt(text: string): boolean {
+  return ACCEPT_PROMPT.test(text);
+}
+
+/**
+ * The smallest amount worth reporting, in whole dollars.
+ *
+ * Set at the scale of the failure this rule exists for (home prices and cash
+ * offers) so that ordinary priced conversation never reaches the digest: a
+ * receptionist quoting an $89 tune-up or a $250 callout is legitimate and
+ * frequent, which is the exact reason NO_INVENTED_CONTACT_LINE left prices
+ * alone in the first place. Only the band where a wrong figure moves a
+ * property decision is detected.
+ */
+export const MIN_REPORTABLE_AMOUNT = 10_000;
+
+/**
+ * How far a spoken amount may sit from a sourced one and still count as the
+ * same figure.
+ *
+ * Rounding aloud is normal and correct: "about 438" for $437,900 is the same
+ * fact, and reporting it would be a false positive. 2% is wide enough for
+ * every rounding seen on real calls and far too narrow to absorb a
+ * fabrication: the incident's 375k against the briefed $425,000 is 11.8% out.
+ */
+export const AMOUNT_MATCH_TOLERANCE = 0.02;
+
+/**
+ * A money amount in speech. Requires a currency marker, a magnitude suffix,
+ * or comma grouping, and never matches a bare digit run: on a real-estate
+ * call the bare runs are zip codes ("85205"), street numbers ("4046") and
+ * years, and matching those would bury the digest instantly.
+ *
+ * Both lookarounds were put there by a false positive on the real corpus,
+ * not by theory. The trailing `(?![\w-])` is why "9 months" is not nine
+ * million: without it the greedy suffix group ate the "m" of "months" (call
+ * 12f073e0, 2026-08-12). It excludes a word character and a hyphen but NOT a
+ * full stop, because "...are 375k and 395k." ends the sentence that carries
+ * the incident's second figure, and an earlier draft that blocked "." found
+ * only the first. The leading `\b` keeps a digit run that is glued to
+ * letters from reading as money.
+ */
+const AMOUNT_PATTERN =
+  /(\$\s*)?\b(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*([kKmM])?(?![\w-])/g;
+
+/**
+ * Every money amount in a piece of text, in whole dollars.
+ *
+ * Amounts below MIN_REPORTABLE_AMOUNT are dropped here rather than at the
+ * comparison, so both the allowlist and the check see the same scale.
+ */
+export function spokenAmounts(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(AMOUNT_PATTERN)) {
+    const [, dollar, digits, suffix] = m;
+    // A bare number is only money when something SAYS it is money.
+    if (!dollar && !suffix && !digits.includes(",")) continue;
+    const base = Number(digits.replace(/,/g, ""));
+    if (!Number.isFinite(base)) continue;
+    const scale = suffix ? (suffix.toLowerCase() === "m" ? 1_000_000 : 1_000) : 1;
+    const value = Math.round(base * scale);
+    if (value < MIN_REPORTABLE_AMOUNT) continue;
+    out.push(value);
+  }
+  return out;
+}
+
+/** True when `value` matches something the call actually sourced. */
+export function amountIsSourced(value: number, allowed: ReadonlySet<number>): boolean {
+  for (const a of allowed) {
+    if (Math.abs(value - a) <= a * AMOUNT_MATCH_TOLERANCE) return true;
+  }
+  return false;
+}
+
+/**
+ * The amounts a call legitimately supplies: everything the OTHER party said
+ * on it. The assistant's own turns are excluded on purpose, since a figure
+ * repeated by the speaker that invented it is not a source.
+ */
+export function callerAmounts(turns: readonly IntegrityTurn[]): Set<number> {
+  const out = new Set<number>();
+  for (const turn of turns) {
+    if (turn.role === "assistant") continue;
+    for (const v of spokenAmounts(typeof turn.content === "string" ? turn.content : "")) {
+      out.add(v);
+    }
+  }
+  return out;
+}
 
 export function hasRoleLeak(text: string): boolean {
   return ROLE_TOKEN_LEAK.test(text);
@@ -203,6 +350,11 @@ function textOf(turn: IntegrityTurn): string {
  * to name the call, and quoting every offending turn would bury the operator
  * in one bad call's noise.
  *
+ * `allowedAmounts` switches the invented-amount rule on, and follows the same
+ * fail-toward-silence contract as `allowedNumbers`: omitted, the rule does
+ * not run. Callers build it with `callerAmounts`, optionally widened with
+ * whatever written material the call was briefed from.
+ *
  * `allowedNumbers` switches the invented-number rule on: it is the
  * business's legitimate set (see `collectAllowedNumbers`) PLUS the numbers
  * of the parties on this call, which the caller adds because reading the
@@ -212,7 +364,11 @@ function textOf(turn: IntegrityTurn): string {
  */
 export function detectCallIntegrity(
   turns: readonly IntegrityTurn[],
-  opts: { minAssistantTurns?: number; allowedNumbers?: ReadonlySet<string> } = {}
+  opts: {
+    minAssistantTurns?: number;
+    allowedNumbers?: ReadonlySet<string>;
+    allowedAmounts?: ReadonlySet<number>;
+  } = {}
 ): CallIntegrityFinding[] {
   const findings: CallIntegrityFinding[] = [];
   const minAssistantTurns = opts.minAssistantTurns ?? DEFAULT_MIN_ASSISTANT_TURNS;
@@ -239,6 +395,27 @@ export function detectCallIntegrity(
     }
   }
 
+  // Same shape as the invented-number rule above and the same reasons: only
+  // the assistant side can fabricate, and one finding per distinct amount so
+  // a figure repeated across a call does not multiply the alert.
+  if (opts.allowedAmounts) {
+    const flagged = new Set<number>();
+    for (const turn of turns) {
+      if (!isAssistant(turn)) continue;
+      const text = textOf(turn);
+      for (const v of spokenAmounts(text)) {
+        if (amountIsSourced(v, opts.allowedAmounts) || flagged.has(v)) continue;
+        flagged.add(v);
+        findings.push({
+          kind: "invented_amount",
+          detail:
+            `said $${v.toLocaleString("en-US")}, which nothing on this call supplied: ` +
+            `"${text.replace(/\s+/g, " ").slice(0, 140)}"`
+        });
+      }
+    }
+  }
+
   // Only OUR side can leak a role token. The caller side is a transcription
   // of whatever was on the line, so a menu that happens to read "user:" is
   // not the AI misbehaving.
@@ -252,6 +429,20 @@ export function detectCallIntegrity(
 
   const callerTurns = turns.filter((t) => !isAssistant(t) && textOf(t) !== "");
   const assistantTurns = turns.filter((t) => isAssistant(t) && textOf(t) !== "");
+  // The partner was still asking us to accept when the call ended, so the
+  // referral was never taken. Checked against the LAST caller turn only: see
+  // ACCEPT_PROMPT for why a repeat count cannot separate a lost referral from
+  // a won one.
+  const lastCaller = callerTurns[callerTurns.length - 1];
+  if (lastCaller && isAcceptPrompt(textOf(lastCaller))) {
+    findings.push({
+      kind: "gate_never_cleared",
+      detail:
+        "the call ended with the partner still asking us to accept: " +
+        `"${textOf(lastCaller).replace(/\s+/g, " ").slice(0, 160)}"`
+    });
+  }
+
   const machineTurns = callerTurns.filter((t) => looksMachineGenerated(textOf(t)));
   // EVERY caller turn has to read as a machine. One human sentence anywhere
   // means a person was reached, which is the ordinary accept path where the
@@ -293,6 +484,13 @@ const ALERT_DETAIL_CHARS = 160;
 function kindPhrase(kind: CallIntegrityKind): string {
   if (kind === "role_leak") return "spoke the caller's side";
   if (kind === "invented_contact_number") return "gave out a number it does not own";
+  if (kind === "invented_amount") return "quoted a figure nothing gave it";
+  // The alert reads "the AI <phrase>". This is the one finding that is NOT
+  // the model misbehaving (on the incident call it stayed correctly silent),
+  // so the phrase names the lost referral rather than an act of disobedience.
+  if (kind === "gate_never_cleared") {
+    return "never got past the partner's accept menu, so the referral was lost";
+  }
   return "talked to a recording";
 }
 
