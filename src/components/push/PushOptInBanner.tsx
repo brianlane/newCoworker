@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { PushSetupCard } from "@/components/push/PushSetupCard";
 import { readPushOptedOut } from "@/components/push/PushRegistrar";
@@ -35,6 +35,15 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
   // Starts hidden and is revealed after the read, so a dismissed banner never
   // flashes on first paint.
   const [dismissed, setDismissed] = useState(true);
+  /**
+   * A decision made in THIS session outranks anything storage says later.
+   *
+   * The dismissal is normally persisted, but the write can fail (private
+   * mode, storage disabled by policy). Without this, the navigation-keyed
+   * re-read below would find empty storage, conclude nobody had answered, and
+   * put the banner back in front of someone who dismissed it a moment ago.
+   */
+  const answeredThisSession = useRef(false);
 
   /**
    * Re-read on every navigation, not just on mount.
@@ -48,6 +57,7 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
    * the moment the banner could reappear.
    */
   useEffect(() => {
+    if (answeredThisSession.current) return;
     // Post-navigation sync from external storage (the documented exception,
     // same as TasksWorkspace): reading localStorage during render would
     // desync the SSR markup from the first client paint.
@@ -91,6 +101,7 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
       businessId={businessId}
       variant="banner"
       onDismiss={() => {
+        answeredThisSession.current = true;
         setDismissed(true);
         try {
           window.localStorage.setItem(DISMISS_KEY, "1");
