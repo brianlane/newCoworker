@@ -598,6 +598,10 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
   const ALL_ON = {
     send_sms: true,
     send_whatsapp: false,
+    // Off here on purpose, like the custom-table block below: this suite
+    // pins the send_sms + calendar declared order; schedule_text has its own
+    // declaration/executor coverage in dashboard-chat-action-tools.test.ts.
+    schedule_text: false,
     calendar_find_slots: true,
     calendar_book_appointment: true,
     calendar_reschedule_appointment: true,

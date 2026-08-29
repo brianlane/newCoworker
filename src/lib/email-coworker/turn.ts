@@ -98,6 +98,10 @@ async function emailToolGates(businessId: string) {
   return {
     send_sms: false,
     send_whatsapp: false,
+    // Deferred SMS is still SMS: the correspondent here is unverified, so
+    // the "must not be able to text anyone" posture covers queueing a text
+    // for later exactly as it covers sending one now.
+    schedule_text: false,
     calendar_find_slots: find,
     calendar_book_appointment: book,
     calendar_reschedule_appointment: reschedule,

@@ -50,6 +50,7 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
+import { scheduleTextTool } from "@/lib/sms/schedule-text";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { smsReachability } from "@/lib/phone/deliverability";
@@ -92,6 +93,7 @@ import { OWNER_SURFACES } from "@/lib/owner-surfaces/registry";
 export const ACTION_TOOL_NAMES = [
   "send_sms",
   "send_whatsapp",
+  "schedule_text",
   "calendar_find_slots",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
@@ -135,6 +137,16 @@ export function isActionToolName(name: string): name is ActionToolName {
 export type ActionToolGates = {
   send_sms: boolean;
   send_whatsapp: boolean;
+  /**
+   * Queue ONE later text per contact through the shared `scheduled_sms`
+   * queue (the same core the texting coworker got in #1728; rows carry
+   * created_by 'sms_coworker' and show on the Text history page where the
+   * owner can cancel them). Deferred send_sms, so it rides surfaces the
+   * same way send_sms does; the customer-facing email coworker and web
+   * chat deliberately never hold it (unverified correspondents must not
+   * queue texts, the same posture that keeps send_sms off those surfaces).
+   */
+  schedule_text: boolean;
   calendar_find_slots: boolean;
   calendar_book_appointment: boolean;
   calendar_reschedule_appointment: boolean;
@@ -282,6 +294,42 @@ const SEND_WHATSAPP_DECLARATION: GeminiFunctionDeclaration = {
       contactName: CONTACT_NAME_PARAM
     },
     required: ["toE164", "body"]
+  }
+};
+
+const SCHEDULE_TEXT_DECLARATION: GeminiFunctionDeclaration = {
+  name: "schedule_text",
+  description:
+    "Queue ONE text message to send later from the business number (a real SMS goes out at that time; it appears on the Text history page where it can be canceled). Use when the owner asks for a text at a future time; for right now use send_sms. Only one AI-queued pending text can exist per recipient: scheduling again MOVES that one (the result names the time it replaced). Say a later text is set ONLY after this returns ok, quoting the result's sendAtLocal. If it returns automatic_reminder_exists, an automation already texts this contact before their booked call; tell the owner and only re-call with confirmed true if they still want it. action cancel drops the pending queued text." +
+    OUTBOUND_TIMEZONE_RULE,
+  parameters: {
+    type: "object",
+    properties: {
+      phone: {
+        type: "string",
+        description: "Recipient phone in E.164, e.g. +15551234567."
+      },
+      action: {
+        type: "string",
+        description: 'schedule (default) or cancel.'
+      },
+      sendAtIso: {
+        type: "string",
+        description:
+          "When to send, ISO 8601 WITH a timezone offset (e.g. 2026-08-31T18:30:00-04:00). Required for schedule."
+      },
+      text: {
+        type: "string",
+        description: "Plain-text message body, at most 1600 characters. Required for schedule."
+      },
+      confirmed: {
+        type: "boolean",
+        description:
+          "Pass true ONLY after the owner re-confirms despite an automatic_reminder_exists result."
+      },
+      contactName: CONTACT_NAME_PARAM
+    },
+    required: ["phone"]
   }
 };
 
@@ -845,6 +893,7 @@ const CT_RESTORE_DECLARATION: GeminiFunctionDeclaration = {
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
+  schedule_text: SCHEDULE_TEXT_DECLARATION,
   calendar_find_slots: FIND_SLOTS_DECLARATION,
   calendar_book_appointment: BOOK_DECLARATION,
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
@@ -891,6 +940,20 @@ const sendSmsArgsSchema = z.object({
 const sendWhatsAppArgsSchema = z.object({
   toE164: z.string().min(5).max(32),
   body: z.string().min(1).max(1600),
+  contactName: z.string().max(120).optional()
+});
+
+// Mirrors the core fields but takes phone loose like send_sms does (the
+// model may echo owner formatting); the executor canonicalizes before the
+// core, whose own schema demands strict E.164. contactName is the
+// owner-surface convention so an outbound-first recipient gets a contact
+// row with a name.
+const scheduleTextActionArgsSchema = z.object({
+  phone: z.string().min(5).max(32),
+  action: z.enum(["schedule", "cancel"]).optional(),
+  sendAtIso: z.string().max(64).optional(),
+  text: z.string().max(1600).optional(),
+  confirmed: z.boolean().optional(),
   contactName: z.string().max(120).optional()
 });
 
@@ -1051,6 +1114,7 @@ export type ActionToolDeps = {
   getMessagingConfig?: typeof getTelnyxMessagingForBusiness;
   sendSms?: typeof sendTelnyxSms;
   sendWhatsApp?: typeof deliverWhatsApp;
+  scheduleText?: typeof scheduleTextTool;
   checkOptOut?: typeof checkSmsOptOut;
   findSlots?: typeof findCalendarSlots;
   book?: typeof bookCalendarAppointment;
@@ -1102,6 +1166,7 @@ export async function executeActionTool(
   const getMessagingConfig = deps.getMessagingConfig ?? getTelnyxMessagingForBusiness;
   const sendSms = deps.sendSms ?? sendTelnyxSms;
   const sendWhatsApp = deps.sendWhatsApp ?? deliverWhatsApp;
+  const scheduleText = deps.scheduleText ?? scheduleTextTool;
   const checkOptOut = deps.checkOptOut ?? checkSmsOptOut;
   const findSlots = deps.findSlots ?? findCalendarSlots;
   const book = deps.book ?? bookCalendarAppointment;
@@ -1313,6 +1378,46 @@ export async function executeActionTool(
               ? "Delivered through the approved template (the recipient was outside the 24-hour window). Tell the owner the exact message body that was sent."
               : "Tell the owner the exact message body that was sent."
         };
+      }
+      case "schedule_text": {
+        const parsed = scheduleTextActionArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        const normalized = normalizeContactNumber(parsed.data.phone);
+        if (!normalized.ok) {
+          return { ok: false, message: "invalid_destination" };
+        }
+        const toPhone = normalized.value;
+        // Same up-front reachability refusal as send_sms, and it matters
+        // MORE here: an unreachable immediate send fails in front of the
+        // model, an unreachable QUEUED send fails days later with nobody
+        // watching, which is exactly the broken-promise class this tool
+        // exists to end. SCHEDULING only (Bugbot): a cancel sends nothing,
+        // and rows for such numbers can exist (the bare SMS path carries no
+        // reachability check), so a cancel must always be able to reach
+        // them.
+        if (parsed.data.action !== "cancel" && smsReachability(toPhone) !== "nanp") {
+          return {
+            ok: false,
+            message:
+              `sms_unreachable_destination, our texting numbers can only deliver SMS to US and Canada (+1) numbers, so a scheduled text to ${toPhone} would sit in the queue and never arrive, and no account or number setting changes that. Recommend WhatsApp for this number instead (send_whatsapp sends now; there is no scheduled WhatsApp send). Voice calls, email, and dashboard alerts still work internationally.`
+          };
+        }
+        // Outbound-first recipients get a contact row with the name the
+        // owner used (same KYP/Ayanna rule as send_sms; the core's pin
+        // write self-creates a bare row, but a bare row files nobody by
+        // name). Cancels touch no new number.
+        if (parsed.data.action !== "cancel") {
+          await upsertRecipientContact(toPhone, "sms", parsed.data.contactName);
+        }
+        return await scheduleText(businessId, {
+          phone: toPhone,
+          action: parsed.data.action ?? "schedule",
+          sendAtIso: parsed.data.sendAtIso,
+          text: parsed.data.text,
+          confirmed: parsed.data.confirmed
+        });
       }
       case "calendar_find_slots": {
         const parsed = findSlotsArgsSchema.safeParse(call.args);

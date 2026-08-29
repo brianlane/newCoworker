@@ -27,7 +27,11 @@ import {
   type GeminiChatStepParams,
   type GeminiChatStepResult
 } from "@/lib/gemini-chat";
+import { z } from "zod";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { scheduleTextTool } from "@/lib/sms/schedule-text";
+import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { customerLanguageLine, detectCustomerLanguage } from "@/lib/i18n/customer-language";
 import {
   getBusinessCustomerLanguages,
@@ -136,13 +140,72 @@ export function messengerBookingPhone(
 }
 
 /**
+ * The phone `schedule_text` may queue to from this conversation, or null
+ * when the surface must not hold the tool at all. Stricter than the
+ * booking lookup above on BOTH axes: only WhatsApp qualifies (the wa_id is
+ * Meta-verified possession of the number; a captured contact_phone on
+ * Messenger/Instagram is self-asserted, the same stranger-typed-a-number
+ * shape that keeps the tool off web chat), and only a NANP (+1) number
+ * does (our long codes cannot originate texts to non-US/CA numbers, so a
+ * queued text to +52... would sit until dispatch and then silently skip,
+ * which is the broken-promise class the tool exists to end).
+ */
+function messengerScheduleTextPhone(
+  conversation: Pick<MessengerConversationRow, "platform" | "psid" | "contact_phone">
+): string | null {
+  if (conversation.platform !== "whatsapp") return null;
+  const wa = messengerBookingPhone(conversation);
+  return wa && /^\+1\d{10}$/.test(wa) ? wa : null;
+}
+
+/**
+ * WhatsApp-only extra declaration next to the shared webchat set. No phone
+ * parameter ON PURPOSE: the recipient is structurally this conversation's
+ * verified wa_id (the executor injects it), so a prompt-injected "text my
+ * friend at ..." has no path on this surface at all.
+ */
+const MESSENGER_SCHEDULE_TEXT_DECLARATION: GeminiFunctionDeclaration = {
+  name: "schedule_text",
+  description:
+    "Queue ONE text message (SMS) to the person in this conversation for a LATER time, delivered to the WhatsApp number they are messaging from, never anyone else. Use when they ask for a reminder or a text at a future time. Say a later text is set ONLY after this returns ok, quoting the result's sendAtLocal. Only one queued text can be pending for them, scheduling again MOVES it (the result names the time it replaced). If it returns automatic_reminder_exists, an automation already texts them before their booked call: say so, and only re-call with confirmed true if they still want it. action cancel drops the pending queued text.",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "schedule (default) or cancel." },
+      sendAtIso: {
+        type: "string",
+        description:
+          "When to send, ISO 8601 WITH a timezone offset (e.g. 2026-08-31T18:30:00-04:00). Required for schedule."
+      },
+      text: {
+        type: "string",
+        description: "Plain-text message body, at most 1600 characters. Required for schedule."
+      },
+      confirmed: {
+        type: "boolean",
+        description: "true ONLY after they re-confirm despite an automatic_reminder_exists result."
+      }
+    },
+    required: []
+  }
+};
+
+const messengerScheduleTextArgsSchema = z.object({
+  action: z.enum(["schedule", "cancel"]).optional(),
+  sendAtIso: z.string().max(64).optional(),
+  text: z.string().max(1600).optional(),
+  confirmed: z.boolean().optional()
+});
+
+/**
  * The per-turn system block: channel context + the conversation ref the
  * lead-capture tool passes back (webchat's sessionRef contract, so the
  * shared tool declarations work verbatim).
  */
 export function buildMessengerPreamble(
   conversation: Pick<MessengerConversationRow, "id" | "platform" | "display_name">,
-  now: Date
+  now: Date,
+  opts: { canScheduleText?: boolean } = {}
 ): string {
   const lines = [
     `[Messenger] You are replying on ${PLATFORM_LABELS[conversation.platform]} as the business's assistant.`,
@@ -150,7 +213,9 @@ export function buildMessengerPreamble(
       ? `The person you are talking to is ${conversation.display_name}.`
       : "The person's name is not known yet, ask naturally when it helps.",
     "Keep replies short, warm, and human, this is a casual chat surface, not email.",
-    "You cannot send SMS or email from this conversation. If follow-up outside this chat is needed, capture their phone number with the lead tool.",
+    opts.canScheduleText
+      ? "You cannot send email or an immediate SMS from this conversation. You CAN queue ONE text message (SMS) to this person for a LATER time with schedule_text, delivered to the number they are messaging from. A later text exists ONLY if schedule_text returned ok in this conversation, never promise one otherwise. If other follow-up outside this chat is needed, capture their phone number with the lead tool."
+      : "You cannot send SMS or email from this conversation. If follow-up outside this chat is needed, capture their phone number with the lead tool.",
     // Grounded capture (messenger twin of the SMS worker's grounded-actions
     // line): the live e2e harness caught the model telling a visitor "I've
     // captured your number, someone will text you shortly" with NO
@@ -231,6 +296,10 @@ export type MessengerGeminiTurnDeps = {
   ) => Promise<ContactBookingContext>;
   /** Booking lookup budget override (tests). */
   bookingContextTimeoutMs?: number;
+  /** Injectable Settings gate for schedule_text (tests). */
+  checkScheduleTextEnabled?: (businessId: string) => Promise<boolean>;
+  /** Injectable schedule-text core (tests). */
+  scheduleText?: typeof scheduleTextTool;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -285,6 +354,12 @@ export async function runMessengerGeminiTurn(
   const fetchBookingContext = deps.fetchBookingContext ?? contactBookingContextForPhone;
   const bookingTimeoutMs =
     deps.bookingContextTimeoutMs ?? MESSENGER_BOOKING_CONTEXT_TIMEOUT_MS;
+  const checkScheduleTextEnabled =
+    deps.checkScheduleTextEnabled ??
+    // The texting coworker's own toggle governs later texts to customers on
+    // every customer chat surface; there is no separate messenger agent card.
+    ((businessId: string) => isAgentToolEnabled(businessId, "sms", "schedule_text"));
+  const scheduleText = deps.scheduleText ?? scheduleTextTool;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -302,6 +377,35 @@ export async function runMessengerGeminiTurn(
   const overCap = snapshot.spendMicros >= snapshot.effectiveCapMicros;
 
   const customerLanguages = await getCustomerLanguages(args.businessId);
+
+  // WhatsApp-only later texts: a verified NANP wa_id AND the sms-channel
+  // Settings toggle. When either fails the declaration is simply absent,
+  // and the executor below fails closed for a hallucinated call anyway.
+  const scheduleTextPhone = messengerScheduleTextPhone(args.conversation);
+  // Statement form, not `x !== null && (await ...)`: an await inside a
+  // logical expression leaves a phantom uncovered v8 branch (same class as
+  // the awaited-default trap in the memory notes).
+  let scheduleTextAllowed = false;
+  if (scheduleTextPhone !== null) {
+    scheduleTextAllowed = await checkScheduleTextEnabled(args.businessId);
+  }
+  const runScheduleText = async (toolArgs: unknown): Promise<WebchatToolResult> => {
+    if (!scheduleTextAllowed || !scheduleTextPhone) {
+      return { ok: false, detail: "tool_disabled" };
+    }
+    const parsed = messengerScheduleTextArgsSchema.safeParse(toolArgs);
+    if (!parsed.success) {
+      return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+    }
+    // Recipient injected, never model-chosen (see the declaration comment).
+    return await scheduleText(args.businessId, {
+      phone: scheduleTextPhone,
+      action: parsed.data.action ?? "schedule",
+      sendAtIso: parsed.data.sendAtIso,
+      text: parsed.data.text,
+      confirmed: parsed.data.confirmed
+    });
+  };
 
   // Owner override on the contact profile is authoritative across every
   // channel (same rule as the SMS worker). Only reachable once a phone was
@@ -426,7 +530,9 @@ export async function runMessengerGeminiTurn(
       defaultLang: customerLanguages.defaultLanguage,
       supported: customerLanguages.supported
     }),
-    buildMessengerPreamble(args.conversation, now()),
+    buildMessengerPreamble(args.conversation, now(), {
+      canScheduleText: scheduleTextAllowed
+    }),
     bookingStatus,
     // Platform-wide writing rule (README "NO EM DASHES"): AI output on every
     // surface carries the punctuation instruction.
@@ -461,7 +567,11 @@ export async function runMessengerGeminiTurn(
         contents,
         // Withhold tools on the last round so the model MUST produce text
         // instead of requesting a call nobody will execute.
-        tools: isFinalRound ? [] : WEBCHAT_TOOL_DECLARATIONS,
+        tools: isFinalRound
+          ? []
+          : scheduleTextAllowed
+            ? [...WEBCHAT_TOOL_DECLARATIONS, MESSENGER_SCHEDULE_TEXT_DECLARATION]
+            : WEBCHAT_TOOL_DECLARATIONS,
         temperature: 0.3,
         // Gemini 3 defaults to dynamic thinking that bills as output AND
         // counts against the (default 1500) output cap, unconstrained it
@@ -484,7 +594,10 @@ export async function runMessengerGeminiTurn(
         for (const call of step.functionCalls) {
           let result: WebchatToolResult;
           try {
-            result = await executeTool(args.businessId, call.name, call.args);
+            result =
+              call.name === "schedule_text"
+                ? await runScheduleText(call.args)
+                : await executeTool(args.businessId, call.name, call.args);
           } catch (err) {
             // One broken tool must not kill the turn, the model gets a
             // structured failure to explain.

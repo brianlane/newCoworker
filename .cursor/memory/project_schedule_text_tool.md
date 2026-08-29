@@ -8,9 +8,23 @@ metadata:
 Shipped Aug 29 2026 (PR #1728), after R V (KYP Ads) was told "I'll make sure
 you get a reminder text at 6:30 PM Eastern" and nothing was queued anywhere.
 
-`schedule_text` (sms surface only) writes the SAME `scheduled_sms` queue the
-owner's Text history composer uses, dispatched by the scheduled-sms-sweep Edge
-cron every minute. Core: `src/lib/sms/schedule-text.ts`.
+`schedule_text` writes the SAME `scheduled_sms` queue the owner's Text
+history composer uses, dispatched by the scheduled-sms-sweep Edge cron every
+minute. Core: `src/lib/sms/schedule-text.ts`.
+
+WIDENED Aug 29 2026 (owner decision: every AI worker schedules texts, except
+strangers): shipped on the texting coworker (#1728), then the dashboard chat
+and every owner chat channel (action-tools declaration; owner-SMS/WhatsApp,
+Slack, Telegram, Teams, Google Chat via OWNER_SURFACE_TOOL_KEYS), the Rowboat
+OwnerCoworker fallback (bare seed name, like send_sms), voice
+(`/api/voice/tools/schedule-text`, phone defaults to the caller ANI), and
+WhatsApp CUSTOMER chats (messenger engine, recipient STRUCTURALLY pinned to a
+NANP wa_id, no phone parameter in that declaration). Still excluded, each on
+the same stranger principle: web chat (anonymous), Messenger/Instagram
+customers (contact_phone is self-asserted), and the customer email coworker
+(prompt-injection posture, `emailToolGates` hard-false). ALL surfaces write
+created_by 'sms_coworker', so one AI-queued pending row per contact holds
+across surfaces, and the panel label reads "queued by your coworker".
 
 ## The five rules, four of them written by Bugbot
 

@@ -33,6 +33,7 @@ export const OWNER_SURFACE_SETTING_KEYS = [
   "business_knowledge_lookup",
   "send_sms",
   "send_whatsapp",
+  "schedule_text",
   "calendar_find_slots",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
@@ -197,6 +198,7 @@ export async function loadOwnerSurfaceContext(
     toolStates: {
       send_sms: states.send_sms,
       send_whatsapp: states.send_whatsapp,
+      schedule_text: states.schedule_text,
       calendar_find_slots: states.calendar_find_slots,
       calendar_book_appointment: states.calendar_book_appointment,
       calendar_reschedule_appointment: states.calendar_reschedule_appointment,

@@ -144,6 +144,39 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
       }
     },
     {
+      name: "schedule_text",
+      description:
+        "Queue ONE text to go out at a LATER time (a reminder the caller asked for). A later text exists ONLY if this returned ok; never promise one otherwise, and confirm by speaking the result's sendAtLocal. Only one queued text can be pending per person, scheduling again MOVES it. If it returns automatic_reminder_exists, an automation already texts them before their booked call: tell them that, and only re-call with confirmed true if they still want this one too. To schedule for the CALLER, OMIT phone entirely, it defaults to the number they are calling from, which you cannot see; NEVER fill it with a guessed or placeholder number. For a text right now use send_follow_up_sms instead.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          phone: {
+            type: Type.STRING,
+            description:
+              "Destination phone in E.164, ONLY when the caller explicitly dictated a different number to you. Omit to use the number they are calling from."
+          },
+          sendAtIso: {
+            type: Type.STRING,
+            description:
+              "When to send, ISO 8601 WITH a timezone offset (e.g. 2026-08-31T18:30:00-04:00). Required to schedule."
+          },
+          text: {
+            type: Type.STRING,
+            description: "Message body, plain text, <= 300 chars. Only facts from this call. Required to schedule."
+          },
+          action: {
+            type: Type.STRING,
+            description: "schedule (default) or cancel, cancel drops the pending queued text."
+          },
+          confirmed: {
+            type: Type.BOOLEAN,
+            description: "true ONLY after the caller re-confirms despite automatic_reminder_exists."
+          }
+        },
+        required: []
+      }
+    },
+    {
       name: "send_follow_up_email",
       description:
         "Email the caller a follow-up. Requires an active workspace connection (Gmail or Outlook). If none is connected the tool returns `email_not_connected`; fall back to SMS or a spoken promise.",

@@ -33,6 +33,8 @@ export type VoiceToolResponse = {
   ok: boolean;
   detail?: string;
   data?: unknown;
+  /** Model-facing guidance riding alongside the detail code. */
+  message?: string;
 };
 
 export function voiceToolResponse(body: VoiceToolResponse, status = 200): NextResponse {

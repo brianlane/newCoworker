@@ -170,6 +170,24 @@ describe("buildMessengerPreamble", () => {
   });
 });
 
+describe("buildMessengerPreamble, schedule_text line", () => {
+  it("swaps the no-SMS line for the later-text teaching line when the tool is live", () => {
+    const off = buildMessengerPreamble(CONVERSATION, new Date("2026-07-15T20:05:00Z"));
+    expect(off).toContain("You cannot send SMS or email from this conversation.");
+    expect(off).not.toContain("schedule_text");
+
+    const on = buildMessengerPreamble(
+      { ...CONVERSATION, platform: "whatsapp" },
+      new Date("2026-07-15T20:05:00Z"),
+      { canScheduleText: true }
+    );
+    expect(on).toContain("schedule_text");
+    expect(on).toContain("cannot send email or an immediate SMS");
+    expect(on).toContain("ONLY if schedule_text returned ok");
+    expect(on).not.toContain("You cannot send SMS or email from this conversation.");
+  });
+});
+
 describe("buildMessengerContents", () => {
   it("maps roles (owner and assistant both read as model) ending on the user turn", () => {
     const contents = buildMessengerContents([
@@ -620,5 +638,223 @@ describe("runMessengerGeminiTurn", () => {
     await vi.advanceTimersByTimeAsync(MESSENGER_ENGINE_TURN_TIMEOUT_MS + 1);
     await assertion;
     expect(deps.meter).not.toHaveBeenCalled();
+  });
+});
+
+describe("runMessengerGeminiTurn, schedule_text (WhatsApp customers only)", () => {
+  const WA = { ...CONVERSATION, platform: "whatsapp" as const, psid: "15145188192" };
+  const WA_ARGS = { ...ARGS, conversation: WA };
+
+  it("declares the extra tool and teaches it when the wa_id is NANP and the toggle is on", async () => {
+    const checkScheduleTextEnabled = vi.fn(async () => true);
+    const deps = makeDeps({ checkScheduleTextEnabled });
+    await runMessengerGeminiTurn(WA_ARGS, deps);
+    expect(checkScheduleTextEnabled).toHaveBeenCalledWith(BIZ);
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.tools.map((t) => t.name)).toEqual([
+      ...WEBCHAT_TOOL_DECLARATIONS.map((t) => t.name),
+      "schedule_text"
+    ]);
+    // No phone parameter ON PURPOSE: the recipient is structurally this
+    // conversation's verified wa_id, injected by the executor.
+    const decl = step.tools[step.tools.length - 1] as {
+      description: string;
+      parameters: { properties: Record<string, unknown>; required: string[] };
+    };
+    expect(decl.parameters.properties).not.toHaveProperty("phone");
+    expect(Object.keys(decl.parameters.properties).sort()).toEqual([
+      "action",
+      "confirmed",
+      "sendAtIso",
+      "text"
+    ]);
+    expect(decl.description).toContain("never anyone else");
+    expect(step.systemInstruction).toContain("schedule_text");
+  });
+
+  it("keeps the shared declaration set untouched when the sms-channel toggle is off", async () => {
+    const deps = makeDeps({ checkScheduleTextEnabled: vi.fn(async () => false) });
+    await runMessengerGeminiTurn(WA_ARGS, deps);
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
+    expect(step.systemInstruction).toContain("You cannot send SMS or email");
+  });
+
+  it("never even reads the toggle for a surface with no verified NANP phone", async () => {
+    const checkScheduleTextEnabled = vi.fn(async () => true);
+    // Messenger conversation (self-asserted contact_phone only).
+    const deps = makeDeps({ checkScheduleTextEnabled });
+    await runMessengerGeminiTurn(ARGS, deps);
+    expect(checkScheduleTextEnabled).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.chatStep).mock.calls[0][0].tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
+
+    // WhatsApp but international wa_id: same, the declaration is withheld
+    // (our long codes cannot originate texts to non-NANP numbers).
+    const intl = makeDeps({ checkScheduleTextEnabled: vi.fn(async () => true) });
+    await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...WA, psid: "5215512345678" } },
+      intl
+    );
+    expect(vi.mocked(intl.chatStep).mock.calls[0][0].tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
+
+    // WhatsApp with a malformed psid (not a wa_id number shape): withheld.
+    const malformed = makeDeps({ checkScheduleTextEnabled: vi.fn(async () => true) });
+    await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...WA, psid: "psid-1" } },
+      malformed
+    );
+    expect(vi.mocked(malformed.chatStep).mock.calls[0][0].tools).toBe(
+      WEBCHAT_TOOL_DECLARATIONS
+    );
+
+    // Instagram with a CAPTURED contact_phone: still withheld. A number a
+    // stranger typed into a lead form is the exact shape the web-chat
+    // exclusion is protecting against.
+    const capturedGate = vi.fn(async () => true);
+    const captured = makeDeps({ checkScheduleTextEnabled: capturedGate });
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: {
+          ...CONVERSATION,
+          platform: "instagram" as const,
+          contact_phone: "+15145188192"
+        }
+      },
+      captured
+    );
+    expect(capturedGate).not.toHaveBeenCalled();
+    expect(vi.mocked(captured.chatStep).mock.calls[0][0].tools).toBe(
+      WEBCHAT_TOOL_DECLARATIONS
+    );
+  });
+
+  it("executes with the recipient pinned to the wa_id, ignoring any model-sent phone", async () => {
+    const scheduleText = vi.fn(async () => ({
+      ok: true,
+      data: { sendAtLocal: "Aug 31, 6:30 PM EDT" },
+      message: "Queued."
+    }));
+    const deps = makeDeps({
+      checkScheduleTextEnabled: vi.fn(async () => true),
+      scheduleText: scheduleText as never,
+      chatStep: vi
+        .fn()
+        .mockResolvedValueOnce(
+          toolStep("schedule_text", {
+            // A hallucinated third-party number MUST have no effect.
+            phone: "+15550009999",
+            sendAtIso: "2026-08-31T18:30:00-04:00",
+            text: "Reminder: call at 6:30"
+          })
+        )
+        .mockResolvedValueOnce(textStep("Your reminder is set for 6:30 PM."))
+    });
+    const res = await runMessengerGeminiTurn(WA_ARGS, deps);
+    expect(res.reply).toBe("Your reminder is set for 6:30 PM.");
+    expect(scheduleText).toHaveBeenCalledWith(BIZ, {
+      phone: "+15145188192",
+      action: "schedule",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: call at 6:30",
+      confirmed: undefined
+    });
+    // Never routed through the webchat executor.
+    expect(deps.executeTool).not.toHaveBeenCalled();
+    const second = vi.mocked(deps.chatStep).mock.calls[1][0];
+    expect(second.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: "schedule_text",
+            response: {
+              result: {
+                ok: true,
+                data: { sendAtLocal: "Aug 31, 6:30 PM EDT" },
+                message: "Queued."
+              }
+            }
+          }
+        }
+      ]
+    });
+  });
+
+  it("passes an explicit cancel through with the action intact", async () => {
+    const scheduleText = vi.fn(async () => ({ ok: true, message: "Canceled." }));
+    const deps = makeDeps({
+      checkScheduleTextEnabled: vi.fn(async () => true),
+      scheduleText: scheduleText as never,
+      chatStep: vi
+        .fn()
+        .mockResolvedValueOnce(toolStep("schedule_text", { action: "cancel" }))
+        .mockResolvedValueOnce(textStep("Okay, that reminder is off."))
+    });
+    await runMessengerGeminiTurn(WA_ARGS, deps);
+    expect(scheduleText).toHaveBeenCalledWith(BIZ, {
+      phone: "+15145188192",
+      action: "cancel",
+      sendAtIso: undefined,
+      text: undefined,
+      confirmed: undefined
+    });
+  });
+
+  it("rejects invalid args without touching the core", async () => {
+    const scheduleText = vi.fn();
+    const deps = makeDeps({
+      checkScheduleTextEnabled: vi.fn(async () => true),
+      scheduleText: scheduleText as never,
+      chatStep: vi
+        .fn()
+        .mockResolvedValueOnce(toolStep("schedule_text", { action: "postpone" }))
+        .mockResolvedValueOnce(textStep("Sorry, something went wrong."))
+    });
+    await runMessengerGeminiTurn(WA_ARGS, deps);
+    expect(scheduleText).not.toHaveBeenCalled();
+    const second = vi.mocked(deps.chatStep).mock.calls[1][0];
+    expect(second.contents[2]).toMatchObject({
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: "schedule_text",
+            response: {
+              result: { ok: false, detail: expect.stringContaining("invalid_args") }
+            }
+          }
+        }
+      ]
+    });
+  });
+
+  it("fails closed on a hallucinated schedule_text call when the tool is not live", async () => {
+    const scheduleText = vi.fn();
+    const deps = makeDeps({
+      checkScheduleTextEnabled: vi.fn(async () => false),
+      scheduleText: scheduleText as never,
+      chatStep: vi
+        .fn()
+        .mockResolvedValueOnce(
+          toolStep("schedule_text", { sendAtIso: "2026-08-31T18:30:00-04:00", text: "hi" })
+        )
+        .mockResolvedValueOnce(textStep("I cannot set that up here."))
+    });
+    await runMessengerGeminiTurn(WA_ARGS, deps);
+    expect(scheduleText).not.toHaveBeenCalled();
+    expect(deps.executeTool).not.toHaveBeenCalled();
+    const second = vi.mocked(deps.chatStep).mock.calls[1][0];
+    expect(second.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: "schedule_text",
+            response: { result: { ok: false, detail: "tool_disabled" } }
+          }
+        }
+      ]
+    });
   });
 });

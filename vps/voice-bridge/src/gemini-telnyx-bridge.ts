@@ -662,6 +662,8 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/calendar/waitlist";
     case "send_follow_up_sms":
       return "/api/voice/tools/sms";
+    case "schedule_text":
+      return "/api/voice/tools/schedule-text";
     case "send_follow_up_email":
       return "/api/voice/tools/email";
     case "capture_caller_details":

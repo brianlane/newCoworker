@@ -1151,6 +1151,83 @@ describe("POST /api/rowboat/tool-call schedule_text (texting coworker)", () => {
   });
 });
 
+describe("POST /api/rowboat/tool-call dashboard_schedule_text (OwnerCoworker fallback)", () => {
+  it("gated on the dashboard toggle and dispatched to the same core", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(scheduleTextTool).mockResolvedValue({
+      ok: true,
+      data: { sendAtLocal: "Monday, August 31, 2026 at 6:30 PM EDT" }
+    });
+    const content = makeContent("dashboard_schedule_text", {
+      phone: "+14168982100",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: your call is in 30 minutes."
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(
+      BIZ,
+      "dashboard",
+      "schedule_text"
+    );
+    expect(vi.mocked(scheduleTextTool)).toHaveBeenCalledWith(BIZ, {
+      phone: "+14168982100",
+      action: "schedule",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: your call is in 30 minutes."
+    });
+  });
+
+  it("refuses a non-NANP recipient up front (a queued text must not die silently at dispatch)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    const content = makeContent("dashboard_schedule_text", {
+      phone: "+525512345678",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "hola"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.detail).toBe("sms_unreachable_destination");
+    expect(String(body.message)).toContain("US and Canada");
+    expect(vi.mocked(scheduleTextTool)).not.toHaveBeenCalled();
+  });
+
+  it("cancel reaches a non-NANP number (a cancel sends nothing, so reachability must not block it)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(scheduleTextTool).mockResolvedValue({ ok: true });
+    const content = makeContent("dashboard_schedule_text", {
+      phone: "+525512345678",
+      action: "cancel"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(vi.mocked(scheduleTextTool)).toHaveBeenCalledWith(BIZ, {
+      phone: "+525512345678",
+      action: "cancel"
+    });
+  });
+
+  it("the bare texting-coworker name keeps NO reachability check of its own", async () => {
+    // The customer surface is NANP by construction (the recipient is the
+    // conversation); pinning that here so a future refactor does not
+    // silently start refusing conversations the texting coworker is in.
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(scheduleTextTool).mockResolvedValue({ ok: true });
+    const content = makeContent("schedule_text", {
+      phone: "+525512345678",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "hola"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(vi.mocked(scheduleTextTool)).toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/rowboat/tool-call start_aiflow_for_contact (texting coworker)", () => {
   it("gated on its own sms toggle and dispatched to the core with the parsed args", async () => {
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);

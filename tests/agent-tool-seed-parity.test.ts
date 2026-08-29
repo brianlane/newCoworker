@@ -40,6 +40,11 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   send_email: null,
   send_sms: ["send_sms"],
   send_whatsapp: ["send_whatsapp"],
+  // Deferred send_sms gets its own owner-framed twin (the bare customer
+  // declaration is hard-framed to "only ever text THEM", wrong for an owner
+  // naming a contact). Owner decision, Aug 29 2026: every worker schedules
+  // texts.
+  schedule_text: ["dashboard_schedule_text"],
   // Worker-intercepted memory capture rides its own Rowboat tool name.
   memory_capture: ["owner_append_business_memory"],
   run_aiflow: ["dashboard_list_aiflows", "dashboard_run_aiflow"],

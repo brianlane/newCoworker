@@ -824,6 +824,7 @@ WORKFLOW_JSON=$(jq -nc \
         "owner_append_business_memory",
         "send_sms",
         "send_whatsapp",
+        "dashboard_schedule_text",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
@@ -875,6 +876,7 @@ WORKFLOW_JSON=$(jq -nc \
         "owner_append_business_memory",
         "send_sms",
         "send_whatsapp",
+        "dashboard_schedule_text",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
@@ -1250,6 +1252,37 @@ WORKFLOW_JSON=$(jq -nc \
           confirmed: {
             type: "boolean",
             description: "Pass true ONLY after the texter has said yes to an EXTRA text on top of an automatic reminder this tool told you about."
+          }
+        },
+        required: ["phone"]
+      }
+    },
+    {
+      name: "dashboard_schedule_text",
+      description: "Queue ONE text message to a contact, sent from the business number at a future time the owner asked for. Use ONLY when the owner explicitly asks for a text at a later time; a text right now is send_sms. Only one queued text can be pending per recipient: scheduling again MOVES it and the result names the time it replaced, and action cancel drops it. Say a later text is set ONLY after this returns ok, quoting sendAtLocal from the result; when it refuses, follow the message it gives you and do not promise a text. If the message body mentions a clock time, always name the timezone.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          phone: {
+            type: "string",
+            description: "Recipient phone in E.164, for example +15551234567."
+          },
+          action: {
+            type: "string",
+            description: "schedule to queue or move the text (the default), or cancel to drop the one already queued."
+          },
+          sendAtIso: {
+            type: "string",
+            description: "When to send it, ISO 8601 with a timezone offset, for example 2026-08-31T18:30:00-04:00. Required when scheduling."
+          },
+          text: {
+            type: "string",
+            description: "The exact message to send at that time. Required when scheduling."
+          },
+          confirmed: {
+            type: "boolean",
+            description: "Pass true ONLY after the owner has said yes to an EXTRA text on top of an automatic reminder this tool told you about."
           }
         },
         required: ["phone"]

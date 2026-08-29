@@ -21,6 +21,7 @@
 export type OwnerSurfaceToolStates = {
   send_sms: boolean;
   send_whatsapp: boolean;
+  schedule_text: boolean;
   calendar_find_slots: boolean;
   calendar_book_appointment: boolean;
   calendar_reschedule_appointment: boolean;
@@ -53,6 +54,7 @@ export type OwnerSurfaceGateArgs = {
 export const OWNER_SURFACE_TOOL_KEYS = [
   "send_sms",
   "send_whatsapp",
+  "schedule_text",
   "calendar_find_slots",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
@@ -93,6 +95,9 @@ export function ownerSurfaceToolGates(
     // Connection-aware, like dashboard chat: never declare a tool that can
     // only fail.
     send_whatsapp: t.send_whatsapp && args.whatsappConnected,
+    // Deferred send_sms: same trust class, so the same plain toggle (the
+    // tier gate lives inside the core, not here).
+    schedule_text: t.schedule_text,
     calendar_find_slots: t.calendar_find_slots,
     calendar_book_appointment: t.calendar_book_appointment,
     calendar_reschedule_appointment: t.calendar_reschedule_appointment,

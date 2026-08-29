@@ -69,6 +69,7 @@ const ACTION_REQUEST =
 const ALL_GATES: ActionToolGates = {
   send_sms: true,
   send_whatsapp: false,
+  schedule_text: true,
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,
