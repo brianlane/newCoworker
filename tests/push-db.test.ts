@@ -11,6 +11,7 @@ import {
   recordPushClick,
   revokePushSubscription,
   revokePushSubscriptionsForUser,
+  revokePushSubscriptionsForAccount,
   stampPushSent,
   upsertPushSubscription
 } from "@/lib/push/db";
@@ -124,7 +125,16 @@ describe("push/db: listDeliverablePushSubscriptions", () => {
 
     expect(calls).toContainEqual(["eq", "business_id", BIZ]);
     expect(calls).toContainEqual(["is", "revoked_at", null]);
-    expect(calls.some((c) => c[0] === "gt" && c[1] === "last_seen_at")).toBe(true);
+    /**
+     * NO staleness floor. last_seen_at only moves when someone opens the
+     * dashboard, so filtering on it expired the very owner push exists for:
+     * the one who reads lock-screen banners and never logs in. It also
+     * disagreed with pushTargetState, which applies no floor, so the
+     * dispatcher saw "connected", the send found nothing, and the leg wrote
+     * NO row at all: the owner disappeared from the channel with no skipped
+     * history and no liveness signal.
+     */
+    expect(calls.some((c) => c[0] === "gt" && c[1] === "last_seen_at")).toBe(false);
   });
 
   /**
@@ -203,6 +213,39 @@ describe("push/db: revokePushSubscriptionsForUser", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(revokePushSubscriptionsForUser(BIZ, "u")).rejects.toThrow(
       "revokePushSubscriptionsForUser: nope"
+    );
+  });
+});
+
+describe("push/db: revokePushSubscriptionsForAccount", () => {
+  /**
+   * user_id carries no FK to auth.users on purpose, so a deleted login
+   * cascades nothing here. Without this the person's handset keeps receiving
+   * a business's alerts until the push service happens to 410 it, which for a
+   * live device may be never.
+   */
+  it("retires every device that person registered, in every scope", async () => {
+    const { db, calls, payloads } = makeDb({ data: [{ id: "a" }, { id: "b" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    expect(await revokePushSubscriptionsForAccount("user-9")).toBe(2);
+    expect(calls).toContainEqual(["eq", "user_id", "user-9"]);
+    // No business_id predicate: an account deletion is not scoped to a tenant.
+    expect(calls.some((c) => c[0] === "eq" && c[1] === "business_id")).toBe(false);
+    expect((payloads[0] as Record<string, unknown>).revoked_reason).toBe("account");
+  });
+
+  it("reports zero when they had none", async () => {
+    const { db } = makeDb({ data: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await revokePushSubscriptionsForAccount("user-9")).toBe(0);
+  });
+
+  it("throws with context on error", async () => {
+    const { db } = makeDb({ error: { message: "boom" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(revokePushSubscriptionsForAccount("u")).rejects.toThrow(
+      "revokePushSubscriptionsForAccount: boom"
     );
   });
 });

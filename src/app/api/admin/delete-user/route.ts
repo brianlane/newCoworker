@@ -33,6 +33,7 @@ import {
 } from "@/lib/nango/cleanup";
 import { listBusinessIdsWithStripeLinkedSubscription } from "@/lib/db/subscriptions";
 import { deleteBusinessMembersByEmail } from "@/lib/db/business-members";
+import { revokePushSubscriptionsForAccount } from "@/lib/push/db";
 import { logAdminAction } from "@/lib/admin/audit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -144,6 +145,23 @@ export async function DELETE(request: Request) {
       await revokeNangoConnectionRows(businessId, nangoSnapshot);
     }
     const membershipsRemoved = await deleteBusinessMembersByEmail(email);
+
+    // Retire their push devices before the auth user goes. push_subscriptions
+    // carries no FK to auth.users on purpose, so nothing cascades: without
+    // this the deleted person's handset keeps receiving a business's alerts
+    // until the push service happens to 410 it, which for a live device may
+    // never happen. Best effort, like the membership sweep above: a failure
+    // here must not strand a half-deleted account.
+    if (authUserId) {
+      try {
+        await revokePushSubscriptionsForAccount(authUserId);
+      } catch (err) {
+        logger.warn("admin.delete-user: push subscription revoke failed", {
+          email,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
 
     // "Not found" is the desired end state; any other auth failure is
     // surfaced for a retry (which will find zero rows and only do this step).

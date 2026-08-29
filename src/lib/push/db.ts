@@ -37,17 +37,6 @@ const SUBSCRIPTION_COLUMNS =
   "id, business_id, user_id, endpoint, p256dh, auth, device_label, last_seen_at, revoked_at";
 
 /**
- * A device that has not re-presented its subscription in this long is not
- * delivered to, even if nothing ever revoked it.
- *
- * Defence in depth, not the primary mechanism. Expiry is discovered
- * authoritatively at send time (404/410) and access loss is handled at the
- * write (`revokePushSubscriptionsForUser`). This is the backstop for any
- * future path that forgets both.
- */
-const STALE_SUBSCRIPTION_DAYS = 60;
-
-/**
  * PostgREST has no `is not distinct from`, and `.eq("business_id", null)`
  * serializes to `business_id=eq.null`, which matches zero rows. The platform
  * scope must therefore be expressed as `is.null`.
@@ -103,19 +92,31 @@ export async function upsertPushSubscription(
   if (error) throw new Error(`upsertPushSubscription: ${error.message}`);
 }
 
-/** Live devices for one scope, freshest first. */
+/**
+ * Live devices for one scope, freshest first.
+ *
+ * NOT filtered on how recently the device re-presented itself, deliberately.
+ * An earlier version dropped anything whose `last_seen_at` was over 60 days
+ * old, as defence in depth. That was exactly backwards: `last_seen_at` is
+ * only bumped when someone opens the dashboard, so the floor expired the very
+ * owner push exists to serve, the one who reads lock-screen banners and never
+ * logs in. Worse, it disagreed with `pushTargetState`, which applies no such
+ * floor: the dispatcher would see "connected", the send would find nothing,
+ * and the leg would write NO row, so the owner vanished from the channel with
+ * no skipped history and no liveness signal to notice it by.
+ *
+ * The two mechanisms that actually retire a device are authoritative and
+ * complete: a 404/410 at send time (the push service saying it is gone) and
+ * `revokePushSubscriptionsForUser` at the moment access is lost.
+ */
 export async function listDeliverablePushSubscriptions(
   scope: PushScope,
   client?: SupabaseClient
 ): Promise<PushSubscriptionRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const staleBefore = new Date(
-    Date.now() - STALE_SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000
-  ).toISOString();
   const base = db.from("push_subscriptions").select(SUBSCRIPTION_COLUMNS);
   const { data, error } = await scopedQuery(base, scope)
     .is("revoked_at", null)
-    .gt("last_seen_at", staleBefore)
     .order("last_seen_at", { ascending: false });
   if (error) throw new Error(`listDeliverablePushSubscriptions: ${error.message}`);
   return (data ?? []) as PushSubscriptionRow[];
@@ -343,7 +344,32 @@ export async function recordPushClick(
   if (error) throw new Error(`recordPushClick: ${error.message}`);
 }
 
-/** Stamp a successful send so the staleness floor and support can see it. */
+/**
+ * Retire every device a person registered, across every scope.
+ *
+ * Called when their account is deleted. `push_subscriptions.user_id`
+ * deliberately carries no FK to auth.users (deleting a login must not erase
+ * the record of what we sent where), so nothing cascades and this is the only
+ * thing that stops the handset. Without it a deleted user's browser keeps
+ * receiving a business's alerts until the push service happens to 410 the
+ * subscription, which for a live device may be never.
+ */
+export async function revokePushSubscriptionsForAccount(
+  userId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("push_subscriptions")
+    .update({ revoked_at: new Date().toISOString(), revoked_reason: "account" })
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .select("id");
+  if (error) throw new Error(`revokePushSubscriptionsForAccount: ${error.message}`);
+  return ((data as unknown[] | null) ?? []).length;
+}
+
+/** Stamp a successful send so support can see it. */
 export async function stampPushSent(ids: string[], client?: SupabaseClient): Promise<void> {
   if (ids.length === 0) return;
   const db = client ?? (await createSupabaseServiceClient());
