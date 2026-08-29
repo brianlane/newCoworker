@@ -58,9 +58,12 @@ async function runOneTelegramJob(
   }
 
   const connection = await getActiveCoworkerConnection(businessId, "telegram");
-  if (!connection) {
-    // Disconnected or paused mid-queue: nothing to post with, and nothing
-    // a retry could fix.
+  // The empty-credential check belongs HERE rather than in the shared
+  // reader: Teams stores no per-tenant secret, so a blanket rule there
+  // would make that channel look permanently disconnected. On Telegram an
+  // empty credential means the stored bot token could not be decrypted,
+  // which needs a reconnect and cannot be retried into.
+  if (!connection || connection.credential.length === 0) {
     await failCoworkerJob({ jobId, errorCode: "no_connection", terminal: true });
     return false;
   }

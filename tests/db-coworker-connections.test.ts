@@ -27,6 +27,7 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: 
 
 import {
   CoworkerWorkspaceAlreadyLinkedError,
+  getCoworkerConnectionByWorkspaceForChannel,
   deleteCoworkerConnection,
   getActiveCoworkerConnection,
   getCoworkerConnection,
@@ -152,17 +153,29 @@ describe("the public read", () => {
 });
 
 describe("the active read", () => {
-  it.each([
-    ["paused", { ...STORED, is_active: false }],
-    ["credential unreadable", { ...STORED, credentials_encrypted: "enc:BROKEN" }]
-  ])("returns null when %s", async (_label, row) => {
-    const { client } = db([{ data: row, error: null }]);
+  it("returns null when the owner paused it", async () => {
+    const { client } = db([{ data: { ...STORED, is_active: false }, error: null }]);
     expect(await getActiveCoworkerConnection(BIZ, "telegram", client)).toBeNull();
   });
 
   it("returns the row when it is live", async () => {
     const { client } = db([{ data: STORED, error: null }]);
     expect(await getActiveCoworkerConnection(BIZ, "telegram", client)).not.toBeNull();
+  });
+
+  it("does NOT require a credential, because not every channel has one", async () => {
+    // Teams authenticates with our own Azure app credentials rather than a
+    // per-tenant secret, so its row carries an empty string by design. A
+    // blanket "empty credential means dead" rule here would make that
+    // channel look permanently disconnected. The channels that DO hold a
+    // secret check it themselves, where empty means something they can act
+    // on (needs reconnect).
+    const { client } = db([
+      { data: { ...STORED, channel: "teams", credentials_encrypted: "" }, error: null }
+    ]);
+    const row = await getActiveCoworkerConnection(BIZ, "teams", client);
+    expect(row).not.toBeNull();
+    expect(row?.credential).toBe("");
   });
 });
 
@@ -292,7 +305,11 @@ describe("the default service client", () => {
     ["getPublicCoworkerConnection", () => getPublicCoworkerConnection(BIZ, "telegram")],
     ["setCoworkerAlertTarget", () => setCoworkerAlertTarget(BIZ, "telegram", { id: "-1", name: null })],
     ["setCoworkerConnectionActive", () => setCoworkerConnectionActive(BIZ, "telegram", true)],
-    ["deleteCoworkerConnection", () => deleteCoworkerConnection(BIZ, "telegram")]
+    ["deleteCoworkerConnection", () => deleteCoworkerConnection(BIZ, "telegram")],
+    [
+      "getCoworkerConnectionByWorkspaceForChannel",
+      () => getCoworkerConnectionByWorkspaceForChannel("teams", "tenant-1")
+    ]
   ];
 
   it.each(calls)("%s falls back to it", async (_name, run) => {

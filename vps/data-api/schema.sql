@@ -227,7 +227,7 @@ create table if not exists email_log (
   constraint email_log_delivery_status_check CHECK ((delivery_status = ANY (ARRAY['sent'::text, 'delayed'::text, 'delivered'::text, 'complained'::text, 'bounced'::text, 'failed'::text]))),
   constraint email_log_direction_check CHECK ((direction = ANY (ARRAY['outbound'::text, 'inbound'::text]))),
   constraint email_log_importance_check CHECK (((importance IS NULL) OR ((importance >= 1) AND (importance <= 10)))),
-  constraint email_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'owner_mailbox'::text, 'email_trigger'::text, 'dashboard_chat'::text, 'sms_assistant'::text, 'voice_assistant'::text, 'slack_assistant'::text, 'telegram_assistant'::text, 'tenant_mailbox_inbound'::text, 'tenant_mailbox_outbound'::text, 'owner_manual'::text, 'email_coworker'::text, 'booking_reminder'::text, 'notification'::text])))
+  constraint email_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'owner_mailbox'::text, 'email_trigger'::text, 'dashboard_chat'::text, 'sms_assistant'::text, 'voice_assistant'::text, 'slack_assistant'::text, 'telegram_assistant'::text, 'teams_assistant'::text, 'tenant_mailbox_inbound'::text, 'tenant_mailbox_outbound'::text, 'owner_manual'::text, 'email_coworker'::text, 'booking_reminder'::text, 'notification'::text])))
 );
 
 alter table email_log add column if not exists id uuid not null default gen_random_uuid();
@@ -270,7 +270,7 @@ end $$;
 alter table email_log add constraint email_log_delivery_status_check CHECK ((delivery_status = ANY (ARRAY['sent'::text, 'delayed'::text, 'delivered'::text, 'complained'::text, 'bounced'::text, 'failed'::text])));
 alter table email_log add constraint email_log_direction_check CHECK ((direction = ANY (ARRAY['outbound'::text, 'inbound'::text])));
 alter table email_log add constraint email_log_importance_check CHECK (((importance IS NULL) OR ((importance >= 1) AND (importance <= 10))));
-alter table email_log add constraint email_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'owner_mailbox'::text, 'email_trigger'::text, 'dashboard_chat'::text, 'sms_assistant'::text, 'voice_assistant'::text, 'slack_assistant'::text, 'telegram_assistant'::text, 'tenant_mailbox_inbound'::text, 'tenant_mailbox_outbound'::text, 'owner_manual'::text, 'email_coworker'::text, 'booking_reminder'::text, 'notification'::text])));
+alter table email_log add constraint email_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'owner_mailbox'::text, 'email_trigger'::text, 'dashboard_chat'::text, 'sms_assistant'::text, 'voice_assistant'::text, 'slack_assistant'::text, 'telegram_assistant'::text, 'teams_assistant'::text, 'tenant_mailbox_inbound'::text, 'tenant_mailbox_outbound'::text, 'owner_manual'::text, 'email_coworker'::text, 'booking_reminder'::text, 'notification'::text])));
 
 create index if not exists email_log_business_created_idx ON public.email_log USING btree (business_id, created_at DESC);
 create index if not exists email_log_business_importance_idx ON public.email_log USING btree (business_id, importance DESC) WHERE (importance IS NOT NULL);
@@ -598,7 +598,7 @@ create table if not exists notifications (
   deleted_by uuid,
   read_by_actor text,
   constraint notifications_pkey PRIMARY KEY (id),
-  constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text])))
+  constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text])))
 );
 
 alter table notifications add column if not exists id uuid;
@@ -620,7 +620,7 @@ do $$ declare c record; begin
     execute format('alter table notifications drop constraint %I', c.conname);
   end loop;
 end $$;
-alter table notifications add constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text])));
+alter table notifications add constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text])));
 
 create index if not exists notifications_business_unread_idx ON public.notifications USING btree (business_id, created_at DESC) WHERE ((status = 'sent'::text) AND (read_at IS NULL));
 create index if not exists notifications_deleted_idx ON public.notifications USING btree (business_id, deleted_at DESC) WHERE (deleted_at IS NOT NULL);

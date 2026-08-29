@@ -69,7 +69,8 @@ type DeliveryChannel =
   | "dashboard"
   | "whatsapp"
   | "slack"
-  | "telegram";
+  | "telegram"
+  | "teams";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
@@ -90,6 +91,7 @@ type ResolvedTargets = {
   whatsappReplacesSms: boolean;
   slackUrgent: boolean;
   telegramUrgent: boolean;
+  teamsUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -174,6 +176,7 @@ async function resolveTargets(
   let whatsappReplacesSms = false;
   let slackUrgent = true;
   let telegramUrgent = true;
+  let teamsUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -182,7 +185,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, telegram_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, telegram_urgent, teams_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -203,6 +206,7 @@ async function resolveTargets(
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
     telegramUrgent = Boolean(prefs.telegram_urgent ?? true);
+    teamsUrgent = Boolean(prefs.teams_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -242,6 +246,7 @@ async function resolveTargets(
     whatsappReplacesSms,
     slackUrgent,
     telegramUrgent,
+    teamsUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
@@ -1354,6 +1359,119 @@ serve(async (req: Request) => {
       kind,
       basePayload,
       "telegram_bridge_unconfigured"
+    );
+  }
+
+  // Microsoft Teams, through /api/internal/teams-send for the same reason
+  // as Slack and Telegram: the Azure app secret and the Bot Connector client
+  // live in src/lib, so no credential lands in an edge function. Mirrors the
+  // seventh arm of src/lib/notifications/dispatch.ts.
+  let teamsConnected = true;
+  {
+    const { data: tmConn, error: tmConnErr } = await supa
+      .from("coworker_connections")
+      .select("business_id")
+      .eq("business_id", record.business_id)
+      .eq("channel", "teams")
+      .maybeSingle();
+    if (!tmConnErr) teamsConnected = tmConn !== null;
+  }
+  if (!teamsConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.teamsUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "teams",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "teams_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "teams",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "recent_team_notify"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const tmRes = await fetch(`${appUrl}/api/internal/teams-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          summary: phiFree?.summary ?? summary,
+          // Always null on this path, and NOT the Node side's
+          // `input.smsBody`: this pipeline builds a notification from a
+          // system_logs row, which carries a summary and a payload but no
+          // separate body.
+          details: null,
+          detailsUrl: dashboardUrl
+        })
+      });
+      const tmJson = tmRes.ok
+        ? ((await tmRes.json().catch(() => null)) as {
+            data?: { ok?: boolean; conversationId?: string; reason?: string; detail?: string };
+          } | null)
+        : null;
+      if (tmJson?.data?.ok) {
+        await recordRow(supa, record.business_id, "teams", "sent", summary, kind, {
+          ...basePayload,
+          recipient: tmJson.data.conversationId ?? "teams"
+        });
+      } else if (tmRes.ok) {
+        const tmReason = tmJson?.data?.reason ?? "send_failed";
+        if (tmReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "teams",
+            tmReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            basePayload,
+            tmJson?.data?.detail ? `${tmReason}:${tmJson.data.detail}` : tmReason
+          );
+        }
+      } else {
+        errors.push(`Teams failed: ${tmRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "teams",
+          "failed",
+          summary,
+          kind,
+          basePayload,
+          `teams_bridge_${tmRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Teams error: ${msg}`);
+      await recordRow(supa, record.business_id, "teams", "failed", summary, kind, basePayload, msg);
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "teams",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "teams_bridge_unconfigured"
     );
   }
 

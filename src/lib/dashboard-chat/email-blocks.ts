@@ -254,7 +254,12 @@ export async function fulfillEmailBlocks(args: {
 export async function fulfillOwnerEmailBlocks(args: {
   businessId: string;
   content: string;
-  source: "dashboard_chat" | "sms_assistant" | "slack_assistant" | "telegram_assistant";
+  source:
+    | "dashboard_chat"
+    | "sms_assistant"
+    | "slack_assistant"
+    | "telegram_assistant"
+    | "teams_assistant";
   /**
    * Which surface's `send_email` Settings toggle authorizes the send.
    * Defaults to `dashboard` (dashboard chat AND the owner-SMS operator both

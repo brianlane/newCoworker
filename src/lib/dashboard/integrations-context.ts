@@ -67,9 +67,11 @@ export type IntegrationsContext = {
   googleMeetEnabled: boolean;
   slackConnection: Awaited<ReturnType<typeof getPublicSlackConnection>>;
   telegramConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
+  teamsConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
   /** False on starter: the Slack integration is a Standard-tier perk. */
   slackEnabled: boolean;
   telegramEnabled: boolean;
+  teamsEnabled: boolean;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
@@ -143,8 +145,10 @@ export async function loadIntegrationsContext(
     telegramConnection: businessId
       ? await getPublicCoworkerConnection(businessId, "telegram")
       : null,
+    teamsConnection: businessId ? await getPublicCoworkerConnection(businessId, "teams") : null,
     slackEnabled: slackAllowedForTier(businessRow?.tier),
     telegramEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
+    teamsEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
     // Never load key metadata for non-owners: the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
@@ -203,6 +207,19 @@ export function computeIntegrationStatuses(
       ? connected
       : { state: "attention", label: "Paused" };
 
+  // Teams has a third state the others do not: connected, but with no
+  // conversation captured yet. Teams cannot start one, so until somebody
+  // messages the bot there is nowhere to deliver, and saying "Connected"
+  // there would be a lie the owner only discovers when an alert goes
+  // missing.
+  const teamsStatus: IntegrationStatus = !ctx.teamsConnection
+    ? disconnected
+    : !ctx.teamsConnection.is_active
+      ? { state: "attention", label: "Paused" }
+      : ctx.teamsConnection.alert_target_id
+        ? connected
+        : { state: "attention", label: "Message your bot once" };
+
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
 
@@ -253,6 +270,7 @@ export function computeIntegrationStatuses(
     zoom: zoomStatus,
     slack: slackStatus,
     telegram: telegramStatus,
+    teams: teamsStatus,
     custom:
       customCount > 0
         ? { state: "connected", label: `${customCount} connected` }

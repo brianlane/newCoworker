@@ -57,6 +57,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   );
   const [slackUrgent, setSlackUrgent] = useState(initial.slack_urgent ?? true);
   const [telegramUrgent, setTelegramUrgent] = useState(initial.telegram_urgent ?? true);
+  const [teamsUrgent, setTeamsUrgent] = useState(initial.teams_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
@@ -107,6 +108,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setWhatsappReplacesSms(initial.whatsapp_replaces_sms ?? false);
     setSlackUrgent(initial.slack_urgent ?? true);
     setTelegramUrgent(initial.telegram_urgent ?? true);
+    setTeamsUrgent(initial.teams_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
@@ -134,6 +136,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setWhatsappReplacesSms(prefs.whatsapp_replaces_sms ?? false);
     setSlackUrgent(prefs.slack_urgent ?? true);
     setTelegramUrgent(prefs.telegram_urgent ?? true);
+    setTeamsUrgent(prefs.teams_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
@@ -169,6 +172,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           whatsapp_replaces_sms: whatsappReplacesSms,
           slack_urgent: slackUrgent,
           telegram_urgent: telegramUrgent,
+          teams_urgent: teamsUrgent,
           slack_digest: slackDigest,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
@@ -217,6 +221,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           whatsapp_urgent: false,
           slack_urgent: false,
           telegram_urgent: false,
+          teams_urgent: false,
           slack_digest: false,
           email_digest: false,
           email_digest_weekly: false,
@@ -303,6 +308,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Send urgent alerts to your business's Telegram bot (requires the Telegram integration under Integrations)."
           checked={telegramUrgent}
           onChange={setTelegramUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Microsoft Teams: urgent alerts"
+          description="Send urgent alerts to your Teams conversation (requires the Microsoft Teams integration under Integrations)."
+          checked={teamsUrgent}
+          onChange={setTeamsUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
