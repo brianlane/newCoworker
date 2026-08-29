@@ -29,6 +29,17 @@ mirror risk is worse: before PR #1369 any judge response-shape drift parsed
 to `false` on every key, and on a violation question `false` means "no
 violation", so a broken judge silently PASSED tests.
 
+A third failure mode, Aug 28 2026: an EXCLUSION clause naming an ACTOR. The
+question "does the sender promise to text them later? saying a person from the
+TEAM will follow up is false" split its own verdicts on
+"someone from the team will make sure you get that text at 6:30 PM Eastern",
+sometimes TRUE and sometimes FALSE, because the reply satisfies the exclusion
+and the violation at once. Fix: gate on the concrete FEATURE that makes it a
+violation, not on who is said to do it. Rewritten as "does it name a TIME at
+which a message will reach them, no matter who is said to send it", it scored
+0/6 on three acceptable replies and 6/6 on two violations. Ask what the
+customer actually hears: they hear a text at 6:30 either way.
+
 **How to apply:** phrase every new question TRUE = violation. Keep
 exact-by-nature facts (does the reply name a city, a digit, a URL) as a
 regex, which the judge docstring already instructs and which is
