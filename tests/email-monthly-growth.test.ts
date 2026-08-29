@@ -137,10 +137,53 @@ describe("buildMonthlyGrowthEmail", () => {
   });
 
   it("still greets a person whose name the business is named after", async () => {
-    // The opposite direction has to keep working: "Amy Laidlaw Real Estate"
-    // CONTAINS "Amy Laidlaw", and she should still be greeted by name.
+    // "Amy Laidlaw Real Estate" contains "Amy Laidlaw"; she is still a person.
     const report = await threeMonths();
     expect(buildMonthlyGrowthEmail({ ...base, report })!.text).toMatch(/^Hi Amy,/);
+  });
+
+  it("greets a realtor whose business IS their name", async () => {
+    // A blunt "owner name contains business name" rule silenced all of these,
+    // which is the same defect this change set out to fix wearing different
+    // clothes. Equality and substring-of-the-person both read as a person.
+    const report = await threeMonths();
+    for (const [businessName, ownerName] of [
+      ["Amy Laidlaw", "Amy Laidlaw"],
+      ["Laidlaw", "Amy Laidlaw"],
+      ["Amy", "Amy Laidlaw"]
+    ] as const) {
+      expect(
+        buildMonthlyGrowthEmail({ ...base, businessName, ownerName, report })!.text
+      ).toMatch(/^Hi Amy,/);
+    }
+  });
+
+  it("treats the business name plus a collective word as the organisation", async () => {
+    const report = await threeMonths();
+    for (const ownerName of [
+      "New Coworker Team",
+      "New Coworker Group",
+      "New Coworker HQ",
+      "New Coworker LLC"
+    ]) {
+      expect(
+        buildMonthlyGrowthEmail({ ...base, businessName: "New Coworker", ownerName, report })!.text
+      ).toMatch(/^Hi,/);
+    }
+  });
+
+  it("does not mistake a real surname after the business name for a collective", async () => {
+    // "Kim" is not a collective word, so "Amy Kim" at a business called "Amy"
+    // is a person, not an organisation.
+    const report = await threeMonths();
+    expect(
+      buildMonthlyGrowthEmail({
+        ...base,
+        businessName: "Amy",
+        ownerName: "Amy Kim",
+        report
+      })!.text
+    ).toMatch(/^Hi Amy,/);
   });
 
   it("skips a mailbox word rather than greeting it", async () => {

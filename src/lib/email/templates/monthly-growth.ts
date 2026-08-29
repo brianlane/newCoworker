@@ -76,7 +76,7 @@ function nextMonthOf(month: string): string {
 }
 
 /**
- * First words that mean the "owner name" is a mailbox or a company, not a
+ * First words that mean the "owner name" is a mailbox or a collective, not a
  * person. Greeting a team inbox by its first word produces "Hi Support," and
  * "Hi The,".
  */
@@ -96,20 +96,46 @@ const NON_PERSON_FIRST_WORDS = new Set([
 ]);
 
 /**
+ * Words that, appended to the business name, make the whole thing the
+ * organisation rather than a person: "New Coworker" + "Team".
+ */
+const ORG_SUFFIX_WORDS = new Set([
+  "team",
+  "group",
+  "hq",
+  "staff",
+  "crew",
+  "co",
+  "company",
+  "llc",
+  "inc",
+  "ltd",
+  "agency",
+  "partners",
+  "associates"
+]);
+
+/**
  * " Amy" for a greeting, or "" when the name we hold is not a person's.
  *
  * First word only: owner_name carries a full name, and "Hi Amy Laidlaw," in a
  * monthly note reads like a form letter, which is exactly what this is trying
  * not to be.
  *
- * TWO WAYS THAT GOES WRONG, both seen on the first live send. HQ's owner_name
- * is "New Coworker Team", so the first word produced "Hi New,". So:
+ * The hard case is telling an organisation from a person, and BOTH directions
+ * of getting it wrong are live in this fleet:
  *
- * - if the owner name CONTAINS the business name it is the organisation, not
- *   a person. Deliberately only that direction: a business named after its
- *   owner ("Amy Laidlaw Real Estate" for "Amy Laidlaw") is the common case
- *   and must still be greeted by name;
- * - if the first word is a mailbox or collective word, skip it.
+ * - HQ's owner_name is "New Coworker Team" against a business called "New
+ *   Coworker", and the first word produced "Hi New," on the first real send;
+ * - a realtor's business is very often their own name, so "Amy Laidlaw" for
+ *   "Amy Laidlaw", or an owner "Amy Laidlaw" at a business called "Laidlaw".
+ *   A blunt "owner name contains business name" rule silences all of those,
+ *   which is the same defect wearing different clothes.
+ *
+ * So the org test is narrow: the owner name must be the business name plus a
+ * collective word. Equality is deliberately treated as a PERSON, because in
+ * this product a business named exactly after someone is the common case and
+ * a nameless "Hi," is the cheaper mistake than "Hi New,".
  */
 function greetingSuffix(
   ownerName: string | null | undefined,
@@ -117,8 +143,15 @@ function greetingSuffix(
 ): string {
   const name = (ownerName ?? "").trim();
   if (!name) return "";
+
+  const folded = name.toLowerCase();
   const business = businessName.trim().toLowerCase();
-  if (business && name.toLowerCase().includes(business)) return "";
+  if (business && folded.startsWith(business)) {
+    const rest = folded.slice(business.length).trim();
+    // "" means the two are the same string, which reads as a person here.
+    if (rest && rest.split(/\s+/).every((w) => ORG_SUFFIX_WORDS.has(w))) return "";
+  }
+
   // `split(sep, 1).join("")` rather than `[0]`: indexing needs a fallback for
   // an empty result that split can never produce, and an unreachable fallback
   // is a branch nothing can test.
