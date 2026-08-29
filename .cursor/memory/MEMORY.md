@@ -140,3 +140,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Google Chat needs a Workspace account](project_google_chat_needs_workspace_account.md) - personal account hard-disables Join spaces; two token shapes; credential + env vars ARE done
 - [SMS segment cliff: invisible characters](project_sms_segment_cliff_invisible_chars.md) - U+202F from Intl's time format doubles every offer that names a deadline; emoji policy is deliberate
 - [Zero snapshot coverage is not zero activity](project_snapshot_zero_coverage_is_not_zero_activity.md) - the sweep writes a row per business per day; no rows means UNMEASURED, drop the month
+- [Texting coworker can schedule a later text](project_schedule_text_tool.md) - ONE pending row per contact; created_by keeps it off the owner's rows; pinned note is how a reschedule finds it, and the owner's cancel must retract it

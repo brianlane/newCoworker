@@ -47,6 +47,21 @@ Two things that made this cheap and are worth reusing:
   was not one I would have guessed from the wrong output alone, and the final
   instructions did not need the check-line at all.
 
+Aug 28 2026 added the missing ingredient for a CHAT-persona incident: the
+**tenant persona**. Replaying R V's reminder ask against the production prompt
+lines alone did not reproduce the failure at all, so the new e2e passed with
+the fix deleted and proved nothing. Adding a warm, eager tenant persona
+("Samantha, James's assistant, upbeat, keeps leads keen"), which every real
+tenant ships, reproduced it 8 of 10 draws at temperature 1 and 3 of 3 runs at
+temperature 0. The bare shared lines are the SAFEST possible prompt; the
+incident lives in the interaction between them and the persona pushing the
+model to please. Reproduce with a persona, or the control is not the control.
+
+Also worth knowing: production does NOT pin a temperature on the SMS turn
+(Rowboat uses the provider default), so score a wording at BOTH temperature 0
+and 1. Today the two disagreed: the first wording scored 1 of 10 at 0 and 3 of
+10 at 1, and picking either alone would have misjudged it.
+
 Also say so plainly in the PR and to Brian when a guard is jointly rather than
 individually load-bearing: it is a real limit on what the test catches.
 
