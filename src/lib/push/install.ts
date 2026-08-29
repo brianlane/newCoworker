@@ -80,22 +80,28 @@ function iosCanEverPush(userAgent: string): boolean {
 }
 
 /**
- * Is this a state worth interrupting someone on the dashboard for?
+ * Is this worth interrupting someone on the dashboard for?
  *
- * Only the two that a person can actually ACT on: they can turn push on here
- * and now (`prompt`), or they are on an iPhone and one Home Screen install
- * away from being able to (`needs_ios_install`).
+ * TWO conditions, and the standalone one is the important half: the banner
+ * appears ONLY inside the installed app, never in a browser tab.
  *
- * Everything else is deliberately silent. `enabled` needs no nudge;
- * `unsupported` and `needs_browser` cannot be fixed from this device, so a
- * banner would be a permanent scold about something out of their hands; and
- * `blocked` can only be undone in browser settings, where a button we render
- * cannot reach and re-asking resolves instantly to denied. The settings card
- * still explains all of those, because someone who goes LOOKING deserves the
- * whole picture; a banner that interrupts does not.
+ * In a tab it was worse than useless. On iOS the only state a tab can produce
+ * is `needs_ios_install`, which has nothing to tap, so the banner rendered
+ * three lines of Share-menu instructions above a lone "Not now" and read as a
+ * broken control. On desktop it offered a real button, but push in a tab dies
+ * with the tab's site data and is not the surface this feature is for.
+ *
+ * That leaves exactly one state worth an interruption: `prompt`, inside the
+ * app, where a single tap finishes the job. `needs_ios_install` is now
+ * unreachable here by construction, because being standalone IS being
+ * installed.
+ *
+ * The settings card still explains every state, including the install steps
+ * and the ones nobody can act on. Someone who goes LOOKING deserves the whole
+ * picture; a banner that interrupts has to be actionable or silent.
  */
-export function shouldOfferPushBanner(state: InstallCoachState): boolean {
-  return state === "prompt" || state === "needs_ios_install";
+export function shouldOfferPushBanner(state: InstallCoachState, standalone: boolean): boolean {
+  return standalone && state === "prompt";
 }
 
 export function installCoachState(input: InstallCoachInput): InstallCoachState {
