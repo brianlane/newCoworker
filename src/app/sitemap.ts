@@ -51,6 +51,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: "/integrations/slack", priority: 0.6 },
     { path: "/integrations/chatgpt", priority: 0.6 },
     { path: "/docs/api", priority: 0.6 },
+    // English-only for the same reason as /docs/api, and it sits under a
+    // prefix the mirror check does not claim, so enOnly is belt and braces.
+    { path: "/docs/push-notifications", priority: 0.6, enOnly: true },
     { path: "/security", priority: 0.5 },
     // The disclosure policy is English-only (LegalPage, English governs),
     // but it sits under the mirrored /security prefix: enOnly stops the

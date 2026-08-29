@@ -14,6 +14,7 @@ const PRODUCT_LINKS: FooterLink[] = [
   { href: "/industries", labelKey: "industries" },
   { href: "/compare", labelKey: "compare" },
   { href: "/docs/api", labelKey: "developers" },
+  { href: "/docs/push-notifications", labelKey: "mobileApp" },
   { href: "/onboard", labelKey: "getStarted" },
   { href: "/login", labelKey: "signIn" }
 ];

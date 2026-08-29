@@ -193,7 +193,15 @@ export default async function NotificationsPage(props: {
             </h2>
             <p className="text-xs text-parchment/45 mb-4">
               Push is per device, not per account. Turn it on once on each phone or computer you
-              want alerts to reach.
+              want alerts to reach.{" "}
+              <a
+                href="/docs/push-notifications"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-claw-green hover:underline"
+              >
+                Step-by-step guide
+              </a>
             </p>
             <PushSetupCard businessId={businessId} />
           </Card>
