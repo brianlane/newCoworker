@@ -116,7 +116,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Undoing a claim needs ownership cleared](project_undoing_a_claim_needs_ownership_cleared.md) - clear contacts.owner_employee_id first, alias-aware
 - [Owner asks that reach the flows](project_owner_ask_reaches_the_flows.md) - memory NEVER reaches AiFlows; owner SMS runs on the platform engine
 - [WhatsApp delivery truth](project_whatsapp_delivery_truth.md) - ok = ACCEPTED not delivered; receipts since #1609; KYP blocked by billing 131042
-- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - #1612 prompt fix failed; sweep detects invented numbers since #1671; voicemail_left honesty #1672; AMD events collapsed Aug 25
+- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - SOLVED #1742: the script NEVER reached the model (dropped tool-response field); deterministic TTS delivery + spoken-number firewall; prompt fixes #1612 had failed
 - [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25 platform-side; #1674 sweep forces resolution at 25s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
 - [Edge admin-alert email was stale](project_edge_admin_alert_email_stale.md) - FIXED Aug 27; Edge secrets held the personal gmail; recipient-only, digests verify by sha256
 - [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; provider_message_id NOT unique
