@@ -63,7 +63,13 @@ interface WebhookPayload {
   };
 }
 
-type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp" | "slack";
+type DeliveryChannel =
+  | "sms"
+  | "email"
+  | "dashboard"
+  | "whatsapp"
+  | "slack"
+  | "telegram";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
@@ -83,6 +89,7 @@ type ResolvedTargets = {
    */
   whatsappReplacesSms: boolean;
   slackUrgent: boolean;
+  telegramUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -166,6 +173,7 @@ async function resolveTargets(
   // channels), unlike the channel toggles which fail toward on.
   let whatsappReplacesSms = false;
   let slackUrgent = true;
+  let telegramUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -174,7 +182,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, telegram_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -194,6 +202,7 @@ async function resolveTargets(
     whatsappReplacesSms = Boolean(prefs.whatsapp_replaces_sms ?? false);
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
+    telegramUrgent = Boolean(prefs.telegram_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -232,6 +241,7 @@ async function resolveTargets(
     whatsappUrgent,
     whatsappReplacesSms,
     slackUrgent,
+    telegramUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
@@ -1213,6 +1223,137 @@ serve(async (req: Request) => {
       kind,
       basePayload,
       "slack_bridge_unconfigured"
+    );
+  }
+
+  // Telegram, through /api/internal/telegram-send for the same reason as
+  // Slack: the bot token is encrypted at rest and the Bot API client lives
+  // in src/lib, so no tenant secret lands in an edge function. Same
+  // never-connected silence rule again: a business with no telegram
+  // coworker_connections row records NOTHING here. Mirrors the sixth arm of
+  // src/lib/notifications/dispatch.ts, and tests/notifications-deno-parity
+  // is what stops the two drifting.
+  let telegramConnected = true;
+  {
+    const { data: tgConn, error: tgConnErr } = await supa
+      .from("coworker_connections")
+      .select("business_id")
+      .eq("business_id", record.business_id)
+      .eq("channel", "telegram")
+      .maybeSingle();
+    if (!tgConnErr) telegramConnected = tgConn !== null;
+  }
+  if (!telegramConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.telegramUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "telegram",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "telegram_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "telegram",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "recent_team_notify"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const tgRes = await fetch(`${appUrl}/api/internal/telegram-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs
+          // only when Origin matches NEXT_PUBLIC_APP_URL.
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          summary: phiFree?.summary ?? summary,
+          // Always null, and NOT the same field as the Node path's
+          // `input.smsBody`. This pipeline builds a notification from a
+          // system_logs row, which carries a summary and a payload but no
+          // separate body, so there is nothing further to say. Written as a
+          // constant rather than a ternary because the ternary previously
+          // read `phiFree ? null : null`, which looks like a dropped branch.
+          details: null,
+          detailsUrl: dashboardUrl
+        })
+      });
+      const tgJson = tgRes.ok
+        ? ((await tgRes.json().catch(() => null)) as {
+            data?: { ok?: boolean; chatId?: string; reason?: string; detail?: string };
+          } | null)
+        : null;
+      if (tgJson?.data?.ok) {
+        await recordRow(supa, record.business_id, "telegram", "sent", summary, kind, {
+          ...basePayload,
+          recipient: tgJson.data.chatId ?? "telegram"
+        });
+      } else if (tgRes.ok) {
+        // Structured policy skip (needs reconnect / no target / tier). A
+        // NEVER-connected business records nothing (raced a disconnect).
+        const tgReason = tgJson?.data?.reason ?? "send_failed";
+        if (tgReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "telegram",
+            tgReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            basePayload,
+            tgJson?.data?.detail ? `${tgReason}:${tgJson.data.detail}` : tgReason
+          );
+        }
+      } else {
+        errors.push(`Telegram failed: ${tgRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "telegram",
+          "failed",
+          summary,
+          kind,
+          basePayload,
+          `telegram_bridge_${tgRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Telegram error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "telegram",
+        "failed",
+        summary,
+        kind,
+        basePayload,
+        msg
+      );
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "telegram",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "telegram_bridge_unconfigured"
     );
   }
 

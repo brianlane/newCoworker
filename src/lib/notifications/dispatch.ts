@@ -52,6 +52,7 @@ import {
   deliverSlackAlert,
   slackAlertTargetState
 } from "@/lib/slack/deliver";
+import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
@@ -197,6 +198,10 @@ export type ResolvedTargets = {
   slackUrgentEnabled: boolean;
   /** Same never-connected silence rule as whatsappConnected. */
   slackConnected: boolean;
+  /** Telegram channel toggle (delivery still requires a picked alert chat). */
+  telegramUrgentEnabled: boolean;
+  /** Same never-connected silence rule again. */
+  telegramConnected: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -247,6 +252,7 @@ export async function resolveNotificationTargets(
   // channels), unlike the channel toggles above which fail toward on.
   let whatsappReplacesSms = false;
   let slackUrgent = true;
+  let telegramUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
   let dashboardAlerts = true;
@@ -286,6 +292,7 @@ export async function resolveNotificationTargets(
     whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
+    telegramUrgent = prefs.telegram_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
@@ -344,6 +351,7 @@ export async function resolveNotificationTargets(
 
   // Same question for Slack (fails toward connected inside the helper).
   const slackState = await slackAlertTargetState(businessId);
+  const telegramState = await telegramAlertTargetState(businessId);
 
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
@@ -395,6 +403,8 @@ export async function resolveNotificationTargets(
     whatsappConnected,
     slackUrgentEnabled: slackUrgent,
     slackConnected: slackState.connected,
+    telegramUrgentEnabled: telegramUrgent,
+    telegramConnected: telegramState.connected,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -589,10 +599,11 @@ export async function dispatchUrgentNotification(
       // The dashboard is NEVER gated: it makes no noise, it is the record of
       // what happened, and suppressing it is what made the eaten alert
       // invisible after the fact as well as at the time.
-      const gatedChannels = (["email", "sms", "whatsapp", "slack"] as const).filter(
+      const gatedChannels = (["email", "sms", "whatsapp", "slack", "telegram"] as const).filter(
         (channel) =>
           (channel !== "whatsapp" || targets.whatsappConnected) &&
-          (channel !== "slack" || targets.slackConnected)
+          (channel !== "slack" || targets.slackConnected) &&
+          (channel !== "telegram" || targets.telegramConnected)
       );
       // Every row of a suppressed dispatch is stamped so the backstop count
       // cannot see it. Without this the dashboard row, which IS genuinely
@@ -636,10 +647,11 @@ export async function dispatchUrgentNotification(
   const category = resolveNotificationCategory(kind);
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
-    const gatedChannels = (["dashboard", "email", "sms", "whatsapp", "slack"] as const).filter(
+    const gatedChannels = (["dashboard", "email", "sms", "whatsapp", "slack", "telegram"] as const).filter(
       (channel) =>
         (channel !== "whatsapp" || targets.whatsappConnected) &&
-        (channel !== "slack" || targets.slackConnected)
+        (channel !== "slack" || targets.slackConnected) &&
+          (channel !== "telegram" || targets.telegramConnected)
     );
     for (const channel of gatedChannels) {
       results.push(
@@ -1130,6 +1142,73 @@ export async function dispatchUrgentNotification(
         await recordRow(
           input.businessId,
           "slack",
+          "failed",
+          summary,
+          kind,
+          payload,
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 6) Telegram. Same never-connected silence rule as WhatsApp and Slack: a
+  // business that never connected Telegram records NOTHING here. Delivery
+  // details (tier re-check, the actual send) live in deliverTelegramAlert.
+  if (!targets.telegramConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.telegramUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "telegram",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "telegram_urgent_disabled"
+      )
+    );
+  } else {
+    try {
+      const delivered = await deliverTelegramAlert({
+        businessId: input.businessId,
+        summary: phiFree?.summary ?? summary,
+        details: phiFree ? null : (input.smsBody ?? null),
+        detailsUrl: dashboardUrl
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "telegram", "sent", summary, kind, {
+            ...payload,
+            recipient: delivered.chatId
+          })
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced a disconnect since the existence check: treat as never
+        // connected, no row (see the section comment above).
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "telegram",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail ? `${delivered.reason}:${delivered.detail}` : delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: telegram send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "telegram",
           "failed",
           summary,
           kind,

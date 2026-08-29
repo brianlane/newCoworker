@@ -69,6 +69,7 @@ const SOURCE_META: Record<EmailLogSource, SourceMeta> = {
   sms_assistant: { label: "Texts", tagClass: "text-parchment/45" },
   voice_assistant: { label: "Call", tagClass: "text-parchment/45" },
   slack_assistant: { label: "Slack", tagClass: "text-parchment/45" },
+  telegram_assistant: { label: "Telegram", tagClass: "text-parchment/45" },
   ai_flow: { label: "AiFlow", tagClass: "text-parchment/45" },
   owner_manual: { label: "You", tagClass: "text-claw-green" },
   // The coworker answered a reply on a thread it started: distinct from

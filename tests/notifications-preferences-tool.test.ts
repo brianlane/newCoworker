@@ -54,6 +54,7 @@ describe("applyNotificationPreferenceToggles", () => {
         "digest_customer_facing_only",
         "dashboard_alerts",
         "sms_warm_transfer",
+        "telegram_urgent",
         "image_limit_alerts",
         "category_leads",
         "category_team",

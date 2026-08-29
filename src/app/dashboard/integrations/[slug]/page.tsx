@@ -17,6 +17,7 @@ import { WhatsAppIntegrationCard } from "@/components/dashboard/WhatsAppIntegrat
 import { GoogleMeetToggle } from "@/components/dashboard/GoogleMeetToggle";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCard";
+import { TelegramIntegrationCard } from "@/components/dashboard/TelegramIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { McpConnectorCard } from "@/components/dashboard/McpConnectorCard";
 import { MCP_ROUTES } from "@/lib/mcp/routes";
@@ -207,6 +208,14 @@ function IntegrationBody({
           businessId={businessId}
           initialConnection={ctx.slackConnection}
           tierAllowed={ctx.slackEnabled}
+        />
+      );
+    case "telegram":
+      return (
+        <TelegramIntegrationCard
+          businessId={businessId}
+          initialConnection={ctx.telegramConnection}
+          tierAllowed={ctx.telegramEnabled}
         />
       );
     case "custom":

@@ -24,7 +24,14 @@
  * The five legs `dispatchUrgentNotification` fans out to, and the five
  * values `notifications.delivery_channel` can hold.
  */
-export const LIVENESS_CHANNELS = ["sms", "email", "dashboard", "whatsapp", "slack"] as const;
+export const LIVENESS_CHANNELS = [
+  "sms",
+  "email",
+  "dashboard",
+  "whatsapp",
+  "slack",
+  "telegram"
+] as const;
 
 export type LivenessChannel = (typeof LIVENESS_CHANNELS)[number];
 
@@ -76,11 +83,26 @@ export const LIVENESS_WINDOW_DAYS = 30;
  * last posted 17.5 days ago. Twenty-one would leave the only known-good
  * example three days from tripping, which is not a threshold, it is a
  * coin flip.
+ *
+ * Telegram sits with SMS and WhatsApp at 21 rather than with Slack at 30,
+ * and the difference is what the signal MEANS. A Slack workspace is a room
+ * somebody sits in all day whether or not they type; a Telegram thread with
+ * their coworker is one they only open to say something. Silence there is
+ * therefore closer to unanswered SMS than to an unposted-in workspace.
+ *
+ * This number has NOT yet been calibrated against real Telegram traffic,
+ * because there is none: the channel ships with zero connected tenants.
+ * Until one clears the ten-send floor every Telegram row reads `unused`,
+ * which can neither darken nor rescue a tenant, so an unproven threshold
+ * cannot raise a false alarm in the meantime. Re-run
+ * debug/channel-liveness-report.ts once a tenant is connected and revisit
+ * this with data, exactly as the numbers above were arrived at.
  */
 const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   sms: 21,
   whatsapp: 21,
   slack: 30,
+  telegram: 21,
   dashboard: 21,
   email: null
 };

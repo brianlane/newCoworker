@@ -241,3 +241,154 @@ describe("resolveSurfaceSpeaker, names it cannot find", () => {
     expect(speaker.kind).toBe("customer");
   });
 });
+
+describe("an account identified only by a channel binding", () => {
+  /**
+   * Telegram carries neither a phone nor an email, so a recorded binding is
+   * the only thing that can answer "who is this". These cases exist because
+   * getting them wrong hands owner powers to a stranger, or strips them
+   * from a colleague who still works here.
+   */
+  const REF = { channel: "telegram" as const, externalUserId: "4242" };
+
+  function bound(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "ident-1",
+      business_id: BIZ,
+      channel: "telegram",
+      external_user_id: "4242",
+      employee_id: null,
+      is_owner: false,
+      verified_phone_e164: null,
+      verified_email: null,
+      linked_via: "link_code",
+      ...overrides
+    } as never;
+  }
+
+  it("treats an UNBOUND account as a customer, which means silence", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => null
+      }
+    );
+    expect(speaker).toEqual({ kind: "customer", name: null, readFailed: false });
+  });
+
+  it("promotes a binding marked as the owner", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => bound({ is_owner: true })
+      }
+    );
+    expect(speaker).toMatchObject({ kind: "owner", name: "Amy" });
+  });
+
+  it("resolves a code-linked teammate through the roster row it names", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [
+          { id: "emp-1", name: "Dana Ruiz", active: true, phone_e164: "+1555", email: null } as never
+        ],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => bound({ employee_id: "emp-1" })
+      }
+    );
+    expect(speaker).toMatchObject({ kind: "teammate", name: "Dana Ruiz" });
+  });
+
+  it("DEMOTES a binding whose roster row was deactivated", async () => {
+    // Somebody who left keeps their Telegram account. The binding outliving
+    // their employment must not outlive their powers.
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [
+          { id: "emp-1", name: "Dana Ruiz", active: false, phone_e164: "+1555", email: null } as never
+        ],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => bound({ employee_id: "emp-1" })
+      }
+    );
+    expect(speaker.kind).toBe("customer");
+  });
+
+  it("demotes a binding naming a roster row that no longer exists", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => bound({ employee_id: "gone" })
+      }
+    );
+    expect(speaker.kind).toBe("customer");
+  });
+
+  it("fails CLOSED when the binding cannot be read", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [],
+        fetchBusiness: async () => null,
+        fetchChannelIdentity: async () => {
+          throw new Error("identities down");
+        }
+      }
+    );
+    expect(speaker).toEqual({ kind: "customer", name: null, readFailed: true });
+  });
+
+  it("prefers a roster name over the binding's own when both are present", async () => {
+    // A contact-linked owner arrives with BOTH a phone and a ref; the
+    // roster name is more specific than businesses.owner_name.
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { phoneE164: "+15145188192", externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => ["+15145188192"],
+        fetchRoster: async () => [
+          { id: "emp-1", name: "Amy Laidlaw", active: true, phone_e164: "+15145188192", email: null } as never
+        ],
+        fetchBusiness: async () => ({ owner_name: "Amy", owner_email: "amy@x.co" }),
+        fetchChannelIdentity: async () => bound({ is_owner: true, employee_id: "emp-1" })
+      }
+    );
+    expect(speaker).toMatchObject({ kind: "owner", name: "Amy Laidlaw" });
+  });
+
+  it("names an owner from the BINDING's roster row when nothing else has one", async () => {
+    const speaker = await resolveSurfaceSpeaker(
+      BIZ,
+      { externalRef: REF },
+      {
+        fetchOwnerNumbers: async () => [],
+        fetchRoster: async () => [
+          { id: "emp-1", name: "Amy Laidlaw", active: true, phone_e164: "+1555", email: null } as never
+        ],
+        fetchBusiness: async () => ({ owner_name: null, owner_email: null }),
+        fetchChannelIdentity: async () => bound({ is_owner: true, employee_id: "emp-1" })
+      }
+    );
+    expect(speaker).toMatchObject({ kind: "owner", name: "Amy Laidlaw" });
+  });
+});

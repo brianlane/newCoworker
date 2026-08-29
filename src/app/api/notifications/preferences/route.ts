@@ -13,6 +13,7 @@ const patchSchema = z.object({
   whatsapp_urgent: z.boolean().optional(),
   whatsapp_replaces_sms: z.boolean().optional(),
   slack_urgent: z.boolean().optional(),
+  telegram_urgent: z.boolean().optional(),
   slack_digest: z.boolean().optional(),
   email_digest: z.boolean().optional(),
   email_digest_weekly: z.boolean().optional(),
