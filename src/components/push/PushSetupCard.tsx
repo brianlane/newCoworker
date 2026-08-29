@@ -37,6 +37,8 @@ export function PushSetupCard({
   onDismiss?: () => void;
 }) {
   const [state, setState] = useState<InstallCoachState | null>(null);
+  // Kept alongside the verdict: the banner shows only inside the installed app.
+  const [standalone, setStandalone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
@@ -65,6 +67,7 @@ export function PushSetupCard({
       }
     }
 
+    setStandalone(standalone);
     setState(
       installCoachState({
         userAgent: navigator.userAgent,
@@ -175,25 +178,15 @@ export function PushSetupCard({
   if (state === null) return null;
 
   if (variant === "banner") {
-    // The banner never renders a state it cannot resolve; see
-    // shouldOfferPushBanner for which those are and why.
-    if (!shouldOfferPushBanner(state)) return null;
+    // Only ever `prompt`, and only inside the installed app; see
+    // shouldOfferPushBanner for why a tab gets nothing.
+    if (!shouldOfferPushBanner(state, standalone)) return null;
     return (
-      // The margin lives HERE, on the element that actually renders. An
-      // always-present wrapper in the layout would leave an empty mb-6 pushing
-      // every dashboard page down in the common case, which is precisely when
-      // this returns null (dismissed, already on, or nothing to act on).
       <div className="mb-6 rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 flex flex-wrap items-start gap-3">
         <div className="flex-1 min-w-[16rem]">
-          <p className="text-sm font-medium text-parchment">
-            {state === "prompt"
-              ? "Get urgent alerts on this device"
-              : "Add New Coworker to your Home Screen for alerts"}
-          </p>
+          <p className="text-sm font-medium text-parchment">Get urgent alerts on this device</p>
           <p className="text-xs text-parchment/60 mt-1">
-            {state === "prompt"
-              ? "One tap. Alerts arrive even when the dashboard is closed."
-              : "iPhone and iPad only deliver alerts to apps on the Home Screen: Share, then Add to Home Screen, then open it from there."}
+            One tap. Alerts arrive even when the app is closed.
           </p>
           {error && (
             <p className="text-xs text-spark-orange mt-1" role="alert">
@@ -202,11 +195,9 @@ export function PushSetupCard({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {state === "prompt" && (
-            <Button type="button" size="sm" onClick={enable} loading={busy}>
-              Turn on alerts
-            </Button>
-          )}
+          <Button type="button" size="sm" onClick={enable} loading={busy}>
+            Turn on alerts
+          </Button>
           <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
             Not now
           </Button>

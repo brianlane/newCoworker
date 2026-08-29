@@ -131,31 +131,46 @@ describe("push/install: installCoachState", () => {
 
 describe("push/install: shouldOfferPushBanner", () => {
   /**
-   * The banner interrupts, so it may only appear for states the person can
-   * actually resolve from where they are standing.
+   * The banner appears ONLY inside the installed app. In a browser tab it was
+   * worse than useless: on iOS the only state a tab can reach is
+   * needs_ios_install, which has nothing to tap, so it rendered Share-menu
+   * instructions above a lone "Not now" and read as a broken control.
    */
-  it.each(["prompt", "needs_ios_install"])("offers on %s, which is actionable", (state) => {
-    expect(shouldOfferPushBanner(state as InstallCoachState)).toBe(true);
+  it("offers only inside the installed app, where one tap finishes the job", () => {
+    expect(shouldOfferPushBanner("prompt", true)).toBe(true);
+  });
+
+  it("stays silent in a browser tab, even when push would work there", () => {
+    // Desktop Chrome can subscribe from a tab, but a tab is not the surface
+    // this feature is for, and the settings card still offers it.
+    expect(shouldOfferPushBanner("prompt", false)).toBe(false);
+  });
+
+  /**
+   * Unreachable by construction now (being standalone IS being installed),
+   * but pinned: this is the state that produced the instructions-only banner,
+   * and reintroducing it is the obvious way to bring that back.
+   */
+  it("never offers the install-coaching state, which has no button", () => {
+    expect(shouldOfferPushBanner("needs_ios_install", false)).toBe(false);
+    expect(shouldOfferPushBanner("needs_ios_install", true)).toBe(false);
   });
 
   /**
    * `enabled` needs no nudge. `unsupported` and `needs_browser` cannot be
-   * fixed on this device, so a banner would be a permanent scold about
+   * fixed from this device, so a banner would be a permanent scold about
    * something out of their hands. `blocked` is only undoable in browser
-   * settings, which no button we render can reach, and re-asking resolves
-   * instantly to denied. The settings card still explains all four, because
-   * someone who goes looking deserves the whole picture.
+   * settings, which no button we render can reach. The settings card still
+   * explains all four.
    */
   it.each(["enabled", "blocked", "unsupported", "needs_browser"])(
     "stays silent on %s, which a banner cannot resolve",
     (state) => {
-      expect(shouldOfferPushBanner(state as InstallCoachState)).toBe(false);
+      expect(shouldOfferPushBanner(state as InstallCoachState, true)).toBe(false);
     }
   );
 
-  it("covers every state the coach can produce, so a new one cannot be missed", () => {
-    // A state added without a decision here would silently default to hidden,
-    // which is the failure that loses installs quietly.
+  it("offers exactly one state, so a new one cannot slip in unnoticed", () => {
     const every: InstallCoachState[] = [
       "enabled",
       "prompt",
@@ -164,9 +179,7 @@ describe("push/install: shouldOfferPushBanner", () => {
       "blocked",
       "unsupported"
     ];
-    for (const state of every) {
-      expect(typeof shouldOfferPushBanner(state)).toBe("boolean");
-    }
-    expect(every.filter(shouldOfferPushBanner)).toEqual(["prompt", "needs_ios_install"]);
+    expect(every.filter((s) => shouldOfferPushBanner(s, true))).toEqual(["prompt"]);
+    expect(every.filter((s) => shouldOfferPushBanner(s, false))).toEqual([]);
   });
 });
