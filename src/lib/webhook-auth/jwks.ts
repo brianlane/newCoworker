@@ -13,9 +13,19 @@
  *
  *   - SIGNATURE, against a key from the provider's own published set
  *   - ISSUER, or a token minted by some other service the same provider
- *     signs for is accepted here
+ *     signs for is accepted here. A provider may legitimately use more than
+ *     one issuer string (Google spells its OIDC issuer both with and
+ *     without a scheme), so this may be a list. Note what an issuer does
+ *     NOT prove: a shared issuer like Google's OIDC endpoint signs for
+ *     EVERY account it hosts, so pinning it identifies the signer's
+ *     platform and not the sender. A provider on a shared issuer needs a
+ *     claim check of its own on top; see google-chat/auth.ts.
  *   - AUDIENCE equal to OUR app identifier, or a valid token addressed to a
- *     DIFFERENT app is replayed into ours
+ *     DIFFERENT app is replayed into ours. A provider may mint this from
+ *     more than one identifier of ours (Google Chat picks either the Cloud
+ *     project number or the endpoint URL, and does not say which), so the
+ *     caller may supply several. They are matched as a SET OF OURS, never
+ *     as a wildcard: every candidate still has to be an identifier we own.
  *   - EXPIRY, with a small clock-skew allowance
  *
  * Deliberately no JWT library. Node's `createPublicKey` takes a JWK
@@ -61,8 +71,8 @@ export type WebhookTokenProvider = {
   /** Names the cache bucket and the log lines. */
   name: string;
   source: JwksSource;
-  /** The only issuer a token from this provider may carry. */
-  issuer: string;
+  /** The only issuer(s) a token from this provider may carry. */
+  issuer: string | string[];
 };
 
 type CacheEntry = {
@@ -153,11 +163,14 @@ export type VerifyWebhookTokenResult =
 export async function verifyWebhookToken(
   provider: WebhookTokenProvider,
   authorizationHeader: string | null,
-  opts: { audience: string; now?: number }
+  opts: { audience: string | string[]; now?: number }
 ): Promise<VerifyWebhookTokenResult> {
-  const expectedAudience = opts.audience.trim();
-  // Fails CLOSED. An empty expected audience must never mean "match any".
-  if (!expectedAudience) return { ok: false, reason: "audience_unconfigured" };
+  const expectedAudiences = (Array.isArray(opts.audience) ? opts.audience : [opts.audience])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  // Fails CLOSED. An empty expected audience must never mean "match any",
+  // and neither must a list that is empty once the blanks are dropped.
+  if (expectedAudiences.length === 0) return { ok: false, reason: "audience_unconfigured" };
 
   const header = (authorizationHeader ?? "").trim();
   if (!/^Bearer\s+\S+$/i.test(header)) return { ok: false, reason: "malformed_header" };
@@ -179,16 +192,24 @@ export async function verifyWebhookToken(
   // Pinned, not merely "whatever the header says". Accepting the token's own
   // algorithm choice is how `alg: none` and HMAC-confusion attacks work.
   if (jwtHeader.alg !== "RS256") return { ok: false, reason: "unexpected_alg" };
-  if (payload.iss !== provider.issuer) return { ok: false, reason: "unexpected_issuer" };
+  const issuers = Array.isArray(provider.issuer) ? provider.issuer : [provider.issuer];
+  if (typeof payload.iss !== "string" || !issuers.includes(payload.iss)) {
+    return { ok: false, reason: "unexpected_issuer" };
+  }
 
   // The audience is OUR app. Without this check a perfectly valid token
   // addressed to somebody else's app would be accepted here.
   const audience = typeof payload.aud === "string" ? payload.aud.trim() : "";
-  const a = Buffer.from(audience, "utf8");
-  const b = Buffer.from(expectedAudience, "utf8");
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return { ok: false, reason: "unexpected_audience" };
+  // Every candidate is compared, with no early exit, so the work does not
+  // depend on WHICH of our identifiers matched.
+  let audienceMatches = false;
+  for (const expected of expectedAudiences) {
+    const a = Buffer.from(audience, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    const matched = a.length === b.length && timingSafeEqual(a, b);
+    audienceMatches = audienceMatches || matched;
   }
+  if (!audienceMatches) return { ok: false, reason: "unexpected_audience" };
 
   const now = opts.now ?? Date.now();
   const exp = payload.exp;
