@@ -53,6 +53,7 @@ import {
   slackAlertTargetState
 } from "@/lib/slack/deliver";
 import { deliverPush } from "@/lib/push/send";
+import { notificationLink } from "@/lib/notifications/display";
 import { pushTargetState } from "@/lib/push/db";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
@@ -1481,7 +1482,24 @@ export async function dispatchUrgentNotification(
         scope: { businessId: input.businessId },
         title: "New Coworker",
         body: phiFree?.summary ?? summary.replace(/\.+$/, ""),
-        url: phiFree ? "/dashboard" : (input.ctaPath ?? "/dashboard"),
+        /**
+         * Where the tap lands. An explicit ctaPath wins, but only 5 of the 12
+         * callers pass one, and the rest were dropping the owner on the
+         * generic dashboard to go find whatever the alert was about.
+         *
+         * `notificationLink` already answers that question for every kind
+         * (the thread, the call, the document, the booking) and is what the
+         * dashboard notification list uses to deep-link the very same row, so
+         * a push and its row now agree about where the alert happened. It
+         * guards its own hrefs against going off-site and falls back to the
+         * activity feed for kinds it does not know.
+         *
+         * HIPAA still overrides both: a path like
+         * /dashboard/customers/%2B15551234567 is itself an identifier.
+         */
+        url: phiFree
+          ? "/dashboard"
+          : (input.ctaPath ?? notificationLink({ kind, payload }).href),
         notificationId: pushNotificationId
       });
 

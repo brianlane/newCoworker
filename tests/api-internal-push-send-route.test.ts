@@ -66,6 +66,35 @@ describe("api/internal/push-send", () => {
     expect(await res.json()).toEqual({ ok: true, data: { ok: false, reason: "not_connected" } });
   });
 
+  /**
+   * The Deno dispatcher cannot import notificationLink (it lives in src/lib
+   * and an edge function cannot reach it), so it sends the alert's kind and
+   * payload and this route resolves the destination. One implementation of
+   * "where did this alert happen", shared with the Node dispatcher and the
+   * dashboard's notification list, instead of a second one drifting in
+   * another runtime.
+   */
+  it("resolves the tap target from kind when the caller sends no url", async () => {
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post({ ...noUrl, kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/dashboard/calls" })
+    );
+  });
+
+  it("prefers an explicit url over the derived one", async () => {
+    await POST(post({ ...VALID, url: "/dashboard/bookings", kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/dashboard/bookings" })
+    );
+  });
+
+  it("falls back to the dashboard when it is given neither", async () => {
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post(noUrl));
+    expect(deliverPush).toHaveBeenCalledWith(expect.objectContaining({ url: "/dashboard" }));
+  });
+
   it.each([
     ["a missing title", { ...VALID, title: "" }],
     ["a non-uuid businessId", { ...VALID, businessId: "nope" }],
