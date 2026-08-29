@@ -153,22 +153,49 @@ export async function handleTeamsActivity(
 
   // Who is speaking.
   //
-  // A recorded binding answers it without a round trip, which is the common
-  // case after somebody's first message. Only a stranger costs a directory
-  // lookup, and only once: a lookup that resolves them to staff is written
-  // back as a binding below.
+  // Pass one is what we already know. A recorded binding answers it with no
+  // round trip, which is the common case after somebody's first message.
   const binding = await findIdentity(businessId, "teams", externalUserId);
-  const address =
-    binding?.verified_email ?? (await fetchMember(reference, fromId))?.email ?? null;
-  const speaker = await resolveSpeaker(businessId, {
-    email: address,
-    externalRef: { channel: "teams", externalUserId }
-  });
+  const externalRef = { channel: "teams" as const, externalUserId };
+  let address = binding?.verified_email ?? null;
+  let speaker = await resolveSpeaker(businessId, { email: address, externalRef });
+
+  // Pass two, only when pass one did not place them.
+  //
+  // THE RECORDED ADDRESS IS A CACHE, NOT THE TRUTH, and that distinction is
+  // the difference between a saved round trip and a lockout. An Entra
+  // address changes when somebody marries, or when a tenant moves from
+  // acme.onmicrosoft.com to acme.com. A binding that froze the old one
+  // would fail the roster match on every later message, forever, and the
+  // person would have no way back: the code path below is only offered to
+  // accounts we cannot place, and they would look placed-but-not-staff.
+  //
+  // So a speaker we cannot place costs one directory lookup, and a changed
+  // address heals itself on the next message.
+  //
+  // `readFailed` is excluded deliberately. It means the ROSTER read errored,
+  // which says nothing about the address, so re-asking Microsoft would not
+  // help and the fail-closed answer must stand.
+  if (speaker.kind === "customer" && !speaker.readFailed) {
+    const member = await fetchMember(reference, fromId);
+    if (member?.email && member.email !== address) {
+      address = member.email;
+      speaker = await resolveSpeaker(businessId, { email: address, externalRef });
+    }
+  }
 
   if (speaker.kind === "customer") {
     // Not somebody we can place. A code is the way in, so honour one before
-    // giving up, but only from an account that is not already bound.
-    if (!binding && looksLikeLinkCode(text)) {
+    // giving up.
+    //
+    // NOT gated on "has no binding yet". A connected teammate typing eight
+    // characters is asking their coworker something rather than enrolling
+    // again, but being inside this branch already says more than a missing
+    // binding ever could: nothing about this account resolves to the
+    // roster right now. Gating on the binding instead would lock out
+    // exactly the person who most needs a code, the one whose recorded
+    // address stopped matching.
+    if (looksLikeLinkCode(text)) {
       const outcome = await redeem({ channel: "teams", code: text, externalUserId });
       await send(reference, {
         text: outcome.ok
@@ -185,8 +212,8 @@ export async function handleTeamsActivity(
 
   // Remember what the directory said, so the next message from this person
   // skips the lookup. Recorded against the Entra object id, which survives a
-  // rename or an address change.
-  if (!binding && address) {
+  // rename or an address change, and rewritten whenever the address moves.
+  if (address && binding?.verified_email !== address) {
     await upsertIdentity({
       businessId,
       channel: "teams",
@@ -259,7 +286,7 @@ export async function handleTeamsActivity(
   }
 
   const nameChanged = Boolean(displayName) && displayName !== conversation.user_display_name;
-  const emailChanged = (address ?? null) !== (conversation.user_email ?? null);
+  const emailChanged = address !== (conversation.user_email ?? null);
   if (nameChanged || emailChanged) {
     // The EMAIL half feeds channel liveness, which reads
     // coworker_conversations to decide whether a human is still here and

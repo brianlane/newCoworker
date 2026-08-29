@@ -66,11 +66,16 @@ function deps(overrides: TeamsInboundDeps = {}): TeamsInboundDeps {
     })),
     upsertIdentity: vi.fn(async () => ({ id: "ident-1" }) as never),
     redeem: vi.fn(async () => ({ ok: false as const, reason: "unknown" as const })),
-    resolveSpeaker: vi.fn(async () => ({
-      kind: "teammate" as const,
-      name: "Dana Ruiz",
-      readFailed: false
-    })),
+    // Behaves like the real resolver rather than answering "teammate" to
+    // anything: it places somebody by the ADDRESS it is handed, and knows
+    // nobody without one. A fixture that said yes regardless would make
+    // every assertion about which address we looked the speaker up by
+    // vacuous, and would hide the two-pass lookup entirely.
+    resolveSpeaker: vi.fn(async (_biz: string, identity: { email?: string | null }) =>
+      identity.email === "dana@acme.com"
+        ? { kind: "teammate" as const, name: "Dana Ruiz", readFailed: false }
+        : { kind: "customer" as const, name: null, readFailed: false }
+    ),
     getConversation: vi.fn(async () => ({
       id: "conv-1",
       user_display_name: null,
@@ -164,6 +169,65 @@ describe("identity comes from the directory", () => {
     );
   });
 
+  it("re-asks the directory when the RECORDED address stops matching", async () => {
+    // The recorded address is a cache, not the truth. An Entra address
+    // changes when somebody marries, or when a tenant moves from
+    // acme.onmicrosoft.com to its real domain. Frozen, the binding would
+    // fail the roster match on every later message, forever.
+    const resolveSpeaker = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "customer", name: null, readFailed: false })
+      .mockResolvedValueOnce({ kind: "teammate", name: "Dana Ruiz", readFailed: false });
+    const d = deps({
+      findIdentity: vi.fn(async () => ({
+        id: "ident-1",
+        verified_email: "dana.old@acme.com"
+      }) as never),
+      fetchMember: vi.fn(async () => ({
+        aadObjectId: "obj-1",
+        email: "dana.new@acme.com",
+        name: "Dana Ruiz"
+      })),
+      resolveSpeaker
+    });
+    const out = await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+
+    expect(resolveSpeaker.mock.calls[0][1]).toMatchObject({ email: "dana.old@acme.com" });
+    expect(resolveSpeaker.mock.calls[1][1]).toMatchObject({ email: "dana.new@acme.com" });
+    // And it heals: the new address is written back, so the next message
+    // costs no lookup at all.
+    expect(d.upsertIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({ verifiedEmail: "dana.new@acme.com" })
+    );
+    expect(out).toEqual({ enqueued: true });
+  });
+
+  it("does not re-ask the directory when the ROSTER read is what failed", async () => {
+    // `readFailed` means the roster read errored, which says nothing about
+    // the address. Microsoft cannot answer that question, and the
+    // fail-closed verdict has to stand.
+    const d = deps({
+      resolveSpeaker: vi.fn(async () => ({
+        kind: "customer" as const,
+        name: null,
+        readFailed: true
+      }))
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.fetchMember).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite a binding that already says the right thing", async () => {
+    const d = deps({
+      findIdentity: vi.fn(async () => ({
+        id: "ident-1",
+        verified_email: "dana@acme.com"
+      }) as never)
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.upsertIdentity).not.toHaveBeenCalled();
+  });
+
   it("records the binding as `directory`, not as an act by the person", async () => {
     // `linked_via` is an audit column about how somebody came to hold staff
     // powers. Filing a directory answer under `shared_contact` would
@@ -198,11 +262,11 @@ describe("identity comes from the directory", () => {
 
   it("records an owner as an owner", async () => {
     const d = deps({
-      resolveSpeaker: vi.fn(async () => ({
-        kind: "owner" as const,
-        name: "Dana",
-        readFailed: false
-      }))
+      resolveSpeaker: vi.fn(async (_biz: string, identity: { email?: string | null }) =>
+        identity.email === "dana@acme.com"
+          ? { kind: "owner" as const, name: "Dana", readFailed: false }
+          : { kind: "customer" as const, name: null, readFailed: false }
+      )
     });
     await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
     expect(d.upsertIdentity).toHaveBeenCalledWith(
@@ -272,20 +336,43 @@ describe("identity comes from the directory", () => {
     expect(out).toEqual({ enqueued: false, reason: "linked_by_code" });
   });
 
-  it("does not treat an eight-character message from a BOUND account as a code", async () => {
+  it("lets a BOUND account whose address stopped matching redeem a code", async () => {
+    // The recovery path, and the reason the code branch is not gated on
+    // "has no binding yet". Somebody whose recorded address went stale and
+    // whose directory entry no longer resolves is exactly the person who
+    // needs a code, and gating on the binding would refuse them the only
+    // way back short of disconnecting the whole tenant.
     const d = deps({
       resolveSpeaker: vi.fn(async () => ({
         kind: "customer" as const,
         name: null,
         readFailed: false
       })),
-      findIdentity: vi.fn(async () => ({ id: "ident-1" }) as never)
+      findIdentity: vi.fn(async () => ({
+        id: "ident-1",
+        verified_email: "dana.old@acme.com"
+      }) as never),
+      fetchMember: vi.fn(async () => null),
+      redeem: vi.fn(async () => ({ ok: true as const, identity: {} as never }))
     });
-    await handleTeamsActivity(
+    const out = await handleTeamsActivity(
+      { connection: CONNECTION, activity: activity({ text: "ABCD2345" }) },
+      d
+    );
+    expect(out).toEqual({ enqueued: false, reason: "linked_by_code" });
+  });
+
+  it("never treats a PLACED teammate's eight-character message as a code", async () => {
+    // The property the dropped `!binding` guard was reaching for, stated
+    // against what actually matters: a connected teammate typing eight
+    // characters is asking their coworker something.
+    const d = deps();
+    const out = await handleTeamsActivity(
       { connection: CONNECTION, activity: activity({ text: "bookings" }) },
       d
     );
     expect(d.redeem).not.toHaveBeenCalled();
+    expect(out).toEqual({ enqueued: true });
   });
 });
 
@@ -534,6 +621,33 @@ describe("failures that must not become webhook errors", () => {
     expect(d.resolveSpeaker).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining({ email: "dana@acme.com" })
+    );
+  });
+
+  it("keeps the stored address for somebody placed by a CODE, not an address", async () => {
+    // Reachable, and worth stating: a link code binds an account without
+    // ever learning an address, so `resolveSurfaceSpeaker` places them
+    // through the externalRef arm with `email` still null. The stored
+    // address must survive that rather than being blanked, because channel
+    // liveness reads it to put a Teams row in the alert audience.
+    const d = deps({
+      findIdentity: vi.fn(async () => ({ id: "ident-1", verified_email: null }) as never),
+      fetchMember: vi.fn(async () => null),
+      resolveSpeaker: vi.fn(async () => ({
+        kind: "teammate" as const,
+        name: "Dana Ruiz",
+        readFailed: false
+      })),
+      getConversation: vi.fn(async () => ({
+        id: "conv-1",
+        user_display_name: "Someone Else",
+        user_email: "dana@acme.com"
+      }) as never)
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.updateIdentity).toHaveBeenCalledWith(
+      "conv-1",
+      expect.objectContaining({ email: "dana@acme.com", displayName: "Dana Ruiz" })
     );
   });
 

@@ -38,9 +38,23 @@ const JWKS_TTL_MS = 24 * 60 * 60 * 1000;
 /** Clock skew allowance on expiry, matching the Slack webhook's window. */
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 
+/**
+ * How often an unknown `kid` may force a key refresh.
+ *
+ * Without this, an unknown kid costs a fetch EVERY time, and our app id is
+ * public: anyone can mint a syntactically valid token with the right
+ * issuer, audience and expiry, and turn our webhook into an amplifier
+ * against Microsoft's key endpoint by varying the kid. Throttled, the whole
+ * fleet spends at most one refresh per window no matter how much garbage
+ * arrives, and a real rotation still recovers in minutes instead of the
+ * cache's 24 hours.
+ */
+const JWKS_FORCE_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+
 type Jwk = { kid?: string; kty?: string; use?: string; n?: string; e?: string };
 
 let jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
+let lastForcedRefreshAt = 0;
 
 /**
  * Test seam, matching resetGoogleRefreshStateForTests and friends: a
@@ -50,6 +64,7 @@ let jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
  */
 export function resetTeamsJwksStateForTests(): void {
   jwksCache = null;
+  lastForcedRefreshAt = 0;
 }
 
 async function loadJwks(now: number, opts: { force?: boolean } = {}): Promise<Jwk[]> {
@@ -151,7 +166,7 @@ export async function verifyTeamsToken(
   }
 
   let jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
-  if (!jwk) {
+  if (!jwk && now - lastForcedRefreshAt >= JWKS_FORCE_REFRESH_COOLDOWN_MS) {
     /**
      * A kid we do not hold is the SIGNATURE OF A KEY ROTATION, not of a
      * forged token, and treating it as the latter is how this channel would
@@ -163,9 +178,14 @@ export async function verifyTeamsToken(
      * they are LOST, and the tenant sees a coworker that simply stopped
      * replying until the cache happened to expire.
      *
-     * So an unknown kid buys exactly one forced refresh. A genuinely forged
-     * token still fails, one fetch later.
+     * So an unknown kid buys a forced refresh, at most one per cooldown
+     * window. A genuinely forged token still fails, one fetch later, and a
+     * flood of them costs one fetch rather than one each.
+     *
+     * The stamp is taken BEFORE the attempt, not after a success: a key
+     * endpoint that is down must not be retried per request either.
      */
+    lastForcedRefreshAt = now;
     try {
       keys = await loadJwks(now, { force: true });
     } catch (err) {

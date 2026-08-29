@@ -279,10 +279,17 @@ describe("fetching the signing keys", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThan(afterWarm);
   });
 
-  it("spends exactly one refresh on a forged kid, then refuses", async () => {
-    // The other half of the same behaviour: an unknown kid buys ONE forced
-    // fetch, not one per request. Otherwise anyone can make us hammer
-    // Microsoft's key endpoint by sending garbage at our webhook.
+  it("spends ONE refresh on a flood of forged kids, not one each", async () => {
+    /**
+     * The other half of the same behaviour, and the reason the refresh is
+     * throttled rather than merely allowed.
+     *
+     * Our Microsoft app id is public, so anyone can mint a syntactically
+     * valid token with the right issuer, audience and expiry. If an unknown
+     * kid always bought a fetch, varying the kid would turn our webhook
+     * into an amplifier against Microsoft's own key endpoint, one request
+     * in, one fetch out, forever.
+     */
     resetTeamsJwksStateForTests();
     const fetchMock = vi.fn(async (url: string) =>
       url.includes("openidconfiguration")
@@ -293,12 +300,45 @@ describe("fetching the signing keys", () => {
 
     expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
     const afterWarm = fetchMock.mock.calls.length;
-    expect(await verify(sign(goodPayload, { kid: "key-99" }))).toEqual({
-      ok: false,
-      reason: "unknown_key"
-    });
-    // Two calls: the metadata document and the key set, once.
+
+    for (let i = 0; i < 25; i++) {
+      expect(await verify(sign(goodPayload, { kid: `forged-${i}` }))).toEqual({
+        ok: false,
+        reason: "unknown_key"
+      });
+    }
+    // Two calls total across all 25: the metadata document and the key set,
+    // once. Not fifty.
     expect(fetchMock.mock.calls.length - afterWarm).toBe(2);
+  });
+
+  it("lets the next rotation through once the cooldown has passed", async () => {
+    // The throttle must not become the outage it was added to prevent. A
+    // rotation that lands just after somebody sent a forged kid still
+    // recovers within the cooldown, not at the 24-hour cache expiry.
+    resetTeamsJwksStateForTests();
+    let served = [jwkFor(publicKey, "key-1")];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("openidconfiguration")
+          ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+          : new Response(JSON.stringify({ keys: served }))
+      )
+    );
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    // Somebody spends the window on garbage.
+    expect(await verify(sign(goodPayload, { kid: "forged" }))).toMatchObject({ ok: false });
+
+    served = [jwkFor(other.publicKey, "key-2")];
+    const rotated = { ...goodPayload, exp: Math.floor(NOW / 1000) + 3600 };
+    const token = sign(rotated, { kid: "key-2", key: other.privateKey });
+
+    // Inside the window the real rotation is still refused, which is the
+    // price of the throttle and is stated here so it cannot be a surprise.
+    expect(await verify(token)).toEqual({ ok: false, reason: "unknown_key" });
+    // Past it, recovery. Six minutes, against a 5 minute cooldown.
+    expect(await verify(token, NOW + 6 * 60 * 1000)).toMatchObject({ ok: true });
   });
 
   it("reports the refresh failing as OURS, so Microsoft redelivers", async () => {
@@ -320,6 +360,32 @@ describe("fetching the signing keys", () => {
       ok: false,
       reason: "jwks_unavailable"
     });
+  });
+
+  it("does not hammer a key endpoint that is DOWN, either", async () => {
+    // Why the cooldown stamp is taken before the attempt rather than after
+    // a success. Stamped on success only, a failing endpoint is retried on
+    // every request, which is the worst moment to add load to it.
+    resetTeamsJwksStateForTests();
+    let healthy = true;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!healthy) return new Response("nope", { status: 503 });
+      return url.includes("openidconfiguration")
+        ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+        : new Response(JSON.stringify({ keys: [jwkFor(publicKey, "key-1")] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    healthy = false;
+    const afterWarm = fetchMock.mock.calls.length;
+    for (let i = 0; i < 20; i++) {
+      expect(await verify(sign(goodPayload, { kid: `forged-${i}` }))).toMatchObject({
+        ok: false
+      });
+    }
+    // One attempt at the metadata document, which failed. Not twenty.
+    expect(fetchMock.mock.calls.length - afterWarm).toBe(1);
   });
 
   it("survives the refresh throwing something that is not an Error", async () => {
