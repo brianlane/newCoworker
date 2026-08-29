@@ -37,34 +37,10 @@ import {
 } from "@/lib/slack/webhook";
 import { markSlackConnectionDeauthorizedByTeamId } from "@/lib/db/slack-connections";
 import { handleSlackChatEvent, handleSlackHomeOpened } from "@/lib/slack/inbound";
+import { kickCoworkerWorker } from "@/lib/coworker-channels/kick";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
-
-/**
- * Fire-and-forget kick of the reply worker (same bearer the cron bridge
- * uses). Missing secret/base URL just defers to the sweep.
- */
-async function kickCoworkerWorker(): Promise<void> {
-  const secret = process.env.INTERNAL_CRON_SECRET?.trim();
-  const base = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (!secret || !base) return;
-  try {
-    await fetch(new URL("/api/internal/coworker-worker", base).toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${secret}`,
-        Origin: base
-      },
-      body: "{}"
-    });
-  } catch (err) {
-    logger.warn("slack worker kick failed; sweep will retry", {
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
-}
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -134,7 +110,7 @@ export async function POST(request: Request) {
         event
       });
       if (outcome.enqueued) {
-        after(() => kickCoworkerWorker());
+        after(() => kickCoworkerWorker("slack"));
       }
       return successResponse(outcome);
     } catch (err) {

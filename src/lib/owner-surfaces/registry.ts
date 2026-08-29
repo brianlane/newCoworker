@@ -26,7 +26,14 @@
  */
 
 /** Surfaces the coworker can act from. `key` is the stable identifier. */
-export type OwnerSurfaceKey = "dashboard" | "sms" | "email" | "slack" | "whatsapp";
+export type OwnerSurfaceKey =
+  | "dashboard"
+  | "sms"
+  | "email"
+  | "slack"
+  | "whatsapp"
+  | "telegram"
+  | "teams";
 
 export type OwnerSurfaceDefinition = {
   key: OwnerSurfaceKey;
@@ -98,6 +105,26 @@ export const OWNER_SURFACES: readonly OwnerSurfaceDefinition[] = [
     customTableSource: "ai_whatsapp",
     changeNoticeLabel: "on WhatsApp",
     historyLabel: "Edited by your coworker, on WhatsApp"
+  },
+  {
+    key: "telegram",
+    label: "Telegram",
+    description:
+      "When you or a team member messages your business's Telegram bot, your coworker answers you as staff. Only accounts you have connected are answered at all.",
+    flowEditSource: "ai_edit_telegram",
+    customTableSource: "ai_telegram",
+    changeNoticeLabel: "on Telegram",
+    historyLabel: "Edited by your coworker, on Telegram"
+  },
+  {
+    key: "teams",
+    label: "Microsoft Teams",
+    description:
+      "When you or a team member messages your coworker in Microsoft Teams, it answers you as staff. Identity comes from your Microsoft account.",
+    flowEditSource: "ai_edit_teams",
+    customTableSource: "ai_teams",
+    changeNoticeLabel: "in Microsoft Teams",
+    historyLabel: "Edited by your coworker, in Microsoft Teams"
   }
 ];
 

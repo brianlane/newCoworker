@@ -278,6 +278,10 @@ const EXEMPT: Record<string, string> = {
     "internal team chat content; business-scoped, removed with the business cascade",
   coworker_jobs:
     "reply-queue bookkeeping for internal team chat; cascades with the conversation",
+  coworker_channel_identities:
+    "which of the business's OWN people a chat account belongs to (owner or roster row), plus the phone/email that proved it; staff identity, not end-customer data, and it cascades with the business and with the roster row it names",
+  coworker_channel_link_codes:
+    "short-lived hashed enrolment codes for connecting a staff member's chat account; single-use, expire in 15 minutes, hold no end-customer data, and cascade with the business",
   vagaro_connections: "tenant credentials",
   whatsapp_connections: "the tenant's own WABA connection",
   workspace_oauth_connections: "tenant OAuth grants",

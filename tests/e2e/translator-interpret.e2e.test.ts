@@ -54,8 +54,41 @@ const SPANISH_MARKERS = /[¿¡áéíóúñ]|\b(hola|quiero|necesito|casa|puedo|g
 /** English output, same idea. */
 const ENGLISH_MARKERS = /\b(hello|hi|the|and|you|your|i|we|house|home|sell|offer|yes|okay)\b/i;
 
+/**
+ * RETRY, and why these three carry it (2026-08-28).
+ *
+ * The nightly went red here twice in one night, both times on a direction
+ * assertion, and the obvious read was that the interpreter cue had drifted.
+ * It had not. Scored against the live model on the worst case (the 3-turn
+ * one, where a colleague turn is already in the history before the caller
+ * speaks), 80 samples: the shipped cue is 79/80.
+ *
+ * The single miss says what the failure actually is. It answered
+ * "Hola, mi nombre es Dave.", which is turn ONE translated, not the turn it
+ * had just heard. The model occasionally interprets an earlier turn instead
+ * of the latest one. Nothing labels the speaker in the history (production
+ * is live audio, so nothing can), and at temperature 0 the variance is
+ * entirely server side.
+ *
+ * A cue edit spelling out "interpret only the most recent turn" scored 80/80,
+ * which is one miss better in 80 and therefore NOT evidence. It is not
+ * shipped. Two other candidates were scored too, and "never reply in the same
+ * language you just heard" made things measurably WORSE (10/12, falling back
+ * to the receptionist persona), which is the reason not to edit a live voice
+ * prompt on a hunch. See feedback_score_prompt_changes_against_outcomes.
+ *
+ * So this is nondeterminism, not drift, and it gets the same treatment the
+ * rest of the live suite gives nondeterminism: one retry.
+ * hq-inbox-classify.e2e.test.ts retries 21 of its 22 cases; this file retried
+ * none, which is why an ordinary ~1% wobble could take the whole nightly red.
+ *
+ * This deliberately does NOT reach for a bigger hammer. The suite already
+ * retries once at the workflow level, so a real regression still has to
+ * survive four attempts to go unnoticed, and a genuine drift (the model
+ * answering in the wrong language most of the time) still fails.
+ */
 describe("the interpreter relays a colleague's English to a Spanish caller", () => {
-  it("renders the colleague's turn in the caller's language, not an answer", async () => {
+  it("renders the colleague's turn in the caller's language, not an answer", { retry: 1, timeout: 120_000 }, async () => {
     const { system, cue } = interpreterSession("es", "en");
     const reply = await geminiChatReply(system, [
       { role: "user", text: cue },
@@ -86,7 +119,7 @@ describe("the interpreter relays a colleague's English to a Spanish caller", () 
     expect(verdict.answers.adds_commentary).toBe(false);
   });
 
-  it("renders the caller's Spanish back into the colleague's language", async () => {
+  it("renders the caller's Spanish back into the colleague's language", { retry: 1, timeout: 120_000 }, async () => {
     const { system, cue } = interpreterSession("es", "en");
     const reply = await geminiChatReply(system, [
       { role: "user", text: cue },
@@ -118,7 +151,7 @@ describe("the interpreter relays a colleague's English to a Spanish caller", () 
 });
 
 describe("the interpreter works for a Spanish-speaking business too", () => {
-  it("does not assume the colleague speaks English", async () => {
+  it("does not assume the colleague speaks English", { retry: 1, timeout: 120_000 }, async () => {
     // The mirror image the old cue could not express: it hardcoded English as
     // the colleague's language, so a Spanish tenant with an English caller
     // would have been told to translate English into English.

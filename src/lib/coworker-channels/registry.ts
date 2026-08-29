@@ -8,9 +8,15 @@
  */
 
 import { slackChannelAdapter } from "@/lib/slack/worker";
+import { teamsChannelAdapter } from "@/lib/teams/adapter";
+import { telegramChannelAdapter } from "@/lib/telegram/adapter";
 import type { CoworkerChannelAdapter } from "./types";
 
-const ADAPTERS: readonly CoworkerChannelAdapter[] = [slackChannelAdapter];
+const ADAPTERS: readonly CoworkerChannelAdapter[] = [
+  slackChannelAdapter,
+  telegramChannelAdapter,
+  teamsChannelAdapter
+];
 
 const BY_CHANNEL = new Map(ADAPTERS.map((a) => [a.channel as string, a]));
 

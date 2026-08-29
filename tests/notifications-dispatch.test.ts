@@ -41,12 +41,22 @@ vi.mock("@/lib/slack/deliver", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/teams/deliver", () => ({
+  deliverTeamsAlert: vi.fn(),
+  teamsAlertTargetState: vi.fn(async () => ({ connected: false, hasTarget: false }))
+}));
+
+vi.mock("@/lib/telegram/deliver", () => ({
+  deliverTelegramAlert: vi.fn(),
+  telegramAlertTargetState: vi.fn(async () => ({ connected: false, hasTarget: false }))
+}));
+
 /**
- * Push defaults to NEVER-SUBSCRIBED, exactly as the Slack mock above defaults
- * to disconnected, and for the same reason: pushTargetState fails TOWARD
- * connected on a read error, so without this every one of the ~2500 lines of
- * expectations below would gain a push row and every toHaveLength would
- * break. The push describe block opts in explicitly.
+ * Push defaults to NEVER-SUBSCRIBED, exactly as the Slack, Telegram and Teams
+ * mocks default to disconnected, and for the same reason: pushTargetState
+ * fails TOWARD connected on a read error, so without this every one of the
+ * thousands of expectations below would gain a push row and every
+ * toHaveLength would break. The push describe block opts in explicitly.
  */
 vi.mock("@/lib/push/db", () => ({
   pushTargetState: vi.fn(async () => ({ connected: false }))
@@ -111,6 +121,8 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { deliverSlackAlert, slackAlertTargetState } from "@/lib/slack/deliver";
 import { pushTargetState } from "@/lib/push/db";
 import { deliverPush } from "@/lib/push/send";
+import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
+import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -229,8 +241,20 @@ describe("notifications/dispatch", () => {
       alertChannelName: null
     });
     vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: no device has ever subscribed, same never-connected rule.
     vi.mocked(pushTargetState).mockResolvedValue({ connected: false });
     vi.mocked(deliverPush).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Telegram NOT connected either, same reason as Slack above.
+    // A never-connected channel records NOTHING, so the existing fan-out
+    // counts keep meaning what they meant.
+    vi.mocked(telegramAlertTargetState).mockResolvedValue({
+      connected: false,
+      hasTarget: false
+    });
+    vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Teams NOT connected either, same never-connected rule.
+    vi.mocked(teamsAlertTargetState).mockResolvedValue({ connected: false, hasTarget: false });
+    vi.mocked(deliverTeamsAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
     // English unless a test says otherwise: clearAllMocks clears calls, not
@@ -1330,6 +1354,260 @@ describe("notifications/dispatch", () => {
     });
   });
 
+  describe("teams channel", () => {
+    const teamsRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "teams");
+
+    const connected = () =>
+      vi.mocked(teamsAlertTargetState).mockResolvedValue({ connected: true, hasTarget: true });
+
+    it("never-connected writes no rows and never delivers", async () => {
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(teamsRows()).toHaveLength(0);
+      expect(deliverTeamsAlert).not.toHaveBeenCalled();
+    });
+
+    it("sends and records the conversation it reached", async () => {
+      connected();
+      vi.mocked(deliverTeamsAlert).mockResolvedValue({
+        ok: true,
+        conversationId: "19:abc@thread.tacv2",
+        activityId: "act-1"
+      });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = teamsRows()[0];
+      expect(row.status).toBe("sent");
+      expect((row.payload as { recipient?: string }).recipient).toBe("19:abc@thread.tacv2");
+    });
+
+    it("carries the summary and the dashboard link into the card", async () => {
+      connected();
+      vi.mocked(deliverTeamsAlert).mockResolvedValue({
+        ok: true,
+        conversationId: "19:x",
+        activityId: "1"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead",
+        smsBody: "Dana called",
+        kind: "urgent_alert"
+      });
+      expect(deliverTeamsAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: "New lead", details: "Dana called" })
+      );
+    });
+
+    it.each([
+      // The state peculiar to Teams: connected, but nobody has messaged the
+      // bot, so there is no conversation to deliver into. An honest skip,
+      // not a failure.
+      ["no conversation captured", { ok: false, reason: "no_alert_target" }, "skipped", "no_alert_target"],
+      [
+        "a skip with detail",
+        { ok: false, reason: "needs_reconnect", detail: "paused" },
+        "skipped",
+        "needs_reconnect:paused"
+      ],
+      ["a send failure", { ok: false, reason: "send_failed" }, "failed", "send_failed"]
+    ])("records %s honestly", async (_label, delivered, status, reason) => {
+      connected();
+      vi.mocked(deliverTeamsAlert).mockResolvedValue(delivered as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = teamsRows()[0];
+      expect(row.status).toBe(status);
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+
+    it("writes NOTHING when delivery raced a disconnect", async () => {
+      connected();
+      vi.mocked(deliverTeamsAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(teamsRows()).toHaveLength(0);
+    });
+
+    it.each([
+      ["a toggle-off", { teams_urgent: false }, "teams_urgent_disabled"],
+      ["an unsubscribe", { unsubscribed_at: "2026-08-01T00:00:00Z" }, "unsubscribed"]
+    ])("records %s as a skip without delivering", async (_label, prefs, reason) => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        ...prefs
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect((teamsRows()[0].payload as { reason?: string }).reason).toBe(reason);
+      expect(deliverTeamsAlert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["an Error", new Error("boom"), "boom"],
+      ["a non-Error", "boom", "send_failed"]
+    ])("records a thrown send that was %s", async (_label, thrown, reason) => {
+      connected();
+      vi.mocked(deliverTeamsAlert).mockRejectedValue(thrown);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      const row = teamsRows()[0];
+      expect(row.status).toBe("failed");
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+  });
+
+  describe("telegram channel", () => {
+    const telegramRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "telegram");
+
+    const connected = () =>
+      vi
+        .mocked(telegramAlertTargetState)
+        .mockResolvedValue({ connected: true, hasTarget: true });
+
+    it("never-connected writes no rows and never delivers", async () => {
+      // The rule every optional channel follows: a business that never
+      // connected it records NOTHING, so an unused channel cannot look like
+      // a broken one.
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(telegramRows()).toHaveLength(0);
+      expect(deliverTelegramAlert).not.toHaveBeenCalled();
+    });
+
+    it("sends and records the chat it reached", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({
+        ok: true,
+        chatId: "-100777",
+        messageId: "9"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe("sent");
+      expect((row.payload as { recipient?: string }).recipient).toBe("-100777");
+    });
+
+    it("carries the dashboard link and the summary through to the card", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({
+        ok: true,
+        chatId: "-1",
+        messageId: "1"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead",
+        smsBody: "Dana called",
+        kind: "urgent_alert"
+      });
+      expect(deliverTelegramAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: "New lead", details: "Dana called" })
+      );
+    });
+
+    it.each([
+      ["a policy skip", { ok: false, reason: "no_alert_target" }, "skipped", "no_alert_target"],
+      [
+        "a skip with detail",
+        { ok: false, reason: "needs_reconnect", detail: "wiped" },
+        "skipped",
+        "needs_reconnect:wiped"
+      ],
+      ["a send failure", { ok: false, reason: "send_failed" }, "failed", "send_failed"]
+    ])("records %s honestly", async (_label, delivered, status, reason) => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue(delivered as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe(status);
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+
+    it("writes NOTHING when delivery raced a disconnect", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(telegramRows()).toHaveLength(0);
+    });
+
+    it("records a skip when the owner turned the channel off", async () => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        telegram_urgent: false
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe(
+        "telegram_urgent_disabled"
+      );
+      expect(deliverTelegramAlert).not.toHaveBeenCalled();
+    });
+
+    it("records an unsubscribe as an unsubscribe, not as a toggle-off", async () => {
+      // The two reasons look the same on the row unless this branch is
+      // right, and only one of them is something the owner chose per
+      // channel; the other silenced everything at once.
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-08-01T00:00:00Z"
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe("unsubscribed");
+    });
+
+    it("records a failure rather than losing a thrown send", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockRejectedValue(new Error("boom"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe("failed");
+      expect((row.payload as { reason?: string }).reason).toBe("boom");
+    });
+
+    it("stringifies a thrown non-Error", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockRejectedValue("boom");
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe("send_failed");
+    });
+  });
+
   describe("push channel", () => {
     const pushRows = () =>
       vi
@@ -1705,6 +1983,14 @@ describe("notifications/dispatch", () => {
     it("stays silent when delivery races a disconnect", async () => {
       connected();
       vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Telegram NOT connected either, same reason as Slack above.
+    // A never-connected channel records NOTHING, so the existing fan-out
+    // counts keep meaning what they meant.
+    vi.mocked(telegramAlertTargetState).mockResolvedValue({
+      connected: false,
+      hasTarget: false
+    });
+    vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
       const result = await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "A",

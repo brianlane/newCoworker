@@ -1,8 +1,10 @@
 -- 'push' becomes a first-class owner-alert delivery channel alongside
--- sms/email/dashboard/whatsapp/slack (same widening pattern as 20260822113305).
+-- sms/email/dashboard/whatsapp/slack/telegram/teams (same widening pattern as
+-- 20260822113305, and it must restate EVERY channel: this constraint is
+-- replaced wholesale, so omitting one silently drops it).
 --
 -- Delivery requires at least one live Web Push subscription for the business
--- (push_subscriptions, 20260828234552); a business that has never subscribed
+-- (push_subscriptions, 20260829041731); a business that has never subscribed
 -- a device records NO push rows at all (the WhatsApp never-connected rule
 -- from PR #1148).
 --
@@ -27,7 +29,10 @@ alter table public.notifications
   drop constraint if exists notifications_delivery_channel_check;
 alter table public.notifications
   add constraint notifications_delivery_channel_check
-  check (delivery_channel in ('sms', 'email', 'dashboard', 'whatsapp', 'slack', 'push'));
+  check (
+    delivery_channel in
+      ('sms', 'email', 'dashboard', 'whatsapp', 'slack', 'telegram', 'teams', 'push')
+  );
 
 alter table public.notification_preferences
   add column if not exists push_urgent boolean not null default true;

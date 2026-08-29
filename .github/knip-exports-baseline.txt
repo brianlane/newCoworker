@@ -1567,6 +1567,8 @@ src/lib/stripe/client.ts :: resolveRenewalPriceId
 src/lib/stripe/promotions.ts :: resolveMembershipProductIds
 src/lib/stripe/subscription-discount.ts :: planProductIdFromSubscription
 src/lib/team/tier-gate.ts :: TEAM_ACCESS_TIER_MESSAGE
+src/lib/teams/auth.ts :: resetTeamsJwksStateForTests
+src/lib/teams/client.ts :: resetTeamsTokenStateForTests
 src/lib/telnyx/alpha-sender.ts :: ALPHA_NO_REPLY_LINE
 src/lib/telnyx/assign-did.ts :: resolveDefaultForwardToE164
 src/lib/telnyx/bridge-health.ts :: BRIDGE_FRESHNESS_THRESHOLD_MS

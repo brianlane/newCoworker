@@ -4,6 +4,7 @@ import {
   ownerSurfaceByFlowEditSource,
   ownerSurfaceByKey
 } from "@/lib/owner-surfaces/registry";
+import { OWNER_TURN_SURFACES } from "@/lib/owner-surfaces/turn-surfaces";
 import { describeEditSource } from "@/lib/ai-flows/version-history";
 import { shouldAnnounceFlowChange } from "@/lib/ai-flows/change-notice";
 
@@ -103,6 +104,27 @@ describe("the four call sites still answer exactly as before", () => {
     }
     for (const source of ["dashboard", "white_glove", "ai_edit", undefined]) {
       expect(shouldAnnounceFlowChange(source), String(source)).toBe(false);
+    }
+  });
+});
+
+describe("every turn surface can name both kinds of speaker", () => {
+  // A surface that serves teammates but only phrases the owner line would
+  // hand the model an empty sentence about who it is talking to.
+  it.each(Object.values(OWNER_TURN_SURFACES))("$key", (surface) => {
+    for (const kind of surface.serves) {
+      const line = surface.speakerLine(
+        { kind, name: kind === "owner" ? "Amy" : "Dana", readFailed: false },
+        "ref-1"
+      );
+      expect(line.length, `${surface.key}/${kind}`).toBeGreaterThan(0);
+      // Not every surface interpolates the ref: Slack names the owner by
+      // their verified profile email instead, which is more useful there.
+    }
+    // And an unnamed speaker must not produce a dangling comma or "undefined".
+    for (const kind of surface.serves) {
+      const line = surface.speakerLine({ kind, name: null, readFailed: false }, "ref-1");
+      expect(line, `${surface.key}/${kind} unnamed`).not.toContain("undefined");
     }
   });
 });

@@ -18,6 +18,8 @@ import {
   CalendarDays,
   CalendarRange,
   Hash,
+  Send,
+  Users,
   KeyRound,
   Mail,
   Megaphone,
@@ -31,6 +33,8 @@ export type IntegrationSlug =
   | "microsoft"
   | "workspace"
   | "slack"
+  | "telegram"
+  | "teams"
   | "vagaro"
   | "acuity"
   | "calendly"
@@ -90,6 +94,24 @@ export const INTEGRATIONS: IntegrationDef[] = [
       "Bring your coworker into Slack: alerts for leads, bookings, and handoffs land in a channel you pick, right where your team already works.",
     // lucide dropped brand icons, so the channel hash stands in for Slack.
     icon: Hash
+  },
+  {
+    slug: "telegram",
+    name: "Telegram",
+    category: "Team chat",
+    benefit:
+      "Bring your coworker into Telegram: urgent alerts arrive on your phone with no template approval and no per-message fee, and you can message back to ask anything.",
+    // lucide dropped brand icons; Send is the paper plane Telegram uses.
+    icon: Send
+  },
+  {
+    slug: "teams",
+    name: "Microsoft Teams",
+    category: "Team chat",
+    benefit:
+      "Bring your coworker into Microsoft Teams: alerts land where your team already works, and anyone on your roster can message it back using their Microsoft account.",
+    // lucide dropped brand icons; Users stands in for a Teams workspace.
+    icon: Users
   },
   {
     slug: "vagaro",

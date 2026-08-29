@@ -105,6 +105,8 @@ type Legs = {
   pushClicks?: Fixture;
   whatsapp?: Fixture;
   slack?: Fixture;
+  telegram?: Fixture;
+  teams?: Fixture;
   email?: Fixture;
 };
 
@@ -118,6 +120,8 @@ const BUSY: Record<LivenessChannel, number> = {
   dashboard: 40,
   whatsapp: 40,
   slack: 40,
+  telegram: 40,
+  teams: 40,
   push: 40
 };
 
@@ -140,7 +144,18 @@ function answer(q: Query, legs: Legs): Fixture {
     return (channel === "push" ? legs.pushClicks : legs.clicks) ?? { data: [] };
   }
   if (q.table === "messenger_conversations") return legs.whatsapp ?? { data: [] };
-  if (q.table === "coworker_conversations") return legs.slack ?? { data: [] };
+  if (q.table === "coworker_conversations") {
+    // One table, every team-chat channel: the fixture is picked by the
+    // channel filter the production code sent, which is also what proves
+    // the filter is there at all.
+    const channel = q.filters.find((f) => f[1] === "channel")?.[2];
+    const perChannel: Record<string, Fixture | undefined> = {
+      slack: legs.slack,
+      telegram: legs.telegram,
+      teams: legs.teams
+    };
+    return perChannel[String(channel)] ?? { data: [] };
+  }
   return legs.email ?? { data: [] };
 }
 
@@ -226,6 +241,8 @@ describe("send counts", () => {
     // head:true is what keeps the 1000-row PostgREST cap from turning a busy
     // month into a quiet-looking one.
     const counts = db.seen.filter((q) => q.table === "notifications" && q.head);
+    // One head count per delivery channel, derived rather than hardcoded so
+    // adding a channel cannot leave this silently under-counting.
     expect(counts).toHaveLength(LIVENESS_CHANNELS.length);
     expect(counts[0].filters).toContainEqual(["eq", "status", "sent"]);
   });
@@ -414,6 +431,35 @@ describe("the WhatsApp signal", () => {
   });
 });
 
+describe("the Telegram signal", () => {
+  it("matches an audience member by their VERIFIED PHONE, not an email", async () => {
+    // Telegram enrolment records the number Telegram verified rather than
+    // an address, so the phone cross-check is the only thing that can
+    // recognise a teammate on this channel.
+    vi.mocked(businessOwnerNumbers).mockResolvedValue(["+15555550100"]);
+    const { by } = await judgeOne({
+      slack: { data: [] },
+      telegram: {
+        data: [
+          { is_owner: false, user_phone_e164: "+15555550100", last_user_message_at: daysAgo(2) }
+        ]
+      }
+    });
+    expect(by("telegram")).toMatchObject({ verdict: "live" });
+  });
+
+  it("ignores a Telegram thread belonging to nobody in the audience", async () => {
+    const { by } = await judgeOne({
+      telegram: {
+        data: [
+          { is_owner: false, user_phone_e164: "+19998887777", last_user_message_at: daysAgo(2) }
+        ]
+      }
+    });
+    expect(by("telegram")).toMatchObject({ verdict: "silent" });
+  });
+});
+
 describe("the Slack signal", () => {
   const withOwnerEmail: Legs = { business: { data: { owner_email: "owner@example.com" } } };
 
@@ -475,8 +521,13 @@ describe("the Slack signal", () => {
   it("tolerates a null result set and reports an error", async () => {
     const nulls = await judgeOne({ slack: { data: null } });
     expect(nulls.by("slack").silentDays).toBeNull();
+    // The error names the CHANNEL, not just the reader: both Slack and
+    // Telegram read this table, and "which one blew up" is the first thing
+    // anyone reading the failure needs to know.
     const failed = await judgeOne({}, { fail: (q) => q.table === "coworker_conversations" });
-    expect(failed.row.outcome === "failed" && failed.row.error).toBe(`lastOwnerSlackAt: ${READ_FAILED}`);
+    expect(failed.row.outcome === "failed" && failed.row.error).toBe(
+      `lastAudienceMessageAt(slack): ${READ_FAILED}`
+    );
   });
 });
 
@@ -575,6 +626,8 @@ describe("reportChannelLiveness", () => {
       "dashboard",
       "whatsapp",
       "slack",
+      "telegram",
+      "teams",
       "push"
     ]);
     expect(recordSystemLog).not.toHaveBeenCalled();

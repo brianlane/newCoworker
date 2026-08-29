@@ -28,6 +28,8 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { getPublicSlackConnection } from "@/lib/db/slack-connections";
 import { slackAllowedForTier } from "@/lib/slack/tier-gate";
+import { coworkerChannelAllowedForTier } from "@/lib/coworker-channels/tier-gate";
+import { getPublicCoworkerConnection } from "@/lib/db/coworker-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
@@ -64,8 +66,12 @@ export type IntegrationsContext = {
    */
   googleMeetEnabled: boolean;
   slackConnection: Awaited<ReturnType<typeof getPublicSlackConnection>>;
+  telegramConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
+  teamsConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
   /** False on starter: the Slack integration is a Standard-tier perk. */
   slackEnabled: boolean;
+  telegramEnabled: boolean;
+  teamsEnabled: boolean;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
@@ -136,7 +142,13 @@ export async function loadIntegrationsContext(
     zoomConnection: businessId ? await getPublicZoomConnection(businessId) : null,
     googleMeetEnabled: businessRow?.google_meet_enabled === true,
     slackConnection: businessId ? await getPublicSlackConnection(businessId) : null,
+    telegramConnection: businessId
+      ? await getPublicCoworkerConnection(businessId, "telegram")
+      : null,
+    teamsConnection: businessId ? await getPublicCoworkerConnection(businessId, "teams") : null,
     slackEnabled: slackAllowedForTier(businessRow?.tier),
+    telegramEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
+    teamsEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
     // Never load key metadata for non-owners: the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
@@ -185,6 +197,28 @@ export function computeIntegrationStatuses(
     : ctx.slackConnection.is_active && ctx.slackConnection.has_bot_token
       ? connected
       : { state: "attention", label: "Needs reconnect" };
+
+  // Telegram has no separate "has token" flag: an empty credential IS the
+  // needs-reconnect state, and the public read deliberately never returns
+  // the token itself, so `is_active` is the whole signal here.
+  const telegramStatus: IntegrationStatus = !ctx.telegramConnection
+    ? disconnected
+    : ctx.telegramConnection.is_active
+      ? connected
+      : { state: "attention", label: "Paused" };
+
+  // Teams has a third state the others do not: connected, but with no
+  // conversation captured yet. Teams cannot start one, so until somebody
+  // messages the bot there is nowhere to deliver, and saying "Connected"
+  // there would be a lie the owner only discovers when an alert goes
+  // missing.
+  const teamsStatus: IntegrationStatus = !ctx.teamsConnection
+    ? disconnected
+    : !ctx.teamsConnection.is_active
+      ? { state: "attention", label: "Paused" }
+      : ctx.teamsConnection.alert_target_id
+        ? connected
+        : { state: "attention", label: "Message your bot once" };
 
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
@@ -235,6 +269,8 @@ export function computeIntegrationStatuses(
     whatsapp: whatsappStatus,
     zoom: zoomStatus,
     slack: slackStatus,
+    telegram: telegramStatus,
+    teams: teamsStatus,
     custom:
       customCount > 0
         ? { state: "connected", label: `${customCount} connected` }

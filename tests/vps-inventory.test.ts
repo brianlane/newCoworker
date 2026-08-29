@@ -25,6 +25,24 @@ import {
   type VpsInventoryRow
 } from "@/lib/db/vps-inventory";
 
+/**
+ * Runway-relative expiry, anchored to NOW rather than written as a literal.
+ *
+ * `claimAvailableVps` pushes a 72-hour runway floor into its candidate scan
+ * (VPS_POOL_MIN_RUNWAY_MS), so a fixture with a hardcoded date is a fuse:
+ * it passes until the wall clock reaches it, then fails forever. The
+ * literal these replaced was `2026-09-01T00:00:00Z`, which stopped clearing
+ * the floor on 2026-08-29 at 00:02 UTC and took the suite red on main with
+ * no code change behind it.
+ */
+const daysFromNow = (days: number): string =>
+  new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+
+/** Comfortably past the 72h floor, whenever this happens to run. */
+const WELL_INSIDE_RUNWAY = () => daysFromNow(30);
+/** Further out still, for "prefer the furthest expiry" ordering. */
+const FURTHER_RUNWAY = () => daysFromNow(60);
+
 const sampleRow: VpsInventoryRow = {
   vm_id: 1800985,
   hostname: "srv1800985.hstgr.cloud",
@@ -36,7 +54,7 @@ const sampleRow: VpsInventoryRow = {
   assigned_at: null,
   notes: null,
   never_renew: false,
-  expires_at: "2026-09-01T00:00:00Z",
+  expires_at: WELL_INSIDE_RUNWAY(),
   updated_at: "2026-07-01T00:00:00Z"
 };
 
@@ -147,7 +165,7 @@ describe("vps_inventory DB layer", () => {
       const chain = makeChain();
       mockNoOwnBox(chain);
       chain.limit.mockResolvedValueOnce({
-        data: [{ vm_id: 1800985, expires_at: "2026-09-01T00:00:00Z" }],
+        data: [{ vm_id: 1800985, expires_at: WELL_INSIDE_RUNWAY() }],
         error: null
       });
       chain.maybeSingle.mockResolvedValue({
@@ -255,8 +273,8 @@ describe("vps_inventory DB layer", () => {
       mockNoOwnBox(chain);
       chain.limit.mockResolvedValueOnce({
         data: [
-          { vm_id: 111, expires_at: "2026-10-01T00:00:00Z" },
-          { vm_id: 222, expires_at: "2026-09-01T00:00:00Z" }
+          { vm_id: 111, expires_at: FURTHER_RUNWAY() },
+          { vm_id: 222, expires_at: WELL_INSIDE_RUNWAY() }
         ],
         error: null
       });

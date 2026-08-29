@@ -30,6 +30,8 @@ export const LIVENESS_CHANNELS = [
   "dashboard",
   "whatsapp",
   "slack",
+  "telegram",
+  "teams",
   "push"
 ] as const;
 
@@ -84,6 +86,20 @@ export const LIVENESS_WINDOW_DAYS = 30;
  * example three days from tripping, which is not a threshold, it is a
  * coin flip.
  *
+ * Telegram sits with SMS and WhatsApp at 21 rather than with Slack at 30,
+ * and the difference is what the signal MEANS. A Slack workspace is a room
+ * somebody sits in all day whether or not they type; a Telegram thread with
+ * their coworker is one they only open to say something. Silence there is
+ * therefore closer to unanswered SMS than to an unposted-in workspace.
+ *
+ * This number has NOT yet been calibrated against real Telegram traffic,
+ * because there is none: the channel ships with zero connected tenants.
+ * Until one clears the ten-send floor every Telegram row reads `unused`,
+ * which can neither darken nor rescue a tenant, so an unproven threshold
+ * cannot raise a false alarm in the meantime. Re-run
+ * debug/channel-liveness-report.ts once a tenant is connected and revisit
+ * this with data, exactly as the numbers above were arrived at.
+ *
  * Push is deliberately the TIGHTEST, at a third of the others, and the reason
  * is evidence quality rather than impatience. Every threshold above is loose
  * because its signal is a PROXY: an owner who reads every alert and answers
@@ -107,6 +123,13 @@ const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   sms: 21,
   whatsapp: 21,
   slack: 30,
+  telegram: 21,
+  // Teams is a room somebody sits in all day, like Slack, so silence
+  // there says less than an unanswered phone message. Same 30 as Slack,
+  // and just as uncalibrated as Telegram until a tenant connects: every
+  // Teams row reads `unused` below the ten-send floor, so an unproven
+  // number cannot raise a false alarm meanwhile.
+  teams: 30,
   dashboard: 21,
   push: 7,
   email: null

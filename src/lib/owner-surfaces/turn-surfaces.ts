@@ -14,12 +14,25 @@
 
 import type { AgentKey } from "@/lib/agent-tools/registry";
 import { SLACK_SURFACE_BLOCK, SLACK_TEAM_PREAMBLE } from "@/lib/slack/chat";
+import {
+  TELEGRAM_REPLY_MAX_CHARS,
+  TELEGRAM_SURFACE_BLOCK,
+  TELEGRAM_TEAM_PREAMBLE
+} from "@/lib/telegram/chat";
+import {
+  TEAMS_REPLY_MAX_CHARS,
+  TEAMS_SURFACE_BLOCK,
+  TEAMS_TEAM_PREAMBLE
+} from "@/lib/teams/chat";
 import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
 import type { OwnerSurfaceKey } from "./registry";
 import type { SpeakerKind, SurfaceSpeaker } from "./speaker";
 
 /** Surfaces that actually run a turn through the shared owner engine. */
-export type OwnerTurnSurfaceKey = Extract<OwnerSurfaceKey, "sms" | "slack" | "whatsapp">;
+export type OwnerTurnSurfaceKey = Extract<
+  OwnerSurfaceKey,
+  "sms" | "slack" | "whatsapp" | "telegram" | "teams"
+>;
 
 export type OwnerTurnSurface = {
   key: OwnerTurnSurfaceKey;
@@ -138,6 +151,46 @@ export const OWNER_TURN_SURFACES: Readonly<Record<OwnerTurnSurfaceKey, OwnerTurn
         : `The person messaging is ${speaker.name ?? "a team member"}, on the business's roster, from ${ref}.`,
     transcriptLabel: `Recent WhatsApp exchange ${TRANSCRIPT_SUFFIX}`,
     replyMaxChars: WHATSAPP_REPLY_MAX_CHARS,
+    budgetMs: 60_000,
+    maxToolSteps: 6
+  },
+  telegram: {
+    key: "telegram",
+    flowEditSource: "ai_edit_telegram",
+    // The owner's own assistant, reached from Telegram: same posture as
+    // owner-over-SMS and owner-over-WhatsApp, so it reads the dashboard
+    // toggles rather than needing a settings card nobody has filled in.
+    // This is also why Telegram adds no AgentKey and no Rowboat seed.
+    toolGateAgentKey: "dashboard",
+    serves: ["owner", "teammate"],
+    surfaceBlock: TELEGRAM_SURFACE_BLOCK,
+    teamPreamble: TELEGRAM_TEAM_PREAMBLE,
+    speakerLine: (speaker, ref) =>
+      speaker.kind === "owner"
+        ? `The person messaging is the business OWNER${speaker.name ? `, ${speaker.name}` : ""}, on their connected Telegram account (${ref}).`
+        : `The person messaging is ${speaker.name ?? "a team member"}, on the business's roster, from their connected Telegram account (${ref}).`,
+    transcriptLabel: `Recent Telegram exchange ${TRANSCRIPT_SUFFIX}`,
+    replyMaxChars: TELEGRAM_REPLY_MAX_CHARS,
+    budgetMs: 60_000,
+    maxToolSteps: 6
+  },
+  teams: {
+    key: "teams",
+    flowEditSource: "ai_edit_teams",
+    // Same posture as owner-over-SMS, WhatsApp and Telegram: the owner's own
+    // assistant reached from somewhere else, so it reads the dashboard
+    // toggles rather than needing a settings card nobody has filled in.
+    // That is also why Teams adds no AgentKey and no Rowboat seed.
+    toolGateAgentKey: "dashboard",
+    serves: ["owner", "teammate"],
+    surfaceBlock: TEAMS_SURFACE_BLOCK,
+    teamPreamble: TEAMS_TEAM_PREAMBLE,
+    speakerLine: (speaker, ref) =>
+      speaker.kind === "owner"
+        ? `The speaker is the business OWNER${speaker.name ? `, ${speaker.name}` : ""}, verified from their Microsoft account (${ref}).`
+        : `The speaker is ${speaker.name ?? "a team member"}, on the business's roster, from their Microsoft account (${ref}).`,
+    transcriptLabel: `Recent Microsoft Teams exchange ${TRANSCRIPT_SUFFIX}`,
+    replyMaxChars: TEAMS_REPLY_MAX_CHARS,
     budgetMs: 60_000,
     maxToolSteps: 6
   }

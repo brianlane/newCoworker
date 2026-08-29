@@ -54,6 +54,8 @@ import {
 } from "@/lib/slack/deliver";
 import { deliverPush } from "@/lib/push/send";
 import { pushTargetState } from "@/lib/push/db";
+import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
+import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
 import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
@@ -213,6 +215,14 @@ export type ResolvedTargets = {
    * already does at send time.
    */
   pushConnected: boolean;
+  /** Telegram channel toggle (delivery still requires a picked alert chat). */
+  telegramUrgentEnabled: boolean;
+  /** Same never-connected silence rule again. */
+  telegramConnected: boolean;
+  /** Microsoft Teams toggle (delivery still requires a captured conversation). */
+  teamsUrgentEnabled: boolean;
+  /** And again. */
+  teamsConnected: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -264,6 +274,8 @@ export async function resolveNotificationTargets(
   let whatsappReplacesSms = false;
   let slackUrgent = true;
   let pushUrgent = true;
+  let telegramUrgent = true;
+  let teamsUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
   let dashboardAlerts = true;
@@ -303,8 +315,10 @@ export async function resolveNotificationTargets(
     whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
-    // ?? true: rows read before 20260828234556, same posture.
+    // ?? true: rows read before 20260829041735, same posture.
     pushUrgent = prefs.push_urgent ?? true;
+    telegramUrgent = prefs.telegram_urgent ?? true;
+    teamsUrgent = prefs.teams_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
@@ -366,6 +380,8 @@ export async function resolveNotificationTargets(
 
   // And for push (also fails toward connected inside the helper).
   const pushState = await pushTargetState(businessId);
+  const telegramState = await telegramAlertTargetState(businessId);
+  const teamsState = await teamsAlertTargetState(businessId);
 
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
@@ -419,6 +435,10 @@ export async function resolveNotificationTargets(
     slackConnected: slackState.connected,
     pushUrgentEnabled: pushUrgent,
     pushConnected: pushState.connected,
+    telegramUrgentEnabled: telegramUrgent,
+    telegramConnected: telegramState.connected,
+    teamsUrgentEnabled: teamsUrgent,
+    teamsConnected: teamsState.connected,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -619,10 +639,14 @@ export async function dispatchUrgentNotification(
       // The dashboard is NEVER gated: it makes no noise, it is the record of
       // what happened, and suppressing it is what made the eaten alert
       // invisible after the fact as well as at the time.
-      const gatedChannels = (["email", "sms", "whatsapp", "slack", "push"] as const).filter(
+      const gatedChannels = (
+        ["email", "sms", "whatsapp", "slack", "telegram", "teams", "push"] as const
+      ).filter(
         (channel) =>
           (channel !== "whatsapp" || targets.whatsappConnected) &&
           (channel !== "slack" || targets.slackConnected) &&
+          (channel !== "telegram" || targets.telegramConnected) &&
+          (channel !== "teams" || targets.teamsConnected) &&
           (channel !== "push" || targets.pushConnected)
       );
       // Every row of a suppressed dispatch is stamped so the backstop count
@@ -668,11 +692,13 @@ export async function dispatchUrgentNotification(
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
     const gatedChannels = (
-      ["dashboard", "email", "sms", "whatsapp", "slack", "push"] as const
+      ["dashboard", "email", "sms", "whatsapp", "slack", "telegram", "teams", "push"] as const
     ).filter(
       (channel) =>
         (channel !== "whatsapp" || targets.whatsappConnected) &&
         (channel !== "slack" || targets.slackConnected) &&
+        (channel !== "telegram" || targets.telegramConnected) &&
+        (channel !== "teams" || targets.teamsConnected) &&
         (channel !== "push" || targets.pushConnected)
     );
     for (const channel of gatedChannels) {
@@ -1174,7 +1200,143 @@ export async function dispatchUrgentNotification(
     }
   }
 
-  // 6) Web Push. Same never-connected silence rule as WhatsApp and Slack: a
+  // 6) Telegram. Same never-connected silence rule as WhatsApp and Slack: a
+  // business that never connected Telegram records NOTHING here. Delivery
+  // details (tier re-check, the actual send) live in deliverTelegramAlert.
+  if (!targets.telegramConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.telegramUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "telegram",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "telegram_urgent_disabled"
+      )
+    );
+  } else {
+    try {
+      const delivered = await deliverTelegramAlert({
+        businessId: input.businessId,
+        summary: phiFree?.summary ?? summary,
+        details: phiFree ? null : (input.smsBody ?? null),
+        detailsUrl: dashboardUrl
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "telegram", "sent", summary, kind, {
+            ...payload,
+            recipient: delivered.chatId
+          })
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced a disconnect since the existence check: treat as never
+        // connected, no row (see the section comment above).
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "telegram",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail ? `${delivered.reason}:${delivered.detail}` : delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: telegram send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "telegram",
+          "failed",
+          summary,
+          kind,
+          payload,
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 7) Microsoft Teams. Same never-connected silence rule. Note the extra
+  // state this channel can be in: Teams cannot START a conversation, so a
+  // tenant who installed the app but has not messaged it yet is connected
+  // with nowhere to deliver, which deliverTeamsAlert reports as
+  // `no_alert_target` and is recorded as an honest owner-actionable skip.
+  if (!targets.teamsConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.teamsUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "teams",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "teams_urgent_disabled"
+      )
+    );
+  } else {
+    try {
+      const delivered = await deliverTeamsAlert({
+        businessId: input.businessId,
+        summary: phiFree?.summary ?? summary,
+        details: phiFree ? null : (input.smsBody ?? null),
+        detailsUrl: dashboardUrl
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "teams", "sent", summary, kind, {
+            ...payload,
+            recipient: delivered.conversationId
+          })
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced a disconnect since the existence check: treat as never
+        // connected, no row.
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "teams",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail ? `${delivered.reason}:${delivered.detail}` : delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: teams send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "teams",
+          "failed",
+          summary,
+          kind,
+          payload,
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 8) Web Push. Same never-connected silence rule as WhatsApp and Slack: a
   // business that has never subscribed a device records NOTHING here.
   //
   // TWO DELIBERATE DIVERGENCES from the WhatsApp leg above, called out because

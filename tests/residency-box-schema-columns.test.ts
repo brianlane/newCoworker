@@ -210,55 +210,56 @@ describe("vps/data-api/schema.sql covers the email_log columns the dashboard rea
 });
 
 /**
- * `notifications.delivery_channel` is the OTHER value-list the box pins, and
- * it is the one with the sharpest failure. `notifications` is a moved table,
- * so a tenant's rows replay onto their box; a channel the box's CHECK does
- * not know is rejected, and per this file's own header a replay that fails
- * "stops, queueing every later write for that tenant behind it". One push row
- * would not just lose itself, it would wedge that tenant's entire journal.
+ * The same trap, one table over, and it had already been sprung.
  *
- * The expectation is DERIVED from the TypeScript union rather than
- * hand-listed, so this cannot drift the way a copied list does, and every
- * future channel inherits the guard for free.
+ * `notifications` is residency-moved, and its `delivery_channel` CHECK lives
+ * in the box schema exactly like `email_log.source`. The email_log half had
+ * a value-parity assertion; this one did not, so when Telegram widened the
+ * central CHECK the box copy silently stayed five channels behind. A
+ * residency tenant's first Telegram alert would have failed that CHECK and
+ * stalled their write journal, queueing every later write behind it.
+ *
+ * Derived from NotificationDeliveryChannel rather than hand-listed, so the
+ * next channel is covered on the day it lands rather than the day somebody
+ * remembers this file.
  */
-describe("vps/data-api/schema.sql accepts every notification delivery channel", () => {
+describe("vps/data-api/schema.sql accepts every delivery channel the app can write", () => {
   const sql = readFileSync(SCHEMA_PATH, "utf8");
-  const unionSource = readFileSync(
-    join(__dirname, "..", "src/lib/db/notifications.ts"),
-    "utf8"
-  );
-
-  const declared = [
-    ...(/export type NotificationDeliveryChannel =([^;]+);/
-      .exec(unionSource)?.[1] ?? "").matchAll(/"([a-z_]+)"/g)
+  const centralChannels = [
+    ...readFileSync(join(__dirname, "..", "src/lib/db/notifications.ts"), "utf8")
+      .match(/export type NotificationDeliveryChannel =([^;]+);/)![1]
+      .matchAll(/"([a-z]+)"/g)
   ].map((m) => m[1]);
 
-  it("finds the union, so this sweep is not vacuous", () => {
-    expect(declared.length).toBeGreaterThan(1);
+  it("has found the central channel list it is checking against", () => {
+    expect(centralChannels.length).toBeGreaterThanOrEqual(5);
+    expect(centralChannels).toContain("dashboard");
   });
 
   /**
-   * Both sites: the create-table constraint for a fresh box, and the
-   * drop/re-add for an existing one. `create table if not exists` never
-   * refreshes a constraint, so patching only the first leaves every box that
-   * already exists rejecting the new channel.
+   * BOTH constraint sites, not just the `add constraint` one.
+   *
+   * The box schema pins delivery_channel twice: inside `create table if not
+   * exists` for a fresh box, and as a drop/re-add for an existing one. A
+   * single `.exec` only ever sees the first match, so patching one and
+   * leaving the other passes while every NEWLY provisioned box rejects the
+   * channel.
    */
-  const checks = [
-    ...sql.matchAll(/notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/g)
-  ].map((m) => new Set([...m[1].matchAll(/'([a-z_]+)'/g)].map((v) => v[1])));
+  const constraints = [
+    ...sql.matchAll(
+      /notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/g
+    )
+  ].map((m) => [...m[1].matchAll(/'([a-z_]+)'/g)].map((v) => v[1]));
 
-  it("patches both the create-table and the alter-table constraint", () => {
-    expect(checks.length).toBe(2);
+  it("pins the channel list in both the create-table and alter-table constraints", () => {
+    expect(constraints).toHaveLength(2);
   });
 
-  it.each(checks.map((set, i) => [i, set]))(
-    "constraint %i accepts every declared channel",
-    (_i, boxChannels) => {
-      for (const channel of declared) {
-        expect([...(boxChannels as Set<string>)]).toContain(channel);
-      }
+  it.each(centralChannels)("accepts %s in every constraint site", (channel) => {
+    for (const boxChannels of constraints) {
+      expect(boxChannels).toContain(channel);
     }
-  );
+  });
 });
 
 /**
