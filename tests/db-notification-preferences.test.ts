@@ -1021,6 +1021,7 @@ describe("db/notification-preferences", () => {
       google_chat_urgent: false,
       slack_digest: false,
       push_urgent: false,
+      push_replaces_sms: true,
       email_digest: false,
       email_digest_weekly: false,
       email_monthly_recap: false,

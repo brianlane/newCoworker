@@ -254,13 +254,13 @@ describe("push/db: pushTargetState", () => {
   it("reports connected when the business has a live device", async () => {
     const { db } = makeDb({ data: [{ id: "sub-1" }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: true });
   });
 
   it("reports not connected when the business has never subscribed one", async () => {
     const { db } = makeDb({ data: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await pushTargetState(BIZ)).toEqual({ connected: false });
+    expect(await pushTargetState(BIZ)).toEqual({ connected: false, deliverable: false });
   });
 
   it("ignores revoked devices", async () => {
@@ -281,7 +281,7 @@ describe("push/db: pushTargetState", () => {
   it("uses limit(1), so a business with two devices does not error", async () => {
     const { db, calls, builder } = makeDb({ data: [{ id: "a" }, { id: "b" }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: true });
     expect(calls).toContainEqual(["limit", 1]);
     expect(builder.maybeSingle).toBeUndefined();
   });
@@ -293,15 +293,25 @@ describe("push/db: pushTargetState", () => {
    * applicable" on a hiccup would erase the channel from a tenant who really
    * does have devices, and leave nothing behind to notice it by.
    */
-  it("fails toward connected on a read error", async () => {
+  /**
+   * The two flags fail in OPPOSITE directions, and that is the whole point.
+   *
+   * `connected` decides whether a business gets no push row versus an honest
+   * skipped row, so a blip must degrade to the noisy-but-honest side.
+   * `deliverable` gates SUPPRESSING the owner's SMS for push_replaces_sms, so
+   * a blip must never be read as "yes": that would silence the text on the
+   * strength of a push nobody confirmed could land, which is the WhatsApp bug
+   * (Bugbot f574b3a4) one channel over.
+   */
+  it("fails OPEN on connected and CLOSED on deliverable, on a read error", async () => {
     const { db } = makeDb({ error: { message: "pg down" } });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: false });
   });
 
-  it("fails toward connected when the client itself cannot be built", async () => {
+  it("fails the same way when the client itself cannot be built", async () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no service key"));
-    expect(await pushTargetState(BIZ)).toEqual({ connected: true });
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: false });
   });
 });
 

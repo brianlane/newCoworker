@@ -217,6 +217,20 @@ export type ResolvedTargets = {
    * nothing.
    */
   pushConnected: boolean;
+  /**
+   * Owner preference: deliver urgent alerts by push INSTEAD of SMS.
+   * Gated on {@link pushDeliverable}, never on {@link pushConnected}.
+   */
+  pushReplacesSms: boolean;
+  /**
+   * Whether push can actually DELIVER right now: at least one live
+   * subscription exists. Distinct from {@link pushConnected}, which only asks
+   * whether the channel applies and fails toward TRUE. This one fails toward
+   * FALSE, because it is the gate that SUPPRESSES the SMS leg, and treating a
+   * read blip as "yes" would silence the owner's text on the strength of a
+   * push nobody confirmed could land.
+   */
+  pushDeliverable: boolean;
   /** Telegram channel toggle (delivery still requires a picked alert chat). */
   telegramUrgentEnabled: boolean;
   /** Same never-connected silence rule again. */
@@ -281,6 +295,7 @@ export async function resolveNotificationTargets(
   let whatsappReplacesSms = false;
   let slackUrgent = true;
   let pushUrgent = true;
+  let pushReplacesSms = false;
   let telegramUrgent = true;
   let teamsUrgent = true;
   let googleChatUrgent = true;
@@ -325,6 +340,9 @@ export async function resolveNotificationTargets(
     slackUrgent = prefs.slack_urgent ?? true;
     // ?? true: rows read before 20260829044308, same posture.
     pushUrgent = prefs.push_urgent ?? true;
+    // === true, never truthiness: the column is tri-state and NULL means
+    // undecided, which must behave as "keep texting" until something decides.
+    pushReplacesSms = prefs.push_replaces_sms === true;
     telegramUrgent = prefs.telegram_urgent ?? true;
     teamsUrgent = prefs.teams_urgent ?? true;
     googleChatUrgent = prefs.google_chat_urgent ?? true;
@@ -445,6 +463,8 @@ export async function resolveNotificationTargets(
     slackConnected: slackState.connected,
     pushUrgentEnabled: pushUrgent,
     pushConnected: pushState.connected,
+    pushReplacesSms,
+    pushDeliverable: pushState.deliverable,
     telegramUrgentEnabled: telegramUrgent,
     telegramConnected: telegramState.connected,
     teamsUrgentEnabled: teamsUrgent,
@@ -882,6 +902,35 @@ export async function dispatchUrgentNotification(
         kind,
         { ...payload, recipient: targets.phone },
         targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
+      )
+    );
+  } else if (
+    targets.pushReplacesSms &&
+    // pushDeliverable, NOT pushConnected: the softer flag fails toward TRUE,
+    // so suppressing the text on it would leave the owner with no phone
+    // channel whenever a read hiccuped. Same distinction, and the same
+    // reason, as the WhatsApp arm below.
+    targets.pushDeliverable &&
+    targets.pushUrgentEnabled &&
+    // Never for an alert redirected to ONE teammate's phone: push fans out to
+    // every subscribed device for the business and cannot be aimed at the
+    // person this text was rerouted to.
+    targets.routing?.target !== "contact_owner" &&
+    // Never for a whole-team broadcast either, and for a sharper reason than
+    // WhatsApp's. Push reaches only the teammates who installed the app; the
+    // text reaches every tagged roster phone. Substituting would silence
+    // exactly the people who never opted in.
+    targets.routing?.target !== "team_broadcast"
+  ) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "sms",
+        "skipped",
+        summary,
+        kind,
+        { ...payload, recipient: targets.phone },
+        "push_preferred"
       )
     );
   } else if (

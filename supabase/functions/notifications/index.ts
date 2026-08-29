@@ -93,6 +93,7 @@ type ResolvedTargets = {
   whatsappReplacesSms: boolean;
   slackUrgent: boolean;
   pushUrgent: boolean;
+  pushReplacesSms: boolean;
   telegramUrgent: boolean;
   teamsUrgent: boolean;
   googleChatUrgent: boolean;
@@ -180,6 +181,7 @@ async function resolveTargets(
   let whatsappReplacesSms = false;
   let slackUrgent = true;
   let pushUrgent = true;
+  let pushReplacesSms = false;
   let telegramUrgent = true;
   let teamsUrgent = true;
   let googleChatUrgent = true;
@@ -191,7 +193,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, push_urgent, telegram_urgent, teams_urgent, google_chat_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, push_urgent, push_replaces_sms, telegram_urgent, teams_urgent, google_chat_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -213,6 +215,8 @@ async function resolveTargets(
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
     // ?? true: rows read before 20260829044308, same posture.
     pushUrgent = Boolean(prefs.push_urgent ?? true);
+    // ?? false: rows read before 20260829182428 keep SMS delivery unchanged.
+    pushReplacesSms = Boolean(prefs.push_replaces_sms ?? false);
     telegramUrgent = Boolean(prefs.telegram_urgent ?? true);
     teamsUrgent = Boolean(prefs.teams_urgent ?? true);
     googleChatUrgent = Boolean(prefs.google_chat_urgent ?? true);
@@ -255,6 +259,7 @@ async function resolveTargets(
     whatsappReplacesSms,
     slackUrgent,
     pushUrgent,
+    pushReplacesSms,
     telegramUrgent,
     teamsUrgent,
     googleChatUrgent,
@@ -617,6 +622,36 @@ serve(async (req: Request) => {
     }
   }
 
+  /**
+   * Push liveness, resolved here rather than in the push leg because the SMS
+   * leg below needs it first (push_replaces_sms).
+   *
+   * TWO flags failing in opposite directions, mirroring WhatsApp's pair.
+   * `pushConnected` decides whether a business gets NO push row at all and
+   * fails toward TRUE, so a read blip degrades to a noisy honest skip.
+   * `pushDeliverable` gates SUPPRESSING the owner's text and fails toward
+   * FALSE, because treating a blip as "yes" would silence the SMS on the
+   * strength of a push nobody confirmed could land.
+   */
+  let pushConnected = true;
+  let pushDeliverable = false;
+  {
+    // limit(1), NOT maybeSingle: push_subscriptions is one row per DEVICE and
+    // maybeSingle errors on the second, which the fail-open guard would then
+    // swallow forever.
+    const { data: pushSubs, error: pushErr } = await supa
+      .from("push_subscriptions")
+      .select("id")
+      .eq("business_id", record.business_id)
+      .is("revoked_at", null)
+      .limit(1);
+    if (!pushErr) {
+      const live = (pushSubs?.length ?? 0) > 0;
+      pushConnected = live;
+      pushDeliverable = live;
+    }
+  }
+
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
   if (record.task_type === "owner_notify_fallback") {
     // The SMS path is exactly what failed (or cannot work) for this
@@ -664,6 +699,26 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.phone },
       "recent_team_notify"
+    );
+  } else if (
+    targets.pushReplacesSms &&
+    pushDeliverable &&
+    targets.pushUrgent &&
+    // Never for an alert redirected to ONE teammate's phone: push fans out to
+    // every subscribed device and cannot be aimed at that person. Mirrors
+    // dispatch.ts, which additionally excludes team_broadcast; this pipeline
+    // has no such routing.
+    targets.routing?.target !== "contact_owner"
+  ) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "push_preferred"
     );
   } else if (
     targets.whatsappReplacesSms &&
@@ -1617,22 +1672,6 @@ serve(async (req: Request) => {
   // private key lands in an edge function). Same never-connected silence rule
   // as WhatsApp and Slack. Mirrors the sixth arm of
   // src/lib/notifications/dispatch.ts.
-  let pushConnected = true;
-  {
-    // limit(1), NOT maybeSingle like the Slack check above. slack_connections
-    // is one row per business; push_subscriptions is one row per DEVICE, and
-    // maybeSingle ERRORS on a second row. Copying the Slack shape here would
-    // make this check throw for every business with two phones, the error
-    // would be swallowed by the `if (!err)` guard, and pushConnected would sit
-    // at its fail-open default forever without anyone noticing.
-    const { data: pushSubs, error: pushErr } = await supa
-      .from("push_subscriptions")
-      .select("id")
-      .eq("business_id", record.business_id)
-      .is("revoked_at", null)
-      .limit(1);
-    if (!pushErr) pushConnected = (pushSubs?.length ?? 0) > 0;
-  }
   if (!pushConnected) {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.pushUrgent || targets.unsubscribed) {

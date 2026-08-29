@@ -258,17 +258,26 @@ export async function repointPushSubscription(
 /**
  * "Is push applicable to this business at all?" for the dispatcher.
  *
- * FAILS TOWARD TRUE, matching slackAlertTargetState. This value decides
- * whether a business gets NO push row at all (the never-connected silence
- * rule) versus an honest skipped row, so a transient read blip must degrade
- * to the noisy-but-honest side. Reporting "not applicable" on a hiccup would
- * silently erase the channel from a tenant who really does have devices, and
- * leave nothing behind to notice it by.
+ * TWO answers, failing in OPPOSITE directions, exactly as WhatsApp's twin
+ * does, because they gate different things.
+ *
+ * `connected` asks "is this channel applicable to this business at all?" and
+ * FAILS TOWARD TRUE. It decides whether a business gets no push row versus an
+ * honest skipped row, so a read blip must degrade to the noisy-but-honest
+ * side; reporting "not applicable" on a hiccup would erase the channel from a
+ * tenant who really does have devices and leave nothing to notice it by.
+ *
+ * `deliverable` asks "can it actually deliver right now?" and FAILS TOWARD
+ * FALSE, because it is the gate that SUPPRESSES the SMS leg for
+ * push_replaces_sms. Treating a read blip as "yes" would silence the owner's
+ * text on the strength of a push we never confirmed could land, leaving them
+ * with no phone channel at all. That is the WhatsApp bug (Bugbot f574b3a4)
+ * one channel over, and this is the shape that avoids it.
  */
 export async function pushTargetState(
   businessId: string,
   client?: SupabaseClient
-): Promise<{ connected: boolean }> {
+): Promise<{ connected: boolean; deliverable: boolean }> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
     const { data, error } = await db
@@ -281,10 +290,11 @@ export async function pushTargetState(
       // maybeSingle here would make the check error for every business with
       // two phones, and the fail-open default would hide it forever.
       .limit(1);
-    if (error) return { connected: true };
-    return { connected: (data as unknown[] | null)?.length ? true : false };
+    if (error) return { connected: true, deliverable: false };
+    const live = (data as unknown[] | null)?.length ? true : false;
+    return { connected: live, deliverable: live };
   } catch {
-    return { connected: true };
+    return { connected: true, deliverable: false };
   }
 }
 
