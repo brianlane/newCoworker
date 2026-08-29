@@ -371,7 +371,8 @@ if (ADOPT_VM_ID !== null) {
       businessId: cloneId,
       tier: CLONE_TIER,
       vpsSize: "kvm2",
-      postInstallScript: buildDefaultPostInstallScript({ tier: CLONE_TIER, vpsSize: "kvm2" })
+      buildPostInstallScript: (authorizedSshPublicKey) =>
+        buildDefaultPostInstallScript({ tier: CLONE_TIER, vpsSize: "kvm2", authorizedSshPublicKey })
     },
     {
       client: hostinger,

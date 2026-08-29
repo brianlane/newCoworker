@@ -284,18 +284,26 @@ export type ProvisionVpsForBusinessInput = {
   /** Total time budget to wait for VPS readiness. Default 15 min. */
   readyTimeoutMs?: number;
   /**
-   * Inline content for the Hostinger post-install script. When provided we
-   * try to register it via `POST /api/vps/v1/post-install-scripts` and
-   * attach the resulting `post_install_script_id` to the setup payload so
-   * it runs at first boot. On 403 (the chicken-and-egg the endpoint hits
-   * for accounts without an existing VPS) we silently fall back to "no
-   * script attached", the orchestrator's SSH-bootstrap path runs the
-   * same content after the VPS is up.
+   * Builds the Hostinger post-install script, given the public half of the
+   * keypair this function just minted. When provided we register the result
+   * via `POST /api/vps/v1/post-install-scripts` and attach the resulting
+   * `post_install_script_id` to the setup payload so it runs at first boot.
+   * On 403 (the chicken-and-egg the endpoint hits for accounts without an
+   * existing VPS) we fall back to "no script attached", and the
+   * orchestrator's SSH-bootstrap path runs the same content after the VPS
+   * is up.
    *
    * When omitted we DO NOT attempt the API call (the orchestrator can
    * still choose to SSH-bootstrap on its own).
+   *
+   * A BUILDER rather than a finished string, because the key it has to
+   * embed does not exist until step 1 below runs. Callers used to pass a
+   * ready-made script, which meant the purchase path was structurally
+   * incapable of embedding the key and depended entirely on Hostinger
+   * honouring `setup.public_key_ids`. It does not: see the comment on the
+   * setup payload in step 4.
    */
-  postInstallScript?: string;
+  buildPostInstallScript?: (authorizedSshPublicKey: string) => string;
   /**
    * Optional name for the post-install script resource. Defaults to a
    * timestamped `newcoworker-<biz>-<ts>` so re-provisions don't collide
@@ -434,8 +442,17 @@ export async function provisionVpsForBusiness(
   //    duplicate timestamped resource in the panel. Every OTHER status
   //    (402/422/5xx…) still throws: those fire before the purchase and
   //    usually indicate an account/token problem the operator must see.
+  //
+  //    The script we register EMBEDS the public key minted in step 1 as an
+  //    authorized_keys write, which is the only deterministic way to get a
+  //    key onto the box (see step 4). So a degrade here is no longer a pure
+  //    optimisation loss: it drops us back onto `public_key_ids`, which
+  //    Hostinger honours only sometimes. It is still not fatal (the account
+  //    that 403s owns no VPS, so there is nothing to migrate and nothing to
+  //    lose), but it is now logged as the key-attach risk it actually is.
   let postInstallScriptId: number | null = null;
-  if (input.postInstallScript) {
+  if (input.buildPostInstallScript) {
+    const postInstallScript = input.buildPostInstallScript(keypair.publicKey);
     const scriptName =
       input.postInstallScriptName ??
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`;
@@ -445,7 +462,7 @@ export async function provisionVpsForBusiness(
       try {
         const created: PostInstallScript = await client.createPostInstallScript(
           scriptName,
-          input.postInstallScript
+          postInstallScript
         );
         postInstallScriptId = created.id;
         onProgress?.("post_install_script_registered", {
@@ -457,13 +474,17 @@ export async function provisionVpsForBusiness(
         const status = errStatus(err);
         if (status === 403) {
           // Expected on brand-new accounts. Log + continue; SSH-bootstrap
-          // will pick up the slack downstream.
+          // will pick up the slack downstream. The account that gets this
+          // 403 owns no VPS, so it is by definition a first-ever provision:
+          // there is no tenant to strand and nothing to migrate off.
           logger.warn(
-            "Hostinger post-install-scripts attach skipped (account not yet eligible, falling back to SSH-bootstrap)",
+            "Hostinger post-install-scripts attach skipped (account not yet eligible, falling back to SSH-bootstrap); " +
+              "SSH access now depends on setup.public_key_ids, which Hostinger honours only sometimes",
             {
               businessId: input.businessId,
               scriptName,
-              status
+              status,
+              keyAttachPath: "public_key_ids_only"
             }
           );
           break;
@@ -482,11 +503,13 @@ export async function provisionVpsForBusiness(
             continue;
           }
           logger.warn(
-            "Hostinger post-install-scripts attach timed out twice, skipping (falling back to SSH-bootstrap)",
+            "Hostinger post-install-scripts attach timed out twice, skipping (falling back to SSH-bootstrap); " +
+              "SSH access now depends on setup.public_key_ids, which Hostinger honours only sometimes",
             {
               businessId: input.businessId,
               scriptName,
-              error: errToMessage(err)
+              error: errToMessage(err),
+              keyAttachPath: "public_key_ids_only"
             }
           );
           break;
@@ -496,10 +519,33 @@ export async function provisionVpsForBusiness(
     }
   }
 
-  // 4. Purchase the VPS. `setup.public_key_ids` attaches at first boot, so
-  //    SSH works immediately once cloud-init finishes, no later attach call.
-  //    `post_install_script_id` is included only when step 3 succeeded; on
-  //    fallback we let the orchestrator do the bootstrap over SSH.
+  // 4. Purchase the VPS. `post_install_script_id` is included only when step
+  //    3 succeeded; on fallback we let the orchestrator do the bootstrap
+  //    over SSH.
+  //
+  //    `public_key_ids` is sent but MUST NOT be trusted as the key-attach
+  //    path. Hostinger drops it silently, and it does so on the
+  //    purchase-embedded setup too, not just the standalone
+  //    setup/recreate/attach endpoints #359 already worked around. Proof:
+  //    Scar Fairy's term-renewal migration on 2026-08-29 bought VM 1939337
+  //    with `public_key_ids: [568047]`, Hostinger returned success, the box
+  //    came up running on the right template, and the key was never in
+  //    root's authorized_keys, verified by hand hours later, long past any
+  //    cloud-init race. The provision died at 17% on
+  //    "All configured authentication methods failed" holding a paid box it
+  //    could not log into.
+  //
+  //    That went unnoticed for months because the purchase reply parser was
+  //    broken (#1696): every purchase threw, every box the fleet owned came
+  //    in through the adopt/reconcile path instead, and THAT path has
+  //    embedded the key in the post-install script since #359. VM 1939337
+  //    was the first box in the fleet's history to complete a clean
+  //    purchase, and therefore the first to actually rely on
+  //    `public_key_ids`. It failed on first contact.
+  //
+  //    So the deterministic attach is the authorized_keys write inside the
+  //    post-install script (step 3). `public_key_ids` stays in the payload
+  //    as the free second chance when Hostinger does honour it.
   const setup: VpsSetupRequest = {
     data_center_id: dataCenterId,
     template_id: templateId,
@@ -676,14 +722,19 @@ export function buildDefaultPostInstallScript(opts?: {
   /**
    * When set, the script writes this OpenSSH public key into
    * `/root/.ssh/authorized_keys` before anything else. This is the
-   * DETERMINISTIC key-attach path for adopt/recreate flows: Hostinger's
-   * standalone setup, recreate, and attach endpoints all silently drop
-   * `public_key_ids` on some VMs (observed on VM 1798267 during the KVM2
-   * experiment and VM 1806097 during the KVM1 Phase E smoke, Jul 2026,
-   * recreate reported success twice, key never landed). Embedding the key
-   * in the post-install script sidesteps the flaky attach entirely; the
-   * purchase-embedded setup path still honors `public_key_ids` so this is
-   * belt-and-suspenders there.
+   * DETERMINISTIC key-attach path on EVERY flow, purchase included:
+   * Hostinger silently drops `public_key_ids` on some VMs, and it does so
+   * from every endpoint that accepts it. Standalone setup, recreate, and
+   * attach were caught first (VM 1798267 during the KVM2 experiment and
+   * VM 1806097 during the KVM1 Phase E smoke, Jul 2026, recreate reported
+   * success twice and the key never landed), which is what #359 worked
+   * around.
+   *
+   * The purchase-embedded setup was ASSUMED to be sound and documented
+   * here as such, so this stayed opt-in and the purchase path never passed
+   * it. That assumption was wrong: VM 1939337 (Scar Fairy, 2026-08-29) was
+   * bought with `public_key_ids: [568047]`, came up clean, and never
+   * carried the key. Treat an unset value on a purchase path as a bug.
    */
   authorizedSshPublicKey?: string | null;
 }): string {

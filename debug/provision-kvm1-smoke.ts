@@ -202,7 +202,8 @@ if (ADOPT_VM_ID !== null) {
       tier: "starter",
       vpsSize: "kvm2",
       itemId: KVM1_ITEM_ID,
-      postInstallScript: buildDefaultPostInstallScript({ tier: "starter", vpsSize: "kvm2" })
+      buildPostInstallScript: (authorizedSshPublicKey) =>
+        buildDefaultPostInstallScript({ tier: "starter", vpsSize: "kvm2", authorizedSshPublicKey })
     },
     {
       client: hostinger,

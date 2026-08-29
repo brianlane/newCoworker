@@ -411,6 +411,168 @@ export async function runWithSshConnectRetry<T>(
   throw lastErr;
 }
 
+/**
+ * Probe for "the box's own post-install run has finished". Greps for the
+ * loader's long-lived `tee -a /post_install.log` plus apt/apt-get/dpkg. The
+ * `[e]` character class stops `pgrep -f` from matching this probe's own
+ * command line, which contains the literal pattern. Bare `apt` is matched as
+ * well as `apt-get`: Hostinger's own maintenance runs `apt`.
+ *
+ * Copied deliberately from `adopt.ts`'s `defaultPisQuiescentProbe` rather
+ * than shared, because the two live on opposite sides of the
+ * provisioning/hostinger module boundary and adopt owns its own SSH stack.
+ * If a third caller appears, hoist it.
+ */
+const PIS_QUIESCENCE_PROBE_COMMAND =
+  "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt >/dev/null || " +
+  "pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi";
+
+/**
+ * How long to wait for Hostinger's own post-install runner before bootstrapping
+ * anyway.
+ *
+ * Measured, not guessed: on KIN's box (VM 1936826, 2026-08-28) the loader ran
+ * 15:53:13 to 15:54:22, so the whole first-boot bootstrap is about 70 seconds.
+ * Ten minutes is roughly eight times that, and still leaves the term-renewal
+ * sweep's 1800s route budget most of its room. Adopt allows 25 minutes, but
+ * adopt runs from a debug script with no route deadline over it.
+ */
+const PIS_QUIESCENCE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Gap between probes. Adopt uses the same 15s. */
+const DEFAULT_QUIESCENCE_POLL_MS = 15_000;
+
+/**
+ * How long to tolerate SSH auth rejections before concluding the key is not
+ * coming.
+ *
+ * This wait only runs when a post-install script is attached, and that script
+ * is now what WRITES the key (see `buildDefaultPostInstallScript`). So an auth
+ * rejection early in the run is the expected transient: sshd is up, the
+ * runner has not reached the authorized_keys line yet. Treating it as
+ * permanent would exit the wait exactly on the boxes that depend on the PIS
+ * write, which is to say exactly when Hostinger dropped `public_key_ids`,
+ * which is the case this whole change exists for.
+ *
+ * Three minutes is generous against a key written in the first seconds of the
+ * run, and still bounds the genuinely keyless box (PIS never ran AND
+ * `public_key_ids` dropped) well under the full quiescence budget. After it,
+ * the bootstrap raises the real error within its own 76s retry.
+ */
+const AUTH_GRACE_MS = 3 * 60 * 1000;
+
+/**
+ * Real timers, named so they are ordinary covered code rather than an
+ * inline default hidden behind a `c8 ignore`. An ignored default is an
+ * untested default, and this pair decides how long a provision waits.
+ */
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const defaultNow = (): number => Date.now();
+
+/**
+ * Wait for the box's own post-install script to go quiescent before the
+ * orchestrator SSHes in and runs the same bootstrap.
+ *
+ * Hostinger executes an attached post-install script through ITS OWN runner,
+ * not cloud-init, so the `cloud-init status --wait` that
+ * `buildBootstrapSshCommand` prefixes cannot see it. Without this wait the two
+ * copies overlap. Measured on the purchase path: Hostinger reported VM 1939337
+ * running 103s after create and the orchestrator SSHed in one second later,
+ * against a first-boot bootstrap that takes about 70s from boot. The loader's
+ * own `wait_for_apt` covers the apt half of that overlap, but nothing
+ * serialises two concurrent runs of `bootstrap.sh` itself (Docker, Ollama,
+ * Rowboat compose, systemd units). `adopt.ts` has waited here since it was
+ * written; the purchase path never did, because until #1696 no purchase ever
+ * got far enough to find out.
+ *
+ * Returns why it stopped, so the caller can log it. Never throws: every
+ * outcome hands control to the bootstrap phase, which is the step allowed to
+ * fail the provision.
+ */
+export async function waitForPostInstallQuiescence(input: {
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  sshKeyRow?: HostKeyPinnable;
+  remoteExec: RemoteExecutor;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  authGraceMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}): Promise<"idle" | "timed_out" | "unauthenticated"> {
+  const timeoutMs = input.timeoutMs ?? PIS_QUIESCENCE_TIMEOUT_MS;
+  const pollIntervalMs = input.pollIntervalMs ?? DEFAULT_QUIESCENCE_POLL_MS;
+  const authGraceMs = input.authGraceMs ?? AUTH_GRACE_MS;
+  const sleep = input.sleep ?? defaultSleep;
+  const now = input.now ?? defaultNow;
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  const authDeadline = startedAt + authGraceMs;
+  /**
+   * Once ANY probe has authenticated we know the key is on the box, so a later
+   * auth blip is not the "key never landed" case and only the overall deadline
+   * bounds it.
+   */
+  let authenticatedOnce = false;
+
+  for (;;) {
+    try {
+      const res = await input.remoteExec({
+        host: input.host,
+        username: input.username,
+        privateKeyPem: input.privateKeyPem,
+        command: PIS_QUIESCENCE_PROBE_COMMAND,
+        sshKeyRow: input.sshKeyRow
+      });
+      authenticatedOnce = true;
+      // Fail OPEN: only an explicit "busy" keeps us waiting. Adopt's probe
+      // asks the opposite question (`includes("idle")`) and that is right for
+      // adopt, which runs from a debug script with 25 minutes and no route
+      // deadline over it. Here, waiting is the dangerous branch: this sits
+      // inside the term-renewal sweep's 1800s budget, so a probe that runs but
+      // answers something unexpected (empty stdout, no `pgrep` on a minimal
+      // template, any shell quirk) would burn ten minutes and CAUSE a failure
+      // that would not otherwise happen. Proceeding is the safe branch: the
+      // bootstrap it hands off to has its own `wait_for_apt` and its own
+      // connect-retry, and skipping the wait entirely is exactly what this
+      // path did before today.
+      if (!res.stdout.includes("busy")) return "idle";
+    } catch (err) {
+      // An auth rejection is NOT proof the key will never arrive: the
+      // post-install script we are waiting on is the thing that writes it, so
+      // early probes legitimately get rejected until that line runs. Keep
+      // waiting through AUTH_GRACE_MS, then conclude the key is not coming and
+      // hand back so the bootstrap can raise the real error inside its own
+      // retry rather than at the end of the full quiescence budget.
+      if (isSshAuthFailure(err) && !authenticatedOnce && now() >= authDeadline) {
+        return "unauthenticated";
+      }
+      // Anything else (refused, timed out, handshake) means sshd is still
+      // coming up. That is indistinguishable from "still busy" here, and the
+      // bootstrap phase has its own connect-retry, so keep waiting.
+    }
+    if (now() >= deadline) return "timed_out";
+    await sleep(pollIntervalMs);
+  }
+}
+
+/**
+ * True when SSH got far enough to be REJECTED, rather than failing to connect.
+ * Distinct from {@link isSshConnectError}, which deliberately matches the
+ * broader "sshExec: connection error: ..." prefix that auth failures also
+ * carry: retrying a refused port is right, retrying a rejected key is not.
+ */
+function isSshAuthFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const m = err.message.toLowerCase();
+  return (
+    m.includes("all configured authentication methods failed") ||
+    m.includes("authentication failure") ||
+    m.includes("permission denied (publickey)")
+  );
+}
+
 function isSshConnectError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const m = err.message.toLowerCase();
@@ -500,8 +662,18 @@ function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
 }
 /* c8 ignore stop */
 
-/* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
-function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
+/**
+ * The production purchase wiring. EXPORTED so a test can assert what it
+ * actually sends, rather than what a hand-written fixture claims it sends.
+ *
+ * It used to be private behind a `c8 ignore` that read "production-only
+ * default factory; tests inject vpsProvisioner", and that is exactly how the
+ * missing key-embed survived: every test injected its own provisioner, so
+ * nothing ever looked at the real one. See
+ * tests/hostinger-provision.test.ts, "production purchase wiring embeds the
+ * minted key in the post-install script".
+ */
+export function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
   return ({ businessId, tier, vpsSize, billingPeriod, hostingerTerm }) =>
     provisionVpsForBusiness(
       {
@@ -516,7 +688,15 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
         // the SSH-bootstrap phase below always runs the same content
         // afterward. Either path produces the same state because the
         // script is idempotent.
-        postInstallScript: buildDefaultPostInstallScript({ tier, vpsSize })
+        //
+        // A BUILDER, not a string: the script has to carry the public key
+        // as an authorized_keys write, and that key does not exist until
+        // provisionVpsForBusiness mints it. Passing a finished string here
+        // is what left the purchase path unable to embed the key at all,
+        // depending instead on Hostinger's `public_key_ids`, which drops
+        // silently and stranded a paid box for Scar Fairy on 2026-08-29.
+        buildPostInstallScript: (authorizedSshPublicKey) =>
+          buildDefaultPostInstallScript({ tier, vpsSize, authorizedSshPublicKey })
       },
       {
         client,
@@ -545,7 +725,6 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
       }
     );
 }
-/* c8 ignore stop */
 
 /**
  * Placeholder provisioner for providers that have no generic purchase path.
@@ -944,9 +1123,12 @@ export async function orchestrateProvisioning(
       businessId: string
     ) => Promise<LatestProvisioningStatus>;
     /**
-     * Injectable clock for the orphan-scan retry deadline. Production uses
-     * `Date.now`; tests inject a controllable clock so the 5-minute budget
-     * can expire without waiting.
+     * Injectable clock for the orphan-scan retry deadline and the
+     * post-install quiescence wait. Production uses `Date.now`; tests inject
+     * a controllable clock so those budgets can expire without waiting. A
+     * no-op `sleep` alone is not enough for either: both are wall-clock, so
+     * without a fake clock a test asserting a give-up path spins against real
+     * minutes.
      */
     now?: () => number;
     /**
@@ -1923,6 +2105,39 @@ async function runOrchestrator(
     message: bootstrapMessage,
     source: "orchestrator"
   });
+
+  // When a post-install script IS attached, Hostinger's own runner is
+  // executing it on the box right now, and `cloud-init status --wait` cannot
+  // see that runner. Let it finish before running the same bootstrap over
+  // SSH. See `waitForPostInstallQuiescence` for the measurements.
+  //
+  // On a box whose PIS already finished (or never ran) the probe answers
+  // "idle" on the first round trip, so the cost is one SSH exec. The adopt
+  // path does its own wait before handing the host over, which makes this a
+  // no-op there rather than a double wait.
+  if (provisioned.postInstallScriptId !== null) {
+    const quiescence = await waitForPostInstallQuiescence({
+      host: provisioned.publicIp,
+      username: provisioned.sshUsername,
+      privateKeyPem: provisioned.sshKey.private_key_pem,
+      sshKeyRow: provisioned.sshKey,
+      remoteExec,
+      sleep: deps?.sleep,
+      now: deps?.now
+    });
+    if (quiescence !== "idle") {
+      // Both non-idle outcomes continue to the bootstrap, which is the step
+      // allowed to fail the provision and the one whose error message names
+      // the real problem. Logged so a post-mortem can tell "we waited out the
+      // budget" from "the key was never on the box".
+      logger.warn("post-install quiescence wait did not reach idle; bootstrapping anyway", {
+        businessId,
+        vpsId,
+        postInstallScriptId: provisioned.postInstallScriptId,
+        outcome: quiescence
+      });
+    }
+  }
 
   // Single-source-of-truth bootstrap invocation via
   // `runRemoteBootstrapInternal`, which encapsulates the script
