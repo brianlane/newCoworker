@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
+import { allChannelTogglesOff } from "@/lib/notifications/channel-toggles";
 import { logger } from "@/lib/logger";
 import { SITE_URL } from "@/lib/marketing/site-url";
 // The bid is UUID-validated before it reaches the form, so this is a second
@@ -86,17 +87,12 @@ async function applyUnsubscribe(
   }
 
   try {
+    // Every channel toggle, from the one list the dashboard's "Unsubscribe
+    // from all" button also builds its payload from. Hand-listing them here
+    // is what left whatsapp_urgent, then push_urgent, then all five chat
+    // channels rendering ON underneath the "you unsubscribed" banner.
     await updateNotificationPreferences(bid, {
-      sms_urgent: false,
-      // The dashboard "Unsubscribe from all" clears this too; without it the
-      // toggle rendered ON under the unsubscribed banner.
-      whatsapp_urgent: false,
-      email_digest: false,
-      email_digest_weekly: false,
-      email_monthly_recap: false,
-      email_urgent: false,
-      dashboard_alerts: false,
-      sms_warm_transfer: false,
+      ...allChannelTogglesOff(),
       unsubscribed_at: new Date().toISOString()
     });
     return "ok";
@@ -151,8 +147,9 @@ function confirmPage(bid: string, scope: UnsubscribeScope): NextResponse {
       isRecap
         ? `This turns off the monthly recap email only. Your urgent alerts,
       digests and dashboard notifications all keep working.`
-        : `This turns off every notification for this business: urgent email and
-      text alerts, WhatsApp, the daily and weekly digests, dashboard alerts,
+        : `This turns off every notification for this business: urgent alerts
+      by email, text, WhatsApp, Slack, Telegram, Microsoft Teams, Google Chat
+      and push, the daily, weekly and monthly summaries, dashboard alerts,
       and warm-transfer texts.`
     }</p>
      <form method="post" action="/api/notifications/unsubscribe">

@@ -6,6 +6,7 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 
 import { GET, POST } from "@/app/api/notifications/unsubscribe/route";
 import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
+import { CHANNEL_TOGGLE_KEYS } from "@/lib/notifications/channel-toggles";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -60,8 +61,6 @@ describe("api/notifications/unsubscribe route", () => {
       BIZ,
       expect.objectContaining({
         sms_urgent: false,
-        // The dashboard unsubscribe-all clears this too; the email one-click
-        // used to leave it ON under the unsubscribed banner.
         whatsapp_urgent: false,
         email_digest: false,
         email_urgent: false,
@@ -69,6 +68,27 @@ describe("api/notifications/unsubscribe route", () => {
         unsubscribed_at: expect.any(String)
       })
     );
+  });
+
+  it("the full unsubscribe clears EVERY channel toggle, not the handful it used to", async () => {
+    // Hand-listing the payload here is what left whatsapp_urgent, then
+    // push_urgent (#1717), then all five chat channels of #1718-#1724
+    // rendering ON underneath the "you unsubscribed" banner. It is not a
+    // delivery bug (dispatch suppresses on unsubscribed_at alone), so the
+    // dashboard was the only place it showed, and nothing failed until
+    // someone read it. Asserting against the shared list rather than a
+    // second hand-written one is the point: the next channel is covered the
+    // day it is added, not the day someone remembers this test.
+    await POST(
+      new Request(`http://localhost/api/notifications/unsubscribe?bid=${BIZ}`, {
+        method: "POST"
+      })
+    );
+    const patch = vi.mocked(updateNotificationPreferences).mock.calls[0]![1];
+    for (const key of CHANNEL_TOGGLE_KEYS) {
+      expect(patch[key], `${key} is missing from the unsubscribe payload`).toBe(false);
+    }
+    expect(patch.unsubscribed_at).toEqual(expect.any(String));
   });
 
   it("a ui=1 POST that fails renders the error as a page, not as plain text", async () => {
@@ -199,6 +219,10 @@ describe("api/notifications/unsubscribe route", () => {
       expect(updateNotificationPreferences).toHaveBeenCalledWith(BIZ, {
         email_monthly_recap: false
       });
+      // Exactly one key, and no unsubscribed_at: the scoped path must NOT
+      // pick up new channels as the shared list grows.
+      const patch = vi.mocked(updateNotificationPreferences).mock.calls[0]![1];
+      expect(Object.keys(patch)).toEqual(["email_monthly_recap"]);
       expect(await res.text()).toContain("Monthly recap turned off");
     });
 
