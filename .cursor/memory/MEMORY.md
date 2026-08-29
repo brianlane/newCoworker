@@ -137,3 +137,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Push PWA is the sixth channel](project_push_pwa_channel.md) - only TRUE read receipt; iOS detect-order, 403 never revokes, SSRF allowlist, invisible Deno mirror
 - [Coworker channel architecture](project_coworker_channel_architecture.md) - shared pipeline + the 12 non-enforced widening sites; per-channel traps
 - [Teams multi-tenant bots are retired](project_teams_multitenant_retired.md) - Single Tenant only since Jul 2025; app REGISTRATION carries cross-tenant (AzureADMultipleOrgs, allow ALL); tenant-scoped token endpoint; secret unrecoverable
+- [Google Chat needs a Workspace account](project_google_chat_needs_workspace_account.md) - personal account hard-disables Join spaces; two token shapes; credential + env vars ARE done
