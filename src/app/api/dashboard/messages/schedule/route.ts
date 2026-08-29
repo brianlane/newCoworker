@@ -21,6 +21,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
   SCHEDULED_SMS_MAX_DAYS_AHEAD,
+  SCHEDULED_SMS_MIN_LEAD_MS,
   SMS_TOOLS_UPGRADE_MESSAGE,
   smsToolsAllowedForBusiness
 } from "@/lib/plans/sms-tools";
@@ -100,7 +101,7 @@ export async function POST(request: Request) {
     // At least a minute out (that's the sweep cadence, "now" belongs on the
     // immediate-send path) and no more than SCHEDULED_SMS_MAX_DAYS_AHEAD.
     const now = Date.now();
-    if (sendAt.getTime() < now + 60 * 1000) {
+    if (sendAt.getTime() < now + SCHEDULED_SMS_MIN_LEAD_MS) {
       return errorResponse(
         "VALIDATION_ERROR",
         "Send time must be at least a minute from now; use Send for immediate messages."

@@ -117,7 +117,7 @@ export default async function DashboardMessagesPage() {
       : Promise.resolve({ data: [] }),
     db
       .from("scheduled_sms")
-      .select("id, to_e164, body, send_at, status, error")
+      .select("id, to_e164, body, send_at, status, error, created_by")
       .eq("business_id", business.id)
       .eq("status", "pending")
       .order("send_at", { ascending: true })
@@ -125,7 +125,7 @@ export default async function DashboardMessagesPage() {
     smsToolsEnabled
       ? db
           .from("scheduled_sms")
-          .select("id, to_e164, body, send_at, status, error")
+          .select("id, to_e164, body, send_at, status, error, created_by")
           .eq("business_id", business.id)
           .neq("status", "pending")
           .order("send_at", { ascending: false })
@@ -156,6 +156,7 @@ export default async function DashboardMessagesPage() {
       send_at: string;
       status: string;
       error: string | null;
+      created_by?: string | null;
     }>
   ).map((s) => ({
     id: s.id,
@@ -163,7 +164,9 @@ export default async function DashboardMessagesPage() {
     body: s.body,
     sendAt: s.send_at,
     status: s.status,
-    error: s.error
+    error: s.error,
+    // So a text the owner never wrote is labelled, not a mystery.
+    createdBy: s.created_by ?? undefined
   }));
 
   const rows: MessageListRow[] = conversations.map((c) => {

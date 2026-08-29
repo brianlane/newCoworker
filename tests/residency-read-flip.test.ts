@@ -1658,6 +1658,12 @@ describe("dashboard route vps reads", () => {
         limit: SCHEDULED_SMS_HISTORY_LIMIT
       });
       expect(chains).toHaveLength(0);
+      // created_by rides BOTH legs: it is what labels a queued text as the
+      // texting coworker's rather than the owner's in the panel, and a vps
+      // tenant must not lose that label by taking the box path.
+      for (const call of vi.mocked(readMovedRows).mock.calls) {
+        expect((call[1] as { columns: string[] }).columns).toContain("created_by");
+      }
       // One mode lookup for both queries.
       expect(isVpsReadMode).toHaveBeenCalledTimes(1);
     });

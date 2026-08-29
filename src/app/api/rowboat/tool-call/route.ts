@@ -82,6 +82,7 @@ import {
   startAiFlowForContactTool,
   startAiflowForContactArgsSchema
 } from "@/lib/ai-flows/agent-start-flow";
+import { scheduleTextArgsSchema, scheduleTextTool } from "@/lib/sms/schedule-text";
 import { applyNotificationPreferenceToggles } from "@/lib/notifications/preferences-tool";
 import { updateNotificationPreferencesArgsSchema } from "@/lib/dashboard-chat/action-tools";
 import {
@@ -587,6 +588,16 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       return await startAiFlowForContactTool(businessId, parsed.data);
+    }
+    // The only FUTURE send the texting coworker has. The core binds the
+    // queue to the number passed here and holds one pending row per
+    // contact, so this case adds no reachability of its own.
+    case "schedule_text": {
+      const parsed = scheduleTextArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await scheduleTextTool(businessId, parsed.data);
     }
     // Notification toggles from the texting surface, ENABLE-ONLY here: the
     // SMS Coworker serves customers and staff with the same agent, so a

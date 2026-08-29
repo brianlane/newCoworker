@@ -28,6 +28,8 @@ export type ScheduledSmsRow = {
   error: string | null;
   created_at: string;
   sent_at: string | null;
+  /** "owner" or "sms_coworker": who queued it. See the schedule_text tool. */
+  created_by: string;
 };
 
 /** Projection shared by the box and central paths so they cannot drift. */
@@ -39,7 +41,8 @@ const SCHEDULED_SMS_COLUMNS = [
   "status",
   "error",
   "created_at",
-  "sent_at"
+  "sent_at",
+  "created_by"
 ] as const;
 
 /** Upcoming sends shown at once. */

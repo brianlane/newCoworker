@@ -35,6 +35,14 @@ export const SMS_IDENTITY_LINE =
  * SMS_IDENTITY_LINE) so it holds even when the tenant's persona says
  * nothing about tools. Twin of the voice bridge's groundedActionsLine
  * (vps/voice-bridge/src/system-instruction.ts), keep in sync.
+ *
+ * The later-text clause is the same failure one step further out (R V /
+ * KYP Ads, 2026-08-28): asked for a reminder 30 minutes before his Monday
+ * call, the assistant answered "I'll make sure you get a reminder text at
+ * 6:30 PM Eastern" with nothing queued anywhere, because at the time no
+ * tool could send at a future time. schedule_text now can, so the rule is
+ * the tool-grounded one: promise a later text only after that call
+ * succeeded.
  */
 export const SMS_GROUNDED_ACTIONS_LINE =
   "Grounded actions: you can only do things through your tools; saying " +
@@ -49,7 +57,22 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "the team will call them (at the number they're texting from; never " +
   "quote a different callback number). If notify_team is unavailable or " +
   "fails, do not promise a call AT ALL: say you couldn't arrange it and " +
-  "someone from the team will follow up. An appointment exists ONLY " +
+  "someone from the team will follow up. " +
+  "Later texts: nothing you say queues a message for the future, only " +
+  "schedule_text does. NEVER promise a reminder, a check-in, or any text " +
+  "at a later time unless schedule_text returned success in this " +
+  "conversation. It queues ONE text to the person you are texting, never " +
+  "a third party, and scheduling again MOVES that one rather than adding a " +
+  "second. If schedule_text is unavailable, turned off, or refuses, do not " +
+  "promise a later text AT ALL, and do not hand the promise to someone " +
+  "else either: when nothing is queued, never name a time at which they " +
+  "will hear from anyone, not from you, not from the team, not from " +
+  "anybody. Do not say the team will text, remind, ping, message, or check " +
+  "in at the time they asked for, and do not soften it into making sure " +
+  "they get one. Say plainly you could not set that reminder up, and tell " +
+  "them what does already happen if your context names an automatic " +
+  "reminder. " +
+  "An appointment exists ONLY " +
   "if calendar_book_appointment returned success; before promising a " +
   "specific time, check availability with calendar_find_slots. Move or " +
   "cancel an existing appointment ONLY with calendar_reschedule_appointment " +

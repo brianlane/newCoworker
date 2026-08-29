@@ -18,12 +18,19 @@ vi.mock("@/lib/plans/sms-tools", async (importOriginal) => {
   return { ...original, smsToolsAllowedForBusiness: vi.fn() };
 });
 
+// The cancel path retracts the coworker's pinned note (best-effort).
+vi.mock("@/lib/customer-tools/handlers", () => ({ appendCustomerPinnedNote: vi.fn() }));
+vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
+vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+
 import { GET, POST } from "@/app/api/dashboard/messages/schedule/route";
 import { DELETE } from "@/app/api/dashboard/messages/schedule/[id]/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
 import { smsToolsAllowedForBusiness } from "@/lib/plans/sms-tools";
+import { appendCustomerPinnedNote } from "@/lib/customer-tools/handlers";
+import { getBusinessTimezone } from "@/lib/db/businesses";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const SCHED = "33333333-3333-4333-8333-333333333333";
@@ -220,7 +227,52 @@ describe("DELETE /api/dashboard/messages/schedule/:id", () => {
   });
 
   it("cancels a pending send", async () => {
-    mockDb({ scheduled_sms: { data: { id: SCHED }, error: null } });
+    mockDb({ scheduled_sms: { data: { id: SCHED, created_by: "owner" }, error: null } });
+    const res = await DELETE(deleteReq({ businessId: BIZ }), idParams);
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.canceled).toBe(true);
+    // The owner queued this one, so there is no coworker pin to retract.
+    expect(appendCustomerPinnedNote).not.toHaveBeenCalled();
+  });
+
+  it("retracts the coworker's pinned promise when it cancels the coworker's send", async () => {
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Toronto");
+    mockDb({
+      scheduled_sms: {
+        data: {
+          id: SCHED,
+          to_e164: "+14168982100",
+          send_at: "2026-08-31T22:30:00.000Z",
+          created_by: "sms_coworker"
+        },
+        error: null
+      }
+    });
+    expect((await DELETE(deleteReq({ businessId: BIZ }), idParams)).status).toBe(200);
+    // Without this the pin still reads "wants a text at 6:30" on every later
+    // SMS turn, and the coworker re-queues what the owner just dropped.
+    expect(appendCustomerPinnedNote).toHaveBeenCalledWith(
+      BIZ,
+      "+14168982100",
+      expect.stringContaining("canceled"),
+      "sms",
+      "dashboard"
+    );
+  });
+
+  it("still reports the cancel when the pin retraction throws", async () => {
+    vi.mocked(getBusinessTimezone).mockRejectedValue(new Error("down"));
+    mockDb({
+      scheduled_sms: {
+        data: {
+          id: SCHED,
+          to_e164: "+14168982100",
+          send_at: "2026-08-31T22:30:00.000Z",
+          created_by: "sms_coworker"
+        },
+        error: null
+      }
+    });
     const res = await DELETE(deleteReq({ businessId: BIZ }), idParams);
     expect(res.status).toBe(200);
     expect((await res.json()).data.canceled).toBe(true);

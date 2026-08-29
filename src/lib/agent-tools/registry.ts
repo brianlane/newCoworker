@@ -511,6 +511,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "schedule_text",
+        label: "Schedule a text for later",
+        description:
+          "Queue one text to the person being texted, to go out at a time they asked for (a reminder before their appointment, a check-in next week). It can only ever text that person, it holds one queued text at a time (scheduling again moves it), and it asks first when one of your automations already sends a reminder before appointments. Standard plan and up.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "notify_team",
         label: "Notify your team",
         description:
