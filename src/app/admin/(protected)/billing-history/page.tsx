@@ -115,7 +115,13 @@ function Sparkline({ values }: { values: number[] }) {
 }
 
 function rowLabel(row: BillingHistoryRow): string {
-  return row.business?.name ?? "Unattributed (no tenant matched)";
+  if (row.business) return row.business.name;
+  // Two different things arrive here. Spend that matched no tenant DID is
+  // genuinely unattributed; a usage or Gemini row pointing at a business that
+  // has left the fleet list is a deleted tenant, and there can be more than
+  // one, so it keeps its own id rather than merging into the bucket above.
+  if (row.key === UNATTRIBUTED_KEY) return "Unattributed (no tenant matched)";
+  return `Deleted tenant ${row.key.slice(0, 8)}`;
 }
 
 /** One tenant's full metric grid, shown when a row is opened. */
@@ -204,10 +210,7 @@ export default async function AdminBillingHistoryPage({
   const fleetRevenue = trendFor(seriesOf(history.fleet, (c) => c.revenueCents), trendOpts);
   const fleetVendor = trendFor(seriesOf(history.fleet, vendorCents), trendOpts);
 
-  const selected =
-    history.rows.find(
-      (r) => (r.business?.id ?? UNATTRIBUTED_KEY) === businessParam
-    ) ?? null;
+  const selected = history.rows.find((r) => r.key === businessParam) ?? null;
 
   return (
     <div className="space-y-6">
@@ -346,15 +349,14 @@ export default async function AdminBillingHistoryPage({
                 {history.rows.map((row) => {
                   const values = seriesOf(row.cells, metric.pick);
                   const trend = trendFor(values, trendOpts);
-                  const id = row.business?.id ?? UNATTRIBUTED_KEY;
                   return (
-                    <tr key={id}>
+                    <tr key={row.key}>
                       <td className="py-2">
                         <a
                           href={href({
                             metric: metric.key,
                             months: monthCount,
-                            business: id
+                            business: row.key
                           })}
                           className="text-parchment font-medium hover:text-signal-teal"
                         >

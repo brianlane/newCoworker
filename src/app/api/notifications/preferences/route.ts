@@ -20,6 +20,7 @@ const patchSchema = z.object({
   push_urgent: z.boolean().optional(),
   email_digest: z.boolean().optional(),
   email_digest_weekly: z.boolean().optional(),
+  email_monthly_recap: z.boolean().optional(),
   email_urgent: z.boolean().optional(),
   dashboard_alerts: z.boolean().optional(),
   sms_warm_transfer: z.boolean().optional(),

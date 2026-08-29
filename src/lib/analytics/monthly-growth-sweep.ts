@@ -16,8 +16,11 @@
  *
  * WHO IS SKIPPED, and why each one:
  *
- * - unsubscribed tenants: `notification_preferences.unsubscribed_at`. This is
- *   a recap, not a transactional notice, so a global unsubscribe governs it.
+ * - tenants who declined THIS email (`email_monthly_recap = false`) and
+ *   tenants who unsubscribed from everything (`unsubscribed_at`). The recap
+ *   has its own flag because the footer link has to be proportionate: sending
+ *   someone to the global unsubscribe to stop a monthly summary would have
+ *   cost them urgent lead alerts on every channel.
  * - tenants with nothing to report: a month with no leads, no texts and no
  *   calls produces a table of zeros, which is worse than silence.
  * - tenants with no complete month yet: nothing to say, and the template
@@ -62,6 +65,7 @@ type MonthlyGrowthSkipReason =
   | "no_owner_email"
   | "wiped"
   | "unsubscribed"
+  | "recap_declined"
   | "no_activity"
   | "no_complete_month"
   | "no_data_for_month";
@@ -132,13 +136,16 @@ type BusinessWithStamp = BusinessRow & { monthly_growth_email_sent_for?: string 
  */
 function preflightSkip(
   business: BusinessWithStamp,
-  month: string,
-  unsubscribed: boolean
+  consent: { unsubscribed: boolean; recapEnabled: boolean }
 ): MonthlyGrowthSkipReason | null {
-  if (business.monthly_growth_email_sent_for === month) return "already_sent";
+  // No stamp check here: the candidate filter already dropped rows reported
+  // this month, and a row stamped between that read and now is caught by the
+  // claim below, which is atomic and therefore the authoritative guard. A
+  // second check here would be a branch nothing could reach.
   if (business.status === "wiped") return "wiped";
   if (!business.owner_email?.trim()) return "no_owner_email";
-  if (unsubscribed) return "unsubscribed";
+  if (consent.unsubscribed) return "unsubscribed";
+  if (!consent.recapEnabled) return "recap_declined";
   return null;
 }
 
@@ -185,10 +192,24 @@ export async function sweepMonthlyGrowthEmails(
     return result;
   }
 
-  const businesses = (await loadBusinesses(db)).slice(
-    0,
-    GROWTH_EMAIL_BATCH_LIMIT
-  ) as BusinessWithStamp[];
+  // Drop rows already reported for this month BEFORE the cap, not after.
+  //
+  // `listBusinesses` is newest-first, so capping the raw list means that once
+  // the fleet passes GROWTH_EMAIL_BATCH_LIMIT every pass walks the same newest
+  // N and the older tenants never get a recap at all: the stamp made them
+  // no-ops that still consumed their slot. Filtering first makes each pass
+  // take the next N tenants that still need one, so a large fleet is covered
+  // over several days within the month rather than never.
+  //
+  // Rows that are skipped for a reason we do NOT stamp (unsubscribed, recap
+  // declined, wiped, no owner email) do still occupy a slot on every pass.
+  // That is deliberate and bounded: those checks have to re-run daily because
+  // an owner can re-enable the recap mid-month, and stamping them would make
+  // that impossible.
+  const all = (await loadBusinesses(db)) as BusinessWithStamp[];
+  const businesses = all
+    .filter((b) => b.monthly_growth_email_sent_for !== month)
+    .slice(0, GROWTH_EMAIL_BATCH_LIMIT);
   result.scanned = businesses.length;
 
   if (!apiKey) {
@@ -201,13 +222,19 @@ export async function sweepMonthlyGrowthEmails(
 
   for (const business of businesses) {
     try {
-      // Preferences failing open would email someone who unsubscribed, so a
-      // read failure is treated as unsubscribed here (the opposite posture to
-      // urgent alerts, which fail toward delivering).
+      // Preferences failing open would email someone who opted out, so a read
+      // failure is treated as opted out here (the opposite posture to urgent
+      // alerts, which fail toward delivering: a missed recap costs nothing, a
+      // missed lead alert costs a lead).
       const prefs = await loadPreferences(business.id, db).catch(() => null);
-      const unsubscribed = prefs === null || prefs.unsubscribed_at !== null;
+      const consent = {
+        unsubscribed: prefs === null || prefs.unsubscribed_at !== null,
+        // `?? true` for rows written before 20260829061823, matching the
+        // column default rather than silently muting every existing tenant.
+        recapEnabled: prefs !== null && (prefs.email_monthly_recap ?? true)
+      };
 
-      const preflight = preflightSkip(business, month, unsubscribed);
+      const preflight = preflightSkip(business, consent);
       if (preflight) {
         skip(preflight);
         continue;
@@ -240,9 +267,10 @@ export async function sweepMonthlyGrowthEmails(
         ownerName: business.owner_name ?? null,
         recipientEmail: toEmail,
         siteUrl,
+        // Scoped: this link stops the recap and nothing else.
         unsubscribeUrl: `${siteUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
           business.id
-        )}`,
+        )}&scope=monthly_recap`,
         locale
       });
       /* c8 ignore next 4 -- unreachable: report.latest was checked above, which

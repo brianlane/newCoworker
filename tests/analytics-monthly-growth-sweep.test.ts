@@ -102,7 +102,9 @@ function deps(over: Record<string, unknown> = {}) {
     resendApiKey: "re_test",
     loadBusinesses: vi.fn(async () => [biz()]),
     loadReport: vi.fn(async () => reportWith()),
-    loadPreferences: vi.fn(async () => ({ unsubscribed_at: null }) as never),
+    loadPreferences: vi.fn(
+      async () => ({ unsubscribed_at: null, email_monthly_recap: true }) as never
+    ),
     sendEmail: vi.fn(async () => "msg-1"),
     resolveLocale: vi.fn(async () => "en" as const),
     ...over
@@ -145,11 +147,13 @@ describe("who is skipped", () => {
     return { result, d };
   };
 
-  it("skips one already stamped with this month", async () => {
-    const { result } = await only({
+  it("does not even scan one already stamped with this month", async () => {
+    const { result, d } = await only({
       loadBusinesses: vi.fn(async () => [biz({ monthly_growth_email_sent_for: MONTH })])
     });
-    expect(result.skipReasons).toEqual({ already_sent: 1 });
+    expect(result.scanned).toBe(0);
+    expect(result.sent).toBe(0);
+    expect(d.loadReport).not.toHaveBeenCalled();
   });
 
   it("still sends when the stamp is an older month", async () => {
@@ -230,11 +234,41 @@ describe("sweepMonthlyGrowthEmails", () => {
 
   it("respects a global unsubscribe", async () => {
     const d = deps({
-      loadPreferences: vi.fn(async () => ({ unsubscribed_at: "2026-08-01T00:00:00Z" }) as never)
+      loadPreferences: vi.fn(
+        async () =>
+          ({ unsubscribed_at: "2026-08-01T00:00:00Z", email_monthly_recap: true }) as never
+      )
     });
     const result = await sweepMonthlyGrowthEmails(d);
     expect(result.skipReasons).toEqual({ unsubscribed: 1 });
     expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("respects the recap's own off-switch without touching anything else", async () => {
+    const d = deps({
+      loadPreferences: vi.fn(
+        async () => ({ unsubscribed_at: null, email_monthly_recap: false }) as never
+      )
+    });
+    const result = await sweepMonthlyGrowthEmails(d);
+    expect(result.skipReasons).toEqual({ recap_declined: 1 });
+    expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("still sends to a row written before the recap flag existed", async () => {
+    const d = deps({
+      loadPreferences: vi.fn(async () => ({ unsubscribed_at: null }) as never)
+    });
+    expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(1);
+  });
+
+  it("points the footer link at the recap-only opt-out, not the global one", async () => {
+    const d = deps();
+    await sweepMonthlyGrowthEmails(d);
+    const html = sentBody(d.sendEmail).html;
+    // `&amp;` because the branded builder escapes href attributes, which is
+    // what makes the rendered link valid HTML.
+    expect(html).toContain("bid=biz-1&amp;scope=monthly_recap");
   });
 
   it("treats a preferences read failure as unsubscribed rather than mailing anyway", async () => {
@@ -318,8 +352,11 @@ describe("sweepMonthlyGrowthEmails", () => {
       ])
     });
     const result = await sweepMonthlyGrowthEmails(d);
-    expect(result.skipped).toBe(3);
-    expect(result.skipReasons).toEqual({ wiped: 1, no_owner_email: 1, already_sent: 1 });
+    // The stamped row never enters the candidate set, so it is not "skipped",
+    // it is simply not scanned.
+    expect(result.scanned).toBe(2);
+    expect(result.skipped).toBe(2);
+    expect(result.skipReasons).toEqual({ wiped: 1, no_owner_email: 1 });
   });
 
   it("caps one pass so a large fleet cannot run past the route budget", async () => {
@@ -327,6 +364,20 @@ describe("sweepMonthlyGrowthEmails", () => {
     const d = deps({ loadBusinesses: vi.fn(async () => many) });
     const result = await sweepMonthlyGrowthEmails(d);
     expect(result.scanned).toBe(200);
+  });
+
+  it("does not let already-reported tenants crowd out the ones still waiting", async () => {
+    // listBusinesses is newest-first. Capping the raw list meant that once the
+    // fleet passed the batch limit, every pass walked the same newest N, whose
+    // stamps made them no-ops, and the older tenants never got a recap at all.
+    const stamped = Array.from({ length: 200 }, (_, i) =>
+      biz({ id: `sent-${i}`, monthly_growth_email_sent_for: MONTH })
+    );
+    const waiting = Array.from({ length: 3 }, (_, i) => biz({ id: `waiting-${i}` }));
+    const d = deps({ loadBusinesses: vi.fn(async () => [...stamped, ...waiting]) });
+    const result = await sweepMonthlyGrowthEmails(d);
+    expect(result.scanned).toBe(3);
+    expect(result.sent).toBe(3);
   });
 
   it("falls back to the app URL env and the wall clock when neither is given", async () => {

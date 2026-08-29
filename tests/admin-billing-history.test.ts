@@ -225,6 +225,36 @@ describe("bucketing", () => {
       telnyx: [{ business_id: "ghost", day: "2026-08-07", cost_micros: 10_000 }]
     });
     expect(history.rows[0]!.business).toBeNull();
+    // The id survives, so the page can still say WHICH departed tenant it is.
+    expect(history.rows[0]!.key).toBe("ghost");
+  });
+
+  it("keeps two departed tenants apart instead of merging them", async () => {
+    // Both resolve to `business: null`. Keyed on that alone they collapsed
+    // into one label, one React key and one drill-in, while the fleet totals
+    // above still counted both.
+    const history = await load({
+      businesses: [],
+      usage: [
+        { business_id: "gone-a", usage_date: "2026-08-01", sms_sent: 1, sms_text_units: 3 },
+        { business_id: "gone-b", usage_date: "2026-08-01", sms_sent: 1, sms_text_units: 7 }
+      ]
+    });
+    expect(history.rows.map((r) => r.key).sort()).toEqual(["gone-a", "gone-b"]);
+    expect(new Set(history.rows.map((r) => r.key)).size).toBe(2);
+    // And the per-tenant rows still add up to the fleet row.
+    expect(history.fleet[1]!.textUnits).toBe(10);
+  });
+
+  it("keeps genuinely unattributed spend separate from a departed tenant", async () => {
+    const history = await load({
+      businesses: [],
+      telnyx: [
+        { business_id: null, day: "2026-08-07", cost_micros: 40_000 },
+        { business_id: "gone", day: "2026-08-07", cost_micros: 10_000 }
+      ]
+    });
+    expect(history.rows.map((r) => r.key).sort()).toEqual([UNATTRIBUTED_KEY, "gone"].sort());
   });
 
   it("omits a tenant with no activity anywhere in the window", async () => {

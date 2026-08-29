@@ -888,6 +888,7 @@ describe("db/notification-preferences", () => {
     const startingPrefs = {
       ...PREFS,
       email_digest_weekly: false,
+      email_monthly_recap: false,
       unsubscribed_at: "2026-05-01T00:00:00Z"
     };
     const selectChain = {
@@ -1022,6 +1023,7 @@ describe("db/notification-preferences", () => {
       push_urgent: false,
       email_digest: false,
       email_digest_weekly: false,
+      email_monthly_recap: false,
       email_urgent: false,
       dashboard_alerts: false,
       sms_warm_transfer: false,

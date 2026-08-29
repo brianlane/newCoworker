@@ -57,6 +57,20 @@ export type BillingHistoryCell = {
 };
 
 export type BillingHistoryRow = {
+  /**
+   * Stable identity for this series: the business id, or
+   * {@link UNATTRIBUTED_KEY} for spend that matched no tenant at all.
+   *
+   * Carried separately from `business` because `business` is null in TWO
+   * different situations, and collapsing them loses money. Telnyx MDRs that
+   * matched no DID are genuinely unattributed; a `daily_usage` or
+   * `gemini_spend_daily` row pointing at a business that is no longer in the
+   * fleet list is a DELETED tenant, and there can be several of those. Keyed
+   * only on `business`, every one of them rendered under one label, one React
+   * key and one drill-in, so the per-tenant grid silently disagreed with the
+   * fleet totals above it.
+   */
+  key: string;
   business: BusinessRow | null;
   /** Same length and order as the window's `months`. */
   cells: BillingHistoryCell[];
@@ -247,15 +261,16 @@ function composeBillingHistory(input: ComposeBillingHistoryInput): BillingHistor
 
   const byId = new Map(input.businesses.map((b) => [b.id, b]));
   const rows: BillingHistoryRow[] = [...grid.entries()]
-    .map(([id, cells]) => ({ business: byId.get(id) ?? null, cells }))
+    .map(([key, cells]) => ({ key, business: byId.get(key) ?? null, cells }))
     .sort((a, b) => {
       // Biggest current vendor spend first: the reason to open this page is
       // usually "who is costing us more than last month".
       const spend = (r: BillingHistoryRow): number => vendorCents(r.cells[r.cells.length - 1]!);
-      // Unattributed has no business row and therefore no name; it sorts to
-      // the top of a tie, which is where a bucket labelled "no tenant
-      // matched" belongs anyway.
-      const name = (r: BillingHistoryRow): string => r.business?.name ?? "";
+      // A row with no business row has no name, so it sorts to the top of a
+      // tie. Falling back to the KEY rather than "" keeps two different
+      // unmatched ids in a stable, distinguishable order instead of an
+      // arbitrary one.
+      const name = (r: BillingHistoryRow): string => r.business?.name ?? r.key;
       return spend(b) - spend(a) || name(a).localeCompare(name(b));
     });
 
