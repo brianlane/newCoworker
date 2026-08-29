@@ -36,10 +36,21 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
   // flashes on first paint.
   const [dismissed, setDismissed] = useState(true);
 
+  /**
+   * Re-read on every navigation, not just on mount.
+   *
+   * This component lives in the dashboard LAYOUT, which persists across
+   * client-side navigation, so a mount-only read happens once per full page
+   * load and never again. Someone who turns alerts off on the notifications
+   * page (where this is suppressed) and then navigates back would still be
+   * carrying `dismissed: false` from that first mount, and the banner would
+   * greet them with "Turn on alerts". Keying on the path re-reads at exactly
+   * the moment the banner could reappear.
+   */
   useEffect(() => {
-    // One-shot post-mount sync from external storage (the documented
-    // exception, same as TasksWorkspace): reading localStorage during render
-    // would desync the SSR markup from the first client paint.
+    // Post-navigation sync from external storage (the documented exception,
+    // same as TasksWorkspace): reading localStorage during render would
+    // desync the SSR markup from the first client paint.
     try {
       /**
        * Turning alerts OFF in settings is a decision too, and it is the one
@@ -59,7 +70,7 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDismissed(false);
     }
-  }, []);
+  }, [pathname]);
 
   if (dismissed) return null;
 
