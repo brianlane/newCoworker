@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  CHANNEL_TOGGLE_KEYS,
-  allChannelTogglesOff
-} from "@/lib/notifications/channel-toggles";
+import { allChannelTogglesOff } from "@/lib/notifications/channel-toggles";
 import {
   NOTIFICATION_TOGGLE_KEYS,
   type NotificationToggleKey
@@ -12,7 +9,10 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
-import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
+import {
+  updateNotificationPreferences,
+  type NotificationPreferencesUpdate
+} from "@/lib/db/notification-preferences";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
@@ -21,6 +21,10 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
  * alone, so listing them here is what makes the partition test below a real
  * guard rather than a restatement.
  */
+const CHANNEL_TOGGLE_KEYS = Object.keys(
+  allChannelTogglesOff()
+) as (keyof NotificationPreferencesUpdate)[];
+
 const NARROWING_TOGGLE_KEYS: readonly NotificationToggleKey[] = [
   "digest_customer_facing_only",
   "category_leads",
@@ -40,6 +44,7 @@ describe("the channel-toggle list is the whole channel-toggle list", () => {
       (key) => !NARROWING_TOGGLE_KEYS.includes(key)
     );
     expect([...CHANNEL_TOGGLE_KEYS].sort()).toEqual([...expected].sort());
+    expect(CHANNEL_TOGGLE_KEYS).toContain("push_urgent");
   });
 
   it("keeps the narrowing toggles OUT, so re-subscribing does not widen alerts", () => {
@@ -52,8 +57,8 @@ describe("the channel-toggle list is the whole channel-toggle list", () => {
 
   it("allChannelTogglesOff sets every one of them to false", () => {
     const off = allChannelTogglesOff();
-    expect(Object.keys(off).sort()).toEqual([...CHANNEL_TOGGLE_KEYS].sort());
     expect(Object.values(off).every((v) => v === false)).toBe(true);
+    expect(Object.values(off).length).toBe(CHANNEL_TOGGLE_KEYS.length);
   });
 
   it("returns a fresh object each call, so one caller cannot poison another", () => {
@@ -99,7 +104,9 @@ describe("every channel toggle re-subscribes when switched back on", () => {
       from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
     } as never);
 
-    await updateNotificationPreferences("biz-1", { [key]: true });
+    await updateNotificationPreferences("biz-1", {
+      [key]: true
+    } as NotificationPreferencesUpdate);
 
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ [key]: true, unsubscribed_at: null })

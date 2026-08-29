@@ -5,8 +5,20 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 }));
 
 import { GET, POST } from "@/app/api/notifications/unsubscribe/route";
-import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
-import { CHANNEL_TOGGLE_KEYS } from "@/lib/notifications/channel-toggles";
+import {
+  updateNotificationPreferences,
+  type NotificationPreferencesUpdate
+} from "@/lib/db/notification-preferences";
+import { allChannelTogglesOff } from "@/lib/notifications/channel-toggles";
+
+/**
+ * Derived from what the shared helper actually produces, never re-listed:
+ * a second hand-written copy of the names is the very thing that let the
+ * payload and the dashboard drift apart in the first place.
+ */
+const CHANNEL_TOGGLE_KEYS = Object.keys(
+  allChannelTogglesOff()
+) as (keyof NotificationPreferencesUpdate)[];
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 

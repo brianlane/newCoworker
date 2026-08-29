@@ -31,8 +31,12 @@ import type { NotificationPreferencesUpdate } from "@/lib/db/notification-prefer
  * `satisfies` pins every entry to a column `updateNotificationPreferences`
  * can actually write, so a typo or a renamed column fails the build instead
  * of becoming a patch field the update loop silently drops.
+ *
+ * Deliberately NOT exported: `allChannelTogglesOff()` is the only way in, so
+ * a caller cannot half-use the list, and the tests assert against what that
+ * function actually produces rather than against a second copy of the names.
  */
-export const CHANNEL_TOGGLE_KEYS = [
+const CHANNEL_TOGGLE_KEYS = [
   "sms_urgent",
   "whatsapp_urgent",
   "slack_urgent",
