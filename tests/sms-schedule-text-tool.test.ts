@@ -29,6 +29,9 @@ vi.mock("@/lib/plans/sms-tools", async (importOriginal) => {
 vi.mock("@/lib/sms/opt-outs", () => ({ checkSmsOptOut: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
 vi.mock("@/lib/customer-tools/handlers", () => ({ appendCustomerPinnedNote: vi.fn() }));
+// Node's local ICU often emits a PLAIN space where production ICU emits
+// U+202F, so the real formatter cannot reproduce the bug here. Inject it.
+vi.mock("@/lib/calendar-tools/handlers", () => ({ formatBookingStartLocal: vi.fn() }));
 
 import { scheduleTextArgsSchema, scheduleTextTool } from "@/lib/sms/schedule-text";
 import { SCHEDULED_SMS_MIN_LEAD_MS } from "@/lib/plans/sms-tools";
@@ -37,6 +40,7 @@ import { smsToolsAllowedForBusiness } from "@/lib/plans/sms-tools";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { appendCustomerPinnedNote } from "@/lib/customer-tools/handlers";
+import { formatBookingStartLocal } from "@/lib/calendar-tools/handlers";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const TEXTER = "+14168982100";
@@ -118,6 +122,12 @@ beforeEach(() => {
   vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: true, optedOut: false });
   vi.mocked(getBusinessTimezone).mockResolvedValue("America/Toronto");
   vi.mocked(appendCustomerPinnedNote).mockResolvedValue({ ok: true, data: {} } as never);
+  // Production ICU shape: a NARROW NO-BREAK SPACE before PM.
+  vi.mocked(formatBookingStartLocal).mockImplementation(
+    (iso: string, timeZone: string) =>
+      `Monday, August 31, 2026 at ${iso.includes("22:00") ? "6:00" : "6:30"}\u202fPM ` +
+      (timeZone === "UTC" ? "UTC" : "EDT")
+  );
 });
 
 afterEach(() => {
@@ -488,6 +498,58 @@ describe("the send time must carry its offset (Bugbot, medium)", () => {
         text: "Reminder"
       })).ok, iso).toBe(true);
     }
+  });
+});
+
+describe("the quoted time label must not blow the SMS segment budget", () => {
+  it("strips the narrow no-break space Intl hides before PM", async () => {
+    mockDb({
+      ai_flows: { select: { data: [], error: null } },
+      scheduled_sms: {
+        select: { data: [], error: null },
+        insert: { data: { id: "sched-1" }, error: null }
+      }
+    });
+    const result = await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    const label = (result.data as { sendAtLocal: string }).sendAtLocal;
+    // The model is told to quote this VERBATIM into a text. One character
+    // outside GSM-7 re-encodes the whole message as UCS-2, cutting the
+    // segment budget from 153 to 67 with nothing visibly different.
+    expect(label).not.toMatch(/[\u202f\u00a0]/);
+    expect(label).toContain("6:30 PM EDT");
+    // Stronger than the two-character check above: anything non-ASCII at all
+    // would force the same re-encode.
+    expect(label).toMatch(/^[ -~]*$/);
+  });
+
+  it("strips it from the pinned note and the replaced-time label too", async () => {
+    mockDb({
+      ai_flows: { select: { data: [], error: null } },
+      scheduled_sms: {
+        select: {
+          data: [{ id: "old-1", send_at: "2026-08-31T22:00:00.000Z", body: "older" }],
+          error: null
+        },
+        insert: { data: { id: "new-1" }, error: null },
+        update: { data: [{ id: "old-1" }], error: null }
+      }
+    });
+    const result = await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    expect((result.data as { replacedSendAtLocal: string }).replacedSendAtLocal).not.toMatch(
+      /[\u202f\u00a0]/
+    );
+    const note = vi.mocked(appendCustomerPinnedNote).mock.calls[0][2];
+    expect(note).not.toMatch(/[\u202f\u00a0]/);
   });
 });
 

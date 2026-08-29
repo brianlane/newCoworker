@@ -21,6 +21,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { appendCustomerPinnedNote } from "@/lib/customer-tools/handlers";
 import { formatBookingStartLocal } from "@/lib/calendar-tools/handlers";
+import { gsmSafeSpaces } from "@/lib/sms/segment-info";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 
@@ -72,7 +73,7 @@ export async function DELETE(request: Request, context: RouteContext) {
           businessId,
           row.to_e164,
           "The reminder text queued for " +
-            `${formatBookingStartLocal(row.send_at, timezone)} was canceled here; ` +
+            `${gsmSafeSpaces(formatBookingStartLocal(row.send_at, timezone))} was canceled here; ` +
             "it is no longer going out. Do not re-queue it unless they ask again.",
           "sms",
           "dashboard"

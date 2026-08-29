@@ -44,6 +44,17 @@ import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { appendCustomerPinnedNote } from "@/lib/customer-tools/handlers";
 import { formatBookingStartLocal } from "@/lib/calendar-tools/handlers";
+import { gsmSafeSpaces } from "@/lib/sms/segment-info";
+
+/**
+ * The local time label, GSM-7 safe. The model is told to quote this back to
+ * the texter VERBATIM, and Intl hides a NARROW NO-BREAK SPACE before AM/PM,
+ * which would re-encode that whole confirmation as UCS-2 and roughly double
+ * what it costs to send. Invisible, so nothing about the reply looks wrong.
+ */
+function timeLabel(iso: string, timeZone: string): string {
+  return gsmSafeSpaces(formatBookingStartLocal(iso, timeZone));
+}
 
 /** How much of the queued body is echoed into the pinned note. */
 const PINNED_BODY_PREVIEW = 120;
@@ -195,7 +206,7 @@ export async function scheduleTextTool(
           "not cancel it and that someone from the team will sort it out."
       };
     }
-    const canceledSendAtLocal = formatBookingStartLocal(pending.send_at, timezone);
+    const canceledSendAtLocal = timeLabel(pending.send_at, timezone);
     await pin(businessId, args.phone, `Canceled the reminder text queued for ${canceledSendAtLocal}.`);
     return {
       ok: true,
@@ -316,7 +327,7 @@ export async function scheduleTextTool(
   let replacedSendAtLocal: string | undefined;
   if (pending) {
     if (await cancelRow(pending.id, db)) {
-      replacedSendAtLocal = formatBookingStartLocal(pending.send_at, timezone);
+      replacedSendAtLocal = timeLabel(pending.send_at, timezone);
     } else {
       // The old row would not retire. Rather than leave the texter with two
       // live sends, retire the one just made and say plainly it did not move.
@@ -326,13 +337,13 @@ export async function scheduleTextTool(
         detail: "move_failed",
         message:
           "The reminder could not be moved, so the one already queued for " +
-          `${formatBookingStartLocal(pending.send_at, timezone)} still stands. Tell them ` +
+          `${timeLabel(pending.send_at, timezone)} still stands. Tell them ` +
           "the new time did not take and that the original reminder is unchanged."
       };
     }
   }
 
-  const sendAtLocal = formatBookingStartLocal(sendAtIso, timezone);
+  const sendAtLocal = timeLabel(sendAtIso, timezone);
   const preview = text.length > PINNED_BODY_PREVIEW ? `${text.slice(0, PINNED_BODY_PREVIEW)}...` : text;
   await pin(
     businessId,

@@ -14,6 +14,23 @@
  * user hits that wall.
  */
 
+/**
+ * Invisible characters that silently force UCS-2, replaced with a plain
+ * space. The one that matters in practice is U+202F, the NARROW NO-BREAK
+ * SPACE modern ICU puts before AM/PM: `Intl.DateTimeFormat` produces it in
+ * every formatted clock time, so any message quoting a time carries it, and
+ * one character outside GSM-7 re-encodes the WHOLE message, cutting the
+ * per-segment budget from 153 to 67. Nothing looks wrong, the bill just
+ * doubles (measured at $3.99/month on one tenant\'s offer sends).
+ *
+ * Use this on any time label that will be read back to a customer in a text.
+ * It is deliberately narrow: emoji are NOT stripped here, because keeping
+ * them is a deliverability policy the AiFlow sender owns.
+ */
+export function gsmSafeSpaces(text: string): string {
+  return text.replace(/[\u202f\u00a0]/g, " ");
+}
+
 /** Longest UCS-2 message Telnyx will send (10 segments × 67 chars). */
 export const UCS2_MAX_SENDABLE_CHARS = 670;
 
