@@ -8,6 +8,10 @@ import {
   type InstallCoachState
 } from "@/lib/push/install";
 import { urlBase64ToUint8Array } from "@/lib/push/vapid";
+import {
+  PUSH_SUBSCRIBED_EVENT,
+  writePushOptedOut
+} from "@/components/push/PushRegistrar";
 
 /**
  * The push opt-in surface.
@@ -74,6 +78,13 @@ export function PushSetupCard({
   }, []);
 
   useEffect(() => {
+    // The registrar can create a subscription AFTER this mounted (the silent
+    // re-create for an already-granted permission). Without this the card
+    // would keep offering "Turn on alerts" for a device that is already
+    // subscribed, and a "Not now" would record a decision that consent had
+    // already overtaken.
+    const onSubscribed = () => void refresh();
+    window.addEventListener(PUSH_SUBSCRIBED_EVENT, onSubscribed);
     void refresh();
     void fetch("/api/push/vapid-key")
       .then((r) => (r.ok ? r.json() : null))
@@ -84,6 +95,7 @@ export function PushSetupCard({
       .catch(() => {
         // The click handler re-fetches as a cold fallback.
       });
+    return () => window.removeEventListener(PUSH_SUBSCRIBED_EVENT, onSubscribed);
   }, [refresh]);
 
   async function enable() {
@@ -117,6 +129,8 @@ export function PushSetupCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ businessId, subscription: subscription.toJSON() })
       });
+      // Consent supersedes any previous "off on this device".
+      writePushOptedOut(false);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setError(body?.error?.message ?? "Could not turn on notifications.");
@@ -135,6 +149,9 @@ export function PushSetupCard({
     setBusy(true);
     setError(null);
     try {
+      // Recorded BEFORE the unsubscribe, so a failure part way through leaves
+      // the device off rather than silently re-subscribed on the next load.
+      writePushOptedOut(true);
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = await registration?.pushManager?.getSubscription();
       if (subscription) {

@@ -4,6 +4,45 @@ import { useEffect } from "react";
 import { urlBase64ToUint8Array } from "@/lib/push/vapid";
 
 /**
+ * Marks that this browser was deliberately turned OFF, as opposed to having
+ * lost its subscription.
+ *
+ * The silent re-create below cannot tell those apart on its own: "Turn off on
+ * this device" revokes the row and drops the browser subscription, but the OS
+ * permission stays granted, which is byte-for-byte what a reinstall or a 410
+ * leaves behind. Without this marker the next dashboard load would helpfully
+ * re-subscribe and clear `revoked_at`, so off would not stay off.
+ *
+ * Per device, in localStorage, because that is exactly the scope of the
+ * decision: it says nothing about the same person's other browsers.
+ */
+const PUSH_OPTED_OUT_KEY = "ncw_push_opted_out_v1";
+
+function readPushOptedOut(): boolean {
+  try {
+    return window.localStorage.getItem(PUSH_OPTED_OUT_KEY) === "1";
+  } catch {
+    // Storage unavailable: treat as not opted out. The cost is one unwanted
+    // re-subscribe on a browser that cannot remember anything; the opposite
+    // default would silently disable push for everyone in private mode.
+    return false;
+  }
+}
+
+export function writePushOptedOut(value: boolean): void {
+  try {
+    if (value) window.localStorage.setItem(PUSH_OPTED_OUT_KEY, "1");
+    else window.localStorage.removeItem(PUSH_OPTED_OUT_KEY);
+  } catch {
+    // Nothing to do; the in-page state already reflects the choice.
+  }
+}
+
+/** Fired after a silent re-create so any mounted card re-reads its state. */
+export const PUSH_SUBSCRIBED_EVENT = "ncw:push-subscribed";
+
+
+/**
  * Keeps an already-opted-in browser's push subscription alive. Renders
  * nothing.
  *
@@ -56,7 +95,11 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
          */
         const permission =
           typeof Notification === "undefined" ? "default" : Notification.permission;
-        if (!existing && permission !== "granted") return;
+        // An explicit "Turn off on this device" must stay off. It leaves the
+        // permission granted and no subscription, which is indistinguishable
+        // from a lost one, so the marker is the only thing that separates
+        // "recover this" from "they said no".
+        if (!existing && (permission !== "granted" || readPushOptedOut())) return;
         if (cancelled) return;
 
         const res = await fetch("/api/push/vapid-key");
@@ -102,6 +145,10 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ businessId, subscription: subscription.toJSON() })
         });
+
+        // A card mounted before this finished is still showing "Turn on
+        // alerts" for a device that is now subscribed, so tell it to re-read.
+        if (!existing) window.dispatchEvent(new Event(PUSH_SUBSCRIBED_EVENT));
       } catch {
         // Best effort by design. A browser that refuses service workers
         // (private mode, an enterprise policy) must not break the dashboard,
