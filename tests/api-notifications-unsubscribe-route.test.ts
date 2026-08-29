@@ -178,4 +178,61 @@ describe("api/notifications/unsubscribe route", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  describe("the monthly-recap scope", () => {
+    const url = (extra = "") =>
+      `http://localhost/api/notifications/unsubscribe?bid=${BIZ}&scope=monthly_recap${extra}`;
+
+    it("asks about the recap only, and says the alerts survive", async () => {
+      const res = await GET(new Request(url()));
+      const body = await res.text();
+      expect(body).toContain("monthly recap email only");
+      expect(body).toContain('value="monthly_recap"');
+      expect(updateNotificationPreferences).not.toHaveBeenCalled();
+    });
+
+    it("clears ONE flag and does not mark the business unsubscribed", async () => {
+      // The defect this closes: an owner who merely did not want a monthly
+      // summary would otherwise have lost urgent lead alerts on every channel.
+      const res = await POST(new Request(url("&ui=1"), { method: "POST" }));
+      expect(res.status).toBe(200);
+      expect(updateNotificationPreferences).toHaveBeenCalledWith(BIZ, {
+        email_monthly_recap: false
+      });
+      expect(await res.text()).toContain("Monthly recap turned off");
+    });
+
+    it("reads the scope out of the form body too", async () => {
+      await POST(
+        new Request("http://localhost/api/notifications/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ bid: BIZ, ui: "1", scope: "monthly_recap" }).toString()
+        })
+      );
+      expect(updateNotificationPreferences).toHaveBeenCalledWith(BIZ, {
+        email_monthly_recap: false
+      });
+    });
+
+    it("reports a write failure instead of claiming success", async () => {
+      vi.mocked(updateNotificationPreferences).mockRejectedValue(new Error("nope"));
+      const res = await POST(new Request(url("&ui=1"), { method: "POST" }));
+      expect(res.status).toBe(500);
+    });
+
+    it("falls back to the FULL unsubscribe for an unrecognized scope", async () => {
+      // The mail-client one-click header carries no scope, and for that
+      // gesture "everything" is the right reading.
+      await POST(
+        new Request(
+          `http://localhost/api/notifications/unsubscribe?bid=${BIZ}&scope=something-else`,
+          { method: "POST" }
+        )
+      );
+      const patch = vi.mocked(updateNotificationPreferences).mock.calls[0]![1];
+      expect(patch).toMatchObject({ email_monthly_recap: false, email_urgent: false });
+      expect(patch.unsubscribed_at).toEqual(expect.any(String));
+    });
+  });
 });

@@ -22,6 +22,16 @@ v8 keeps reporting the line uncovered (seen on
 **Why:** the ignore comment covers the statement, but the awaited
 continuation is attributed separately.
 
+**It is worse than "the ignore does nothing": the ignore MOVES the gap onto
+the NEXT statement** (confirmed 2026-08-28 on
+`src/lib/analytics/growth-report.ts`). With `/* c8 ignore next */` above the
+awaited default, v8 reported the following line, an ordinary
+`const now = opts.now ?? new Date();`, as uncovered instead. Both `next` and
+`start`/`stop` did it. So the symptom is a mystery gap on an innocent line one
+below, and chasing THAT line with more tests never closes it. If a
+plainly-executed line reports uncovered, look at the statement above it for an
+awaited default.
+
 **How to apply:** stop annotating and cover it. `vi.mock` the module and add
 one test that calls the function WITHOUT the client argument:
 
@@ -33,4 +43,5 @@ vi.mock("@/lib/supabase/server", () => ({
 ```
 
 Better test anyway: production takes that branch on every call, so it was
-the one path never exercised. Related: [[feedback-testing]].
+the one path never exercised. Adding that one test closed both the awaited
+line AND the phantom gap below it. Related: [[feedback-testing]].

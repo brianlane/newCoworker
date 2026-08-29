@@ -65,6 +65,8 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "cron-sweep-watchdog": { maxGapMinutes: 1500, schedule: "30 3 * * *" },
   "data-retention-sweep": { maxGapMinutes: 1500, schedule: "35 1 * * *" },
   "document-expiration-sweep": { maxGapMinutes: 1500, schedule: "5 2 * * *" },
+  // Sends only from the 3rd of the month; the daily tick is the retry.
+  "monthly-growth-sweep": { maxGapMinutes: 1500, schedule: "20 16 * * *" },
   "monthly-intro-nudge-sweep": { maxGapMinutes: 1500, schedule: "15 15 * * *" },
   "priority-support-nudge-sweep": { maxGapMinutes: 1500, schedule: "35 15 * * *" },
   "platform-cost-sync": { maxGapMinutes: 1500, schedule: "10 11 * * *" },

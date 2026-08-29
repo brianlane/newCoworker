@@ -50,6 +50,7 @@ export const NOTIFICATION_TOGGLE_KEYS = [
   "email_urgent",
   "email_digest",
   "email_digest_weekly",
+  "email_monthly_recap",
   "digest_customer_facing_only",
   "dashboard_alerts",
   "sms_warm_transfer",

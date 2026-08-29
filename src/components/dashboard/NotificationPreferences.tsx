@@ -63,6 +63,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
+  const [emailMonthlyRecap, setEmailMonthlyRecap] = useState(initial.email_monthly_recap ?? true);
   const [digestCustomerFacingOnly, setDigestCustomerFacingOnly] = useState(
     initial.digest_customer_facing_only ?? false
   );
@@ -116,6 +117,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setPushUrgent(initial.push_urgent ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
+    setEmailMonthlyRecap(initial.email_monthly_recap ?? true);
     setDigestCustomerFacingOnly(initial.digest_customer_facing_only ?? false);
     setEmailUrgent(initial.email_urgent);
     setDashboardAlerts(initial.dashboard_alerts);
@@ -146,6 +148,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setPushUrgent(prefs.push_urgent ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
+    setEmailMonthlyRecap(prefs.email_monthly_recap ?? true);
     setDigestCustomerFacingOnly(prefs.digest_customer_facing_only ?? false);
     setEmailUrgent(prefs.email_urgent);
     setDashboardAlerts(prefs.dashboard_alerts);
@@ -184,6 +187,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           push_urgent: pushUrgent,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
+          email_monthly_recap: emailMonthlyRecap,
           digest_customer_facing_only: digestCustomerFacingOnly,
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
@@ -353,6 +357,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Roll-up of the past week's activity, sent Monday mornings."
           checked={emailDigestWeekly}
           onChange={setEmailDigestWeekly}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Email: monthly recap"
+          description="Once a month, what your coworker handled: leads, texts, calls and minutes, next to the month before."
+          checked={emailMonthlyRecap}
+          onChange={setEmailMonthlyRecap}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

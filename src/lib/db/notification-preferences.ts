@@ -41,6 +41,11 @@ export type NotificationPreferencesRow = {
   push_urgent?: boolean;
   email_digest: boolean;
   email_digest_weekly: boolean;
+  /**
+   * Send the monthly growth recap. Optional on the type for rows read before
+   * 20260829061823; a missing value reads as ON, matching the column default.
+   */
+  email_monthly_recap?: boolean;
   email_urgent: boolean;
   dashboard_alerts: boolean;
   /** Text the recipient + owner on every voice warm transfer (success/failure). */
@@ -187,6 +192,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "push_urgent"
     | "email_digest"
     | "email_digest_weekly"
+    | "email_monthly_recap"
     | "email_urgent"
     | "dashboard_alerts"
     | "sms_warm_transfer"
@@ -235,6 +241,7 @@ const UPDATABLE_PREFERENCE_KEYS: Record<keyof Required<NotificationPreferencesUp
   push_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
+  email_monthly_recap: true,
   email_urgent: true,
   dashboard_alerts: true,
   sms_warm_transfer: true,
@@ -270,6 +277,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   push_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
+  email_monthly_recap: true,
   email_urgent: true,
   dashboard_alerts: true,
   sms_warm_transfer: true,
@@ -401,6 +409,10 @@ export async function updateNotificationPreferences(
       patch.push_urgent === true ||
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||
+      // Turning the monthly recap back on re-subscribes for the same reason
+      // every other channel toggle does: the sweep checks the global flag
+      // first, so leaving it set would make this switch do nothing.
+      patch.email_monthly_recap === true ||
       patch.email_urgent === true ||
       patch.dashboard_alerts === true ||
       patch.sms_warm_transfer === true ||
