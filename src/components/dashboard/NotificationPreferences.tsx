@@ -62,6 +62,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   const [googleChatUrgent, setGoogleChatUrgent] = useState(initial.google_chat_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
+  const [pushReplacesSms, setPushReplacesSms] = useState(initial.push_replaces_sms ?? false);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [emailMonthlyRecap, setEmailMonthlyRecap] = useState(initial.email_monthly_recap ?? true);
@@ -116,6 +117,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setGoogleChatUrgent(initial.google_chat_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
     setPushUrgent(initial.push_urgent ?? true);
+    setPushReplacesSms(initial.push_replaces_sms ?? false);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setEmailMonthlyRecap(initial.email_monthly_recap ?? true);
@@ -147,6 +149,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setGoogleChatUrgent(prefs.google_chat_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
     setPushUrgent(prefs.push_urgent ?? true);
+    setPushReplacesSms(prefs.push_replaces_sms ?? false);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setEmailMonthlyRecap(prefs.email_monthly_recap ?? true);
@@ -186,6 +189,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           google_chat_urgent: googleChatUrgent,
           slack_digest: slackDigest,
           push_urgent: pushUrgent,
+          push_replaces_sms: pushReplacesSms,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           email_monthly_recap: emailMonthlyRecap,
@@ -324,6 +328,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Send urgent alerts to your Google Chat space (requires the Google Chat integration under Integrations)."
           checked={googleChatUrgent}
           onChange={setGoogleChatUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Push instead of text"
+          description="When a device has alerts on, send the push and skip the text. Falls back to texting whenever no device can be reached."
+          checked={pushReplacesSms}
+          onChange={setPushReplacesSms}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

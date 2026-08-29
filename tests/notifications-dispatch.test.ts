@@ -64,7 +64,7 @@ vi.mock("@/lib/telegram/deliver", () => ({
  * toHaveLength would break. The push describe block opts in explicitly.
  */
 vi.mock("@/lib/push/db", () => ({
-  pushTargetState: vi.fn(async () => ({ connected: false }))
+  pushTargetState: vi.fn(async () => ({ connected: false, deliverable: false }))
 }));
 
 vi.mock("@/lib/push/send", () => ({ deliverPush: vi.fn() }));
@@ -251,7 +251,7 @@ describe("notifications/dispatch", () => {
     });
     vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no device has ever subscribed, same never-connected rule.
-    vi.mocked(pushTargetState).mockResolvedValue({ connected: false });
+    vi.mocked(pushTargetState).mockResolvedValue({ connected: false, deliverable: false });
     vi.mocked(deliverPush).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: Telegram NOT connected either, same reason as Slack above.
     // A never-connected channel records NOTHING, so the existing fan-out
@@ -1765,7 +1765,7 @@ describe("notifications/dispatch", () => {
         .filter((r) => r.delivery_channel === "push");
 
     const subscribed = () =>
-      vi.mocked(pushTargetState).mockResolvedValue({ connected: true });
+      vi.mocked(pushTargetState).mockResolvedValue({ connected: true, deliverable: true });
 
     const dispatch = (over: Record<string, unknown> = {}) =>
       dispatchUrgentNotification({
@@ -2009,6 +2009,103 @@ describe("notifications/dispatch", () => {
       expect(deliverPush).toHaveBeenCalledWith(
         expect.objectContaining({ url: "/dashboard/activity" })
       );
+    });
+
+    describe("push instead of text", () => {
+      const smsRows = () =>
+        vi
+          .mocked(insertNotification)
+          .mock.calls.map((c) => c[0] as Record<string, unknown>)
+          .filter((r) => r.delivery_channel === "sms");
+
+      const preferPush = () =>
+        vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+          ...PREFS_ON,
+          push_replaces_sms: true
+        } as never);
+
+      it("skips the text and says why", async () => {
+        subscribed();
+        preferPush();
+        vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+        await dispatch();
+
+        expect(sendTelnyxSms).not.toHaveBeenCalled();
+        expect(smsRows()[0].status).toBe("skipped");
+        expect((smsRows()[0].payload as Record<string, unknown>).reason).toBe("push_preferred");
+        // The push still goes, so the owner is not left with nothing.
+        expect(pushRows()[0].status).toBe("sent");
+      });
+
+      /**
+       * THE ONE THAT MATTERS. pushConnected fails toward TRUE so a read blip
+       * degrades to a noisy honest skip; pushDeliverable fails toward FALSE
+       * because it gates suppressing the TEXT. Gating on the wrong one would
+       * silence the owner's phone entirely on a hiccup, which is the WhatsApp
+       * bug (Bugbot f574b3a4) one channel over.
+       */
+      it("still texts when push is applicable but not provably deliverable", async () => {
+        vi.mocked(pushTargetState).mockResolvedValue({ connected: true, deliverable: false });
+        preferPush();
+        await dispatch();
+        expect(sendTelnyxSms).toHaveBeenCalled();
+        expect(smsRows().some((r) => r.status === "skipped")).toBe(false);
+      });
+
+      it("still texts when the push toggle itself is off", async () => {
+        subscribed();
+        vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+          ...PREFS_ON,
+          push_replaces_sms: true,
+          push_urgent: false
+        } as never);
+        await dispatch();
+        expect(sendTelnyxSms).toHaveBeenCalled();
+      });
+
+      /**
+       * Push fans out only to devices that installed the app; a team
+       * broadcast text reaches every tagged roster phone. Substituting would
+       * silence exactly the teammates who never opted in.
+       */
+      it("never substitutes on an unowned-lead team broadcast", async () => {
+        subscribed();
+        preferPush();
+        vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+        vi.mocked(resolveContactOwnerTarget).mockResolvedValue({
+          target: "team_broadcast",
+          team: [{ phone: "+15550000001", name: "A", employeeId: null }],
+          email: null,
+          emailTarget: "owner"
+        } as never);
+
+        await dispatch({ contactE164: "+15551234567" });
+        expect(sendTelnyxSms).toHaveBeenCalled();
+      });
+
+      it("never substitutes on an alert redirected to one teammate", async () => {
+        // Push cannot be aimed at the person the text was rerouted to.
+        subscribed();
+        preferPush();
+        vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+        vi.mocked(resolveContactOwnerTarget).mockResolvedValue({
+          target: "contact_owner",
+          team: [],
+          phone: "+15559998888",
+          email: null,
+          emailTarget: "owner"
+        } as never);
+
+        await dispatch({ contactE164: "+15551234567" });
+        expect(sendTelnyxSms).toHaveBeenCalled();
+      });
+
+      it("texts as usual when the preference is off", async () => {
+        subscribed();
+        vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+        await dispatch();
+        expect(sendTelnyxSms).toHaveBeenCalled();
+      });
     });
 
     it("goes content-free under HIPAA mode, and drops the deep link", async () => {

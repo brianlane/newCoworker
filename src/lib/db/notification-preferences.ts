@@ -39,6 +39,15 @@ export type NotificationPreferencesRow = {
    * that channel-liveness reads. See the migration for the full argument.
    */
   push_urgent?: boolean;
+  /**
+   * Deliver urgent alerts by push INSTEAD of SMS when a live subscription
+   * exists. Optional on the type for rows read before 20260829182428.
+   *
+   * Default FALSE, unlike the other push toggles: this suppresses a metered
+   * channel that always arrives in favour of one that can die quietly, so
+   * nobody is opted in by a migration.
+   */
+  push_replaces_sms?: boolean;
   email_digest: boolean;
   email_digest_weekly: boolean;
   /**
@@ -190,6 +199,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "google_chat_urgent"
     | "slack_digest"
     | "push_urgent"
+    | "push_replaces_sms"
     | "email_digest"
     | "email_digest_weekly"
     | "email_monthly_recap"
@@ -239,6 +249,7 @@ const UPDATABLE_PREFERENCE_KEYS: Record<keyof Required<NotificationPreferencesUp
   google_chat_urgent: true,
   slack_digest: true,
   push_urgent: true,
+  push_replaces_sms: true,
   email_digest: true,
   email_digest_weekly: true,
   email_monthly_recap: true,
@@ -275,6 +286,12 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   // is optional on the row type (it postdates the table), so Omit<> does not
   // demand it here. Add every new channel toggle by hand.
   push_urgent: true,
+  // FALSE, unlike every other push toggle. Turning this on suppresses a
+  // metered channel that always arrives in favour of one that can die
+  // quietly (an uninstalled app, a revoked permission, a dropped
+  // subscription), so it is opt-in rather than something a migration decides
+  // for an owner.
+  push_replaces_sms: false,
   email_digest: true,
   email_digest_weekly: true,
   email_monthly_recap: true,
