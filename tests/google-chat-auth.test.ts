@@ -207,3 +207,223 @@ describe("configuration", () => {
     expect(await verify(sign(goodPayload))).toEqual({ ok: false, reason: "jwks_unavailable" });
   });
 });
+
+describe("more than one audience, because Google will not say which it sends", () => {
+  /**
+   * Chat mints the audience from EITHER the Cloud project number OR the
+   * endpoint URL, chosen by an "Authentication Audience" setting that does
+   * not appear on the configuration page of an app built in the Workspace
+   * add-on shape. There is no API that reports it and no way to read it off
+   * before the first event lands, and guessing wrong rejects every event
+   * with a 401 indistinguishable from a forged token.
+   *
+   * So both of OUR identifiers are accepted. These tests exist to prove
+   * that this widened the set of identifiers rather than weakening the
+   * check: an audience belonging to somebody else is still refused, and an
+   * empty configuration still refuses everything.
+   */
+  const URL_AUDIENCE = "https://www.newcoworker.com/api/webhooks/google-chat";
+  const BOTH = `${AUDIENCE},${URL_AUDIENCE}`;
+
+  it.each([
+    ["the project number", AUDIENCE],
+    ["the endpoint URL", URL_AUDIENCE]
+  ])("accepts a token whose audience is %s", async (_label, aud) => {
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud })}`, {
+        audience: BOTH,
+        now: NOW
+      })
+    ).toEqual({ ok: true, audience: aud });
+  });
+
+  it("still refuses an audience that is neither of ours", async () => {
+    // The whole point of the check. Holding two of our own identifiers must
+    // not become "accept any audience".
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: "999888777666" })}`, {
+        audience: BOTH,
+        now: NOW
+      })
+    ).toEqual({ ok: false, reason: "unexpected_audience" });
+  });
+
+  it("refuses a URL that merely CONTAINS one of ours", async () => {
+    // A prefix or suffix match here would accept an attacker-chosen host,
+    // so the comparison stays whole-string.
+    expect(
+      await verifyGoogleChatToken(
+        `Bearer ${sign({ ...goodPayload, aud: `${URL_AUDIENCE}.evil.test` })}`,
+        { audience: BOTH, now: NOW }
+      )
+    ).toEqual({ ok: false, reason: "unexpected_audience" });
+  });
+
+  it("tolerates the spacing an operator actually types", async () => {
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: URL_AUDIENCE })}`, {
+        audience: ` ${AUDIENCE} ,  ${URL_AUDIENCE} `,
+        now: NOW
+      })
+    ).toMatchObject({ ok: true });
+  });
+
+  it("fails CLOSED on a list that is nothing but separators", async () => {
+    // ",  ," must never collapse into "match anything". This is the shape a
+    // half-finished env var edit leaves behind.
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign(goodPayload)}`, {
+        audience: " , ,, ",
+        now: NOW
+      })
+    ).toEqual({ ok: false, reason: "audience_unconfigured" });
+  });
+
+  it("reads the list from the environment too", async () => {
+    // The deployed shape: one variable holding both identifiers.
+    process.env.GOOGLE_CHAT_AUDIENCE = BOTH;
+    try {
+      expect(
+        await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: URL_AUDIENCE })}`, {
+          now: NOW
+        })
+      ).toMatchObject({ ok: true, audience: URL_AUDIENCE });
+    } finally {
+      delete process.env.GOOGLE_CHAT_AUDIENCE;
+    }
+  });
+});
+
+describe("the app-URL shape, where a valid signature does NOT prove Chat sent it", () => {
+  /**
+   * With the audience set to the app URL, Chat sends an OpenID Connect ID
+   * token instead of a self-signed JWT: issuer `accounts.google.com`, signed
+   * with Google's federated keys, not Chat's own.
+   *
+   * That issuer signs for every account Google hosts, and the audience of an
+   * ID token is chosen by whoever requests one, so ANY service account can
+   * have Google mint a correctly signed token whose `aud` is our webhook URL.
+   * Signature plus audience is therefore not enough here, and the claim that
+   * actually identifies Chat is `email`. The refusals below are the point of
+   * this block; the acceptances only frame them.
+   */
+  const URL_AUDIENCE = "https://www.newcoworker.com/api/webhooks/google-chat";
+  const BOTH = `${AUDIENCE},${URL_AUDIENCE}`;
+  const OIDC_CERTS = "https://www.googleapis.com/oauth2/v3/certs";
+
+  /** Chat's key at its own URL; a DIFFERENT key at Google's federated URL. */
+  function serveBothKeySets() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        new Response(
+          JSON.stringify({
+            keys:
+              String(url) === OIDC_CERTS
+                ? [jwkFor(other.publicKey, "oidc-1")]
+                : [jwkFor(publicKey, "key-1")]
+          })
+        )
+      )
+    );
+  }
+
+  const idToken = (over: Record<string, unknown> = {}) =>
+    sign(
+      {
+        iss: "https://accounts.google.com",
+        aud: URL_AUDIENCE,
+        exp: Math.floor(NOW / 1000) + 600,
+        email: "chat@system.gserviceaccount.com",
+        email_verified: true,
+        ...over
+      },
+      { kid: "oidc-1", key: other.privateKey }
+    );
+
+  beforeEach(() => {
+    resetGoogleChatJwksStateForTests();
+    serveBothKeySets();
+  });
+
+  it("accepts a real Chat ID token", async () => {
+    expect(
+      await verifyGoogleChatToken(`Bearer ${idToken()}`, { audience: BOTH, now: NOW })
+    ).toEqual({ ok: true, audience: URL_AUDIENCE });
+  });
+
+  it("accepts the issuer spelled without a scheme", async () => {
+    // Google has used both spellings.
+    expect(
+      await verifyGoogleChatToken(`Bearer ${idToken({ iss: "accounts.google.com" })}`, {
+        audience: BOTH,
+        now: NOW
+      })
+    ).toMatchObject({ ok: true });
+  });
+
+  it("REFUSES a correctly signed Google token from anybody but Chat", async () => {
+    // The forgery this pin exists to stop: real Google signature, real
+    // issuer, our own URL as the audience, minted by a stranger's service
+    // account. Only the email claim separates it from the real thing.
+    expect(
+      await verifyGoogleChatToken(
+        `Bearer ${idToken({ email: "attacker@some-project.iam.gserviceaccount.com" })}`,
+        { audience: BOTH, now: NOW }
+      )
+    ).toEqual({ ok: false, reason: "unexpected_chat_identity" });
+  });
+
+  it.each([
+    ["email_verified is false", { email_verified: false }],
+    ["email_verified is absent", { email_verified: undefined }],
+    ["there is no email claim at all", { email: undefined }]
+  ])("refuses when %s", async (_label, over) => {
+    // An unverified email claim asserts nothing, so it cannot carry the
+    // identity of the sender.
+    expect(
+      await verifyGoogleChatToken(`Bearer ${idToken(over)}`, { audience: BOTH, now: NOW })
+    ).toEqual({ ok: false, reason: "unexpected_chat_identity" });
+  });
+
+  it.each([
+    // Chat's kid is not in Google's federated set at all.
+    ["a key id only Chat publishes", "key-1", "unknown_key"],
+    // A kid that IS in the federated set, but the wrong private key behind
+    // it: this is the one that has to reach the signature check and fail.
+    ["a federated key id it was not signed with", "oidc-1", "bad_signature"]
+  ])("refuses an ID token presenting %s", async (_label, kid, reason) => {
+    // The two key sets are disjoint in production, so neither crossing may
+    // verify.
+    expect(
+      await verifyGoogleChatToken(
+        `Bearer ${sign(
+          {
+            iss: "https://accounts.google.com",
+            aud: URL_AUDIENCE,
+            exp: Math.floor(NOW / 1000) + 600,
+            email: "chat@system.gserviceaccount.com",
+            email_verified: true
+          },
+          { kid, key: privateKey }
+        )}`,
+        { audience: BOTH, now: NOW }
+      )
+    ).toEqual({ ok: false, reason });
+  });
+
+  it("does not spend a second key fetch on a failure both shapes share", async () => {
+    // An expired token is expired either way. Only a mismatched ISSUER is
+    // worth trying the other shape for.
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ keys: [jwkFor(publicKey, "key-1")] })));
+    resetGoogleChatJwksStateForTests();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(
+      await verifyGoogleChatToken(
+        `Bearer ${sign({ ...goodPayload, exp: Math.floor(NOW / 1000) - 600 })}`,
+        { audience: BOTH, now: NOW }
+      )
+    ).toEqual({ ok: false, reason: "expired" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

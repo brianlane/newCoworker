@@ -31,6 +31,28 @@ describe("SMS prompt lines", () => {
     expect(SMS_GROUNDED_ACTIONS_LINE).toContain("do not promise a call AT ALL");
   });
 
+  it("grounded actions: no promised future texts without schedule_text (R V / KYP Ads, 2026-08-28)", () => {
+    // R V asked for a reminder 30 minutes before his Monday call and was
+    // told "I'll make sure you get a reminder text at 6:30 PM Eastern".
+    // Nothing was queued: the texting coworker had no way to send later.
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("NEVER promise a reminder");
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("unless schedule_text returned success");
+    // The tools-off / tool-refused worst case, mirroring the call rule.
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("do not promise a later text AT ALL");
+    // Measured gap: without this, the model keeps the promise and just
+    // reassigns it ("someone on the team will make sure you get a nudge at
+    // 6:30 PM Eastern"), which is the Derek Schultz shape again. Naming the
+    // TIME is what makes it a promise, so that is what the rule bans:
+    // scored over 20 draws (10 per temperature) the softer wording still
+    // delegated a timed promise 4 times, this one 0.
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain(
+      "never name a time at which they will hear from anyone"
+    );
+    // The queue is bound to the person being texted, and holds exactly one.
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("never a third party");
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("MOVES that one");
+  });
+
   it("grounded actions: the booking honesty rules (Truly booking incident)", () => {
     expect(SMS_GROUNDED_ACTIONS_LINE).toContain(
       "An appointment exists ONLY if calendar_book_appointment returned success"

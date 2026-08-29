@@ -570,6 +570,7 @@ alter table scheduled_sms add column if not exists telnyx_message_id text;
 alter table scheduled_sms add column if not exists created_at timestamp with time zone not null default now();
 alter table scheduled_sms add column if not exists claimed_at timestamp with time zone;
 alter table scheduled_sms add column if not exists sent_at timestamp with time zone;
+alter table scheduled_sms add column if not exists created_by text not null default 'owner';
 
 do $$ declare c record; begin
   for c in select conname from pg_constraint
