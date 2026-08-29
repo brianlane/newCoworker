@@ -15,6 +15,14 @@ An `order` OBJECT and a SINGULAR `virtual_machine`. Hostinger's OpenAPI spec has
 
 `src/lib/hostinger/client.ts` was written against `{ order_id, virtual_machines: [] }`, which the API never sends. **Every purchase therefore threw on a reply that had already succeeded and been charged.** Fixed 2026-08-28 in [#1696](https://github.com/brianlane/newCoworker/pull/1696): the client now reads both spellings and normalizes to `{ orderId, virtualMachines }`.
 
+**Fixing this exposed the next wall.** #1696 made clean purchases possible for
+the first time, and the very first one (VM 1939337, Scar Fairy, 2026-08-29)
+died because the purchase path never embedded the SSH key in its post-install
+script and Hostinger drops `setup.public_key_ids` there too. See
+[[project-hostinger-drops-public-key-ids-on-purchase-too]]. Everything the
+purchase path does after the box exists had been dead code for months, so
+expect more of it to be untested.
+
 **Why nobody noticed for months.** The whole "Hostinger fail-but-charge" story was partly this bug. `vps_inventory` had ZERO rows from a cleanly parsed purchase; every box the fleet owned arrived via the error-recovery path, labelled "adopted fail-but-charge orphan" or "adopted from pool". When Hostinger genuinely errors the box sits in `initial` with no template, the reconciler catches it, and provisioning limps to success; when Hostinger SUCCEEDS, we hard-failed with a paid orphan. The unit fixture hand-fed the invented shape, so 25k green tests never touched the real contract. See [[feedback-assert-the-producer-not-the-fixture]].
 
 **Two gates decide whether a stranded paid box gets recovered.** Both matter when debugging a "purchase failed but we were charged":
