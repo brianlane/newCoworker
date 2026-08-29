@@ -8,6 +8,8 @@
  * (`requireBusinessRole` before any call here).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { revokePushSubscriptionsForUser } from "@/lib/push/db";
+import { logger } from "@/lib/logger";
 import type { BusinessRole, MemberRole } from "@/lib/authz/policy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -217,9 +219,36 @@ export async function revokeBusinessMember(
     .eq("business_id", businessId)
     .eq("id", memberId)
     .neq("status", "revoked")
-    .select("id");
+    .select("id, user_id");
   if (error) throw new Error(`revokeBusinessMember: ${error.message}`);
-  return ((data as unknown[] | null) ?? []).length > 0;
+  const revoked = (data as { id: string; user_id: string | null }[] | null) ?? [];
+  if (revoked.length === 0) return false;
+
+  /**
+   * Stop this person's push devices for this tenant.
+   *
+   * Expiry hygiene at send time cannot cover access loss: their subscription
+   * is perfectly alive, the browser is theirs, and the push service will keep
+   * accepting for it. Only this write knows they are no longer allowed to see
+   * the tenant's alerts, so it is the only place the revoke can happen.
+   *
+   * Best effort on purpose. Losing the membership revoke itself because the
+   * push cleanup failed would be worse: the row above is the authoritative
+   * access change, and listDeliverablePushSubscriptions has a staleness floor
+   * that eventually catches a device this missed.
+   */
+  const userId = revoked[0].user_id;
+  if (userId) {
+    try {
+      await revokePushSubscriptionsForUser(businessId, userId, db);
+    } catch (err) {
+      logger.warn("revokeBusinessMember: push subscription revoke failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  return true;
 }
 
 /**

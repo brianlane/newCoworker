@@ -524,6 +524,17 @@ export const config = {
   matcher: [
     // logo-\d+.png are the sized favicon/app-icon variants (logo-32 etc.),
     // static assets the middleware must skip just like logo.png itself.
-    "/((?!_next/static|_next/image|favicon.ico|logo.png|logo-\\d+.png|.*\\.svg).*)",
+    //
+    // sw.js and manifest.webmanifest are skipped for the same reason plus a
+    // sharper one. The browser re-fetches /sw.js on every registration call
+    // to check for an update, so a dashboard behind one office NAT spends a
+    // shared per-IP API bucket on it; when that trips, the middleware answers
+    // with a JSON 429 where the browser expected a script, the worker update
+    // fails, and a shipped change silently never reaches those machines. A
+    // 429 on the manifest makes the install prompt vanish with nothing in our
+    // logs. Neither path reads the session or needs a rate limit, and
+    // next.config.ts headers() is a separate matcher that still applies the
+    // full security baseline to both.
+    "/((?!_next/static|_next/image|favicon.ico|logo.png|logo-\\d+.png|sw\\.js|manifest\\.webmanifest|.*\\.svg).*)",
   ],
 };

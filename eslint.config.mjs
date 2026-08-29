@@ -24,6 +24,34 @@ const config = [
       globals: { ...globals.node }
     },
     rules: { "no-undef": "error" }
+  },
+  {
+    /**
+     * public/sw.js has the exact shape the vps block above exists for: plain
+     * script, no build step, no typechecker, shipped byte-for-byte to the
+     * browser. It is worse in one way. A VPS sidecar that references a
+     * deleted name throws on the first request and someone notices within
+     * minutes; a service worker that does throws inside a push event, on a
+     * device we do not own, and the only symptom is that an urgent alert
+     * silently never arrived.
+     *
+     * `npx eslint --print-config public/widget.js` confirms the defaults are
+     * not enough on their own: no-undef is OFF for public/*.js, and the
+     * resolved globals are browser-only, so `clients`, `registration` and
+     * `ServiceWorkerGlobalScope` would all read as undefined names.
+     *
+     * sourceType is "script" because the worker is registered as a classic
+     * script. That is not cosmetic either: it makes a stray `import` a lint
+     * error here instead of a runtime SyntaxError that silently unregisters
+     * the worker in the field.
+     */
+    files: ["public/sw.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      globals: { ...globals.serviceworker }
+    },
+    rules: { "no-undef": "error" }
   }
 ];
 

@@ -236,14 +236,29 @@ describe("vps/data-api/schema.sql accepts every delivery channel the app can wri
     expect(centralChannels).toContain("dashboard");
   });
 
-  it.each(centralChannels)("accepts %s", (channel) => {
-    const constraint =
-      /add constraint notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/.exec(
-        sql
-      );
-    expect(constraint).not.toBeNull();
-    const boxChannels = [...(constraint?.[1] ?? "").matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
-    expect(boxChannels).toContain(channel);
+  /**
+   * BOTH constraint sites, not just the `add constraint` one.
+   *
+   * The box schema pins delivery_channel twice: inside `create table if not
+   * exists` for a fresh box, and as a drop/re-add for an existing one. A
+   * single `.exec` only ever sees the first match, so patching one and
+   * leaving the other passes while every NEWLY provisioned box rejects the
+   * channel.
+   */
+  const constraints = [
+    ...sql.matchAll(
+      /notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/g
+    )
+  ].map((m) => [...m[1].matchAll(/'([a-z_]+)'/g)].map((v) => v[1]));
+
+  it("pins the channel list in both the create-table and alter-table constraints", () => {
+    expect(constraints).toHaveLength(2);
+  });
+
+  it.each(centralChannels)("accepts %s in every constraint site", (channel) => {
+    for (const boxChannels of constraints) {
+      expect(boxChannels).toContain(channel);
+    }
   });
 });
 

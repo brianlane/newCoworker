@@ -30,6 +30,15 @@ export type NotificationPreferencesRow = {
   google_chat_urgent?: boolean;
   /** Post the daily/weekly digest to the same Slack channel. */
   slack_digest?: boolean;
+  /**
+   * Deliver urgent owner alerts as a Web Push banner to every subscribed
+   * device. Optional on the type for rows read before 20260829044308.
+   *
+   * There is deliberately no push_digest sibling: a push is an interrupt, and
+   * a daily banner nobody taps would corrode the notificationclick receipt
+   * that channel-liveness reads. See the migration for the full argument.
+   */
+  push_urgent?: boolean;
   email_digest: boolean;
   email_digest_weekly: boolean;
   email_urgent: boolean;
@@ -175,6 +184,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "teams_urgent"
     | "google_chat_urgent"
     | "slack_digest"
+    | "push_urgent"
     | "email_digest"
     | "email_digest_weekly"
     | "email_urgent"
@@ -198,6 +208,53 @@ export type NotificationPreferencesUpdate = Partial<
   >
 >;
 
+/**
+ * Every column {@link updateNotificationPreferences} is allowed to write.
+ *
+ * This is a `Record` over the update type's keys, not a plain array, and the
+ * difference is the whole point: `(keyof NotificationPreferencesUpdate)[]`
+ * accepts any SUBSET, so adding a column to the type above and forgetting it
+ * here compiles cleanly. The route then validates the new field, the UI shows
+ * its toggle flipping, the save returns 200, and the column never changes.
+ * There is no error anywhere and nothing to grep for.
+ *
+ * `Record<keyof Required<...>, true>` refuses to compile until every key is
+ * present, so the next channel cannot repeat that. `Required` is needed
+ * because several of these are optional on the row type (they postdate the
+ * table), and `keyof` an optional property is still the key.
+ */
+const UPDATABLE_PREFERENCE_KEYS: Record<keyof Required<NotificationPreferencesUpdate>, true> = {
+  sms_urgent: true,
+  whatsapp_urgent: true,
+  whatsapp_replaces_sms: true,
+  slack_urgent: true,
+  telegram_urgent: true,
+  teams_urgent: true,
+  google_chat_urgent: true,
+  slack_digest: true,
+  push_urgent: true,
+  email_digest: true,
+  email_digest_weekly: true,
+  email_urgent: true,
+  dashboard_alerts: true,
+  sms_warm_transfer: true,
+  image_limit_alerts: true,
+  aiflow_failure_alerts: true,
+  customer_reply_alerts: true,
+  unassigned_booking_alerts: true,
+  booking_alert_audience: true,
+  booking_alert_member_ids: true,
+  category_leads: true,
+  category_team: true,
+  category_system: true,
+  digest_customer_facing_only: true,
+  phone_number: true,
+  alert_email: true,
+  digest_email_daily: true,
+  digest_email_weekly: true,
+  unsubscribed_at: true
+};
+
 const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> = {
   sms_urgent: true,
   whatsapp_urgent: true,
@@ -207,6 +264,10 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   teams_urgent: true,
   google_chat_urgent: true,
   slack_digest: true,
+  // NOT compiler-enforced, unlike UPDATABLE_PREFERENCE_KEYS above: the field
+  // is optional on the row type (it postdates the table), so Omit<> does not
+  // demand it here. Add every new channel toggle by hand.
+  push_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
   email_urgent: true,
@@ -311,36 +372,7 @@ export async function updateNotificationPreferences(
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
 
-  const keys: (keyof NotificationPreferencesUpdate)[] = [
-    "sms_urgent",
-    "whatsapp_urgent",
-    "whatsapp_replaces_sms",
-    "slack_urgent",
-    "telegram_urgent",
-    "teams_urgent",
-    "google_chat_urgent",
-    "slack_digest",
-    "email_digest",
-    "email_digest_weekly",
-    "email_urgent",
-    "dashboard_alerts",
-    "sms_warm_transfer",
-    "image_limit_alerts",
-    "aiflow_failure_alerts",
-    "customer_reply_alerts",
-    "unassigned_booking_alerts",
-    "booking_alert_audience",
-    "booking_alert_member_ids",
-    "category_leads",
-    "category_team",
-    "category_system",
-    "digest_customer_facing_only",
-    "phone_number",
-    "alert_email",
-    "digest_email_daily",
-    "digest_email_weekly",
-    "unsubscribed_at"
-  ];
+  const keys = Object.keys(UPDATABLE_PREFERENCE_KEYS) as (keyof NotificationPreferencesUpdate)[];
   const update: Record<string, unknown> = { updated_at: now };
   for (const key of keys) {
     const v = patch[key];
@@ -366,6 +398,7 @@ export async function updateNotificationPreferences(
       patch.teams_urgent === true ||
       patch.google_chat_urgent === true ||
       patch.slack_digest === true ||
+      patch.push_urgent === true ||
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||
       patch.email_urgent === true ||

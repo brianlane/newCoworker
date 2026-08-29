@@ -258,6 +258,8 @@ const EXEMPT: Record<string, string> = {
   calendly_connections: "tenant credentials",
   integrations: "tenant integration state",
   meta_connections: "tenant Page tokens",
+  push_subscriptions:
+    "the tenant's OWN staff device registrations for alerts (push service endpoint, the browser's RFC 8291 public keys, a coarse device label), on the same footing as slack_connections: it is who WE send to, never anything about an end customer, so there is no identifier here to erase by. Tenant rows cascade with the business; a departing teammate's rows are revoked by revokeBusinessMember in src/lib/db/business-members.ts; and business_id NULL rows are the platform's own HQ-admin devices, not a tenant's",
   slack_connections: "tenant OAuth grants (workspace bot token, no end-customer data)",
   // The slack_* chat trio is SUPERSEDED by the coworker_* pipeline below and
   // is retained, unread, for one release so a rollback is a code revert

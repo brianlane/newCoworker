@@ -598,7 +598,7 @@ create table if not exists notifications (
   deleted_by uuid,
   read_by_actor text,
   constraint notifications_pkey PRIMARY KEY (id),
-  constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text, 'google_chat'::text])))
+  constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text, 'google_chat'::text, 'push'::text])))
 );
 
 alter table notifications add column if not exists id uuid;
@@ -620,7 +620,7 @@ do $$ declare c record; begin
     execute format('alter table notifications drop constraint %I', c.conname);
   end loop;
 end $$;
-alter table notifications add constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text, 'google_chat'::text])));
+alter table notifications add constraint notifications_delivery_channel_check CHECK ((delivery_channel = ANY (ARRAY['sms'::text, 'email'::text, 'dashboard'::text, 'whatsapp'::text, 'slack'::text, 'telegram'::text, 'teams'::text, 'google_chat'::text, 'push'::text])));
 
 create index if not exists notifications_business_unread_idx ON public.notifications USING btree (business_id, created_at DESC) WHERE ((status = 'sent'::text) AND (read_at IS NULL));
 create index if not exists notifications_deleted_idx ON public.notifications USING btree (business_id, deleted_at DESC) WHERE (deleted_at IS NOT NULL);

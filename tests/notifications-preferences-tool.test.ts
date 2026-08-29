@@ -48,6 +48,7 @@ describe("applyNotificationPreferenceToggles", () => {
         "whatsapp_urgent",
         "slack_urgent",
         "slack_digest",
+        "push_urgent",
         "email_urgent",
         "google_chat_urgent",
         "email_digest",

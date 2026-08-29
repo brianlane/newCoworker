@@ -60,6 +60,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
   const [teamsUrgent, setTeamsUrgent] = useState(initial.teams_urgent ?? true);
   const [googleChatUrgent, setGoogleChatUrgent] = useState(initial.google_chat_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
+  const [pushUrgent, setPushUrgent] = useState(initial.push_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [digestCustomerFacingOnly, setDigestCustomerFacingOnly] = useState(
@@ -112,6 +113,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setTeamsUrgent(initial.teams_urgent ?? true);
     setGoogleChatUrgent(initial.google_chat_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
+    setPushUrgent(initial.push_urgent ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setDigestCustomerFacingOnly(initial.digest_customer_facing_only ?? false);
@@ -141,6 +143,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
     setTeamsUrgent(prefs.teams_urgent ?? true);
     setGoogleChatUrgent(prefs.google_chat_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
+    setPushUrgent(prefs.push_urgent ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setDigestCustomerFacingOnly(prefs.digest_customer_facing_only ?? false);
@@ -178,6 +181,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           teams_urgent: teamsUrgent,
           google_chat_urgent: googleChatUrgent,
           slack_digest: slackDigest,
+          push_urgent: pushUrgent,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           digest_customer_facing_only: digestCustomerFacingOnly,
@@ -228,6 +232,7 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           teams_urgent: false,
           google_chat_urgent: false,
           slack_digest: false,
+          push_urgent: false,
           email_digest: false,
           email_digest_weekly: false,
           email_urgent: false,
@@ -327,6 +332,13 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
           description="Send urgent alerts to your Google Chat space (requires the Google Chat integration under Integrations)."
           checked={googleChatUrgent}
           onChange={setGoogleChatUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Push: urgent alerts"
+          description="Show a banner on every device where you turned on notifications for this dashboard."
+          checked={pushUrgent}
+          onChange={setPushUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

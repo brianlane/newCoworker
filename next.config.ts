@@ -42,6 +42,11 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const cspReportOnly = [
   "default-src 'self'",
   "script-src 'self'",
+  // public/sw.js. Without this, worker-src falls back to script-src, which
+  // happens to allow it today; naming it explicitly means a future tightening
+  // of script-src cannot silently kill push delivery, whose only symptom
+  // would be alerts that stop arriving on devices we do not own.
+  "worker-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",

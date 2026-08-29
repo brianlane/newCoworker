@@ -134,4 +134,5 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Stripe period fields moved to items](project_stripe_period_moved_to_items.md) - FIXED #1698; one shared parser, term plans get a wider cache cap; backfill script re-stamps
 - [Amy's term runs on a canceled Stripe sub BY DESIGN](project_provision_fail_cancels_sub_keeps_payment.md) - failed-but-charged recovery, documented; only contract_auto_renew=true lies
 - [Live transfers are invisible to AMD](project_live_transfer_amd_blindspot.md) - partner bridges the client in, so no leg to detect on; 5 of 8 hit voicemail, none recorded; adding a tool means DELETING the old prompt path
+- [Push PWA is the sixth channel](project_push_pwa_channel.md) - only TRUE read receipt; iOS detect-order, 403 never revokes, SSRF allowlist, invisible Deno mirror
 - [Coworker channel architecture](project_coworker_channel_architecture.md) - shared pipeline + the 12 non-enforced widening sites; per-channel traps

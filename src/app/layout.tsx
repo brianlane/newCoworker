@@ -114,6 +114,23 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true
+  },
+  /**
+   * iOS home-screen behaviour for the installed PWA.
+   *
+   * `capable` emits apple-mobile-web-app-capable, which is what makes an
+   * added-to-Home-Screen launch open without Safari chrome. It is legacy
+   * (the manifest's `display: standalone` is the standard), but Safari still
+   * reads it, and without a standalone launch iOS delivers no Web Push at
+   * all: the permission only exists inside an installed app.
+   *
+   * `black-translucent` lets the page background run under the status bar,
+   * which matches themeColor above.
+   */
+  appleWebApp: {
+    capable: true,
+    title: "New Coworker",
+    statusBarStyle: "black-translucent"
   }
 };
 

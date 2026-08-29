@@ -24,7 +24,19 @@ import { describe, expect, it } from "vitest";
  */
 
 const ROOT = join(__dirname, "..");
-const COMPONENTS = join(ROOT, "src/components/dashboard");
+/**
+ * Every directory of client components this sweep walks.
+ *
+ * `push` is here because its components sit one import away from
+ * src/lib/push/send.ts, which pulls in `web-push` (node:crypto) and the
+ * service client. The pure halves they are allowed to touch
+ * (src/lib/push/install.ts, vapid.ts) are deliberately separate modules for
+ * exactly that reason, and this is what keeps them separate.
+ */
+const COMPONENT_DIRS = [
+  join(ROOT, "src/components/dashboard"),
+  join(ROOT, "src/components/push")
+];
 const LIB = join(ROOT, "src/lib");
 
 /**
@@ -35,7 +47,17 @@ const LIB = join(ROOT, "src/lib");
  * listing it would flag correct code. `next/headers` is the import that
  * actually breaks the build, via `cookies()` in the server client.
  */
-const SERVER_ONLY = ["next/headers", "server-only", "node:fs", "node:crypto", "node:child_process"];
+const SERVER_ONLY = [
+  "next/headers",
+  "server-only",
+  "node:fs",
+  "node:crypto",
+  "node:child_process",
+  // VAPID signing and aes128gcm content encryption. Node-only, and the whole
+  // reason src/lib/push/send.ts is reachable from the internal bridge route
+  // instead of from a component.
+  "web-push"
+];
 
 /** Resolve an `@/lib/...` specifier to a file path, or null. */
 function resolveLib(spec: string): string | null {
@@ -93,10 +115,12 @@ function serverChain(entry: string, seen = new Set<string>()): string[] | null {
 }
 
 function clientComponents(): string[] {
-  return readdirSync(COMPONENTS)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((f) => join(COMPONENTS, f))
-    .filter((p) => readFileSync(p, "utf8").trimStart().startsWith('"use client"'));
+  return COMPONENT_DIRS.flatMap((dir) =>
+    readdirSync(dir)
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => join(dir, f))
+      .filter((p) => readFileSync(p, "utf8").trimStart().startsWith('"use client"'))
+  );
 }
 
 describe("dashboard client components stay out of the server bundle", () => {

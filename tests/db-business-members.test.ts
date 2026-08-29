@@ -4,7 +4,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+vi.mock("@/lib/push/db", () => ({
+  revokePushSubscriptionsForUser: vi.fn()
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { revokePushSubscriptionsForUser } from "@/lib/push/db";
 import {
   listBusinessMembers,
   listAllBusinessMembers,
@@ -303,6 +308,64 @@ describe("db/business-members", () => {
     await expect(revokeBusinessMember(BIZ, MEMBER.id, bad as never)).rejects.toThrow(
       "revokeBusinessMember: boom"
     );
+  });
+
+  /**
+   * Access loss is a WRITE-time event, and this is the only place that knows
+   * about it. Send-time expiry hygiene cannot help: the departing teammate's
+   * subscription is perfectly alive and the push service will keep accepting
+   * for it. Without this they keep receiving the tenant's urgent alerts on
+   * their own phone after being removed from the team.
+   */
+  it("revokeBusinessMember also stops that person's push devices for the business", async () => {
+    const db = mockDb({
+      select: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: MEMBER.id, user_id: "user-9" }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    expect(await revokeBusinessMember(BIZ, MEMBER.id)).toBe(true);
+    expect(revokePushSubscriptionsForUser).toHaveBeenCalledWith(BIZ, "user-9", db);
+  });
+
+  it("revokeBusinessMember skips the push revoke for a member who never signed in", async () => {
+    // An invited-but-unbound row has user_id null, so there is no person to
+    // key devices on and nothing to revoke.
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: [{ id: MEMBER.id, user_id: null }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    expect(await revokeBusinessMember(BIZ, MEMBER.id)).toBe(true);
+    expect(revokePushSubscriptionsForUser).not.toHaveBeenCalled();
+  });
+
+  it("revokeBusinessMember still revokes access when the push cleanup fails", async () => {
+    // The membership row is the authoritative access change. Losing it
+    // because a best-effort device cleanup failed would be strictly worse,
+    // and the staleness floor eventually catches the device this missed.
+    const db = mockDb({
+      select: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: MEMBER.id, user_id: "user-9" }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(revokePushSubscriptionsForUser).mockRejectedValueOnce(new Error("pg down"));
+
+    expect(await revokeBusinessMember(BIZ, MEMBER.id)).toBe(true);
+  });
+
+  it("revokeBusinessMember survives a non-Error thrown by the push cleanup", async () => {
+    const db = mockDb({
+      select: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: MEMBER.id, user_id: "user-9" }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(revokePushSubscriptionsForUser).mockRejectedValueOnce("exploded");
+
+    expect(await revokeBusinessMember(BIZ, MEMBER.id)).toBe(true);
   });
 
   it("bindBusinessMemberUser activates invited rows for the email", async () => {

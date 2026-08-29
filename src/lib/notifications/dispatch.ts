@@ -52,6 +52,8 @@ import {
   deliverSlackAlert,
   slackAlertTargetState
 } from "@/lib/slack/deliver";
+import { deliverPush } from "@/lib/push/send";
+import { pushTargetState } from "@/lib/push/db";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
 import {
@@ -203,6 +205,17 @@ export type ResolvedTargets = {
   slackUrgentEnabled: boolean;
   /** Same never-connected silence rule as whatsappConnected. */
   slackConnected: boolean;
+  /** Push channel toggle (delivery still requires a live subscription). */
+  pushUrgentEnabled: boolean;
+  /**
+   * Whether this business has ever subscribed a device. Same never-connected
+   * silence rule, and the same fail-toward-TRUE direction, as the other
+   * connection-gated channels. There is deliberately no `pushDeliverable`
+   * twin: that shape exists only for WhatsApp, which SUPPRESSES the SMS leg
+   * and so needs a resolve-time verdict that fails closed. Push suppresses
+   * nothing.
+   */
+  pushConnected: boolean;
   /** Telegram channel toggle (delivery still requires a picked alert chat). */
   telegramUrgentEnabled: boolean;
   /** Same never-connected silence rule again. */
@@ -266,6 +279,7 @@ export async function resolveNotificationTargets(
   // channels), unlike the channel toggles above which fail toward on.
   let whatsappReplacesSms = false;
   let slackUrgent = true;
+  let pushUrgent = true;
   let telegramUrgent = true;
   let teamsUrgent = true;
   let googleChatUrgent = true;
@@ -308,6 +322,8 @@ export async function resolveNotificationTargets(
     whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
+    // ?? true: rows read before 20260829044308, same posture.
+    pushUrgent = prefs.push_urgent ?? true;
     telegramUrgent = prefs.telegram_urgent ?? true;
     teamsUrgent = prefs.teams_urgent ?? true;
     googleChatUrgent = prefs.google_chat_urgent ?? true;
@@ -369,6 +385,9 @@ export async function resolveNotificationTargets(
 
   // Same question for Slack (fails toward connected inside the helper).
   const slackState = await slackAlertTargetState(businessId);
+
+  // And for push (also fails toward connected inside the helper).
+  const pushState = await pushTargetState(businessId);
   const telegramState = await telegramAlertTargetState(businessId);
   const teamsState = await teamsAlertTargetState(businessId);
   const googleChatConnected = await googleChatConnectedState(businessId);
@@ -423,6 +442,8 @@ export async function resolveNotificationTargets(
     whatsappConnected,
     slackUrgentEnabled: slackUrgent,
     slackConnected: slackState.connected,
+    pushUrgentEnabled: pushUrgent,
+    pushConnected: pushState.connected,
     telegramUrgentEnabled: telegramUrgent,
     telegramConnected: telegramState.connected,
     teamsUrgentEnabled: teamsUrgent,
@@ -444,9 +465,14 @@ async function recordRow(
   summary: string,
   kind: NotificationKind,
   payload: Record<string, unknown>,
-  reason?: string
+  reason?: string,
+  /**
+   * Caller-supplied row id. Only the push leg passes one: the service worker
+   * posts this id back as the click receipt, so it must be known BEFORE the
+   * send rather than minted here.
+   */
+  id: string = randomUUID()
 ): Promise<DispatchChannelResult> {
-  const id = randomUUID();
   try {
     await insertNotification({
       id,
@@ -624,14 +650,15 @@ export async function dispatchUrgentNotification(
       // what happened, and suppressing it is what made the eaten alert
       // invisible after the fact as well as at the time.
       const gatedChannels = (
-        ["email", "sms", "whatsapp", "slack", "telegram", "teams", "google_chat"] as const
+        ["email", "sms", "whatsapp", "slack", "telegram", "teams", "google_chat", "push"] as const
       ).filter(
         (channel) =>
           (channel !== "whatsapp" || targets.whatsappConnected) &&
           (channel !== "slack" || targets.slackConnected) &&
           (channel !== "telegram" || targets.telegramConnected) &&
           (channel !== "teams" || targets.teamsConnected) &&
-          (channel !== "google_chat" || targets.googleChatConnected)
+          (channel !== "google_chat" || targets.googleChatConnected) &&
+          (channel !== "push" || targets.pushConnected)
       );
       // Every row of a suppressed dispatch is stamped so the backstop count
       // cannot see it. Without this the dashboard row, which IS genuinely
@@ -676,14 +703,25 @@ export async function dispatchUrgentNotification(
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
     const gatedChannels = (
-      ["dashboard", "email", "sms", "whatsapp", "slack", "telegram", "teams", "google_chat"] as const
+      [
+        "dashboard",
+        "email",
+        "sms",
+        "whatsapp",
+        "slack",
+        "telegram",
+        "teams",
+        "google_chat",
+        "push"
+      ] as const
     ).filter(
       (channel) =>
         (channel !== "whatsapp" || targets.whatsappConnected) &&
         (channel !== "slack" || targets.slackConnected) &&
           (channel !== "telegram" || targets.telegramConnected) &&
           (channel !== "teams" || targets.teamsConnected) &&
-          (channel !== "google_chat" || targets.googleChatConnected)
+          (channel !== "google_chat" || targets.googleChatConnected) &&
+          (channel !== "push" || targets.pushConnected)
     );
     for (const channel of gatedChannels) {
       results.push(
@@ -1392,6 +1430,120 @@ export async function dispatchUrgentNotification(
           kind,
           payload,
           err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 9) Web Push. Same never-connected silence rule as WhatsApp and Slack: a
+  // business that has never subscribed a device records NOTHING here.
+  //
+  // TWO DELIBERATE DIVERGENCES from the WhatsApp leg above, called out because
+  // a reader will expect that shape and not find it.
+  //
+  //   Push DOES fire on a team_broadcast. WhatsApp sits it out because that
+  //   leg is single-recipient and would reach an arbitrary subset of the
+  //   roster. deliverPush fans out to every device subscribed for the
+  //   business, so sitting out would trade noise for SILENCE, and this
+  //   dispatcher's own rule (see DispatchInput.leadTag) is that an unowned
+  //   lead degrades to noise, never to silence.
+  //
+  //   Push has no address branch: no `no_phone`, no `no_email`. Its recipient
+  //   is a subscription, not a column on the prefs row, so there is no
+  //   "nothing on file" state to skip on.
+  if (!targets.pushConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.pushUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "push",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "push_urgent_disabled"
+      )
+    );
+  } else {
+    // Minted HERE rather than inside recordRow because the service worker
+    // posts it back as the click receipt, so it has to travel WITH the push.
+    // tests/notifications-dispatch asserts these two are the same value; if
+    // they ever drift, every tap records against nothing and the liveness
+    // signal quietly dies.
+    const pushNotificationId = randomUUID();
+    try {
+      // The banner lands on a lock screen, which is at least as exposed as an
+      // SMS preview, so it takes the phiFree copy on exactly the same terms as
+      // every other leg. The tap target drops the deep link too: a path like
+      // /dashboard/customers/%2B15551234567 is itself an identifier.
+      const delivered = await deliverPush({
+        scope: { businessId: input.businessId },
+        title: "New Coworker",
+        body: phiFree?.summary ?? summary.replace(/\.+$/, ""),
+        url: phiFree ? "/dashboard" : (input.ctaPath ?? "/dashboard"),
+        notificationId: pushNotificationId
+      });
+
+      if (delivered.ok) {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "push",
+            "sent",
+            summary,
+            kind,
+            {
+              ...payload,
+              recipient: `${delivered.sent} device(s)`,
+              devices_sent: delivered.sent,
+              devices_revoked: delivered.revoked
+            },
+            undefined,
+            pushNotificationId
+          )
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced an unsubscribe since the existence check above: treat as never
+        // connected, no row (same as the Slack leg).
+      } else {
+        // Everything else is a skip EXCEPT a transport failure. In
+        // particular `all_expired` is a skip, not a failure: it means the
+        // owner uninstalled or cleared their browser, which is a decision
+        // rather than a fault, and raising alert_delivery_failed for every
+        // cleared browser would page us constantly. The chronic case (a
+        // tenant whose only channel has quietly died) is what the
+        // channel-liveness sweep exists to catch.
+        results.push(
+          await recordRow(
+            input.businessId,
+            "push",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail
+              ? `push_${delivered.reason}:${delivered.detail}`
+              : `push_${delivered.reason}`,
+            pushNotificationId
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: push send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "push",
+          "failed",
+          summary,
+          kind,
+          payload,
+          err instanceof Error ? err.message : "send_failed",
+          pushNotificationId
         )
       );
     }

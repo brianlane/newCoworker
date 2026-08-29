@@ -21,8 +21,8 @@
  */
 
 /**
- * The five legs `dispatchUrgentNotification` fans out to, and the five
- * values `notifications.delivery_channel` can hold.
+ * The six legs `dispatchUrgentNotification` fans out to, and the six values
+ * `notifications.delivery_channel` can hold.
  */
 export const LIVENESS_CHANNELS = [
   "sms",
@@ -32,7 +32,8 @@ export const LIVENESS_CHANNELS = [
   "slack",
   "telegram",
   "teams",
-  "google_chat"
+  "google_chat",
+  "push"
 ] as const;
 
 export type LivenessChannel = (typeof LIVENESS_CHANNELS)[number];
@@ -99,6 +100,25 @@ export const LIVENESS_WINDOW_DAYS = 30;
  * cannot raise a false alarm in the meantime. Re-run
  * debug/channel-liveness-report.ts once a tenant is connected and revisit
  * this with data, exactly as the numbers above were arrived at.
+ *
+ * Push is deliberately the TIGHTEST, at a third of the others, and the reason
+ * is evidence quality rather than impatience. Every threshold above is loose
+ * because its signal is a PROXY: an owner who reads every alert and answers
+ * none looks identical to one who stopped receiving them, so the numbers buy
+ * headroom against that false positive. Push has no such failure mode. Its
+ * signal is a notificationclick, which fires only when a human taps the
+ * specific banner carrying the specific alert, so absence of signal is far
+ * closer to absence of reading.
+ *
+ * Seven and not three, because push is opportunistic: an owner can absorb a
+ * lock-screen banner and act in another channel without ever tapping, and
+ * three days would trip on a long weekend. Seven, against the ten-send floor,
+ * means three or more consecutive alerts landed on a live subscription and
+ * not one was opened. Two things keep that safe rather than trigger-happy:
+ * a dead subscription is pruned at the delivery layer by its 404/410, so this
+ * only ever judges the "subscription alive, nobody looks" case; and
+ * judgeAudience escalates to `dark` only when NO channel is live, so a silent
+ * push beside a live dashboard is a `degraded` warn, not a page.
  */
 const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   sms: 21,
@@ -117,6 +137,7 @@ const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   // below the ten-send floor every row reads `unused`.
   google_chat: 30,
   dashboard: 21,
+  push: 7,
   email: null
 };
 

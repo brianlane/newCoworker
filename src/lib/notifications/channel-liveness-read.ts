@@ -340,17 +340,22 @@ async function lastDashboardReadAt(
  */
 async function lastNotificationLinkClickAt(
   businessId: string,
+  channel: LivenessChannel,
   db: SupabaseClient
 ): Promise<string | null> {
   const { data, error } = await db
     .from("notification_link_clicks")
     .select("clicked_at")
     .eq("business_id", businessId)
-    .eq("channel", "sms")
+    // Filtered by channel, never assumed. That column exists precisely so
+    // this read can say WHICH channel the click proves, and assuming is how
+    // the WhatsApp leg of this same check first read a lead's message as the
+    // owner's.
+    .eq("channel", channel)
     .eq("likely_prefetch", false)
     .order("clicked_at", { ascending: false })
     .limit(1);
-  if (error) throw new Error(`lastNotificationLinkClickAt: ${error.message}`);
+  if (error) throw new Error(`lastNotificationLinkClickAt(${channel}): ${error.message}`);
   return usableSignal((data as { clicked_at?: string }[] | null)?.[0]?.clicked_at ?? null);
 }
 
@@ -406,6 +411,7 @@ async function gatherChannelEvidence(
     sends,
     smsReply,
     linkClick,
+    pushClick,
     whatsapp,
     slack,
     telegram,
@@ -417,7 +423,8 @@ async function gatherChannelEvidence(
     await Promise.all([
       countSendsByChannel(businessId, sinceIso, db),
       lastStaffSmsAt(businessId, audience, db),
-      lastNotificationLinkClickAt(businessId, db),
+      lastNotificationLinkClickAt(businessId, "sms", db),
+      lastNotificationLinkClickAt(businessId, "push", db),
       lastOwnerWhatsappAt(businessId, audience, db),
       lastAudienceMessageAt(businessId, "slack", audience, db),
       lastAudienceMessageAt(businessId, "telegram", audience, db),
@@ -497,6 +504,23 @@ async function gatherChannelEvidence(
       // only reaches a turn once the platform has matched it to the owner
       // or an active roster row, by Workspace address or a recorded
       // binding.
+      attributed: true,
+      receipted: 0,
+      hardFailures: 0
+    },
+    {
+      channel: "push",
+      sends: sends.push,
+      lastHumanSignalAt: pushClick,
+      /**
+       * Unconditionally attributed, and this is the STRONGEST attribution in
+       * the whole check. The other channels hedge: read_at carried no actor
+       * before 20260828..., and messenger_conversations is mostly lead
+       * threads. A push receipt is written from a notificationclick on a
+       * subscription bound to an authenticated user row, so there is no
+       * ambiguity about whether the person who tapped is in the alert
+       * audience. They are, by construction.
+       */
       attributed: true,
       receipted: 0,
       hardFailures: 0
