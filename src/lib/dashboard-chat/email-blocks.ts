@@ -249,12 +249,12 @@ export async function fulfillEmailBlocks(args: {
  * protocol lives in a prompt block, so a model could emit one anyway) and
  * files the send on the Emails page.
  *
- * `source` distinguishes the two surfaces in the email log.
+ * `source` names which surface sent it, in the email log.
  */
 export async function fulfillOwnerEmailBlocks(args: {
   businessId: string;
   content: string;
-  source: "dashboard_chat" | "sms_assistant" | "slack_assistant";
+  source: "dashboard_chat" | "sms_assistant" | "slack_assistant" | "telegram_assistant";
   /**
    * Which surface's `send_email` Settings toggle authorizes the send.
    * Defaults to `dashboard` (dashboard chat AND the owner-SMS operator both

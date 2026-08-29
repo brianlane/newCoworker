@@ -34,6 +34,8 @@
  */
 
 import { businessOwnerNumbersResult } from "@/lib/db/contact-names";
+import { findChannelIdentity } from "@/lib/db/coworker-identities";
+import type { CoworkerChannel } from "@/lib/db/coworker-chat";
 import { listTeamMembers, type TeamMemberRow } from "@/lib/db/employees";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
@@ -57,10 +59,22 @@ export type SurfaceSpeaker = {
  * The channel identity of whoever just wrote in. A surface supplies
  * whichever it has: WhatsApp and SMS carry a number, Slack and email carry
  * an address.
+ *
+ * `externalRef` is the third form, and it exists because Telegram carries
+ * NEITHER. A `from.id` is an opaque integer and a @username is self-chosen
+ * and re-assignable, so nothing in the message identifies a person. What
+ * answers it is a binding made once, deliberately, and recorded in
+ * `coworker_channel_identities`: either the person shared the phone number
+ * Telegram verified at signup, or they redeemed a single-use code minted by
+ * a dashboard session that already held manage_settings.
+ *
+ * A surface may supply more than one. They are checked together and the
+ * strongest answer wins, exactly as owner beats teammate below.
  */
 export type SpeakerIdentity = {
   phoneE164?: string | null;
   email?: string | null;
+  externalRef?: { channel: CoworkerChannel; externalUserId: string } | null;
 };
 
 type BusinessIdentityRow = { owner_name: string | null; owner_email: string | null };
@@ -69,6 +83,7 @@ export type ResolveSpeakerDeps = {
   fetchOwnerNumbers?: (businessId: string) => Promise<string[]>;
   fetchRoster?: (businessId: string) => Promise<TeamMemberRow[]>;
   fetchBusiness?: (businessId: string) => Promise<BusinessIdentityRow | null>;
+  fetchChannelIdentity?: typeof findChannelIdentity;
 };
 
 /**
@@ -131,26 +146,32 @@ export async function resolveSurfaceSpeaker(
 ): Promise<SurfaceSpeaker> {
   const phone = (identity.phoneE164 ?? "").trim();
   const email = (identity.email ?? "").trim().toLowerCase();
+  const externalRef = identity.externalRef ?? null;
   // No identity is not a failure, it is simply an anonymous speaker. Return
   // before spending any reads on it.
-  if (!phone && !email) return unknownSpeaker();
+  if (!phone && !email && !externalRef) return unknownSpeaker();
 
   /* c8 ignore start -- production defaults; tests inject */
   const fetchOwnerNumbers = deps.fetchOwnerNumbers ?? ownerNumbersOrThrow;
   const fetchRoster = deps.fetchRoster ?? listTeamMembers;
   const fetchBusiness = deps.fetchBusiness ?? businessIdentityOrThrow;
+  const fetchChannelIdentity = deps.fetchChannelIdentity ?? findChannelIdentity;
   /* c8 ignore stop */
 
   let ownerNumbers: string[];
   let roster: TeamMemberRow[];
   let business: BusinessIdentityRow | null;
+  let binding: Awaited<ReturnType<typeof findChannelIdentity>> = null;
   try {
-    [ownerNumbers, roster, business] = await Promise.all([
+    [ownerNumbers, roster, business, binding] = await Promise.all([
       // Only the phone arm can use these, so an email-only surface skips
       // the three reads behind them.
       phone ? fetchOwnerNumbers(businessId) : Promise.resolve<string[]>([]),
       fetchRoster(businessId),
-      fetchBusiness(businessId)
+      fetchBusiness(businessId),
+      externalRef
+        ? fetchChannelIdentity(businessId, externalRef.channel, externalRef.externalUserId)
+        : Promise.resolve(null)
     ]);
   } catch (err) {
     // Fail CLOSED. See the file header: an unreadable roster must not
@@ -175,8 +196,21 @@ export async function resolveSurfaceSpeaker(
       return Boolean(email && memberEmail && memberEmail === email);
     }) ?? null;
 
+  /**
+   * A recorded binding for this exact account. The roster row it names must
+   * still be ACTIVE to count, the same bar the phone and email arms apply:
+   * a deactivated teammate keeps their Telegram account, and it must stop
+   * carrying staff powers the moment they leave.
+   */
+  const boundEmployee =
+    binding && binding.employee_id
+      ? (roster.find((m) => m.id === binding.employee_id && m.active) ?? null)
+      : null;
+  const boundIsOwner = binding?.is_owner === true;
+
   const ownerEmail = (business?.owner_email ?? "").trim().toLowerCase();
   const isOwner =
+    boundIsOwner ||
     (phone && isSelfPhone(phone, ownerNumbers)) ||
     Boolean(email && ownerEmail && ownerEmail === email);
 
@@ -185,11 +219,13 @@ export async function resolveSurfaceSpeaker(
     // roster name still wins the label when there is one: it is usually
     // more specific than the generic businesses.owner_name. This is the
     // same precedence telnyx-sms-inbound already applies.
-    const name = rosterMatch?.name?.trim() || business?.owner_name?.trim() || null;
+    const name =
+      rosterMatch?.name?.trim() || boundEmployee?.name?.trim() || business?.owner_name?.trim() || null;
     return { kind: "owner", name, readFailed: false };
   }
-  if (rosterMatch) {
-    return { kind: "teammate", name: rosterMatch.name?.trim() || null, readFailed: false };
+  const teammate = rosterMatch ?? boundEmployee;
+  if (teammate) {
+    return { kind: "teammate", name: teammate.name?.trim() || null, readFailed: false };
   }
   return unknownSpeaker();
 }

@@ -26,6 +26,7 @@ vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }
 vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({ getPublicZoomConnection: vi.fn() }));
 vi.mock("@/lib/db/slack-connections", () => ({ getPublicSlackConnection: vi.fn() }));
+vi.mock("@/lib/db/coworker-connections", () => ({ getPublicCoworkerConnection: vi.fn() }));
 vi.mock("@/lib/db/api-keys", () => ({ listApiKeys: vi.fn() }));
 vi.mock("@/lib/db/webhook-subscriptions", () => ({ listWebhookSubscriptions: vi.fn() }));
 vi.mock("@/lib/mcp/connector-status", async (importOriginal) => ({
@@ -52,6 +53,7 @@ import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { getPublicSlackConnection } from "@/lib/db/slack-connections";
+import { getPublicCoworkerConnection } from "@/lib/db/coworker-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import {
@@ -93,6 +95,7 @@ beforeEach(() => {
   vi.mocked(getPublicMetaConnection).mockResolvedValue(null);
   vi.mocked(getPublicZoomConnection).mockResolvedValue(null);
   vi.mocked(getPublicSlackConnection).mockResolvedValue(null);
+  vi.mocked(getPublicCoworkerConnection).mockResolvedValue(null);
   vi.mocked(listApiKeys).mockResolvedValue([]);
   vi.mocked(listWebhookSubscriptions).mockResolvedValue([]);
   vi.mocked(getMcpConnectorStatusForBusiness).mockResolvedValue(null);
@@ -130,6 +133,7 @@ describe("loadIntegrationsContext", () => {
     expect(getPublicMetaConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicZoomConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicSlackConnection).toHaveBeenCalledWith(BIZ);
+    expect(getPublicCoworkerConnection).toHaveBeenCalledWith(BIZ, "telegram");
     // No tier on the row → Slack (Standard+) reads as not enabled.
     expect(ctx.slackEnabled).toBe(false);
     expect(listApiKeys).toHaveBeenCalledWith(BIZ);
@@ -473,5 +477,19 @@ describe("computeIntegrationStatuses", () => {
       baseCtx({ mcpConnectorStatuses: { claude: quiet, chatgpt: null } })
     );
     expect(s.claude).toEqual({ state: "attention", label: "Gone quiet" });
+  });
+});
+
+describe("the Telegram tile", () => {
+  it.each([
+    ["disconnected", null, "Not connected"],
+    ["connected", { is_active: true }, null],
+    ["paused", { is_active: false }, "Paused"]
+  ])("reports %s", async (_label, row, label) => {
+    vi.mocked(getPublicCoworkerConnection).mockResolvedValue(row as never);
+    const ctx = await loadIntegrationsContext("/dashboard/integrations");
+    const status = computeIntegrationStatuses(ctx).telegram;
+    if (label) expect(status.label).toBe(label);
+    else expect(status.state).toBe("connected");
   });
 });

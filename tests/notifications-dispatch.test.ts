@@ -41,6 +41,11 @@ vi.mock("@/lib/slack/deliver", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/telegram/deliver", () => ({
+  deliverTelegramAlert: vi.fn(),
+  telegramAlertTargetState: vi.fn(async () => ({ connected: false, hasTarget: false }))
+}));
+
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
   getTelnyxMessagingForBusiness: vi.fn(async () => ({
@@ -96,6 +101,7 @@ import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messa
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { deliverSlackAlert, slackAlertTargetState } from "@/lib/slack/deliver";
+import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -214,6 +220,14 @@ describe("notifications/dispatch", () => {
       alertChannelName: null
     });
     vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Telegram NOT connected either, same reason as Slack above.
+    // A never-connected channel records NOTHING, so the existing fan-out
+    // counts keep meaning what they meant.
+    vi.mocked(telegramAlertTargetState).mockResolvedValue({
+      connected: false,
+      hasTarget: false
+    });
+    vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
     // English unless a test says otherwise: clearAllMocks clears calls, not
@@ -1313,6 +1327,158 @@ describe("notifications/dispatch", () => {
     });
   });
 
+  describe("telegram channel", () => {
+    const telegramRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "telegram");
+
+    const connected = () =>
+      vi
+        .mocked(telegramAlertTargetState)
+        .mockResolvedValue({ connected: true, hasTarget: true });
+
+    it("never-connected writes no rows and never delivers", async () => {
+      // The rule every optional channel follows: a business that never
+      // connected it records NOTHING, so an unused channel cannot look like
+      // a broken one.
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(telegramRows()).toHaveLength(0);
+      expect(deliverTelegramAlert).not.toHaveBeenCalled();
+    });
+
+    it("sends and records the chat it reached", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({
+        ok: true,
+        chatId: "-100777",
+        messageId: "9"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe("sent");
+      expect((row.payload as { recipient?: string }).recipient).toBe("-100777");
+    });
+
+    it("carries the dashboard link and the summary through to the card", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({
+        ok: true,
+        chatId: "-1",
+        messageId: "1"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead",
+        smsBody: "Dana called",
+        kind: "urgent_alert"
+      });
+      expect(deliverTelegramAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: "New lead", details: "Dana called" })
+      );
+    });
+
+    it.each([
+      ["a policy skip", { ok: false, reason: "no_alert_target" }, "skipped", "no_alert_target"],
+      [
+        "a skip with detail",
+        { ok: false, reason: "needs_reconnect", detail: "wiped" },
+        "skipped",
+        "needs_reconnect:wiped"
+      ],
+      ["a send failure", { ok: false, reason: "send_failed" }, "failed", "send_failed"]
+    ])("records %s honestly", async (_label, delivered, status, reason) => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue(delivered as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe(status);
+      expect((row.payload as { reason?: string }).reason).toBe(reason);
+    });
+
+    it("writes NOTHING when delivery raced a disconnect", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(telegramRows()).toHaveLength(0);
+    });
+
+    it("records a skip when the owner turned the channel off", async () => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        telegram_urgent: false
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe(
+        "telegram_urgent_disabled"
+      );
+      expect(deliverTelegramAlert).not.toHaveBeenCalled();
+    });
+
+    it("records an unsubscribe as an unsubscribe, not as a toggle-off", async () => {
+      // The two reasons look the same on the row unless this branch is
+      // right, and only one of them is something the owner chose per
+      // channel; the other silenced everything at once.
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-08-01T00:00:00Z"
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe("unsubscribed");
+    });
+
+    it("records a failure rather than losing a thrown send", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockRejectedValue(new Error("boom"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const row = telegramRows()[0];
+      expect(row.status).toBe("failed");
+      expect((row.payload as { reason?: string }).reason).toBe("boom");
+    });
+
+    it("stringifies a thrown non-Error", async () => {
+      connected();
+      vi.mocked(deliverTelegramAlert).mockRejectedValue("boom");
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect((telegramRows()[0].payload as { reason?: string }).reason).toBe("send_failed");
+    });
+  });
+
   describe("slack channel", () => {
     const slackRows = () =>
       vi
@@ -1449,6 +1615,14 @@ describe("notifications/dispatch", () => {
     it("stays silent when delivery races a disconnect", async () => {
       connected();
       vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+    // Default: Telegram NOT connected either, same reason as Slack above.
+    // A never-connected channel records NOTHING, so the existing fan-out
+    // counts keep meaning what they meant.
+    vi.mocked(telegramAlertTargetState).mockResolvedValue({
+      connected: false,
+      hasTarget: false
+    });
+    vi.mocked(deliverTelegramAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
       const result = await dispatchUrgentNotification({
         businessId: BIZ,
         summary: "A",

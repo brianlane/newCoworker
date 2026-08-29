@@ -12,17 +12,17 @@ import { describe, expect, it } from "vitest";
 import { coworkerAdapterFor } from "@/lib/coworker-channels/registry";
 
 describe("coworkerAdapterFor", () => {
-  it("finds Slack under its own key, and hands back ITS adapter", () => {
-    // The channel this pipeline was extracted from. If it ever falls out of
-    // the registry, every queued Slack job fails as unknown_channel, which
-    // is silent in the workspace and loud only in a job row nobody reads.
-    expect(coworkerAdapterFor("slack")?.channel).toBe("slack");
+  it.each(["slack", "telegram"])("finds %s under its own key, and hands back ITS adapter", (channel) => {
+    // If a channel falls out of the registry, every queued job for it fails
+    // as unknown_channel, which is silent in the chat window and loud only
+    // in a job row nobody reads.
+    expect(coworkerAdapterFor(channel)?.channel).toBe(channel);
   });
 
   it("answers null for a channel nobody implements, rather than throwing", () => {
     // A row written by removed code, or a half-rolled deploy. The worker
     // fails that ONE job terminally and keeps draining.
-    expect(coworkerAdapterFor("telegram")).toBeNull();
+    expect(coworkerAdapterFor("discord")).toBeNull();
     expect(coworkerAdapterFor("")).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -90,11 +90,29 @@ describe("the two dispatchers declare the same channels", () => {
     // send on it into a failed insert, and `notifications` is a residency
     // moved table, so on a residency tenant a rejected row stops the write
     // journal and queues every later write behind it.
-    const migrations = read("supabase/migrations/20260822113305_slack_alert_channel.sql");
-    for (const channel of NODE_CHANNELS) {
-      expect(migrations, `${channel} missing from the delivery_channel CHECK`).toContain(
-        `'${channel}'`
+    //
+    // The LATEST migration that re-adds the constraint is the one in force,
+    // found rather than named: pinning a filename here would have made this
+    // assertion go stale the first time a channel widened it, which is
+    // precisely when it needs to be right.
+    const dir = join(ROOT, "supabase/migrations");
+    const defining = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort()
+      .filter((f) =>
+        readFileSync(join(dir, f), "utf8").includes(
+          "add constraint notifications_delivery_channel_check"
+        )
       );
+    expect(defining.length, "no migration defines the delivery_channel CHECK").toBeGreaterThan(0);
+
+    const inForce = readFileSync(join(dir, defining[defining.length - 1]), "utf8");
+    const allowed = [...inForce.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    for (const channel of NODE_CHANNELS) {
+      expect(
+        allowed,
+        `${channel} is missing from the delivery_channel CHECK in ${defining[defining.length - 1]}`
+      ).toContain(channel);
     }
   });
 });

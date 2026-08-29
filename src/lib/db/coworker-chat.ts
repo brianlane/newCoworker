@@ -18,7 +18,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Channels that run a two-way coworker conversation. */
-export type CoworkerChannel = "slack";
+export type CoworkerChannel = "slack" | "telegram";
 
 export type CoworkerConversationRow = {
   id: string;

@@ -69,6 +69,8 @@ export type EmailLogSource =
   // The verified owner asked from the Slack surface (EMAIL_SEND block
   // fulfilled by src/lib/slack/worker.ts).
   | "slack_assistant"
+  // Same, from the Telegram surface (src/lib/telegram/adapter.ts).
+  | "telegram_assistant"
   | "tenant_mailbox_inbound"
   | "tenant_mailbox_outbound"
   // Owner typed + sent this email by hand from the dashboard Emails page
@@ -725,6 +727,7 @@ export type RecordOutboundAssistantEmailInput = {
     | "sms_assistant"
     | "voice_assistant"
     | "slack_assistant"
+    | "telegram_assistant"
     | "email_coworker"
     | "booking_reminder";
   /**

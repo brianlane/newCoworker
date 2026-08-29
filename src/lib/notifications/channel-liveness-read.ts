@@ -226,34 +226,50 @@ async function lastOwnerWhatsappAt(
 }
 
 /**
- * Newest Slack message from the tenant's owner.
+ * Newest message from somebody in the alert audience, on one team-chat
+ * channel.
  *
- * `is_owner` is stamped by the Slack pipeline when the Slack user's email
- * matches the tenant owner, so it is already the attribution this check
- * needs; the email cross-check widens it to roster members who are in the
- * workspace under their own address.
+ * ONE function for every channel on the shared pipeline, and the `channel`
+ * filter is what makes it safe: these rows all live in one table now, so
+ * without the pin a live Telegram thread would certify Slack as healthy.
+ * That is the same shape of bug as reading the newest WhatsApp thread
+ * instead of the owner's own.
+ *
+ * Three ways a row can belong to the audience, because the channels prove
+ * identity differently. `is_owner` is stamped by the pipeline when the
+ * platform matched the speaker to the tenant owner. The email cross-check
+ * widens it to roster members present under their own address, which is how
+ * Slack and Google Chat identify people. The phone cross-check does the
+ * same for Telegram, where enrolment records the number Telegram verified
+ * rather than an address.
  */
-async function lastOwnerSlackAt(
+async function lastAudienceMessageAt(
   businessId: string,
+  channel: "slack" | "telegram",
   audience: AlertAudience,
   db: SupabaseClient
 ): Promise<string | null> {
   const { data, error } = await db
     .from("coworker_conversations")
-    .select("is_owner, user_email, last_user_message_at")
+    .select("is_owner, user_email, user_phone_e164, last_user_message_at")
     .eq("business_id", businessId)
-    // The shared pipeline holds every team-chat channel, so this MUST pin
-    // the channel. Without it a live Telegram thread would certify Slack.
-    .eq("channel", "slack");
-  if (error) throw new Error(`lastOwnerSlackAt: ${error.message}`);
+    .eq("channel", channel);
+  if (error) throw new Error(`lastAudienceMessageAt(${channel}): ${error.message}`);
   const emails = new Set(audience.emails);
+  const phones = new Set(audience.phones.map(bareDigits));
   let at: string | null = null;
   for (const row of (data as
-    | { is_owner?: boolean; user_email?: string; last_user_message_at?: string }[]
+    | {
+        is_owner?: boolean;
+        user_email?: string;
+        user_phone_e164?: string;
+        last_user_message_at?: string;
+      }[]
     | null) ?? []) {
     const isAudience =
       row.is_owner === true ||
-      (typeof row.user_email === "string" && emails.has(row.user_email.toLowerCase()));
+      (typeof row.user_email === "string" && emails.has(row.user_email.toLowerCase())) ||
+      (typeof row.user_phone_e164 === "string" && phones.has(bareDigits(row.user_phone_e164)));
     if (!isAudience) continue;
     at = newest(at, usableSignal(row.last_user_message_at ?? null));
   }
@@ -386,15 +402,17 @@ async function gatherChannelEvidence(
 ): Promise<ChannelEvidence[]> {
   const sinceIso = windowStartIso(nowMs);
   const audience = await loadAlertAudience(businessId, db);
-  const [sends, smsReply, linkClick, whatsapp, slack, dashboard, email] = await Promise.all([
-    countSendsByChannel(businessId, sinceIso, db),
-    lastStaffSmsAt(businessId, audience, db),
-    lastNotificationLinkClickAt(businessId, db),
-    lastOwnerWhatsappAt(businessId, audience, db),
-    lastOwnerSlackAt(businessId, audience, db),
-    lastDashboardReadAt(businessId, db),
-    emailReceiptTally(businessId, sinceIso, audience, db)
-  ]);
+  const [sends, smsReply, linkClick, whatsapp, slack, telegram, dashboard, email] =
+    await Promise.all([
+      countSendsByChannel(businessId, sinceIso, db),
+      lastStaffSmsAt(businessId, audience, db),
+      lastNotificationLinkClickAt(businessId, db),
+      lastOwnerWhatsappAt(businessId, audience, db),
+      lastAudienceMessageAt(businessId, "slack", audience, db),
+      lastAudienceMessageAt(businessId, "telegram", audience, db),
+      lastDashboardReadAt(businessId, db),
+      emailReceiptTally(businessId, sinceIso, audience, db)
+    ]);
 
   return [
     {
@@ -433,6 +451,16 @@ async function gatherChannelEvidence(
       channel: "slack",
       sends: sends.slack,
       lastHumanSignalAt: slack,
+      attributed: true,
+      receipted: 0,
+      hardFailures: 0
+    },
+    {
+      channel: "telegram",
+      sends: sends.telegram,
+      lastHumanSignalAt: telegram,
+      // Attributed with confidence: nobody reaches this surface at all
+      // without a recorded binding to the owner or an active roster row.
       attributed: true,
       receipted: 0,
       hardFailures: 0
