@@ -309,18 +309,25 @@ describe("waitForPostInstallQuiescence", () => {
   });
 
   /**
-   * The regression that makes this guard safe to add. Scar Fairy's box
-   * rejected the key permanently; waiting cannot install it. If this loop
-   * treated auth failure as "busy" it would spend its whole budget before the
-   * bootstrap phase raised the real error, turning a 76-second failure into a
-   * 10-minute one and eating the sweep's runway.
+   * Bugbot caught the first draft of this, and was right: the wait only runs
+   * when a post-install script is attached, and that script is now the thing
+   * that WRITES the key. So an early auth rejection is the expected transient,
+   * not proof the key will never come. Returning at once on it would exit the
+   * wait exactly on the boxes that depend on the PIS write, which is to say
+   * exactly when Hostinger dropped `public_key_ids`, which is the case this
+   * whole change exists for.
    */
-  it("returns immediately on an auth rejection instead of waiting out the budget", async () => {
+  it("waits through early auth rejections, because the script is what installs the key", async () => {
     const remoteExec = vi
       .fn()
-      .mockRejectedValue(
+      .mockRejectedValueOnce(
         new Error("sshExec: connection error: All configured authentication methods failed")
-      );
+      )
+      .mockRejectedValueOnce(
+        new Error("sshExec: connection error: All configured authentication methods failed")
+      )
+      .mockResolvedValueOnce(ok("busy\n"))
+      .mockResolvedValueOnce(ok("idle\n"));
     const sleep = vi.fn();
     const out = await waitForPostInstallQuiescence({
       ...base,
@@ -328,18 +335,63 @@ describe("waitForPostInstallQuiescence", () => {
       sleep,
       now: () => 0
     });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(4);
+  });
+
+  /**
+   * The bound on that patience. A box where the key genuinely never lands
+   * (PIS never ran AND `public_key_ids` dropped) must not consume the full
+   * quiescence budget: the bootstrap raises the real error inside its own 76s
+   * retry, and the sweep's 1800s runway is finite.
+   */
+  it("gives up on auth once the grace window passes and the key still is not there", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("sshExec: connection error: All configured authentication methods failed")
+      );
+    const sleep = vi.fn();
+    let t = 0;
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      // First call stamps the deadlines, then the clock jumps past the grace.
+      now: () => (t++ === 0 ? 0 : 10_000),
+      authGraceMs: 1000
+    });
     expect(out).toBe("unauthenticated");
+    // Gave up well inside the overall budget rather than polling it away.
     expect(remoteExec).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Once a probe HAS authenticated, the key is demonstrably on the box, so a
+   * later auth blip is not the "never landed" case and only the overall
+   * deadline bounds it.
+   */
+  it("does not apply the auth grace after a probe has already authenticated", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValueOnce(ok("busy\n"))
+      .mockRejectedValueOnce(
+        new Error("sshExec: connection error: All configured authentication methods failed")
+      )
+      .mockResolvedValueOnce(ok("idle\n"));
+    let t = 0;
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep: vi.fn(),
+      now: () => (t++ === 0 ? 0 : 10_000),
+      authGraceMs: 1000
+    });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(3);
   });
 });
 
-/**
- * The auth predicate is private, like its sibling `isSshConnectError`, so
- * assert it through the loop that consumes it. Each phrase must short-circuit
- * to "unauthenticated" on the FIRST probe; a message that only looks like a
- * connect error must not.
- */
 describe("auth rejection vs a port that will not open", () => {
   const base = { host: "1.2.3.4", username: "root", privateKeyPem: "pem" };
 
@@ -347,21 +399,20 @@ describe("auth rejection vs a port that will not open", () => {
     "sshExec: connection error: All configured authentication methods failed",
     "Permission denied (publickey)",
     "SSH authentication failure"
-  ])("stops immediately on: %s", async (message) => {
+  ])("is recognised as an auth rejection, not a connect failure: %s", async (message) => {
     const remoteExec = vi.fn().mockRejectedValue(new Error(message));
-    const sleep = vi.fn();
+    let t = 0;
     const out = await waitForPostInstallQuiescence({
       ...base,
       remoteExec,
-      sleep,
-      now: () => 0
+      sleep: vi.fn(),
+      now: () => (t++ === 0 ? 0 : 10_000),
+      authGraceMs: 1000
     });
     expect(out).toBe("unauthenticated");
-    expect(remoteExec).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("keeps waiting on a refused port and on a non-Error throw", async () => {
+  it("keeps waiting on a refused port and on a non-Error throw, past the grace", async () => {
     for (const thrown of [
       new Error("sshExec: connection error: ECONNREFUSED"),
       "a bare string, not an Error"
@@ -370,11 +421,15 @@ describe("auth rejection vs a port that will not open", () => {
         .fn()
         .mockRejectedValueOnce(thrown)
         .mockResolvedValueOnce({ exitCode: 0, signal: null, stdout: "idle", stderr: "" });
+      let t = 0;
       const out = await waitForPostInstallQuiescence({
         ...base,
         remoteExec,
         sleep: vi.fn(),
-        now: () => 0
+        // Well past the grace: neither of these may ever be mistaken for an
+        // auth rejection and end the wait early.
+        now: () => (t++ === 0 ? 0 : 10_000),
+        authGraceMs: 1000
       });
       expect(out).toBe("idle");
       expect(remoteExec).toHaveBeenCalledTimes(2);

@@ -3419,10 +3419,10 @@ describe("provisioning/orchestrate", () => {
      * ahead anyway: the bootstrap is the step allowed to fail, and it is the
      * one whose error names the real problem.
      *
-     * Driven here through an auth rejection, which is the outcome Scar Fairy's
-     * stranded box produced on 2026-08-29. The probe must return at once
-     * rather than spend its budget, so the first remoteExec call rejects and
-     * every later one succeeds: the bootstrap still runs, and still reports.
+     * Driven here through an auth rejection that outlives the grace window,
+     * which is the outcome Scar Fairy's stranded box produced on 2026-08-29.
+     * The first remoteExec call rejects and every later one succeeds, so the
+     * bootstrap still runs and still reports.
      */
     it("bootstraps anyway when the post-install quiescence probe cannot confirm idle", async () => {
       const recordMock = vi.mocked(recordProvisioningProgress);
@@ -3430,16 +3430,27 @@ describe("provisioning/orchestrate", () => {
       const vpsProvisioner = vi
         .fn()
         .mockResolvedValue(makeVpsStub("42", "1.2.3.4", "PEM", 8888));
-      const remoteExec = vi
-        .fn()
-        .mockRejectedValueOnce(
-          new Error("sshExec: connection error: All configured authentication methods failed")
-        )
-        .mockResolvedValue(okExec());
+      // Discriminate by COMMAND, not call order: `now` is shared with the
+      // orphan-scan deadline, so counting calls is brittle. The probe always
+      // fails auth; everything else succeeds.
+      const remoteExec = vi.fn(async (args: { command: string }) => {
+        if (args.command.includes("/post_install.log")) {
+          throw new Error(
+            "sshExec: connection error: All configured authentication methods failed"
+          );
+        }
+        return okExec();
+      });
+      // The clock advances only when the wait sleeps, so the grace window
+      // expires in virtual time instead of real minutes.
+      let clock = 0;
+      const sleep = vi.fn(async () => {
+        clock += 60_000;
+      });
 
       await orchestrateProvisioning(
         { businessId: "biz-pis-quiescence", tier: "starter" },
-        { vpsProvisioner, remoteExec, sleep: vi.fn() }
+        { vpsProvisioner, remoteExec, sleep, now: () => clock }
       );
 
       const calls = recordMock.mock.calls.map((c) => c[0]);
@@ -3447,11 +3458,15 @@ describe("provisioning/orchestrate", () => {
       expect(calls.find((p) => p.phase === "vps_bootstrapped")?.message).toMatch(
         /PIS id=8888.*SSH re-run/
       );
-      // First call is the probe, and it is the quiescence command, not the
-      // bootstrap: pins the ordering so the wait cannot drift after the thing
-      // it exists to wait for.
-      expect(remoteExec.mock.calls[0][0].command).toContain("/post_install.log");
-      expect(remoteExec.mock.calls[1][0].command).toContain("newcoworker-bootstrap.sh");
+      const commands = remoteExec.mock.calls.map((c) => c[0].command);
+      // It waited (more than one probe) rather than giving up on the first
+      // auth rejection, and then still ran the bootstrap.
+      expect(commands.filter((c) => c.includes("/post_install.log")).length).toBeGreaterThan(1);
+      expect(commands[0]).toContain("/post_install.log");
+      // The bootstrap ran, and ran AFTER the wait it is supposed to follow.
+      const bootstrapAt = commands.findIndex((c) => c.includes("newcoworker-bootstrap.sh"));
+      const lastProbeAt = commands.map((c) => c.includes("/post_install.log")).lastIndexOf(true);
+      expect(bootstrapAt).toBeGreaterThan(lastProbeAt);
     });
 
     /**

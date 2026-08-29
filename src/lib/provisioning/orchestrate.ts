@@ -443,6 +443,25 @@ const PIS_QUIESCENCE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_QUIESCENCE_POLL_MS = 15_000;
 
 /**
+ * How long to tolerate SSH auth rejections before concluding the key is not
+ * coming.
+ *
+ * This wait only runs when a post-install script is attached, and that script
+ * is now what WRITES the key (see `buildDefaultPostInstallScript`). So an auth
+ * rejection early in the run is the expected transient: sshd is up, the
+ * runner has not reached the authorized_keys line yet. Treating it as
+ * permanent would exit the wait exactly on the boxes that depend on the PIS
+ * write, which is to say exactly when Hostinger dropped `public_key_ids`,
+ * which is the case this whole change exists for.
+ *
+ * Three minutes is generous against a key written in the first seconds of the
+ * run, and still bounds the genuinely keyless box (PIS never ran AND
+ * `public_key_ids` dropped) well under the full quiescence budget. After it,
+ * the bootstrap raises the real error within its own 76s retry.
+ */
+const AUTH_GRACE_MS = 3 * 60 * 1000;
+
+/**
  * Real timers, named so they are ordinary covered code rather than an
  * inline default hidden behind a `c8 ignore`. An ignored default is an
  * untested default, and this pair decides how long a provision waits.
@@ -478,14 +497,24 @@ export async function waitForPostInstallQuiescence(input: {
   remoteExec: RemoteExecutor;
   timeoutMs?: number;
   pollIntervalMs?: number;
+  authGraceMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }): Promise<"idle" | "timed_out" | "unauthenticated"> {
   const timeoutMs = input.timeoutMs ?? PIS_QUIESCENCE_TIMEOUT_MS;
   const pollIntervalMs = input.pollIntervalMs ?? DEFAULT_QUIESCENCE_POLL_MS;
+  const authGraceMs = input.authGraceMs ?? AUTH_GRACE_MS;
   const sleep = input.sleep ?? defaultSleep;
   const now = input.now ?? defaultNow;
-  const deadline = now() + timeoutMs;
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  const authDeadline = startedAt + authGraceMs;
+  /**
+   * Once ANY probe has authenticated we know the key is on the box, so a later
+   * auth blip is not the "key never landed" case and only the overall deadline
+   * bounds it.
+   */
+  let authenticatedOnce = false;
 
   for (;;) {
     try {
@@ -496,6 +525,7 @@ export async function waitForPostInstallQuiescence(input: {
         command: PIS_QUIESCENCE_PROBE_COMMAND,
         sshKeyRow: input.sshKeyRow
       });
+      authenticatedOnce = true;
       // Fail OPEN: only an explicit "busy" keeps us waiting. Adopt's probe
       // asks the opposite question (`includes("idle")`) and that is right for
       // adopt, which runs from a debug script with 25 minutes and no route
@@ -509,13 +539,15 @@ export async function waitForPostInstallQuiescence(input: {
       // path did before today.
       if (!res.stdout.includes("busy")) return "idle";
     } catch (err) {
-      // An auth rejection is permanent: the key is not on the box and waiting
-      // cannot put it there. Return immediately so the bootstrap phase raises
-      // the real error in seconds, instead of this loop spending its whole
-      // budget first. Scar Fairy's stranded box (2026-08-29) failed exactly
-      // this way, and turning a 76-second failure into a 10-minute one would
-      // eat the sweep's runway for no information.
-      if (isSshAuthFailure(err)) return "unauthenticated";
+      // An auth rejection is NOT proof the key will never arrive: the
+      // post-install script we are waiting on is the thing that writes it, so
+      // early probes legitimately get rejected until that line runs. Keep
+      // waiting through AUTH_GRACE_MS, then conclude the key is not coming and
+      // hand back so the bootstrap can raise the real error inside its own
+      // retry rather than at the end of the full quiescence budget.
+      if (isSshAuthFailure(err) && !authenticatedOnce && now() >= authDeadline) {
+        return "unauthenticated";
+      }
       // Anything else (refused, timed out, handshake) means sshd is still
       // coming up. That is indistinguishable from "still busy" here, and the
       // bootstrap phase has its own connect-retry, so keep waiting.
@@ -1091,9 +1123,12 @@ export async function orchestrateProvisioning(
       businessId: string
     ) => Promise<LatestProvisioningStatus>;
     /**
-     * Injectable clock for the orphan-scan retry deadline. Production uses
-     * `Date.now`; tests inject a controllable clock so the 5-minute budget
-     * can expire without waiting.
+     * Injectable clock for the orphan-scan retry deadline and the
+     * post-install quiescence wait. Production uses `Date.now`; tests inject
+     * a controllable clock so those budgets can expire without waiting. A
+     * no-op `sleep` alone is not enough for either: both are wall-clock, so
+     * without a fake clock a test asserting a give-up path spins against real
+     * minutes.
      */
     now?: () => number;
     /**
@@ -2087,7 +2122,8 @@ async function runOrchestrator(
       privateKeyPem: provisioned.sshKey.private_key_pem,
       sshKeyRow: provisioned.sshKey,
       remoteExec,
-      sleep: deps?.sleep
+      sleep: deps?.sleep,
+      now: deps?.now
     });
     if (quiescence !== "idle") {
       // Both non-idle outcomes continue to the bootstrap, which is the step
