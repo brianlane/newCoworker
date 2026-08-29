@@ -3,8 +3,9 @@
  *
  * Scheduled daily by `schedule_call_integrity_sweep.sql`. Reads yesterday's
  * voice transcripts and reports calls where the AI voiced BOTH sides of the
- * conversation, held a conversation with a recording, or gave out a phone
- * number the business does not own.
+ * conversation, held a conversation with a recording, gave out a phone
+ * number the business does not own, quoted a money figure nothing on the
+ * call supplied, or never got past a referral partner's accept menu.
  *
  * WHY A CRON AND NOT A TEST. Each failure is the model disobeying its
  * prompt (the rules added in PRs #1377 and #1612), and prompt adherence
@@ -30,9 +31,11 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   callIntegrityAlertSubject,
+  callerAmounts,
   collectAllowedNumbers,
   detectCallIntegrity,
   formatCallIntegrityAlert,
+  kindPhrase,
   spokenNumberForm,
   type CallIntegrityAlertItem,
   type CallIntegrityFinding,
@@ -281,10 +284,14 @@ serve(async (req: Request) => {
       }
     }
 
-    const findings: CallIntegrityFinding[] = detectCallIntegrity(
-      turns,
-      allowedNumbers ? { allowedNumbers } : {}
-    );
+    // Amounts need no fleet lookup: the legitimate ones are whatever the other
+    // party said on this very call, which is already loaded. Unlike the number
+    // allowlist there is nothing to fail-open on, so the rule runs on every
+    // call regardless of `allowlistOk`.
+    const findings: CallIntegrityFinding[] = detectCallIntegrity(turns, {
+      ...(allowedNumbers ? { allowedNumbers } : {}),
+      allowedAmounts: callerAmounts(turns)
+    });
     for (const finding of findings) {
       alerts.push({
         ...finding,
@@ -307,12 +314,14 @@ serve(async (req: Request) => {
         // argument for warn does not apply either.
         level: "error",
         event: EVENT,
+        // Shares kindPhrase with the alert email. This was a separate chained
+        // ternary that fell through to the recording wording for any kind it
+        // did not name, so a forfeited referral and an invented price were
+        // each stored, and shown to the client, as the AI holding a
+        // conversation with a recording (Bugbot, this PR).
         message:
-          finding.kind === "role_leak"
-            ? `The AI spoke the caller's side of a call (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
-            : finding.kind === "invented_contact_number"
-              ? `The AI gave out a phone number this business does not own (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
-              : `The AI held a conversation with a recording (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
+          `The AI ${kindPhrase(finding.kind)} ` +
+          `(${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
         payload: {
           transcript_id: call.id,
           kind: finding.kind,

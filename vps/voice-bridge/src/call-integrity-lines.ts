@@ -147,3 +147,40 @@ export const RECORDED_SYSTEM_LINE =
  */
 export const NO_INVENTED_CONTACT_LINE =
   "NEVER invent a contact detail. A phone number, email address, website, or street address may only leave your mouth if it is written, character for character, in your instructions, your briefing, or a script you were given for this call, OR if the person on this call just told it to you and you are repeating it back so they can confirm you heard it right. Those are the only two sources. Do not reconstruct one from memory, do not adapt one you have seen before, and never assemble a plausible local number: a detail you make up reaches a stranger, and the person you are speaking to will dial it or write to it. If someone asks how to reach the business, or you are ending a message and want to leave a way back, and none was given to you, give none. Say that the office will follow up, or say nothing at all. In interpreter mode the same rule holds in the relaying direction: pass on exactly the details a real person actually said, and never fill in one they did not.";
+
+/**
+ * Never state a money figure you were not given.
+ *
+ * THE INCIDENT (Clever seller lead, 2026-08-20, call 60a64ddd). Calling Luis
+ * Castillo about 6826 W Pierson St, the AI said: "Clever offered you a cash
+ * offer program, and the offers on your file are 375k and 395k." The only
+ * offers ever sent for that lead were $320,097, $342,000 and $325,000, and
+ * they arrived four minutes AFTER the call ended. At the moment it spoke, the
+ * AI held one referral text reading "Est. home value: $425,000.00" and no
+ * offers at all. Both figures were invented, both were tens of thousands
+ * high, and it delivered them to the seller as a fact about their own file.
+ *
+ * This is the case NO_INVENTED_CONTACT_LINE deliberately left out. That rule
+ * scoped itself to details "a person will ACT on, by dialling or writing to
+ * them", reasoning that "prices, timeframes, and keypad digits are all
+ * legitimate and frequent". The first half of that still holds and is why
+ * this line is narrow. The second half does not survive this call: a seller
+ * acts on a number like that by deciding whether to list, and unlike a wrong
+ * phone number, which fails visibly the moment somebody dials it, a wrong
+ * price is never contradicted by anything.
+ *
+ * So this bans ATTRIBUTED figures only, the ones asserted as coming from our
+ * records, a partner, or the person's file. Ordinary priced conversation is
+ * untouched on purpose: a receptionist quoting the shop's own rates, an agent
+ * talking about what homes in an area are going for, or repeating back a
+ * number the caller just said all stay allowed, and a rule broad enough to
+ * catch those would be a rule the personas cannot follow.
+ *
+ * Like every rule in this module it is paired with detection rather than
+ * trusted: `invented_amount` in supabase/functions/_shared/call_integrity.ts
+ * reports these daily off real transcripts. #1612 proved a prompt rule alone
+ * does not close this class, and that lesson is why the sweep shipped with
+ * this line rather than after it.
+ */
+export const NO_INVENTED_FIGURE_LINE =
+  "NEVER invent a money figure. If you present an amount as coming from our records, from a partner or referral service, from an offer, or from the person's own file, that exact amount must be written in your instructions, your briefing, or a script you were given for this call, or the person on this call must have just told it to you. If you were not given the figures, say so plainly and offer to follow up with them: say that you do not have the numbers in front of you, never a guess, never a range you assembled yourself, and never a placeholder that sounds close. This covers only amounts you attribute to a source. Talking about prices in general, quoting rates you were given, and repeating back a number the person just said are all still your job.";

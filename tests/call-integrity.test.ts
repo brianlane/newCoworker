@@ -1,21 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  AMOUNT_MATCH_TOLERANCE,
   DEFAULT_MIN_ASSISTANT_TURNS,
+  MIN_REPORTABLE_AMOUNT,
+  amountIsSourced,
+  callerAmounts,
   collectAllowedNumbers,
   detectCallIntegrity,
   callIntegrityAlertSubject,
   extractSpokenNumbers,
   formatCallIntegrityAlert,
   hasRoleLeak,
+  kindPhrase,
+  isAcceptPrompt,
   looksMachineGenerated,
+  spokenAmounts,
   spokenNumberForm
 } from "../supabase/functions/_shared/call_integrity.ts";
 
 /**
- * Detection for the two ways a voice call can go wrong that no code check can
- * catch, because both are the model disobeying its prompt.
+ * Detection for the ways a voice call can go wrong that no code check can
+ * catch, because each is either the model disobeying its prompt or a partner
+ * refusing us silently.
  *
- * Both signatures are lifted from real calls on Amy Laidlaw's account, not
+ * Every signature is lifted from a real call on Amy Laidlaw's account, not
  * imagined:
  *
  *   role_leak (call 28f9c228, 2026-08-14) - the AI, dropped into a seller's
@@ -109,11 +117,18 @@ describe("detectCallIntegrity", () => {
   it("stays quiet when the AI said almost nothing to the recording", () => {
     // Pressing a key and waiting is CORRECT behavior on the HomeLight gate.
     // Only a sustained conversation is the failure.
+    //
+    // This asserted `toEqual([])` until gate_never_cleared shipped, which was
+    // shorthand for "talked_to_recording does not fire" back when it was the
+    // only rule this fixture could trip. The fixture ENDS on the partner's
+    // accept prompt, so it is also a call that never took the referral, and
+    // the new rule is right to say so. The original intent is what is pinned
+    // here; the companion case below pins the new finding deliberately.
     const findings = detectCallIntegrity([
       t("caller", "Press one to be connected."),
       t("assistant", "Hello?")
     ]);
-    expect(findings).toEqual([]);
+    expect(findings.map((f) => f.kind)).not.toContain("talked_to_recording");
   });
 
   it("honours a caller-supplied turn threshold", () => {
@@ -122,7 +137,10 @@ describe("detectCallIntegrity", () => {
       t("assistant", "a"),
       t("assistant", "b")
     ];
-    expect(detectCallIntegrity(turns)).toEqual([]);
+    // Same premise change as above: this fixture ends on the accept prompt,
+    // so gate_never_cleared fires either way and only the threshold-driven
+    // finding is what this test is about.
+    expect(detectCallIntegrity(turns).map((f) => f.kind)).not.toContain("talked_to_recording");
     expect(detectCallIntegrity(turns, { minAssistantTurns: 2 }).map((f) => f.kind)).toContain(
       "talked_to_recording"
     );
@@ -378,5 +396,264 @@ describe("callIntegrityAlertSubject", () => {
 
   it("is empty for no findings, so nothing can be sent about nothing", () => {
     expect(callIntegrityAlertSubject([])).toBe("");
+  });
+});
+
+/**
+ * gate_never_cleared (call 3578b1a7, 2026-07-30).
+ *
+ * A HomeLight live transfer opened on the partner's accept menu, the accept
+ * digit never landed, and the partner repeated "press one to agree" TEN times
+ * before the call ended. Nothing reported it: the AI behaved perfectly, so
+ * every other rule stayed silent, and the $800K referral was simply lost.
+ *
+ * The strings below are verbatim last-caller-turns from real calls. The two
+ * mailbox menus are the whole reason the rule is written the way it is: both
+ * come from transfers that CONNECTED, and both contain "press one".
+ */
+describe("detectCallIntegrity: the partner never let us in", () => {
+  const ACCEPT_FEE =
+    "Press one to agree to our referral fee specified in the referral agreement " +
+    "and to be connected to the client on a recorded line.";
+  const ACCEPT_CONNECT = "Press one to be connected to the client on a recorded line.";
+
+  it("reports a call that ended on the partner's accept prompt", () => {
+    const findings = detectCallIntegrity([
+      t("caller", "Our client, Dera H, would like to sell a single family home in 85213."),
+      t("caller", ACCEPT_FEE),
+      t("caller", ACCEPT_FEE)
+    ]);
+    const gate = findings.find((f) => f.kind === "gate_never_cleared");
+    expect(gate).toBeDefined();
+    expect(gate!.detail).toContain("still asking us to accept");
+  });
+
+  it("recognises both partner wordings", () => {
+    expect(isAcceptPrompt(ACCEPT_FEE)).toBe(true);
+    expect(isAcceptPrompt(ACCEPT_CONNECT)).toBe(true);
+  });
+
+  it("covers a rewording HomeLight has not used yet", () => {
+    // The two errors do not cost the same. An unmatched rewording turns the
+    // rule silently off and loses a referral exactly the way the incident
+    // did; an extra verb costs one line in a digest a human reads.
+    expect(isAcceptPrompt("Press 1 to accept this referral.")).toBe(true);
+    // The keypress and the same-sentence window still have to hold.
+    expect(isAcceptPrompt("We accept referrals. Press one.")).toBe(false);
+  });
+
+  /**
+   * The false-positive that would have muted this rule. Both of these ended
+   * calls that reached the seller (28f9c228 and dbd44742): the AI was put
+   * through, hit a mailbox, and the mailbox offered its own keypad options.
+   * Reporting these as lost referrals would have made the digest untrustworthy
+   * within a week.
+   */
+  it("never mistakes a voicemail keypad menu for the accept prompt", () => {
+    const menus = [
+      "Replay your message. Press one. To continue recording, press two.",
+      "To review, re-record or add to your message, press one. To mark your " +
+        "message urgent, press two. To mark your message private, press three.",
+      "You have reached the maximum time permitted for recording your message."
+    ];
+    for (const menu of menus) expect(isAcceptPrompt(menu)).toBe(false);
+  });
+
+  it("stays quiet when the partner connected us", () => {
+    const findings = detectCallIntegrity([
+      t("caller", ACCEPT_FEE),
+      t("caller", "Connecting you now. Say hi at the beep."),
+      t("assistant", "Hi, this is Amy Laidlaw's office with HomeSmart.")
+    ]);
+    expect(findings.map((f) => f.kind)).not.toContain("gate_never_cleared");
+  });
+
+  it("stays quiet on a call with no caller side at all", () => {
+    const findings = detectCallIntegrity([t("assistant", "Hello, anyone there?")]);
+    expect(findings.map((f) => f.kind)).not.toContain("gate_never_cleared");
+  });
+
+  it("names the lost referral rather than blaming the model", () => {
+    const body = formatCallIntegrityAlert([
+      {
+        kind: "gate_never_cleared",
+        detail: "d",
+        transcriptId: "3578b1a7",
+        business: "Amy Laidlaw Real Estate",
+        caller: "+14159851909",
+        startedAt: "2026-07-30T17:03:28Z"
+      }
+    ]);
+    expect(body).toContain("the referral was lost");
+  });
+});
+
+/**
+ * invented_amount (call 60a64ddd, 2026-08-20).
+ *
+ * "Clever offered you a cash offer program, and the offers on your file are
+ * 375k and 395k." The real offers were $320,097, $342,000 and $325,000, and
+ * they arrived four minutes after the call ended.
+ */
+describe("detectCallIntegrity: figures nothing gave it", () => {
+  const INCIDENT =
+    "Great, so, Clever offered you a cash offer program, and the offers on " +
+    "your file are 375k and 395k.";
+
+  it("reports every distinct unsourced amount in the incident turn", () => {
+    const turns = [t("caller", "Sure."), t("assistant", INCIDENT)];
+    const kinds = detectCallIntegrity(turns, { allowedAmounts: callerAmounts(turns) });
+    const amounts = kinds.filter((f) => f.kind === "invented_amount");
+    expect(amounts).toHaveLength(2);
+    expect(amounts[0]!.detail).toContain("$375,000");
+    expect(amounts[1]!.detail).toContain("$395,000");
+  });
+
+  it("stays quiet when the caller supplied the figure", () => {
+    const turns = [
+      t("caller", "I'm hoping to get around $425,000 for it."),
+      t("assistant", "Got it, $425,000 is the target.")
+    ];
+    const findings = detectCallIntegrity(turns, { allowedAmounts: callerAmounts(turns) });
+    expect(findings.map((f) => f.kind)).not.toContain("invented_amount");
+  });
+
+  it("allows rounding a sourced figure aloud", () => {
+    // "about 438" for $437,900 is the same fact, and reporting it would be a
+    // false positive. HomeLight's own announcement reads the exact figure and
+    // a person answers in round numbers.
+    const turns = [
+      t("caller", "The home is listed at $437,900."),
+      t("assistant", "So roughly 438k, understood.")
+    ];
+    const findings = detectCallIntegrity(turns, { allowedAmounts: callerAmounts(turns) });
+    expect(findings.map((f) => f.kind)).not.toContain("invented_amount");
+  });
+
+  it("reports one finding per amount however often it is repeated", () => {
+    const turns = [
+      t("assistant", "The offer is 375k."),
+      t("assistant", "As I said, 375k.")
+    ];
+    const findings = detectCallIntegrity(turns, { allowedAmounts: new Set<number>() });
+    expect(findings.filter((f) => f.kind === "invented_amount")).toHaveLength(1);
+  });
+
+  it("does not run at all without an allowlist, so a caller cannot half-enable it", () => {
+    const findings = detectCallIntegrity([t("assistant", INCIDENT)]);
+    expect(findings.map((f) => f.kind)).not.toContain("invented_amount");
+  });
+
+  it("ignores what the caller said when deciding what the AI invented", () => {
+    // The assistant's own turns are not a source: a figure repeated by the
+    // speaker that invented it would otherwise launder itself.
+    const turns = [t("assistant", "375k."), t("caller", "Okay, 375k then.")];
+    expect(callerAmounts(turns).has(375_000)).toBe(true);
+    expect(callerAmounts([t("assistant", "375k.")]).size).toBe(0);
+  });
+
+  it("skips a turn whose content is not a string", () => {
+    expect(callerAmounts([{ role: "caller", content: null }]).size).toBe(0);
+  });
+
+  it("names the failure in the alert body", () => {
+    const body = formatCallIntegrityAlert([
+      {
+        kind: "invented_amount",
+        detail: "d",
+        transcriptId: "60a64ddd",
+        business: "Amy Laidlaw Real Estate",
+        caller: "+16028752869",
+        startedAt: "2026-08-20T22:59:52Z"
+      }
+    ]);
+    expect(body).toContain("quoted a figure nothing gave it");
+  });
+});
+
+describe("spokenAmounts", () => {
+  it("reads the forms a person actually says", () => {
+    expect(spokenAmounts("375k and 395k")).toEqual([375_000, 395_000]);
+    expect(spokenAmounts("$425,000.00")).toEqual([425_000]);
+    expect(spokenAmounts("$1.2M")).toEqual([1_200_000]);
+    expect(spokenAmounts("they want 437,900")).toEqual([437_900]);
+  });
+
+  it("needs something to say it is money, so bare digit runs are not amounts", () => {
+    // On a real-estate call the bare runs are zips, street numbers and years.
+    expect(spokenAmounts("a home in 85205 at 4046 East Camino, built 1998")).toEqual([]);
+  });
+
+  it("does not read the m of a word as millions", () => {
+    // Call 12f073e0, 2026-08-12: "timeframe:9 months" scored as $9,000,000
+    // until the trailing lookahead landed.
+    expect(spokenAmounts("timeframe:9 months")).toEqual([]);
+    expect(spokenAmounts("call back in 20 minutes")).toEqual([]);
+  });
+
+  it("keeps a sentence-ending full stop from hiding the last figure", () => {
+    // An earlier draft blocked "." after the suffix and found only the first
+    // of the incident's two figures.
+    expect(spokenAmounts("the offers are 375k and 395k.")).toEqual([375_000, 395_000]);
+  });
+
+  it("drops amounts below the reportable floor", () => {
+    expect(MIN_REPORTABLE_AMOUNT).toBe(10_000);
+    // An $89 tune-up and a $250 callout are legitimate and frequent.
+    expect(spokenAmounts("that's $89, or $250 for the callout")).toEqual([]);
+    expect(spokenAmounts("$9,999 and $10,000")).toEqual([10_000]);
+  });
+
+  it("refuses a digit run too large to be a number", () => {
+    const absurd = "1" + ",000".repeat(120);
+    expect(spokenAmounts(absurd)).toEqual([]);
+  });
+
+  it("does not read a number glued to letters as money", () => {
+    expect(spokenAmounts("unit A4046")).toEqual([]);
+  });
+});
+
+describe("amountIsSourced", () => {
+  it("matches inside the tolerance and not outside it", () => {
+    expect(AMOUNT_MATCH_TOLERANCE).toBe(0.02);
+    expect(amountIsSourced(438_000, new Set([437_900]))).toBe(true);
+    // The incident: 375k against the briefed $425,000 is 11.8% out.
+    expect(amountIsSourced(375_000, new Set([425_000]))).toBe(false);
+  });
+
+  it("is false against an empty source set", () => {
+    expect(amountIsSourced(375_000, new Set())).toBe(false);
+  });
+});
+
+/**
+ * One phrase source for both readers.
+ *
+ * The alert email and the per-tenant `system_logs` row the fleet dashboard
+ * reads used to build their wording separately, and the sweep's copy was a
+ * chained ternary that ENDED on the recording sentence. Every kind it did not
+ * name inherited that ending, so a forfeited referral and an invented price
+ * were each shown to the client as the AI holding a conversation with a
+ * recording (Bugbot, this PR).
+ */
+describe("kindPhrase", () => {
+  const KINDS = [
+    "role_leak",
+    "talked_to_recording",
+    "invented_contact_number",
+    "gate_never_cleared",
+    "invented_amount"
+  ] as const;
+
+  it("gives every kind its own sentence, and none inherits another's", () => {
+    const phrases = KINDS.map((k) => kindPhrase(k));
+    expect(new Set(phrases).size).toBe(KINDS.length);
+    for (const p of phrases) expect(p.length).toBeGreaterThan(0);
+  });
+
+  it("does not describe the two new kinds as talking to a recording", () => {
+    expect(kindPhrase("gate_never_cleared")).not.toContain("recording");
+    expect(kindPhrase("invented_amount")).not.toContain("recording");
   });
 });

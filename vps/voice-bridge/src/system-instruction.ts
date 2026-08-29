@@ -15,6 +15,7 @@ import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
   NO_INVENTED_CONTACT_LINE,
+  NO_INVENTED_FIGURE_LINE,
   ONE_VOICE_LINE,
   RECORDED_SYSTEM_LINE
 } from "./call-integrity-lines.js";
@@ -172,6 +173,7 @@ export function systemInstructionForBusiness(
       ONE_VOICE_LINE,
       RECORDED_SYSTEM_LINE,
       NO_INVENTED_CONTACT_LINE,
+      NO_INVENTED_FIGURE_LINE,
       noEmDashLine,
       usSpellingLine,
       currentDateTimeLine(new Date(), businessTimezone)
@@ -208,6 +210,7 @@ export function systemInstructionForBusiness(
       ONE_VOICE_LINE,
       RECORDED_SYSTEM_LINE,
       NO_INVENTED_CONTACT_LINE,
+      NO_INVENTED_FIGURE_LINE,
       noEmDashLine,
       usSpellingLine,
       currentDateTimeLine(new Date(), businessTimezone)
