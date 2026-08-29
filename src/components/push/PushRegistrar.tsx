@@ -69,6 +69,10 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
            * then receive nothing until they noticed and opted in again, and
            * the next send would 410-revoke the stored row on the way past.
            */
+          // Nothing to drop and retry when there was no subscription to begin
+          // with: that is the silent re-create path above, so a failure there
+          // is just a failure.
+          if (!existing) throw err;
           if ((err as { name?: string } | null)?.name !== "InvalidStateError") throw err;
           await existing.unsubscribe();
           subscription = await registration.pushManager.subscribe({

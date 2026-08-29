@@ -79,6 +79,25 @@ function iosCanEverPush(userAgent: string): boolean {
   return version.major === 16 && version.minor >= 4;
 }
 
+/**
+ * Is this a state worth interrupting someone on the dashboard for?
+ *
+ * Only the two that a person can actually ACT on: they can turn push on here
+ * and now (`prompt`), or they are on an iPhone and one Home Screen install
+ * away from being able to (`needs_ios_install`).
+ *
+ * Everything else is deliberately silent. `enabled` needs no nudge;
+ * `unsupported` and `needs_browser` cannot be fixed from this device, so a
+ * banner would be a permanent scold about something out of their hands; and
+ * `blocked` can only be undone in browser settings, where a button we render
+ * cannot reach and re-asking resolves instantly to denied. The settings card
+ * still explains all of those, because someone who goes LOOKING deserves the
+ * whole picture; a banner that interrupts does not.
+ */
+export function shouldOfferPushBanner(state: InstallCoachState): boolean {
+  return state === "prompt" || state === "needs_ios_install";
+}
+
 export function installCoachState(input: InstallCoachInput): InstallCoachState {
   if (input.subscribed) return "enabled";
 

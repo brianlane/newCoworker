@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { installCoachState, type InstallCoachInput } from "@/lib/push/install";
+import {
+  installCoachState,
+  shouldOfferPushBanner,
+  type InstallCoachInput,
+  type InstallCoachState
+} from "@/lib/push/install";
 
 /**
  * The whole opt-in UI is a render of this function, so these cases are the
@@ -121,5 +126,47 @@ describe("push/install: installCoachState", () => {
     // Granting permission and registering a subscription are two steps; a
     // browser that has the first without the second must be offered the second.
     expect(installCoachState(input({ permission: "granted" }))).toBe("prompt");
+  });
+});
+
+describe("push/install: shouldOfferPushBanner", () => {
+  /**
+   * The banner interrupts, so it may only appear for states the person can
+   * actually resolve from where they are standing.
+   */
+  it.each(["prompt", "needs_ios_install"])("offers on %s, which is actionable", (state) => {
+    expect(shouldOfferPushBanner(state as InstallCoachState)).toBe(true);
+  });
+
+  /**
+   * `enabled` needs no nudge. `unsupported` and `needs_browser` cannot be
+   * fixed on this device, so a banner would be a permanent scold about
+   * something out of their hands. `blocked` is only undoable in browser
+   * settings, which no button we render can reach, and re-asking resolves
+   * instantly to denied. The settings card still explains all four, because
+   * someone who goes looking deserves the whole picture.
+   */
+  it.each(["enabled", "blocked", "unsupported", "needs_browser"])(
+    "stays silent on %s, which a banner cannot resolve",
+    (state) => {
+      expect(shouldOfferPushBanner(state as InstallCoachState)).toBe(false);
+    }
+  );
+
+  it("covers every state the coach can produce, so a new one cannot be missed", () => {
+    // A state added without a decision here would silently default to hidden,
+    // which is the failure that loses installs quietly.
+    const every: InstallCoachState[] = [
+      "enabled",
+      "prompt",
+      "needs_ios_install",
+      "needs_browser",
+      "blocked",
+      "unsupported"
+    ];
+    for (const state of every) {
+      expect(typeof shouldOfferPushBanner(state)).toBe("boolean");
+    }
+    expect(every.filter(shouldOfferPushBanner)).toEqual(["prompt", "needs_ios_install"]);
   });
 });

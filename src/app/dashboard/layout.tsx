@@ -28,6 +28,7 @@ import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
 import { SectionMessages } from "@/components/i18n/SectionMessages";
 import { HipaaIdleLogout } from "@/components/dashboard/HipaaIdleLogout";
 import { PushRegistrar } from "@/components/push/PushRegistrar";
+import { PushOptInBanner } from "@/components/push/PushOptInBanner";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -230,6 +231,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {grace && (
           <div className="mb-6">
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />
+          </div>
+        )}
+        {/* Asks once per device, then never again: any decision ends it. The
+            permanent opt-in stays on the notifications settings page. Not
+            shown while the terms gate is up, which owns the screen. */}
+        {businessId && !requireAcceptance && (
+          <div className="mb-6">
+            <PushOptInBanner businessId={businessId} />
           </div>
         )}
         {hipaaMode && <HipaaIdleLogout />}

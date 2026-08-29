@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { installCoachState, type InstallCoachState } from "@/lib/push/install";
+import {
+  installCoachState,
+  shouldOfferPushBanner,
+  type InstallCoachState
+} from "@/lib/push/install";
 import { urlBase64ToUint8Array } from "@/lib/push/vapid";
 
 /**
@@ -13,7 +17,21 @@ import { urlBase64ToUint8Array } from "@/lib/push/vapid";
  * globals, hands them over, and renders the answer, which is the same split
  * HipaaIdleLogout uses against src/lib/hipaa/session-timeout.ts.
  */
-export function PushSetupCard({ businessId }: { businessId: string | null }) {
+export function PushSetupCard({
+  businessId,
+  variant = "card",
+  onDismiss
+}: {
+  businessId: string | null;
+  /**
+   * "card" is the settings surface: it explains every state, including the
+   * ones nobody can act on from here, because someone who went looking
+   * deserves the whole picture. "banner" interrupts, so it renders only the
+   * actionable states and carries a dismiss.
+   */
+  variant?: "card" | "banner";
+  onDismiss?: () => void;
+}) {
   const [state, setState] = useState<InstallCoachState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +156,43 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
   // Nothing is rendered until the browser has been read, so the card never
   // flashes the wrong advice on first paint.
   if (state === null) return null;
+
+  if (variant === "banner") {
+    // The banner never renders a state it cannot resolve; see
+    // shouldOfferPushBanner for which those are and why.
+    if (!shouldOfferPushBanner(state)) return null;
+    return (
+      <div className="rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 flex flex-wrap items-start gap-3">
+        <div className="flex-1 min-w-[16rem]">
+          <p className="text-sm font-medium text-parchment">
+            {state === "prompt"
+              ? "Get urgent alerts on this device"
+              : "Add New Coworker to your Home Screen for alerts"}
+          </p>
+          <p className="text-xs text-parchment/60 mt-1">
+            {state === "prompt"
+              ? "One tap. Alerts arrive even when the dashboard is closed."
+              : "iPhone and iPad only deliver alerts to apps on the Home Screen: Share, then Add to Home Screen, then open it from there."}
+          </p>
+          {error && (
+            <p className="text-xs text-spark-orange mt-1" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {state === "prompt" && (
+            <Button type="button" size="sm" onClick={enable} loading={busy}>
+              Turn on alerts
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
+            Not now
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
