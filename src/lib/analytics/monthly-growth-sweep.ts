@@ -291,16 +291,24 @@ export async function sweepMonthlyGrowthEmails(
 
       const toEmail = business.owner_email.trim();
       const locale = await resolveLocale(toEmail);
+      // Scoped: this link stops the recap and nothing else. It goes to BOTH
+      // the template (the footer link in the HTML) and the sender, which is
+      // what attaches the RFC 8058 List-Unsubscribe / List-Unsubscribe-Post
+      // headers and appends a plain-text footer. Without the second, Gmail
+      // and Apple Mail never render their native Unsubscribe control, which
+      // is the one this scope was built for, a text-only client has no way
+      // out at all, and a recurring email missing those headers is exactly
+      // what bulk-sender rules penalize.
+      const unsubscribeUrl =
+        `${siteUrl}/api/notifications/unsubscribe` +
+        `?bid=${encodeURIComponent(business.id)}&scope=monthly_recap`;
       const email = buildMonthlyGrowthEmail({
         report,
         businessName: business.name,
         ownerName: business.owner_name ?? null,
         recipientEmail: toEmail,
         siteUrl,
-        // Scoped: this link stops the recap and nothing else.
-        unsubscribeUrl: `${siteUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
-          business.id
-        )}&scope=monthly_recap`,
+        unsubscribeUrl,
         locale
       });
       /* c8 ignore next 4 -- unreachable: report.latest was checked above, which
@@ -317,7 +325,11 @@ export async function sweepMonthlyGrowthEmails(
         continue;
       }
 
-      await send(apiKey, toEmail, email.subject, { text: email.text, html: email.html });
+      await send(apiKey, toEmail, email.subject, {
+        text: email.text,
+        html: email.html,
+        unsubscribeUrl
+      });
       result.sent += 1;
     } catch (err) {
       result.errors.push({

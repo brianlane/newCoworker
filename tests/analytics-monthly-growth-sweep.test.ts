@@ -307,6 +307,20 @@ describe("sweepMonthlyGrowthEmails", () => {
     expect(html).toContain("bid=biz-1&amp;scope=monthly_recap");
   });
 
+  it("hands the same scoped URL to the sender, so the one-click headers get set", async () => {
+    // sendOwnerEmail is what attaches List-Unsubscribe /
+    // List-Unsubscribe-Post and the plain-text footer. Building the URL for
+    // the HTML footer alone left Gmail and Apple Mail with no native
+    // Unsubscribe control, which is the whole reason the scope exists, and
+    // left a text-only reader with no way out at all.
+    const d = deps();
+    await sweepMonthlyGrowthEmails(d);
+    const opts = vi.mocked(d.sendEmail).mock.calls[0]![3] as { unsubscribeUrl?: string };
+    expect(opts.unsubscribeUrl).toBe(
+      "https://www.newcoworker.com/api/notifications/unsubscribe?bid=biz-1&scope=monthly_recap"
+    );
+  });
+
   it("treats a preferences read failure as unsubscribed rather than mailing anyway", async () => {
     const d = deps({
       loadPreferences: vi.fn(async () => {
