@@ -279,9 +279,18 @@ async function recordRow(
   summary: string,
   kind: string,
   payload: Record<string, unknown>,
-  reason?: string
+  reason?: string,
+  /**
+   * Pin the row's primary key instead of minting one here.
+   *
+   * Only the push leg passes it. The service worker posts the notification id
+   * back as the click receipt, so the id has to travel WITH the push, which
+   * means it must exist BEFORE the row is written. Mirrors the identical
+   * trailing parameter on recordRow in src/lib/notifications/dispatch.ts.
+   */
+  rowId?: string
 ): Promise<void> {
-  const id = crypto.randomUUID();
+  const id = rowId ?? crypto.randomUUID();
   const { error } = await supa.from("notifications").insert({
     id,
     business_id: businessId,
@@ -1697,6 +1706,16 @@ serve(async (req: Request) => {
       "recent_team_notify"
     );
   } else if (cronSecret && appUrl) {
+    // Minted HERE rather than inside recordRow because the service worker
+    // posts it back as the click receipt, so it has to travel WITH the push.
+    // The row it names is written below with this same id.
+    //
+    // Without it the edge path still delivers a banner and still records a
+    // click, but the receipt binds to NOTHING: markNotificationRead never
+    // fires, so the alert stays unread forever, and the click row lands with
+    // a null notification_id. That is the read receipt this whole channel was
+    // built for, silently degraded on one of the two pipelines.
+    const pushNotificationId = crypto.randomUUID();
     try {
       const pushRes = await fetch(`${appUrl}/api/internal/push-send`, {
         method: "POST",
@@ -1726,7 +1745,8 @@ serve(async (req: Request) => {
           // dispatcher applies. `payload` is withheld entirely rather than
           // sent alongside a pinned url, because it is the thing that carries
           // the identifier.
-          ...(phiFree ? { url: "/dashboard" } : { kind, payload: basePayload })
+          ...(phiFree ? { url: "/dashboard" } : { kind, payload: basePayload }),
+          notificationId: pushNotificationId
         })
       });
       const pushJson = pushRes.ok
@@ -1735,12 +1755,22 @@ serve(async (req: Request) => {
           } | null)
         : null;
       if (pushJson?.data?.ok) {
-        await recordRow(supa, record.business_id, "push", "sent", summary, kind, {
-          ...basePayload,
-          recipient: `${pushJson.data.sent ?? 0} device(s)`,
-          devices_sent: pushJson.data.sent ?? 0,
-          devices_revoked: pushJson.data.revoked ?? 0
-        });
+        await recordRow(
+          supa,
+          record.business_id,
+          "push",
+          "sent",
+          summary,
+          kind,
+          {
+            ...basePayload,
+            recipient: `${pushJson.data.sent ?? 0} device(s)`,
+            devices_sent: pushJson.data.sent ?? 0,
+            devices_revoked: pushJson.data.revoked ?? 0
+          },
+          undefined,
+          pushNotificationId
+        );
       } else if (pushRes.ok) {
         // Structured policy skip. A NEVER-subscribed business records nothing
         // (raced an unsubscribe since the check above).
@@ -1756,7 +1786,8 @@ serve(async (req: Request) => {
             basePayload,
             pushJson?.data?.detail
               ? `push_${pushReason}:${pushJson.data.detail}`
-              : `push_${pushReason}`
+              : `push_${pushReason}`,
+            pushNotificationId
           );
         }
       } else {
@@ -1769,13 +1800,24 @@ serve(async (req: Request) => {
           summary,
           kind,
           basePayload,
-          `push_bridge_${pushRes.status}`
+          `push_bridge_${pushRes.status}`,
+          pushNotificationId
         );
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Push error: ${msg}`);
-      await recordRow(supa, record.business_id, "push", "failed", summary, kind, basePayload, msg);
+      await recordRow(
+        supa,
+        record.business_id,
+        "push",
+        "failed",
+        summary,
+        kind,
+        basePayload,
+        msg,
+        pushNotificationId
+      );
     }
   } else {
     await recordRow(

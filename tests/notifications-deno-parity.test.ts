@@ -212,3 +212,77 @@ describe("both dispatchers actually have a leg for every channel", () => {
     }
   );
 });
+
+describe("a push carries the id of the row it is about, on both sides", () => {
+  const NODE_DISPATCH = read("src/lib/notifications/dispatch.ts");
+
+  /**
+   * Push is the only channel where a tap is a real read receipt, and that
+   * rests entirely on one thing: the id the service worker posts back has to
+   * name the `notifications` row the push was about. Which means the id must
+   * be minted BEFORE the send and reused for the row, in both pipelines.
+   *
+   * This shipped broken on the Deno side. The edge leg posted no
+   * notificationId at all, so a tap on an edge-dispatched alert reported a
+   * click bound to nothing: markNotificationRead never fired, the alert
+   * stayed unread forever, and the click row landed with a null
+   * notification_id. Delivery still worked, the row still said `sent`, and
+   * the channel-liveness sweep still counted the tap, so every signal
+   * available said the feature was healthy.
+   *
+   * tests/notifications-dispatch proves the Node half behaviourally. The Deno
+   * half cannot be imported here, so this reads the source, which is the same
+   * trade the rest of this file makes.
+   */
+
+  /** The argument text of a call, scanned with balanced delimiters. */
+  function callArgs(source: string, openParenIndex: number): string {
+    let depth = 0;
+    for (let i = openParenIndex; i < source.length; i += 1) {
+      const char = source[i];
+      if (char === "(" || char === "[" || char === "{") depth += 1;
+      else if (char === ")" || char === "]" || char === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(openParenIndex + 1, i);
+      }
+    }
+    throw new Error("unbalanced call, could not find the closing paren");
+  }
+
+  /** The `recordRow(...)` call in this file that writes the SENT push row. */
+  function sentPushRecordRowArgs(source: string, label: string): string {
+    for (const match of source.matchAll(/recordRow\(/g)) {
+      const args = callArgs(source, match.index + "recordRow".length);
+      if (/"push"/.test(args) && /"sent"/.test(args)) return args;
+    }
+    throw new Error(`${label} has no recordRow call writing a sent push row`);
+  }
+
+  it.each([
+    ["the Node dispatcher", NODE_DISPATCH],
+    ["the Deno mirror", DENO_DISPATCH]
+  ])("%s sends a notificationId and writes the row under that same id", (label, source) => {
+    /**
+     * The variable has to be BOTH freshly minted and sent, matched as a pair
+     * rather than taken as the first textual hit of either. `notificationId:`
+     * alone also matches a type field and the DeliveryResult it builds, and
+     * anchoring on those would have made this assertion measure the wrong
+     * thing and then fail for the wrong reason.
+     */
+    const minted = [
+      ...source.matchAll(/(?:const|let)\s+(\w+)\s*=\s*(?:crypto\.)?randomUUID\(\)/g)
+    ].map((m) => m[1]);
+    const sent = [...source.matchAll(/notificationId:\s*(\w+)/g)].map((m) => m[1]);
+    const idVar = sent.find((name) => minted.includes(name));
+
+    expect(
+      idVar,
+      `${label} never sends a freshly minted notificationId with its push, so every tap on one of its alerts records a click bound to no row`
+    ).toBeTruthy();
+
+    expect(
+      sentPushRecordRowArgs(source, label),
+      `${label} sends ${idVar} to the push but does not write the notifications row under it, so the receipt names a row that does not exist`
+    ).toContain(idVar);
+  });
+});
