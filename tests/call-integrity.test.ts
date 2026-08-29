@@ -14,6 +14,7 @@ import {
   kindPhrase,
   isAcceptPrompt,
   looksMachineGenerated,
+  partitionBlockedFindings,
   spokenAmounts,
   spokenNumberForm
 } from "../supabase/functions/_shared/call_integrity.ts";
@@ -299,6 +300,63 @@ describe("detectCallIntegrity invented_contact_number", () => {
       { allowedNumbers: allowed }
     );
     expect(findings[0]!.detail.length).toBeLessThan(220);
+  });
+
+  it("carries the offending number as a structured field, in spoken 3-3-4 form", () => {
+    // The sweep matches this against the bridge's suppressed-number record;
+    // parsing it back out of `detail` would couple the match to prose.
+    const findings = detectCallIntegrity(
+      [t("assistant", "call us at (480) 400-0588 today")],
+      { allowedNumbers: allowed }
+    );
+    expect(findings[0]!.number).toBe("480-400-0588");
+  });
+});
+
+describe("partitionBlockedFindings", () => {
+  const invented = (number: string): ReturnType<typeof detectCallIntegrity>[number] => ({
+    kind: "invented_contact_number",
+    number,
+    detail: `spoke ${number}`
+  });
+
+  it("moves a suppressed number to blocked and leaves the rest as failures", () => {
+    const findings = [invented("480-400-0588"), invented("480-331-9100")];
+    const { failures, blocked } = partitionBlockedFindings(findings, ["480-400-0588"]);
+    expect(blocked.map((f) => f.number)).toEqual(["480-400-0588"]);
+    expect(failures.map((f) => f.number)).toEqual(["480-331-9100"]);
+  });
+
+  it("normalizes the bridge's record defensively: any phone-ish shape matches", () => {
+    const { blocked } = partitionBlockedFindings(
+      [invented("480-400-0588")],
+      ["+14804000588", "garbage", 42, null]
+    );
+    expect(blocked).toHaveLength(1);
+  });
+
+  it("treats a missing or malformed record as nothing blocked", () => {
+    const findings = [invented("480-400-0588")];
+    expect(partitionBlockedFindings(findings, null).failures).toHaveLength(1);
+    expect(partitionBlockedFindings(findings, undefined).failures).toHaveLength(1);
+    expect(partitionBlockedFindings(findings, "480-400-0588").failures).toHaveLength(1);
+    expect(partitionBlockedFindings(findings, {}).failures).toHaveLength(1);
+  });
+
+  it("only invented_contact_number findings can be blocked", () => {
+    // A role leak on a call that also had a suppression must still page: the
+    // guard cut a number, never the leak.
+    const leak = { kind: "role_leak" as const, detail: "user: yes" };
+    const { failures, blocked } = partitionBlockedFindings([leak], ["480-400-0588"]);
+    expect(failures).toEqual([leak]);
+    expect(blocked).toEqual([]);
+  });
+
+  it("a number finding without the structured field stays a failure", () => {
+    const bare = { kind: "invented_contact_number" as const, detail: "spoke 480-400-0588" };
+    const { failures, blocked } = partitionBlockedFindings([bare], ["480-400-0588"]);
+    expect(failures).toEqual([bare]);
+    expect(blocked).toEqual([]);
   });
 });
 

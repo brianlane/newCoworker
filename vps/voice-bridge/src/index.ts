@@ -53,6 +53,13 @@ import { isBridgeToolEnabled } from "./tool-settings.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
+import {
+  AMD_RESOLUTION_SETTINGS_KEY,
+  deterministicVoicemailArmed,
+  NUMBER_GUARD_SETTINGS_KEY,
+  parseRolloutGate,
+  rolloutIncludes
+} from "./voicemail-mode.js";
 
 loadEnv();
 
@@ -550,6 +557,46 @@ async function loadTenantTelnyxSettings(
     translatorTierAllowed: translatorTierOk,
     voiceName: row?.voice_name ?? null
   };
+}
+
+/**
+ * The two voice rollout gates for this business, read in one query at session
+ * attach. Fail-OFF on any error or malformed value: both features change call
+ * behavior irreversibly (muted model audio, refused hangups, flushed playback
+ * queues), so an unreadable gate must mean yesterday's behavior, never a
+ * half-armed one. Parsing is the lockstep copy in voicemail-mode.ts.
+ */
+async function loadVoiceRolloutEnrollment(
+  supabase: SupabaseClient,
+  businessId: string
+): Promise<{ amdResolution: boolean; numberGuard: boolean }> {
+  const off = { amdResolution: false, numberGuard: false };
+  try {
+    const { data, error } = await supabase
+      .from("admin_platform_settings")
+      .select("key, value")
+      .in("key", [AMD_RESOLUTION_SETTINGS_KEY, NUMBER_GUARD_SETTINGS_KEY]);
+    if (error) {
+      console.error("voice-bridge: rollout gates read failed", error);
+      return off;
+    }
+    const byKey = new Map(
+      ((data ?? []) as Array<{ key: string; value: unknown }>).map((r) => [r.key, r.value])
+    );
+    return {
+      amdResolution: rolloutIncludes(
+        parseRolloutGate(byKey.get(AMD_RESOLUTION_SETTINGS_KEY)),
+        businessId
+      ),
+      numberGuard: rolloutIncludes(
+        parseRolloutGate(byKey.get(NUMBER_GUARD_SETTINGS_KEY)),
+        businessId
+      )
+    };
+  } catch (err) {
+    console.error("voice-bridge: rollout gates read threw", err);
+    return off;
+  }
 }
 
 /**
@@ -1236,6 +1283,7 @@ function main(): void {
       });
 
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
+      const rollout = await loadVoiceRolloutEnrollment(supabase, businessId);
       const { data: biz } = await supabase
         .from("businesses")
         .select("name, timezone, owner_name, phone, default_customer_language")
@@ -1453,6 +1501,22 @@ function main(): void {
         }
       }
 
+      // DETERMINISTIC VOICEMAIL DELIVERY: outbound leg, authored script, and
+      // the AMD resolution sweep armed for this tenant (the sweep or the
+      // greeting handler is what will speak and end a leg the bridge mutes).
+      // See voicemail-mode.ts for why all three conditions are load-bearing.
+      const deterministicVoicemail = deterministicVoicemailArmed({
+        direction: callDirection,
+        voicemailScript: intakeVoicemailScript,
+        amdResolutionEnrolled: rollout.amdResolution
+      });
+      // The persona names the script's callback number (fabrications happened
+      // exactly where the model held none), and the spoken-number guard learns
+      // the script's numbers through the same field.
+      if (intake && intakeVoicemailScript) {
+        intake.voicemailScript = intakeVoicemailScript;
+      }
+
       // Let the assistant hang up when the conversation is over. Available on
       // every call (inbound + outbound) whenever we have a Telnyx API key, the
       // bridge gates the `end_call` tool on this capability being present.
@@ -1567,9 +1631,30 @@ function main(): void {
         callDirection === "outbound" || transferGated
           ? {
               execute: async () => {
+                // Deterministic mode ages the leg against `machine_stamped_at`
+                // (the AMD resolution sweep's clock). The edge's stampMachine
+                // writes it exactly once on the AMD webhook; only fill it here
+                // when Telnyx never delivered a verdict, and never move an
+                // existing clock (a moved clock restarts the 25s grace).
+                let stampPatch: Record<string, unknown> = { machine_detected: true };
+                if (deterministicVoicemail) {
+                  const { data: sessRow } = await supabase
+                    .from("voice_handoff_sessions")
+                    .select("context")
+                    .eq("call_control_id", callControlId)
+                    .maybeSingle();
+                  const sessCtx = ((sessRow as { context?: unknown } | null)?.context ??
+                    {}) as Record<string, unknown>;
+                  if (typeof sessCtx.machine_stamped_at !== "string") {
+                    stampPatch = {
+                      ...stampPatch,
+                      machine_stamped_at: new Date().toISOString()
+                    };
+                  }
+                }
                 const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
                   p_call_control_id: callControlId,
-                  p_patch: { machine_detected: true }
+                  p_patch: stampPatch
                 });
                 if (stampErr) {
                   // Without the stamp the run would still resolve "answered",
@@ -1585,6 +1670,16 @@ function main(): void {
                   .eq("call_control_id", callControlId);
                 if (badgeErr) {
                   console.error("voice-bridge: voicemail badge write failed", badgeErr);
+                }
+                // Deterministic mode ends here: NO claim and NO script. The
+                // claim is the "I am the one speaking" token, and the speaker
+                // in this mode is the edge (greeting.ended handler, else the
+                // AMD resolution sweep 25s after the stamp), which claims when
+                // it acts. The model's tool winning the claim is exactly what
+                // stood the sweep down on call 5e325829 while the model
+                // betrayed the read with a fabricated number.
+                if (deterministicVoicemail) {
+                  return { ok: true, detail: "machine stamped, platform delivers" };
                 }
                 // Authored template first, so a flow author who wrote one for
                 // an outbound step keeps it; the transfer default only fills
@@ -1642,6 +1737,48 @@ function main(): void {
                   .update({ answering_machine_result: "machine", voicemail_left: true })
                   .eq("call_control_id", callControlId);
                 if (rowErr) console.error("voice-bridge: transfer voicemail row write failed", rowErr);
+              },
+              /**
+               * What the platform currently believes about this leg's machine
+               * verdict, for the deterministic hold's poll. "speaking" beats
+               * "live" on purpose: once someone holds the voicemail claim the
+               * TTS is (about to be) playing, and unmuting the model under it
+               * is the double-speak the claim exists to prevent. A failed or
+               * empty read is "pending", which keeps the hold: the failsafe
+               * window bounds it regardless.
+               */
+              checkResolution: async () => {
+                try {
+                  const { data: sessRow, error } = await supabase
+                    .from("voice_handoff_sessions")
+                    .select("context")
+                    .eq("call_control_id", callControlId)
+                    .maybeSingle();
+                  if (error || !sessRow) return "pending";
+                  const ctx = ((sessRow as { context?: unknown }).context ??
+                    {}) as Record<string, unknown>;
+                  if (
+                    ctx.voicemail_claimed === true ||
+                    typeof ctx.voicemail_speak_started_at === "string"
+                  ) {
+                    return "speaking";
+                  }
+                  // Withdrawal is EXPLICIT: `clearProvisionalMachine` (edge)
+                  // writes `machine_detected: false` and `ios_screening:
+                  // true`; it never deletes the key. An ABSENT key means the
+                  // stamp has not landed yet (this poll can start before the
+                  // execute() write on a slow path), and reading that as
+                  // "live" would unmute the model at a mailbox and let it
+                  // hang up before the sweep speaks, the exact incident the
+                  // hold exists to prevent (Bugbot, PR #1742).
+                  if (ctx.ios_screening === true || ctx.machine_detected === false) {
+                    return "live";
+                  }
+                  return "pending";
+                } catch (err) {
+                  console.error("voice-bridge: voicemail resolution check threw", err);
+                  return "pending";
+                }
               }
             }
           : undefined;
@@ -2110,6 +2247,50 @@ function main(): void {
               ?.default_customer_language
           });
 
+          // SPOKEN-NUMBER FIREWALL seeds: every number the model could
+          // legitimately speak that does NOT already ride the system
+          // instruction or a tool response. The guard fails toward allowing
+          // (an unseeded legitimate number would be cut as fabricated, the
+          // one failure the guard must never have), so this list leans wide:
+          // party numbers, configured business numbers, transfer and reach
+          // targets, and the authored voicemail script's text.
+          const numberGuardOpts = rollout.numberGuard
+            ? {
+                seedTexts: [
+                  intakeVoicemailScript,
+                  intake?.persona ?? "",
+                  intake?.contextNote ?? ""
+                ],
+                seedNumbers: [
+                  trustedFromE164,
+                  fromE164Info,
+                  tenantSettings.forwardToE164,
+                  tenantSettings.smsFromE164,
+                  (notifPrefs as { phone_number?: string | null } | null)?.phone_number,
+                  (biz as { phone?: string | null } | null)?.phone,
+                  intakeNotifyE164,
+                  intakeAlsoNotifyE164,
+                  intakeTransferConfig?.toE164,
+                  intakeReachConfig?.fromE164,
+                  ...(intakeReachConfig?.targets.map((t) => t.e164) ?? [])
+                ],
+                // Best-effort context record so the daily call-integrity sweep
+                // reports a cut number as BLOCKED instead of paging a human
+                // about audio nobody heard. Inbound receptionist calls may
+                // have no handoff session row; the merge failing is fine, the
+                // suppression diag and telemetry still carry the event.
+                recordSuppressed: async (numbers: string[]) => {
+                  const { error } = await supabase.rpc("voice_session_context_merge", {
+                    p_call_control_id: callControlId,
+                    p_patch: { suppressed_spoken_numbers: numbers }
+                  });
+                  if (error) {
+                    console.error("voice-bridge: suppressed-number record failed", error);
+                  }
+                }
+              }
+            : undefined;
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -2147,7 +2328,9 @@ function main(): void {
             translatorOnRequestEnabled,
             callerIdentity,
             intake,
-            recordDiag
+            recordDiag,
+            numberGuard: numberGuardOpts,
+            deterministicVoicemail
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;

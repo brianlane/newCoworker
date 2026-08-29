@@ -14,6 +14,7 @@ import {
   customerLanguageLine,
   type VoiceCustomerLanguage
 } from "./customer-language-line.js";
+import { extractSpokenNumbers } from "./spoken-number-guard.js";
 
 export const DEFAULT_INTAKE_CAPTURE_FIELDS = ["name", "phone", "address", "timeframe", "notes"];
 
@@ -145,6 +146,17 @@ export const OUTBOUND_VOICEMAIL_TOOL_LINE =
   "IF YOU REACH A RECORDING, REPORT IT BEFORE YOU SAY ANYTHING ELSE. A recorded greeting in the person's own voice, an automated one, an invitation to \"please record your message\", \"leave a message after the tone\", \"when you have finished recording you may hang up\", or any mailbox menu offering to replay, re-record, or send your message all mean you reached a machine, not the person. The moment you notice, call the `voicemail_reached` tool and wait for its answer: never deliver your opening line, your pitch, or any question to a recording, and never narrate an action you are about to take. If it returns a `script`, read that text aloud word for word, exactly as written, then call `end_call`. If it returns no script, say nothing at all and call `end_call` immediately. The one exception: if it says a message is already being left, stay completely silent and do NOT end the call, because hanging up would cut that message off part way through.";
 
 /**
+ * The deterministic-delivery variant of the rule above: the platform speaks
+ * the approved message itself (Telnyx TTS through the shared claim), so the
+ * model's whole job ends at the report. Shipped INSTEAD of the line above,
+ * never alongside it: two live rules describing different endings for the
+ * same tool is the competing-procedures trap Bugbot caught on PR #1716,
+ * where the model keeps taking the older path.
+ */
+export const OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC =
+  "IF YOU REACH A RECORDING, REPORT IT BEFORE YOU SAY ANYTHING ELSE. A recorded greeting in the person's own voice, an automated one, an invitation to \"please record your message\", \"leave a message after the tone\", \"when you have finished recording you may hang up\", or any mailbox menu offering to replay, re-record, or send your message all mean you reached a machine, not the person. The moment you notice, call the `voicemail_reached` tool: never deliver your opening line, your pitch, or any question to a recording, and never narrate an action you are about to take. One carve-out: CALL SCREENING IS NOT A MAILBOX. A robotic voice asking you to state your name or the reason for your call is screening for a real person who is listening, so follow the call screening rule instead and do not call `voicemail_reached` for it. The platform leaves the approved message itself, so after calling the tool say nothing more for the rest of the call and do NOT call `end_call`: the call ends automatically once the message has played. If a coordinator message later tells you the line is not a recording after all, follow it and resume the conversation.";
+
+/**
  * The carve-out a LIVE TRANSFER needs alongside the rule above.
  *
  * A gated call is answered INTO a recording on purpose: the referral service
@@ -182,7 +194,19 @@ export function intakeSystemInstruction(
    */
   hasVoicemailTool = false,
   /** True when this session waits on a partner IVR before the client joins. */
-  ivrGated = false
+  ivrGated = false,
+  /**
+   * The step's authored voicemailTemplate text, when one exists. Used only to
+   * surface its callback number (see callbackNumberLine below); the script
+   * itself is never pasted into the persona, the delivery paths own it.
+   */
+  voicemailScript?: string,
+  /**
+   * True when the platform speaks the voicemail itself (deterministic
+   * delivery): the tool rule then describes the report-and-stay-silent
+   * contract instead of the read-the-script one.
+   */
+  deterministicVoicemail = false
 ): string {
   const opener = intakeOpener(
     businessName,
@@ -292,12 +316,32 @@ export function intakeSystemInstruction(
     lines.push(iosScreeningLine(businessName));
   }
   // Reporting the recording is what makes the flow outcome honest, so the rule
-  // only ships when the tool that carries it actually exists.
+  // only ships when the tool that carries it actually exists. The
+  // deterministic variant REPLACES the read-the-script one, never joins it
+  // (see OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC).
   if (hasVoicemailTool) {
-    lines.push(OUTBOUND_VOICEMAIL_TOOL_LINE);
+    lines.push(
+      deterministicVoicemail
+        ? OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC
+        : OUTBOUND_VOICEMAIL_TOOL_LINE
+    );
     // Ordered after the rule it narrows, so the model reads the exception
     // against a rule it has already been given rather than the reverse.
     if (ivrGated) lines.push(TRANSFER_PARTNER_MENU_LINE);
+  }
+  // THE one callback number, stated as data rather than as another rule. The
+  // 45-day fabrication audit found every invented number on a call where the
+  // model held NO number at all: NO_INVENTED_CONTACT_LINE permits only
+  // numbers written in the instructions, and nothing wrote one. When the flow
+  // author's voicemail script carries a callback number, name it here so a
+  // model that speaks a number at all has the right one to reach for. The
+  // spoken-number firewall bounds the downside: a number outside the
+  // instructions cannot finish playing regardless.
+  const scriptNumbers = extractSpokenNumbers(voicemailScript ?? "");
+  if (scriptNumbers.length > 0) {
+    lines.push(
+      `If you ever give a callback number for the business, the ONLY one you may say is ${scriptNumbers[0]}. Never say any other number as a way to reach us.`
+    );
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
   // must never ask for something the flow already extracted, "why are you

@@ -4,7 +4,11 @@ import { existsSync, readFileSync } from "node:fs";
 import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, StreamingResampler } from "./audio-resample.js";
-import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
+import {
+  parseTelnyxFrame,
+  telnyxClearMessage,
+  telnyxMediaMessageFromPcmBase64
+} from "./telnyx-media-json.js";
 import { decodeTelnyxMediaPayload } from "./rtp-frame.js";
 import { type VaultSnapshot } from "./vault-loader.js";
 import {
@@ -15,9 +19,26 @@ import {
 } from "./intake.js";
 import {
   createTranscriptRecorder,
+  extractTranscriptionFrame,
   type TranscriptAdapter,
   type TranscriptRecorder
 } from "./voice-transcript.js";
+import { toolResponsePayload, type ToolResult } from "./tool-response-payload.js";
+import {
+  createSpokenNumberGuard,
+  GUARD_MAX_CUES,
+  NUMBER_SUPPRESSED_CUE,
+  type SpokenNumberGuard,
+  type SpokenNumberViolation
+} from "./spoken-number-guard.js";
+import {
+  VOICEMAIL_DETERMINISTIC_END_CALL_REPLY,
+  VOICEMAIL_DETERMINISTIC_TOOL_REPLY,
+  VOICEMAIL_END_CALL_HOLD_MS,
+  VOICEMAIL_MUTE_LIFTED_CUE,
+  VOICEMAIL_RESOLUTION_POLL_MS,
+  type VoicemailResolutionState
+} from "./voicemail-mode.js";
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
@@ -240,6 +261,17 @@ export type VoicemailCapability = {
    * message reads as never left.
    */
   confirmSpoken?: () => Promise<void>;
+  /**
+   * DETERMINISTIC MODE ONLY: what the platform currently believes about this
+   * leg's machine verdict (see VoicemailResolutionState). Polled while the
+   * mute-and-hold is pending, because the verdict can be WITHDRAWN: Apple
+   * call screening clears the machine stamp edge-side and the resolution
+   * sweep then deliberately never speaks, so without a lift a screened call
+   * a real person answers would sit against a muted model until the hold
+   * expires (Bugbot, PR #1742). Must never throw; an unreadable state
+   * reports "pending", which keeps yesterday's behavior.
+   */
+  checkResolution?: () => Promise<VoicemailResolutionState>;
 };
 
 /**
@@ -303,6 +335,13 @@ export type IntakeCapability = {
    * is prevented anyway.
    */
   ivrGate?: { digit: string; fallbackMs?: number };
+  /**
+   * The step's authored voicemailTemplate text, when one exists. Two jobs:
+   * the persona states the ONE callback number the script carries (the model
+   * fabricated numbers precisely on calls where it held none), and the
+   * spoken-number guard learns the script's numbers as legitimate.
+   */
+  voicemailScript?: string;
 };
 
 export type { CapturedLead } from "./intake.js";
@@ -511,6 +550,39 @@ export type GeminiBridgeOptions = {
    * a throwing sink should never tear down a live call.
    */
   recordDiag?: (eventType: string, payload: Record<string, unknown>) => void;
+  /**
+   * SPOKEN-NUMBER FIREWALL (rollout-gated in index.ts via the
+   * `voice_spoken_number_guard` platform setting). When set, the bridge runs
+   * output transcription through a per-call allowlist and, the moment the
+   * model's speech reveals a phone number nothing on this call supplied,
+   * flushes Telnyx's queued audio (`{"event":"clear"}`) and drops the rest of
+   * that model turn, so the digits never finish playing. See
+   * spoken-number-guard.ts for the allowlist contract.
+   */
+  numberGuard?: {
+    /** Text blobs whose numbers are legitimate (voicemail script, briefing, party numbers as text). */
+    seedTexts: ReadonlyArray<string>;
+    /** Known-legitimate numbers (party E.164s, configured business numbers). */
+    seedNumbers: ReadonlyArray<unknown>;
+    /**
+     * Persist the full suppressed-number list for this call (best-effort).
+     * index.ts merges it onto the handoff session context so the daily
+     * call-integrity sweep can report the attempt as BLOCKED rather than
+     * paging a human about audio nobody heard.
+     */
+    recordSuppressed?: (numbers: string[]) => Promise<void>;
+  };
+  /**
+   * DETERMINISTIC VOICEMAIL DELIVERY (outbound legs with an authored script,
+   * tenant enrolled in `voice_amd_resolution`; decided by
+   * deterministicVoicemailArmed in voicemail-mode.ts). When true,
+   * `voicemail_reached` stops handing the script to the model: the bridge
+   * stamps the verdict, mutes the model's audio for the rest of the call,
+   * refuses the model's `end_call` while the platform still owes the
+   * voicemail, and the edge greeting handler or AMD resolution sweep speaks
+   * the script over Telnyx TTS through the shared claim.
+   */
+  deterministicVoicemail?: boolean;
 };
 
 function extractModelAudioParts(message: LiveServerMessage): Array<{ dataB64: string; mimeType?: string }> {
@@ -573,7 +645,10 @@ function sendPcmToTelnyx(
 // Voice tool adapters, HTTP calls into the platform Next.js app.
 // ---------------------------------------------------------------------------
 
-type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
+// ToolResult and the wire payload it becomes live in tool-response-payload.ts:
+// the field enumeration there is pinned by a test, because an unforwarded
+// field once cost twelve days of fabricated voicemail numbers (the
+// `voicemail_reached` script never reached the model).
 
 function voiceToolPath(name: string): string {
   switch (name) {
@@ -726,6 +801,19 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let voicemailScriptGiven = false;
   let voicemailScriptGivenAtMs = 0;
   let voicemailScriptChars = 0;
+  // DETERMINISTIC VOICEMAIL: set the moment `voicemail_reached` is accepted in
+  // deterministic mode. From then on the model's audio never reaches the wire
+  // (modelAudioMuted) and its `end_call` is refused for
+  // VOICEMAIL_END_CALL_HOLD_MS, because on call 5e325829 the model ended the
+  // leg 9 seconds after the machine verdict, before any deterministic speaker
+  // could act. 0 means not pending.
+  let voicemailDeterministicPendingAtMs = 0;
+  // SPOKEN-NUMBER FIREWALL state. `modelAudioMuted` is permanent for the rest
+  // of the call (machine legs); `suppressTurnAudio` drops the remainder of the
+  // CURRENT model turn after a violation and resets at turnComplete.
+  let modelAudioMuted = false;
+  let suppressTurnAudio = false;
+  let guardCuesSent = 0;
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
@@ -805,6 +893,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     uplinkBytesPostHeader: 0,
     downlinkFrames: 0,
     downlinkBytesPostHeader: 0,
+    // Model audio chunks withheld from the wire by the deterministic-voicemail
+    // mute or the spoken-number firewall. Nonzero here plus zero suppressed
+    // numbers means the mute did the work; a spike is a model that kept
+    // talking to a mailbox.
+    mutedChunks: 0,
     // Tracks peak |sample| seen since the last heartbeat. Pure silence
     // stays <100; real speech routinely peaks >5000. Reset every heartbeat
     // tick so the next window reports its own peak rather than the running
@@ -904,6 +997,114 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    * decision is live and synchronous, and must not wait on a DB write.
    */
   const callerSpeech = createCallerSpeechLog();
+
+  // SPOKEN-NUMBER FIREWALL. Seeded here with everything known before the
+  // session opens; every later injection toward the model (coordinator cues
+  // via the sendRealtimeInput tap below, tool responses in sendToolResponse,
+  // the system instruction once composed) feeds it too, so the allowlist is
+  // exactly "what the model was legitimately given", the same contract as
+  // NO_INVENTED_CONTACT_LINE.
+  const numberGuard: SpokenNumberGuard | null = opts.numberGuard ? createSpokenNumberGuard() : null;
+  if (numberGuard && opts.numberGuard) {
+    for (const t of opts.numberGuard.seedTexts) numberGuard.allowText(t);
+    for (const n of opts.numberGuard.seedNumbers) numberGuard.allowNumber(n);
+    numberGuard.allowNumber(opts.callerE164);
+  }
+
+  /**
+   * A number left the model's mouth that nothing on this call supplied.
+   * Ordered for speed: flush Telnyx's queued audio FIRST (the digits are
+   * usually still in that queue, and every millisecond of queue drain is a
+   * digit closer to the caller's ear), then suppress the rest of the turn,
+   * then record, then correct the model.
+   */
+  const handleNumberViolations = (violations: SpokenNumberViolation[]): void => {
+    suppressTurnAudio = true;
+    try {
+      if (opts.ws.readyState === WebSocket.OPEN) opts.ws.send(telnyxClearMessage());
+    } catch (err) {
+      console.error("gemini-bridge: telnyx clear failed", err);
+    }
+    for (const v of violations) {
+      console.error("gemini-bridge: suppressed fabricated number", {
+        callControlId: opts.callControlId,
+        number: v.number,
+        muted: modelAudioMuted
+      });
+      emitDiag("voice_bridge_spoken_number_suppressed", {
+        number: v.number,
+        turn_chars: v.turnText.length,
+        muted: modelAudioMuted
+      });
+    }
+    const record = opts.numberGuard?.recordSuppressed;
+    if (record && numberGuard) {
+      void record(numberGuard.suppressedNumbers()).catch((err) => {
+        console.error("gemini-bridge: recordSuppressed failed", err);
+      });
+    }
+    // On a muted leg (machine verdict) nobody hears the model either way, so
+    // a correction would only burn tokens; the deterministic script path owns
+    // the leg. On a live leg, tell the model once or twice, then rely on
+    // suppression alone.
+    if (!modelAudioMuted && guardCuesSent < GUARD_MAX_CUES) {
+      guardCuesSent++;
+      try {
+        session.sendRealtimeInput({ text: NUMBER_SUPPRESSED_CUE });
+      } catch (err) {
+        console.error("gemini-bridge: number-suppressed cue failed", err);
+      }
+    }
+  };
+
+  /**
+   * The deterministic hold's LIFT. While the mute-and-hold is pending, poll
+   * the platform's view of the verdict: Apple call screening WITHDRAWS the
+   * machine stamp edge-side and the resolution sweep then deliberately never
+   * speaks, so without this poll a screened call that a real person answers
+   * would sit against a muted model until the hold expired (Bugbot, PR
+   * #1742). A standalone timer chain, never in `timers`: it dies with the
+   * session (`ended`), when the hold resolves either way, or when the hold
+   * window expires.
+   */
+  const startVoicemailResolutionPoll = (): void => {
+    const check = opts.voicemail?.checkResolution;
+    if (!check) return;
+    const tick = (): void => {
+      if (ended || voicemailDeterministicPendingAtMs === 0) return;
+      if (Date.now() - voicemailDeterministicPendingAtMs >= VOICEMAIL_END_CALL_HOLD_MS) return;
+      void (async () => {
+        let state: VoicemailResolutionState = "pending";
+        try {
+          state = await check();
+        } catch (err) {
+          console.error("gemini-bridge: voicemail resolution check threw", err);
+        }
+        if (ended || voicemailDeterministicPendingAtMs === 0) return;
+        if (state === "speaking") {
+          // The edge owns the leg now: its TTS is playing and
+          // call.speak.ended hangs up. The mute stays (model chatter over
+          // the script is the double-speak the claim exists to prevent),
+          // and polling is done.
+          emitDiag("voice_bridge_voicemail_resolution_speaking", {});
+          return;
+        }
+        if (state === "live") {
+          voicemailDeterministicPendingAtMs = 0;
+          modelAudioMuted = false;
+          emitDiag("voice_bridge_voicemail_mute_lifted", {});
+          try {
+            session.sendRealtimeInput({ text: VOICEMAIL_MUTE_LIFTED_CUE });
+          } catch (err) {
+            console.error("gemini-bridge: mute-lift cue failed", err);
+          }
+          return;
+        }
+        setTimeout(tick, VOICEMAIL_RESOLUTION_POLL_MS);
+      })();
+    };
+    setTimeout(tick, VOICEMAIL_RESOLUTION_POLL_MS);
+  };
 
   const transcriptRecorder: TranscriptRecorder | null = opts.transcriptAdapter
     ? createTranscriptRecorder(opts.transcriptAdapter, {
@@ -1246,7 +1447,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     emitDiag("voice_bridge_gemini_teardown", {
       ended_flag_prior_to_teardown: ended,
       uplink_bytes: diag.uplinkBytesPostHeader,
-      downlink_bytes: diag.downlinkBytesPostHeader
+      downlink_bytes: diag.downlinkBytesPostHeader,
+      muted_chunks: diag.mutedChunks,
+      suppressed_numbers: numberGuard ? numberGuard.suppressedNumbers().length : 0
     });
     if (!ended) {
       ended = true;
@@ -1454,8 +1657,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   if (hasVoicemailTool) {
     declarations.push({
       name: "voicemail_reached",
-      description:
-        "Report that this call reached a RECORDING (a voicemail greeting, an answering machine, or a mailbox menu) rather than a live person. Call this as soon as you are confident, BEFORE saying anything else. It returns `script` when there is a message to leave: read that text aloud word for word, then call end_call. When it returns no script, say nothing at all and call end_call immediately.",
+      // Deterministic mode changes the CONTRACT, so the declaration must say
+      // so: promising a `script` the response will never carry is exactly the
+      // read-a-message-you-do-not-have bind that produced the fabricated
+      // callback numbers.
+      description: opts.deterministicVoicemail
+        ? "Report that this call reached a RECORDING (a voicemail greeting, an answering machine, or a mailbox menu) rather than a live person. Call this as soon as you are confident, BEFORE saying anything else. The platform then leaves the approved message itself: after calling this, say nothing more for the rest of the call and do NOT call end_call, the call ends automatically."
+        : "Report that this call reached a RECORDING (a voicemail greeting, an answering machine, or a mailbox menu) rather than a live person. Call this as soon as you are confident, BEFORE saying anything else. It returns `script` when there is a message to leave: read that text aloud word for word, then call end_call. When it returns no script, say nothing at all and call end_call immediately.",
       parameters: { type: Type.OBJECT, properties: {}, required: [] }
     });
   }
@@ -1481,7 +1689,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // whose language the model is already choosing deliberately, and constraining
   // it would fight the prompt's instruction to follow a caller who switches
   // language mid-call.
-  const transcriptionConfig = transcriptRecorder
+  // The spoken-number guard needs the transcription stream even on a session
+  // that records no transcript (transcription is what reveals a number in the
+  // model's audio before the audio finishes playing), so the guard forces the
+  // config on. Only the RECORDING stays gated on transcriptAdapter.
+  const transcriptionConfig = transcriptRecorder || numberGuard
     ? {
         inputAudioTranscription: inputAudioTranscriptionConfig({
           established: opts.languagePrefs?.established,
@@ -1504,42 +1716,50 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
   };
 
+  // Hoisted so the spoken-number guard learns every number the instruction
+  // legitimately carries (the vault profile phone, flow-context numbers, the
+  // voicemail script's callback number) before the model can speak one.
+  const systemInstructionText = intake
+    ? intakeSystemInstruction(
+        opts.businessName,
+        intake.persona,
+        opts.businessTimezone,
+        intakeCaptureFields,
+        hasEndCall,
+        intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
+        opts.direction === "outbound",
+        intake.contextNote,
+        opts.languagePrefs,
+        hasVoicemailTool,
+        Boolean(ivrGate),
+        intake.voicemailScript,
+        Boolean(opts.deterministicVoicemail)
+      )
+    : systemInstructionForBusiness(
+        opts.businessName,
+        Boolean(opts.transfer),
+        voiceToolsReady,
+        opts.vault,
+        opts.customerMemorySummary,
+        opts.businessTimezone,
+        opts.callerIdentity,
+        hasEndCall,
+        opts.flowContextNote,
+        opts.recentInteractionsNote,
+        opts.bookingStatusNote,
+        opts.languagePrefs,
+        // Only teach the tool when it was actually declared above.
+        declarations.some((d) => d.name === "start_translator_mode")
+      );
+  numberGuard?.allowText(systemInstructionText);
+
   session = await ai.live.connect({
     model: opts.model,
     config: {
       responseModalities: [Modality.AUDIO],
       ...(speechConfig as Record<string, unknown>),
       ...(transcriptionConfig as Record<string, unknown>),
-      systemInstruction: intake
-        ? intakeSystemInstruction(
-            opts.businessName,
-            intake.persona,
-            opts.businessTimezone,
-            intakeCaptureFields,
-            hasEndCall,
-            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
-            opts.direction === "outbound",
-            intake.contextNote,
-            opts.languagePrefs,
-            hasVoicemailTool,
-            Boolean(ivrGate)
-          )
-        : systemInstructionForBusiness(
-            opts.businessName,
-            Boolean(opts.transfer),
-            voiceToolsReady,
-            opts.vault,
-            opts.customerMemorySummary,
-            opts.businessTimezone,
-            opts.callerIdentity,
-            hasEndCall,
-            opts.flowContextNote,
-            opts.recentInteractionsNote,
-            opts.bookingStatusNote,
-            opts.languagePrefs,
-            // Only teach the tool when it was actually declared above.
-            declarations.some((d) => d.name === "start_translator_mode")
-          ),
+      systemInstruction: systemInstructionText,
       tools: toolsForSession
     },
     callbacks: {
@@ -1621,32 +1841,58 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (transcriptRecorder) {
           void transcriptRecorder.ingest(message);
         }
-        for (const chunk of extractModelAudioParts(message)) {
-          try {
-            const raw = Buffer.from(chunk.dataB64, "base64");
-            if (raw.length < 2 || raw.length % 2 !== 0) continue;
-            const inSamples = new Int16Array(raw.buffer, raw.byteOffset, raw.length / 2);
-            const inRate = parsePcmRateFromMime(chunk.mimeType, GEMINI_OUTPUT_DEFAULT_RATE);
-            if (!downlinkResampler || !downlinkResampler.matchesRate(inRate)) {
-              downlinkResampler = new StreamingResampler(inRate, TELNYX_PCM_RATE);
+        // SPOKEN-NUMBER FIREWALL, and it must run BEFORE the audio loop below:
+        // when the transcription revealing a fabricated number rides the same
+        // server message as audio frames, those frames must never be sent at
+        // all, and the `clear` inside handleNumberViolations flushes whatever
+        // earlier messages already queued. Caller-side transcription feeds the
+        // allowlist (repeating back what the person said is legitimate).
+        if (numberGuard) {
+          const frame = extractTranscriptionFrame(message);
+          if (frame.callerText) numberGuard.noteCallerText(frame.callerText);
+          if (frame.assistantText) {
+            const violations = numberGuard.noteAssistantText(frame.assistantText);
+            if (violations.length > 0) handleNumberViolations(violations);
+          }
+          if (frame.turnComplete) {
+            numberGuard.endAssistantTurn();
+            suppressTurnAudio = false;
+          }
+        }
+        const audioChunks = extractModelAudioParts(message);
+        // Withheld audio is COUNTED, never silently vanished: mutedChunks in
+        // the teardown diag is how a "the AI went quiet" report is told apart
+        // from a session that generated nothing.
+        if (audioChunks.length > 0 && (modelAudioMuted || suppressTurnAudio)) {
+          diag.mutedChunks += audioChunks.length;
+        } else {
+          for (const chunk of audioChunks) {
+            try {
+              const raw = Buffer.from(chunk.dataB64, "base64");
+              if (raw.length < 2 || raw.length % 2 !== 0) continue;
+              const inSamples = new Int16Array(raw.buffer, raw.byteOffset, raw.length / 2);
+              const inRate = parsePcmRateFromMime(chunk.mimeType, GEMINI_OUTPUT_DEFAULT_RATE);
+              if (!downlinkResampler || !downlinkResampler.matchesRate(inRate)) {
+                downlinkResampler = new StreamingResampler(inRate, TELNYX_PCM_RATE);
+              }
+              const outSamples = downlinkResampler.process(inSamples);
+              if (outSamples.length === 0) continue;
+              if (!diag.firstDownlinkLogged) {
+                diag.firstDownlinkLogged = true;
+                console.log("gemini-bridge: first downlink chunk", {
+                  callControlId: opts.callControlId,
+                  mimeType: chunk.mimeType,
+                  inRate,
+                  inSamples: inSamples.length,
+                  outSamples: outSamples.length
+                });
+              }
+              diag.downlinkFrames += 1;
+              diag.downlinkBytesPostHeader += outSamples.byteLength;
+              sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
+            } catch (e) {
+              console.error("gemini-bridge: downlink chunk", e);
             }
-            const outSamples = downlinkResampler.process(inSamples);
-            if (outSamples.length === 0) continue;
-            if (!diag.firstDownlinkLogged) {
-              diag.firstDownlinkLogged = true;
-              console.log("gemini-bridge: first downlink chunk", {
-                callControlId: opts.callControlId,
-                mimeType: chunk.mimeType,
-                inRate,
-                inSamples: inSamples.length,
-                outSamples: outSamples.length
-              });
-            }
-            diag.downlinkFrames += 1;
-            diag.downlinkBytesPostHeader += outSamples.byteLength;
-            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
-          } catch (e) {
-            console.error("gemini-bridge: downlink chunk", e);
           }
         }
       },
@@ -1700,6 +1946,27 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   });
 
+  // Feed every coordinator text cue to the spoken-number guard from ONE
+  // choke point rather than at each of the dozen cue sites: a cue site added
+  // later that skipped seeding would make the guard cut a legitimately-given
+  // number as fabricated, and a false positive is the one failure this guard
+  // must never have. Installed before `sessionAssigned` flips so no cue can
+  // race past it. Same wrap-the-send pattern as tapSessionSocket below.
+  if (numberGuard) {
+    const target = session as unknown as {
+      sendRealtimeInput: (arg: Record<string, unknown>) => unknown;
+    };
+    const orig = target.sendRealtimeInput.bind(session);
+    target.sendRealtimeInput = (arg: Record<string, unknown>) => {
+      try {
+        if (arg && typeof arg.text === "string") numberGuard.allowText(arg.text);
+      } catch {
+        // the guard must never break a send
+      }
+      return orig(arg);
+    };
+  }
+
   sessionAssigned = true;
   // Flush a greeting cue that raced connect: `setupComplete` frequently
   // arrives while `ai.live.connect` is still awaiting (the SDK dispatches
@@ -1722,6 +1989,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     sdk_version: GENAI_SDK_VERSION,
     model: opts.model,
     transcription_enabled: Boolean(transcriptRecorder),
+    number_guard: Boolean(numberGuard),
+    deterministic_voicemail: Boolean(opts.deterministicVoicemail),
     transfer_enabled: Boolean(opts.transfer),
     voice_tools_ready: voiceToolsReady,
     session_max_ms: opts.sessionMaxMs,
@@ -1743,24 +2012,29 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       ok: response.ok,
       detail: typeof response.detail === "string" ? response.detail.slice(0, 120) : null,
       data_type: dataType,
+      // `script` earns an explicit flag: for twelve days the voicemail script
+      // was silently dropped from this payload, and this diag's
+      // data_type:"none" is what finally proved it on the wire.
+      has_script: typeof response.script === "string" && response.script !== "",
       data_keys:
         response.data && typeof response.data === "object" && !Array.isArray(response.data)
           ? Object.keys(response.data as Record<string, unknown>).slice(0, 20)
           : null
     });
     pushTrail("toolResp:" + name);
+    // The payload builder lives in tool-response-payload.ts, where a test pins
+    // every ToolResult field to the wire.
+    const payload = toolResponsePayload(response);
+    // Everything a tool hands the model is a legitimate source for spoken
+    // numbers (slot confirmations, the voicemail script, capture echoes).
+    numberGuard?.allowText(JSON.stringify(payload));
     try {
       session.sendToolResponse({
         functionResponses: [
           {
             id,
             name,
-            response: {
-              ok: response.ok,
-              detail: response.detail ?? (response.ok ? "ok" : "error"),
-              ...(typeof response.message === "string" ? { message: response.message } : {}),
-              ...(response.data !== undefined ? { data: response.data } : {})
-            }
+            response: payload
           }
         ]
       });
@@ -2149,7 +2423,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // or recorded. `batchRequestsEndCall` covers the same-turn pair: the
         // capability starts synchronously here, before the loop reaches the
         // batch's own end_call, so the flag alone would miss it.
-        if (endCallRequested || batchRequestsEndCall) {
+        //
+        // Deterministic mode narrows this to `endCallRequested` only: a
+        // same-batch end_call arriving AFTER this handler has not scheduled
+        // anything yet, and the deterministic branch below sets the pending
+        // stamp synchronously, so when the loop reaches that end_call it is
+        // deferred and the platform keeps the leg for the scripted speak.
+        // With an end_call from an EARLIER turn the hangup timer is already
+        // burning and nothing can be delivered, so the refusal stands.
+        if (endCallRequested || (batchRequestsEndCall && !opts.deterministicVoicemail)) {
           sendToolResponse(call.id, name, {
             ok: false,
             detail: "the call is already ending: leave no message and say nothing"
@@ -2185,6 +2467,70 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
               "that is the referral service's own menu, not a mailbox: stay silent, press the accept digit, and wait to be connected"
           });
           emitDiag("voice_bridge_voicemail_before_accept", {});
+          continue;
+        }
+        // DETERMINISTIC MODE: the verdict is accepted and the model's job on
+        // this call is OVER. On 2026-08-29 (call 5e325829) the model was
+        // handed this exact moment and betrayed it: it claimed the voicemail,
+        // rewrote the script with an invented "offer came through" and a
+        // fabricated callback number, and ended the leg 9 seconds after the
+        // verdict, before the resolution sweep's 25s grace could act. So in
+        // this mode the tool response carries NO script, the model's audio is
+        // muted for the rest of the call (plus a queue flush for anything
+        // already in flight), the capability stamps the verdict WITHOUT
+        // claiming the speak, and the edge (greeting.ended handler, else the
+        // AMD resolution sweep) speaks the authored script over Telnyx TTS,
+        // verbatim by construction. The pending stamp is set SYNCHRONOUSLY so
+        // a same-batch end_call reaching the loop after this is deferred.
+        if (opts.deterministicVoicemail) {
+          // First report starts the clock; a repeat must NOT re-credit the
+          // end_call hold, or a model looping this tool could pin the leg
+          // past the failsafe window.
+          const firstDeterministicReport = voicemailDeterministicPendingAtMs === 0;
+          if (firstDeterministicReport) {
+            voicemailDeterministicPendingAtMs = Date.now();
+          }
+          modelAudioMuted = true;
+          try {
+            if (opts.ws.readyState === WebSocket.OPEN) opts.ws.send(telnyxClearMessage());
+          } catch (err) {
+            console.error("gemini-bridge: telnyx clear failed (voicemail)", err);
+          }
+          void (async () => {
+            let result: Awaited<ReturnType<VoicemailCapability["execute"]>>;
+            try {
+              result = await opts.voicemail!.execute();
+            } catch (err) {
+              console.error("gemini-bridge: voicemail_reached execute threw", err);
+              result = { ok: false, detail: "voicemail record failed" };
+            }
+            if (!result.ok) {
+              // The stamp never landed, so no resolver is coming for this
+              // leg: lift the end_call hold and tell the model to end it.
+              // The mute stays, model audio into a mailbox is never useful.
+              voicemailDeterministicPendingAtMs = 0;
+              sendToolResponse(call.id, name, {
+                ok: false,
+                detail: "voicemail record failed: say nothing and call end_call now"
+              });
+            } else {
+              // The resolution poll (the lift for a verdict the platform
+              // later withdraws) starts only NOW, with the stamp known
+              // written: a tick that reads the session before the stamp
+              // lands would see the key absent and misread a fresh no-AMD
+              // leg as a withdrawn verdict (Bugbot, PR #1742). The
+              // capability's own read is belt to this ordering's braces.
+              if (firstDeterministicReport) startVoicemailResolutionPoll();
+              sendToolResponse(call.id, name, {
+                ok: true,
+                detail: VOICEMAIL_DETERMINISTIC_TOOL_REPLY
+              });
+            }
+            emitDiag("voice_bridge_voicemail_deterministic", {
+              ok: result.ok,
+              detail: result.detail ?? null
+            });
+          })();
           continue;
         }
         // Answered on its own task so the model's turn completes promptly: it
@@ -2233,6 +2579,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
 
       if (name === "end_call" && opts.hangup) {
+        // The platform still owes this mailbox the scripted voicemail: refuse
+        // to end the leg. On 2026-08-29 the model's end_call killed the call
+        // 9 seconds after its own machine verdict, so no deterministic
+        // speaker ever got a turn. Bounded by VOICEMAIL_END_CALL_HOLD_MS so a
+        // broken resolver can never pin a leg: past the window the refusal
+        // lifts, and the mailbox's own recording limit bounds the leg anyway.
+        if (
+          voicemailDeterministicPendingAtMs > 0 &&
+          Date.now() - voicemailDeterministicPendingAtMs < VOICEMAIL_END_CALL_HOLD_MS
+        ) {
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: VOICEMAIL_DETERMINISTIC_END_CALL_REPLY
+          });
+          emitDiag("voice_bridge_end_call_deferred_for_voicemail", {
+            pending_ms: Date.now() - voicemailDeterministicPendingAtMs
+          });
+          continue;
+        }
         const reason =
           typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
         // Acknowledge immediately so the model's turn completes cleanly, then

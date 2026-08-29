@@ -66,3 +66,15 @@ export function telnyxMediaMessageFromPcmBase64(base64Pcm: string): string {
     media: { payload: base64Pcm }
   });
 }
+
+/**
+ * Telnyx bidirectional-stream buffer flush: "will immediately stop the media
+ * playing on the stream and clear the media queue" (Telnyx media-streaming
+ * docs). Gemini generates audio faster than the line plays it, so the queue
+ * routinely holds several seconds of not-yet-heard speech; sending this the
+ * moment the output transcription reveals a fabricated phone number is what
+ * stops the digits from ever reaching the caller's ear.
+ */
+export function telnyxClearMessage(): string {
+  return JSON.stringify({ event: "clear" });
+}

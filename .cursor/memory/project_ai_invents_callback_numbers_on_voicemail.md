@@ -1,6 +1,6 @@
 ---
 name: ai-invents-callback-numbers-on-voicemail
-description: "Outbound AI voicemails ad-lib a sign-off with a FABRICATED callback number before calling voicemail_reached; 13 wrong numbers given to Amy's leads in 45 days"
+description: "SOLVED 2026-08-29 (#1742): the voicemail script NEVER reached the model (tool response dropped the field), so it reconstructed messages and fabricated 16 callback numbers; fixed by payload pin + deterministic TTS delivery + spoken-number firewall (Telnyx clear)"
 metadata: 
   node_type: memory
   type: project
@@ -186,6 +186,74 @@ this is an Amy-volume problem today.
   helps calls where Telnyx delivered a verdict (about half right now);
   verdict-less machine calls (Sandy's shape) remain model-only until the
   Telnyx ticket resolves.
+
+## 2026-08-29: the REAL root cause, found on the failure that beat every fix
+
+Call `5e325829` (Charisa Deremiah, Clever seller): the model did everything
+right, `voicemail_reached` BEFORE speaking (verdict at 3.7s, tool at 5s,
+claim won), then spoke a compressed REWRITE with an invented "offer came
+through" and fabricated 480-400-0588, and ended the leg at 11s. Its claim
+had stood the #1674 sweep down (claimed legs leave the sweep's queue), so
+every deterministic layer watched the model betray the read.
+
+**The script never reached the model. Not once, on any call since the tool
+shipped (#1428, Aug 17).** `sendToolResponse` forwarded only
+ok/detail/message/data; the handler passed `script` through an object
+SPREAD, which bypasses TypeScript's excess-property check, so it compiled
+and was dropped on the wire. The tool-response diag proves it per call:
+`data_type: "none", data_keys: null`. The model held "read this message
+aloud word for word" + a declaration promising `script`, and no script, so
+it reconstructed a voicemail from its briefing, which never contains a
+callback number. Every "correct" script read in old transcripts was the
+`[Voicemail]` BADGE turn (code-written) or predates #1716, when the script
+text still sat in the persona. #1716 removed that fallback when the tool
+exists, leaving the inbound path fully dependent on the dropped field.
+
+**Lesson: an excess object property passed through a spread compiles and
+vanishes.** When a tool contract promises a field, pin the wire payload
+builder with a test that walks every field of the source type
+(`vps/voice-bridge/src/tool-response-payload.ts` +
+`tests/voice-bridge-tool-response-payload.test.ts`).
+
+## SHIPPED 2026-08-29 (PR #1742): script restored, and the wire stops trusting the model
+
+- **Payload pin**: `script`/`alreadyBeingLeft` now reach the wire; test
+  walks every ToolResult field. Fixes reads for ALL tenants incl. the
+  #1716 inbound transfer path.
+- **Deterministic voicemail delivery** (outbound + authored script + tenant
+  enrolled in `voice_amd_resolution`): `voicemail_reached` becomes a pure
+  verdict. Bridge stamps `machine_stamped_at` itself when Telnyx never did,
+  does NOT claim, MUTES model audio for the rest of the call, flushes the
+  Telnyx queue, refuses model `end_call` for 120s
+  (`voicemail-mode.ts`). Delivery: greeting.ended handler at the beep, else
+  the #1674 sweep at stamp+25s, Telnyx TTS through the shared claim,
+  verbatim BY CONSTRUCTION. Tool declaration and persona line switch to
+  report-and-stay-silent in this mode (never both procedures, #1716
+  lesson).
+- **Spoken-number firewall** (`voice_spoken_number_guard` platform-settings
+  gate, fail-OFF): output transcription scanned against a per-call
+  allowlist = everything the bridge fed the model (instruction, cues via a
+  sendRealtimeInput tap, tool responses, brief) + caller-spoken numbers +
+  party/configured numbers. Violation: Telnyx `{"event":"clear"}` flushes
+  the queued not-yet-played audio (generation runs ~2x realtime, digits are
+  still queued), rest of turn dropped, corrective cue on live legs (max 2),
+  suppression recorded on session context. Extraction is a lockstep copy of
+  the sweep's, pinned by `tests/spoken-number-guard-lockstep.test.ts`.
+- **Persona names THE callback number** from the authored script (every
+  fabrication happened where the model held none).
+- **Sweep reconciliation**: a firewalled number reports as
+  `voice_call_integrity_blocked` (level warn, tail line on the email),
+  never a failure page for audio nobody heard; deduped with the failure
+  event.
+
+Rollout: fleet redeploy required for the bridge; Amy enrolled in
+`voice_spoken_number_guard` post-deploy (deterministic mode arms from her
+existing `voice_amd_resolution` enrollment). Grade with transcripts +
+`debug/amd-resolution-measure.ts`; watch `voice_bridge_spoken_number_suppressed`,
+`voice_bridge_voicemail_deterministic`, `voice_bridge_end_call_deferred_for_voicemail`,
+teardown `muted_chunks`. Known limits: digit-form transcriptions only
+(words-spelled-out slips the regex), and a badly lagging transcription
+could lose the race on a long turn.
 
 ## Original fix direction (superseded by the above)
 

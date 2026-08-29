@@ -36,6 +36,7 @@ import {
   detectCallIntegrity,
   formatCallIntegrityAlert,
   kindPhrase,
+  partitionBlockedFindings,
   spokenNumberForm,
   type CallIntegrityAlertItem,
   type CallIntegrityFinding,
@@ -56,6 +57,14 @@ const LOOKBACK_HOURS = 26;
 const PAGE = 1000;
 
 const EVENT = "voice_call_integrity_failure";
+
+/**
+ * A fabrication the bridge's spoken-number guard cut before the audio played.
+ * Logged at level `warn` under its own event so the fleet dashboard (which
+ * reads level `error` only) never shows a client an incident nobody heard,
+ * while the daily count of ATTEMPTS stays on the record.
+ */
+const BLOCKED_EVENT = "voice_call_integrity_blocked";
 
 serve(async (req: Request) => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -92,6 +101,7 @@ serve(async (req: Request) => {
   const calls: Array<{
     id: string;
     business_id: string;
+    call_control_id: string | null;
     caller_e164: string | null;
     forwarded_to_e164: string | null;
     started_at: string | null;
@@ -99,7 +109,7 @@ serve(async (req: Request) => {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from("voice_call_transcripts")
-      .select("id, business_id, caller_e164, forwarded_to_e164, started_at")
+      .select("id, business_id, call_control_id, caller_e164, forwarded_to_e164, started_at")
       // Exclude only the non-terminal state, rather than allow-listing
       // "completed". A call still in progress can be mid-IVR with a couple of
       // greetings behind it, which scores as talked_to_recording right up
@@ -131,12 +141,14 @@ serve(async (req: Request) => {
 
   // Already-reported calls, so a re-run over the overlapping window does not
   // log the same failure twice. An alert that repeats itself gets muted.
+  // Blocked rows join the same set: a call whose fabrication was reported as
+  // blocked yesterday must not be re-scanned into a fresh row every day.
   const reported = new Set<string>();
   {
     const { data } = await supabase
       .from("system_logs")
       .select("payload")
-      .eq("event", EVENT)
+      .in("event", [EVENT, BLOCKED_EVENT])
       .gte("created_at", since)
       .limit(PAGE);
     for (const row of data ?? []) {
@@ -248,6 +260,7 @@ serve(async (req: Request) => {
   }
 
   let scanned = 0;
+  let blockedCount = 0;
   const alerts: CallIntegrityAlertItem[] = [];
   for (const call of calls) {
     if (reported.has(call.id)) continue;
@@ -288,11 +301,60 @@ serve(async (req: Request) => {
     // party said on this very call, which is already loaded. Unlike the number
     // allowlist there is nothing to fail-open on, so the rule runs on every
     // call regardless of `allowlistOk`.
-    const findings: CallIntegrityFinding[] = detectCallIntegrity(turns, {
+    const allFindings: CallIntegrityFinding[] = detectCallIntegrity(turns, {
       ...(allowedNumbers ? { allowedNumbers } : {}),
       allowedAmounts: callerAmounts(turns)
     });
-    for (const finding of findings) {
+
+    // Bridge-blocked fabrications: the spoken-number guard cuts a fabricated
+    // number's audio before it finishes playing and records the cut on the
+    // handoff session context. The transcript still holds what the model
+    // GENERATED, so match findings against that record and report the blocked
+    // ones as attempts, not failures. Fetched only when a number finding
+    // exists, which on a normal day is zero calls; a failed fetch simply
+    // leaves `suppressed` empty, and the finding reports as a failure, the
+    // pre-guard behavior.
+    let suppressed: unknown = null;
+    if (
+      call.call_control_id &&
+      allFindings.some((f) => f.kind === "invented_contact_number")
+    ) {
+      const { data: sess } = await supabase
+        .from("voice_handoff_sessions")
+        .select("context")
+        .eq("call_control_id", call.call_control_id)
+        .maybeSingle();
+      suppressed =
+        ((sess as { context?: { suppressed_spoken_numbers?: unknown } } | null)?.context
+          ?.suppressed_spoken_numbers) ?? null;
+    }
+    const { failures, blocked } = partitionBlockedFindings(allFindings, suppressed);
+    for (const finding of blocked) {
+      blockedCount++;
+      await systemLog(supabase, {
+        businessId: call.business_id,
+        source: "voice",
+        // `warn`, deliberately unlike the failures below: the fleet dashboard
+        // reads level `error` only, and this incident never reached a human
+        // ear. The row exists so fabrication ATTEMPTS stay countable per
+        // tenant, and its transcript_id keeps the dedupe honest.
+        level: "warn",
+        event: BLOCKED_EVENT,
+        message:
+          `The AI tried to give out a number it does not own ` +
+          `(${call.caller_e164 ?? "unknown caller"}); the spoken-number guard cut the audio ` +
+          `before the number finished playing. ${finding.detail}`,
+        payload: {
+          transcript_id: call.id,
+          kind: finding.kind,
+          blocked: true,
+          caller_e164: call.caller_e164,
+          started_at: call.started_at,
+          detail: finding.detail
+        }
+      });
+    }
+    for (const finding of failures) {
       alerts.push({
         ...finding,
         transcriptId: call.id,
@@ -337,7 +399,8 @@ serve(async (req: Request) => {
     lookback_hours: LOOKBACK_HOURS,
     calls_in_window: calls.length,
     scanned,
-    findings: alerts.length
+    findings: alerts.length,
+    blocked: blockedCount
   });
 
   // Email, so a finding reaches someone instead of waiting to be found. The
@@ -362,10 +425,21 @@ serve(async (req: Request) => {
         findings: alerts.length
       });
     } else {
+      // Blocked attempts ride the failure email as a tail line rather than
+      // triggering one of their own: nobody heard them, so they are context,
+      // not a page. The system_logs warn rows carry the per-call detail.
+      const blockedTail =
+        blockedCount > 0
+          ? `\n• plus ${blockedCount} fabrication attempt${blockedCount === 1 ? "" : "s"} ` +
+            "blocked by the spoken-number guard before the audio played"
+          : "";
       alertResult = await sendAdminAlertEmail(
         (url, init) => fetch(url, init),
         config,
-        { subject: callIntegrityAlertSubject(alerts), text: formatCallIntegrityAlert(alerts) }
+        {
+          subject: callIntegrityAlertSubject(alerts),
+          text: formatCallIntegrityAlert(alerts) + blockedTail
+        }
       );
       if (alertResult !== "sent") {
         // The system_logs rows are already written, so a mail outage is not a
@@ -385,6 +459,7 @@ serve(async (req: Request) => {
       ok: true,
       scanned,
       findings: alerts.length,
+      blocked: blockedCount,
       alert: alertResult,
       summary: formatCallIntegrityAlert(alerts)
     }),
