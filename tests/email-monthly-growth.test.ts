@@ -164,7 +164,14 @@ describe("buildMonthlyGrowthEmail", () => {
       "New Coworker Team",
       "New Coworker Group",
       "New Coworker HQ",
-      "New Coworker LLC"
+      "New Coworker LLC",
+      // The legal forms almost always arrive punctuated, and they are exactly
+      // the words on the suffix list, so tokenizing on whitespace alone left
+      // these falling through to "Hi New,".
+      "New Coworker, LLC",
+      "New Coworker Inc.",
+      "New Coworker Ltd.",
+      "New Coworker & Co."
     ]) {
       expect(
         buildMonthlyGrowthEmail({ ...base, businessName: "New Coworker", ownerName, report })!.text

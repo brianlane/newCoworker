@@ -147,9 +147,15 @@ function greetingSuffix(
   const folded = name.toLowerCase();
   const business = businessName.trim().toLowerCase();
   if (business && folded.startsWith(business)) {
-    const rest = folded.slice(business.length).trim();
-    // "" means the two are the same string, which reads as a person here.
-    if (rest && rest.split(/\s+/).every((w) => ORG_SUFFIX_WORDS.has(w))) return "";
+    // Split on anything that is not alphanumeric, not just whitespace. The
+    // suffix list is precisely the set of words that normally arrive
+    // punctuated ("New Coworker, LLC", "New Coworker Inc."), so tokenizing on
+    // spaces alone left `, llc` and `inc.` unmatched and fell straight back to
+    // "Hi New," for the exact names this test exists to catch.
+    const rest = folded.slice(business.length).split(/[^a-z0-9]+/).filter(Boolean);
+    // No leftover tokens means the two are the same string, which reads as a
+    // person here.
+    if (rest.length > 0 && rest.every((w) => ORG_SUFFIX_WORDS.has(w))) return "";
   }
 
   // `split(sep, 1).join("")` rather than `[0]`: indexing needs a fallback for
