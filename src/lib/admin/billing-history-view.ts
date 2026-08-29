@@ -9,7 +9,7 @@
 import type { BillingHistoryCell } from "@/lib/admin/billing-history";
 import { vendorCents } from "@/lib/admin/billing-history";
 
-export type MetricKey =
+type MetricKey =
   | "telnyx"
   | "gemini"
   | "vendor"

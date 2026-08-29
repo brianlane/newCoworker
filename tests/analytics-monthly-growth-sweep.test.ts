@@ -1,13 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import {
-  GROWTH_EMAIL_BATCH_LIMIT,
-  GROWTH_EMAIL_SEND_DAY,
-  claimGrowthEmail,
-  isSendWindowOpen,
-  preflightSkip,
-  sweepMonthlyGrowthEmails
-} from "@/lib/analytics/monthly-growth-sweep";
-import { composeGrowthReport, type GrowthReport } from "@/lib/analytics/growth-report";
+import { sweepMonthlyGrowthEmails } from "@/lib/analytics/monthly-growth-sweep";
+import type { GrowthReport } from "@/lib/analytics/growth-report";
 import type { BusinessRow } from "@/lib/db/businesses";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -28,25 +21,50 @@ const biz = (over: Partial<BusinessRow> & { monthly_growth_email_sent_for?: stri
     ...over
   }) as BusinessRow & { monthly_growth_email_sent_for?: string | null };
 
-function reportWith(over: { leads?: number; texts?: number; calls?: number } = {}): GrowthReport {
-  return composeGrowthReport({
-    months: ["2026-07", "2026-08"],
-    snapshots: [
-      {
-        snapshot_date: "2026-08-01",
-        calls: over.calls ?? 3,
-        sms_sent: over.texts ?? 30,
-        voice_minutes: 6
-      }
-    ],
-    leadsByMonth: new Map([
-      ["2026-07", 10],
-      ["2026-08", over.leads ?? 20]
-    ])
-  });
+/**
+ * The sweep takes `loadReport` as a dependency, so a report is plain input
+ * here. Its own construction is asserted in analytics-growth-report.test.ts
+ * against the real loader; duplicating that here would only re-test the
+ * producer through a second door.
+ */
+function month(name: string, over: Partial<GrowthReport["months"][number]> = {}) {
+  return {
+    month: name,
+    leads: 20,
+    texts: 30,
+    calls: 3,
+    voiceMinutes: 6,
+    coveredDays: 31,
+    daysInMonth: 31,
+    ...over
+  };
 }
 
-const EMPTY_REPORT = composeGrowthReport({ months: [], snapshots: [], leadsByMonth: new Map() });
+function reportWith(over: { leads?: number; texts?: number; calls?: number } = {}): GrowthReport {
+  const previous = month("2026-07", { leads: 10 });
+  const latest = month("2026-08", {
+    leads: over.leads ?? 20,
+    texts: over.texts ?? 30,
+    calls: over.calls ?? 3
+  });
+  return {
+    months: [previous, latest],
+    latest,
+    previous,
+    changes: null,
+    projection: null,
+    latestMonthIncomplete: false
+  };
+}
+
+const EMPTY_REPORT: GrowthReport = {
+  months: [],
+  latest: null,
+  previous: null,
+  changes: null,
+  projection: null,
+  latestMonthIncomplete: false
+};
 
 /** Client mock that only has to answer the claim update. */
 function claimClient(won = true) {
@@ -97,11 +115,14 @@ describe("timing", () => {
     expect(result.month).toBe(MONTH);
   });
 
-  it("waits until the previous month's snapshots have settled", () => {
-    expect(GROWTH_EMAIL_SEND_DAY).toBe(3);
-    expect(isSendWindowOpen(new Date("2026-09-01T00:00:00Z"))).toBe(false);
-    expect(isSendWindowOpen(new Date("2026-09-02T23:59:00Z"))).toBe(false);
-    expect(isSendWindowOpen(new Date("2026-09-03T00:00:00Z"))).toBe(true);
+  it("waits until the previous month's snapshots have settled, then sends", async () => {
+    for (const iso of ["2026-09-01T00:00:00Z", "2026-09-02T23:59:00Z"]) {
+      const d = deps({ now: new Date(iso) });
+      expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(0);
+      expect(d.loadBusinesses).not.toHaveBeenCalled();
+    }
+    const d = deps({ now: new Date("2026-09-03T00:00:00Z") });
+    expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(1);
   });
 
   it("does nothing at all before the send day", async () => {
@@ -117,41 +138,47 @@ describe("timing", () => {
   });
 });
 
-describe("preflightSkip", () => {
-  it("passes a healthy, subscribed, unsent business", () => {
-    expect(preflightSkip(biz(), MONTH, false)).toBeNull();
+describe("who is skipped", () => {
+  const only = async (over: Record<string, unknown>) => {
+    const d = deps(over);
+    const result = await sweepMonthlyGrowthEmails(d);
+    return { result, d };
+  };
+
+  it("skips one already stamped with this month", async () => {
+    const { result } = await only({
+      loadBusinesses: vi.fn(async () => [biz({ monthly_growth_email_sent_for: MONTH })])
+    });
+    expect(result.skipReasons).toEqual({ already_sent: 1 });
   });
 
-  it("skips one already sent this month", () => {
-    expect(preflightSkip(biz({ monthly_growth_email_sent_for: MONTH }), MONTH, false)).toBe(
-      "already_sent"
-    );
+  it("still sends when the stamp is an older month", async () => {
+    const { result } = await only({
+      loadBusinesses: vi.fn(async () => [biz({ monthly_growth_email_sent_for: "2026-07" })])
+    });
+    expect(result.sent).toBe(1);
   });
 
-  it("still sends when the stamp is an older month", () => {
-    expect(preflightSkip(biz({ monthly_growth_email_sent_for: "2026-07" }), MONTH, false)).toBeNull();
-  });
-
-  it("skips a wiped tenant, one with no owner email, and one unsubscribed", () => {
-    expect(preflightSkip(biz({ status: "wiped" }), MONTH, false)).toBe("wiped");
-    expect(preflightSkip(biz({ owner_email: "  " }), MONTH, false)).toBe("no_owner_email");
-    expect(preflightSkip(biz(), MONTH, true)).toBe("unsubscribed");
+  it("skips a wiped tenant and one with no owner email", async () => {
+    const { result } = await only({
+      loadBusinesses: vi.fn(async () => [
+        biz({ id: "a", status: "wiped" }),
+        biz({ id: "b", owner_email: "  " })
+      ])
+    });
+    expect(result.skipReasons).toEqual({ wiped: 1, no_owner_email: 1 });
   });
 });
 
-describe("claimGrowthEmail", () => {
-  it("stamps the month and reports the win", async () => {
+describe("the claim", () => {
+  it("stamps the month before sending", async () => {
     const { client, update } = claimClient(true);
-    await expect(claimGrowthEmail(client, "biz-1", MONTH)).resolves.toBe(true);
+    const d = deps({ client });
+    await sweepMonthlyGrowthEmails(d);
     expect(update).toHaveBeenCalledWith({ monthly_growth_email_sent_for: MONTH });
   });
 
-  it("reports a loss when the row was already claimed", async () => {
-    const { client } = claimClient(false);
-    await expect(claimGrowthEmail(client, "biz-1", MONTH)).resolves.toBe(false);
-  });
-
-  it("throws on a write error rather than silently not sending", async () => {
+  it("records a write error as a per-business error rather than sending anyway", async () => {
     const client = {
       from: () => ({
         update: () => ({
@@ -165,9 +192,12 @@ describe("claimGrowthEmail", () => {
         })
       })
     } as never;
-    await expect(claimGrowthEmail(client, "biz-1", MONTH)).rejects.toThrow(
-      /claimGrowthEmail: denied/
-    );
+    const d = deps({ client });
+    const result = await sweepMonthlyGrowthEmails(d);
+    expect(result.errors).toEqual([
+      { businessId: "biz-1", message: "claimGrowthEmail: denied" }
+    ]);
+    expect(d.sendEmail).not.toHaveBeenCalled();
   });
 });
 
@@ -227,11 +257,15 @@ describe("sweepMonthlyGrowthEmails", () => {
     // A tenant whose newest MEASURED month is July while the pass is claiming
     // August: sending would stamp August and mail a July recap, and the stamp
     // would then stop August ever going out.
-    const stale = composeGrowthReport({
-      months: ["2026-07"],
-      snapshots: [{ snapshot_date: "2026-07-15", calls: 3, sms_sent: 30, voice_minutes: 6 }],
-      leadsByMonth: new Map([["2026-07", 20]])
-    });
+    const july = month("2026-07");
+    const stale: GrowthReport = {
+      months: [july],
+      latest: july,
+      previous: null,
+      changes: null,
+      projection: null,
+      latestMonthIncomplete: false
+    };
     const d = deps({ loadReport: vi.fn(async () => stale) });
     const result = await sweepMonthlyGrowthEmails(d);
     expect(result.skipReasons).toEqual({ no_data_for_month: 1 });
@@ -289,12 +323,10 @@ describe("sweepMonthlyGrowthEmails", () => {
   });
 
   it("caps one pass so a large fleet cannot run past the route budget", async () => {
-    const many = Array.from({ length: GROWTH_EMAIL_BATCH_LIMIT + 5 }, (_, i) =>
-      biz({ id: `biz-${i}` })
-    );
+    const many = Array.from({ length: 205 }, (_, i) => biz({ id: `biz-${i}` }));
     const d = deps({ loadBusinesses: vi.fn(async () => many) });
     const result = await sweepMonthlyGrowthEmails(d);
-    expect(result.scanned).toBe(GROWTH_EMAIL_BATCH_LIMIT);
+    expect(result.scanned).toBe(200);
   });
 
   it("falls back to the app URL env and the wall clock when neither is given", async () => {

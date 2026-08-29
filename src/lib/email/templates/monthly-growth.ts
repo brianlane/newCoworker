@@ -54,7 +54,7 @@ export type MonthlyGrowthEmail = {
 };
 
 /** "2026-08" -> "August 2026", in the recipient's locale. */
-export function monthLabel(month: string, locale: AppLocale): string {
+function monthLabel(month: string, locale: AppLocale): string {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m! - 1, 1)).toLocaleDateString(
     locale === "es" ? "es-US" : "en-US",
@@ -63,7 +63,7 @@ export function monthLabel(month: string, locale: AppLocale): string {
 }
 
 /** The month after `month`, as "YYYY-MM". */
-export function nextMonthOf(month: string): string {
+function nextMonthOf(month: string): string {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 1)).toISOString().slice(0, 7);
 }
@@ -75,7 +75,7 @@ export function nextMonthOf(month: string): string {
  * monthly note reads like a form letter, which is exactly what this is trying
  * not to be.
  */
-export function greetingSuffix(ownerName: string | null | undefined): string {
+function greetingSuffix(ownerName: string | null | undefined): string {
   // `split(sep, 1).join("")` rather than `[0]`: indexing needs a fallback for
   // an empty result that split can never produce, and an unreachable fallback
   // is a branch nothing can test.
@@ -89,7 +89,7 @@ function metricValue(metric: GrowthMetric, value: number): string {
 }
 
 /** "+42%" / "-8%" / the localized "new" when there was no previous month. */
-export function changeLabel(percent: number | null, newLabel: string): string {
+function changeLabel(percent: number | null, newLabel: string): string {
   if (percent === null) return newLabel;
   const rounded = Math.round(percent);
   return `${rounded > 0 ? "+" : ""}${rounded}%`;

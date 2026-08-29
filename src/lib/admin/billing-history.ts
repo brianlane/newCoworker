@@ -35,7 +35,7 @@ import { listDailyUsageSince, listVoiceSettlementsSince } from "@/lib/db/usage";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** How many months the page shows by default, newest last. */
-export const DEFAULT_HISTORY_MONTHS = 12;
+const DEFAULT_HISTORY_MONTHS = 12;
 
 /** Micro-USD (1e-6 USD) per cent. */
 const MICROS_PER_CENT = 10_000;
@@ -77,7 +77,7 @@ export type BillingHistory = {
   newestMonthElapsed: number;
 };
 
-export function emptyCell(): BillingHistoryCell {
+function emptyCell(): BillingHistoryCell {
   return {
     messages: 0,
     textUnits: 0,
@@ -95,12 +95,12 @@ export function vendorCents(cell: BillingHistoryCell): number {
 }
 
 /** "2026-08" for a UTC instant. */
-export function monthKey(date: Date): string {
+function monthKey(date: Date): string {
   return date.toISOString().slice(0, 7);
 }
 
 /** "2026-08" for a "YYYY-MM-DD" day string. */
-export function monthKeyOfYmd(ymd: string): string {
+function monthKeyOfYmd(ymd: string): string {
   return ymd.slice(0, 7);
 }
 
@@ -109,7 +109,7 @@ export function monthKeyOfYmd(ymd: string): string {
  * `count` is clamped to at least one month so a caller cannot ask for an
  * empty window and get a page with no columns.
  */
-export function historyMonths(now: Date, count: number): string[] {
+function historyMonths(now: Date, count: number): string[] {
   const wanted = Math.max(1, Math.trunc(count));
   const months: string[] = [];
   const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -121,7 +121,7 @@ export function historyMonths(now: Date, count: number): string[] {
 }
 
 /** First UTC day of the window, as "YYYY-MM-DD", for the `gte` reads. */
-export function windowStartYmd(months: string[]): string {
+function windowStartYmd(months: string[]): string {
   return `${months[0]}-01`;
 }
 
@@ -131,7 +131,7 @@ export function windowStartYmd(months: string[]): string {
  * The current month is always short, so comparing it raw against a finished
  * month reads as a collapse in usage. The page pro-rates with this instead.
  */
-export function monthElapsedFraction(now: Date): number {
+function monthElapsedFraction(now: Date): number {
   const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
   return (now.getTime() - start) / (end - start);
@@ -141,38 +141,38 @@ export function monthElapsedFraction(now: Date): number {
 // Composition
 // ---------------------------------------------------------------------------
 
-export type DailyUsageInput = {
+type DailyUsageInput = {
   business_id: string;
   usage_date: string;
   sms_sent: number | null;
   sms_text_units: number | null;
 };
 
-export type VoiceSettlementInput = {
+type VoiceSettlementInput = {
   business_id: string;
   created_at: string;
   billable_seconds: number | null;
 };
 
-export type TelnyxCostInput = {
+type TelnyxCostInput = {
   business_id: string | null;
   day: string;
   cost_micros: number;
 };
 
-export type GeminiSpendInput = {
+type GeminiSpendInput = {
   business_id: string;
   day: string;
   cost_micros: number;
 };
 
-export type StripeFeeInput = {
+type StripeFeeInput = {
   business_id: string | null;
   month_start: string;
   charge_gross_cents: number;
 };
 
-export type ComposeBillingHistoryInput = {
+type ComposeBillingHistoryInput = {
   months: string[];
   businesses: BusinessRow[];
   usage: DailyUsageInput[];
@@ -197,7 +197,7 @@ export const UNATTRIBUTED_KEY = "__unattributed__";
  * had tenants that never sent anything, and a page of zero rows buries the
  * ones that moved.
  */
-export function composeBillingHistory(input: ComposeBillingHistoryInput): BillingHistory {
+function composeBillingHistory(input: ComposeBillingHistoryInput): BillingHistory {
   const { months } = input;
   const index = new Map(months.map((m, i) => [m, i]));
   const grid = new Map<string, BillingHistoryCell[]>();

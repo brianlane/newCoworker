@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { emptyCell } from "@/lib/admin/billing-history";
+import type { BillingHistoryCell } from "@/lib/admin/billing-history";
+
+const EMPTY: BillingHistoryCell = {
+  messages: 0,
+  textUnits: 0,
+  voiceMinutes: 0,
+  calls: 0,
+  telnyxCents: 0,
+  geminiCents: 0,
+  revenueCents: 0
+};
 import {
   METRICS,
   MONTH_CHOICES,
@@ -12,7 +22,7 @@ import {
 } from "@/lib/admin/billing-history-view";
 
 const CELL = {
-  ...emptyCell(),
+  ...EMPTY,
   messages: 450,
   textUnits: 2072,
   voiceMinutes: 12.34,

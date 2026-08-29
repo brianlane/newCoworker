@@ -38,10 +38,10 @@ import { monthStart } from "@/lib/analytics/monthly-summary";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Complete months the report looks back over, newest last. */
-export const DEFAULT_GROWTH_MONTHS = 6;
+const DEFAULT_GROWTH_MONTHS = 6;
 
 /** Fewest complete months before a forward projection is honest. */
-export const MIN_MONTHS_FOR_TREND = 3;
+const MIN_MONTHS_FOR_TREND = 3;
 
 export type GrowthMonth = {
   /** "YYYY-MM". */
@@ -82,7 +82,7 @@ export type GrowthReport = {
   latestMonthIncomplete: boolean;
 };
 
-export function daysInMonth(month: string): number {
+function daysInMonth(month: string): number {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 0)).getUTCDate();
 }
@@ -93,7 +93,7 @@ export function daysInMonth(month: string): number {
  * Called on Sep 2 2026 with count 3 this gives June, July, August: the month
  * in progress is never in the list.
  */
-export function completeMonths(now: Date, count: number): string[] {
+function completeMonths(now: Date, count: number): string[] {
   const wanted = Math.max(0, Math.trunc(count));
   const months: string[] = [];
   for (let back = 1; back <= wanted; back += 1) {
@@ -113,7 +113,7 @@ export function completeMonths(now: Date, count: number): string[] {
  * month-over-month percentage across six months turns one busy September into
  * an absurd forecast, and this number goes in front of a customer.
  */
-export function linearFit(values: number[]): { slope: number; intercept: number } {
+function linearFit(values: number[]): { slope: number; intercept: number } {
   const n = values.length;
   const meanX = (n - 1) / 2;
   const meanY = values.reduce((s, v) => s + v, 0) / n;
@@ -136,7 +136,7 @@ export function linearFit(values: number[]): { slope: number; intercept: number 
  * month should be told what happened, not given a forecast drawn through two
  * points.
  */
-export function projectNextMonth(values: number[]): number | null {
+function projectNextMonth(values: number[]): number | null {
   if (values.length < MIN_MONTHS_FOR_TREND) return null;
   const { slope, intercept } = linearFit(values);
   return Math.max(0, Math.round(intercept + slope * values.length));
@@ -146,36 +146,30 @@ export function projectNextMonth(values: number[]): number | null {
 // Composition
 // ---------------------------------------------------------------------------
 
-export type SnapshotRow = {
+type SnapshotRow = {
   snapshot_date: string;
   calls: number | null;
   sms_sent: number | null;
   voice_minutes: number | null;
 };
 
-export type ComposeGrowthReportInput = {
-  months: string[];
+type ComposeGrowthReportInput = {
+  /**
+   * One entry per month in the window, oldest first, with `leads` and
+   * `daysInMonth` already filled and the snapshot counters at zero.
+   *
+   * Seeded by the caller rather than looked up here: a map lookup would need a
+   * fallback for a month the caller forgot, which the caller cannot forget
+   * (it builds both from the same list), and an unreachable fallback is a
+   * branch nothing can test.
+   */
+  seeded: GrowthMonth[];
   snapshots: SnapshotRow[];
-  /** New customer contacts per month, keyed "YYYY-MM". */
-  leadsByMonth: Map<string, number>;
 };
 
-/** Fold snapshot days and contact counts into one month-by-month report. */
-export function composeGrowthReport(input: ComposeGrowthReportInput): GrowthReport {
-  const byMonth = new Map<string, GrowthMonth>(
-    input.months.map((month) => [
-      month,
-      {
-        month,
-        leads: input.leadsByMonth.get(month) ?? 0,
-        texts: 0,
-        calls: 0,
-        voiceMinutes: 0,
-        coveredDays: 0,
-        daysInMonth: daysInMonth(month)
-      }
-    ])
-  );
+/** Fold snapshot days into the seeded months. */
+function composeGrowthReport(input: ComposeGrowthReportInput): GrowthReport {
+  const byMonth = new Map<string, GrowthMonth>(input.seeded.map((m) => [m.month, m]));
 
   for (const row of input.snapshots) {
     const entry = byMonth.get(row.snapshot_date.slice(0, 7));
@@ -190,7 +184,7 @@ export function composeGrowthReport(input: ComposeGrowthReportInput): GrowthRepo
   // such a month (they come from `contacts`, not the snapshots), which is
   // exactly what makes the mixed row dangerous: a real lead count beside a
   // fabricated zero for texts and calls reads as a catastrophic month.
-  const months = input.months.map((m) => byMonth.get(m)!).filter((m) => m.coveredDays > 0);
+  const months = input.seeded.filter((m) => m.coveredDays > 0);
   const latest = months[months.length - 1] ?? null;
   const previous = months[months.length - 2] ?? null;
 
@@ -291,7 +285,7 @@ export async function loadGrowthReport(
   const now = opts.now ?? new Date();
   const months = completeMonths(now, opts.months ?? DEFAULT_GROWTH_MONTHS);
   if (months.length === 0) {
-    return composeGrowthReport({ months, snapshots: [], leadsByMonth: new Map() });
+    return composeGrowthReport({ seeded: [], snapshots: [] });
   }
 
   const windowStart = `${months[0]}-01`;
@@ -310,16 +304,23 @@ export async function loadGrowthReport(
 
   // Resolved once for every month rather than per query.
   const vpsReadMode = await isVpsReadMode(businessId, db);
-  const leadsByMonth = new Map<string, number>();
+  const seeded: GrowthMonth[] = [];
   for (const month of months) {
     const start = new Date(`${month}-01T00:00:00.000Z`);
     const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
-    leadsByMonth.set(month, await countLeads(db, businessId, start, end, vpsReadMode));
+    seeded.push({
+      month,
+      leads: await countLeads(db, businessId, start, end, vpsReadMode),
+      texts: 0,
+      calls: 0,
+      voiceMinutes: 0,
+      coveredDays: 0,
+      daysInMonth: daysInMonth(month)
+    });
   }
 
   return composeGrowthReport({
-    months,
-    snapshots: (snapshotRes.data ?? []) as SnapshotRow[],
-    leadsByMonth
+    seeded,
+    snapshots: (snapshotRes.data ?? []) as SnapshotRow[]
   });
 }

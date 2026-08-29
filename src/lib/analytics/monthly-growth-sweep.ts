@@ -38,7 +38,7 @@ import { listBusinesses, type BusinessRow } from "@/lib/db/businesses";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildMonthlyGrowthEmail } from "@/lib/email/templates/monthly-growth";
-import { loadGrowthReport } from "@/lib/analytics/growth-report";
+import { hasReportableActivity, loadGrowthReport } from "@/lib/analytics/growth-report";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { logger } from "@/lib/logger";
 
@@ -51,12 +51,12 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
  * the month's final day lands on the 1st, and one spare day absorbs a skipped
  * or retried nightly run.
  */
-export const GROWTH_EMAIL_SEND_DAY = 3;
+const GROWTH_EMAIL_SEND_DAY = 3;
 
 /** Per-pass ceiling so one long run cannot starve the rest of the fleet. */
-export const GROWTH_EMAIL_BATCH_LIMIT = 200;
+const GROWTH_EMAIL_BATCH_LIMIT = 200;
 
-export type MonthlyGrowthSkipReason =
+type MonthlyGrowthSkipReason =
   | "too_early_in_month"
   | "already_sent"
   | "no_owner_email"
@@ -89,14 +89,14 @@ export type MonthlyGrowthSweepDeps = {
 };
 
 /** "YYYY-MM" of the month before `now`'s. */
-export function targetMonth(now: Date): string {
+function targetMonth(now: Date): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
     .toISOString()
     .slice(0, 7);
 }
 
 /** Whether the previous month has settled enough to report on. */
-export function isSendWindowOpen(now: Date): boolean {
+function isSendWindowOpen(now: Date): boolean {
   return now.getUTCDate() >= GROWTH_EMAIL_SEND_DAY;
 }
 
@@ -108,7 +108,7 @@ export function isSendWindowOpen(now: Date): boolean {
  * and `data` comes back null. A no-match PostgREST write reports no error, so
  * the `.select()` is load-bearing, not decorative.
  */
-export async function claimGrowthEmail(
+async function claimGrowthEmail(
   db: SupabaseClient,
   businessId: string,
   month: string
@@ -130,7 +130,7 @@ type BusinessWithStamp = BusinessRow & { monthly_growth_email_sent_for?: string 
  * Reasons a business is skipped that can be decided WITHOUT reading its
  * activity, so the expensive report load only runs for real candidates.
  */
-export function preflightSkip(
+function preflightSkip(
   business: BusinessWithStamp,
   month: string,
   unsubscribed: boolean
@@ -227,8 +227,7 @@ export async function sweepMonthlyGrowthEmails(
         skip("no_data_for_month");
         continue;
       }
-      const activity = report.latest.leads + report.latest.texts + report.latest.calls;
-      if (activity === 0) {
+      if (!hasReportableActivity(report)) {
         skip("no_activity");
         continue;
       }
