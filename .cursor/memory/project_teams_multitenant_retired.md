@@ -64,22 +64,57 @@ decides and it does work. Both are Q&A posts, not documentation, so treat it
 as unproven until measured. We have a Partner Center account, so AppSource is
 open to us.
 
-## The portal blade cannot be driven from the sandbox browser
+## Final state, 29 Aug 2026
 
-The Channels page renders in a **cross-origin sandboxed iframe**
-(`sandbox-*.reactblade.portal.azure.net`). Consequences, all measured:
+Everything below is done and verified:
 
-- `read_page` cannot see the channel rows, and `javascript_tool` cannot reach
-  into the frame.
-- Blade **toolbar** clicks (Refresh, Apply) land; **row** clicks do not.
-  Verified by clicking a visible row and a sort header with no effect.
-- Mouse `scroll` anywhere on the page wedges the pane every time.
-- A taller emulated viewport does render the whole list after a Refresh, but
-  coordinates then scale and still do not reach the iframe.
+- Teams channel connected, health **Healthy** (Brian did this one in his own
+  Chrome).
+- App registration `signInAudience` is **`AzureADMultipleOrgs`** with **allow
+  ALL tenants**, confirmed in the Microsoft Graph manifest. The "Multiple
+  Entra ID tenants" choice defaults to *Allow only certain tenants*, which
+  would require adding each customer's tenant id in Azure before they could
+  connect. That was rejected: it breaks self-serve onboarding and duplicates
+  the gate the webhook already applies against `coworker_connections`.
+- `publisherDomain` is still `newcoworker.onmicrosoft.com`. AppSource wants a
+  verified domain we own, so that DNS TXT verification is a prerequisite of
+  any submission.
 
-The Configuration blade IS drivable (the messaging endpoint was set and saved
-that way). Only the React channels blade resists. Enabling the Teams channel
-has to be done by hand, or with `az bot msteams create`.
+The auto-generated client secret Azure makes alongside the bot is **not
+recoverable** (masked after creation), so a fresh one has to be minted under
+Certificates & secrets. Bot secrets expire silently: when one does, sends
+just start failing and it reads like a misconfiguration.
+
+## The channels blade was CRASHING, not merely unreachable
+
+Worth being precise, because "the pane cannot drive Azure" is the wrong
+lesson. The Channels page renders in a cross-origin sandboxed iframe
+(`sandbox-*.reactblade.portal.azure.net`), so `read_page` cannot see the rows
+and `javascript_tool` cannot reach in. But the reason clicks did nothing was
+an actual exception inside Microsoft's extension:
+
+```
+[Microsoft_Azure_BotService] ReactInternalErrorHandler
+Cannot read properties of undefined (reading 'openm365')
+Unhandled Promise Rejection
+```
+
+The blade later refused to load at all. Brian enabled the channel in his own
+Chrome without trouble, so this was a portal-side fault plus an iframe the
+tooling cannot introspect, not a general "Azure is undrivable" rule. The
+Configuration blade WAS driven successfully (messaging endpoint set and
+saved), as was the whole Entra admin center.
+
+Still true and useful: mouse `scroll` wedges the pane on this portal every
+time, and a taller emulated viewport re-renders the full list after a Refresh
+but its scaled coordinates do not reach a cross-origin iframe. Reach for
+`az bot msteams create` rather than fighting the blade.
+
+Unrelated but seen in the console: the portal's own XHR probe of our
+messaging endpoint is blocked by CORS, because we return
+`Access-Control-Allow-Origin: https://www.newcoworker.com`. Harmless, Bot
+Framework delivery is server to server, but it means the portal cannot do its
+client-side endpoint health check and will never tell you the endpoint works.
 
 Related: [[feedback-browser-pane-console-work]],
 [[project-coworker-channel-architecture]], [[project-owner-surface-registry]].
