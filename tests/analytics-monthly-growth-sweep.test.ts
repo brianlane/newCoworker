@@ -135,14 +135,35 @@ describe("timing", () => {
     expect(result.month).toBe(MONTH);
   });
 
-  it("waits until the previous month's snapshots have settled, then sends", async () => {
+  it("waits until the previous month's snapshots have settled", async () => {
     for (const iso of ["2026-09-01T00:00:00Z", "2026-09-02T23:59:00Z"]) {
       const d = deps({ now: new Date(iso) });
       expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(0);
       expect(d.loadBusinesses).not.toHaveBeenCalled();
     }
-    const d = deps({ now: new Date("2026-09-03T00:00:00Z") });
-    expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(1);
+  });
+
+  it("sends on each of the three window days, so a failed send has retries", async () => {
+    for (const iso of [
+      "2026-09-03T00:00:00Z",
+      "2026-09-04T00:00:00Z",
+      "2026-09-05T23:59:00Z"
+    ]) {
+      const d = deps({ now: new Date(iso) });
+      expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(1);
+    }
+  });
+
+  it("closes the window after the 5th, so a mid-month deploy cannot surprise anyone", async () => {
+    // The defect this closes: an open-ended ">= 3" fired on the first daily
+    // tick after ANY deploy. Shipping on Aug 29 sent every eligible tenant a
+    // July recap that evening, and two real customers got an unannounced
+    // email.
+    for (const iso of ["2026-09-06T00:00:00Z", "2026-09-29T16:20:00Z"]) {
+      const d = deps({ now: new Date(iso) });
+      expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(0);
+      expect(d.loadBusinesses).not.toHaveBeenCalled();
+    }
   });
 
   it("does nothing at all before the send day", async () => {
@@ -155,6 +176,48 @@ describe("timing", () => {
   it("rolls the reported month back across a year boundary", async () => {
     const result = await sweepMonthlyGrowthEmails(deps({ now: new Date("2027-01-04T00:00:00Z") }));
     expect(result.month).toBe("2026-12");
+  });
+
+  it("passes the signup date through, so the copy can tell first month from first measured month", async () => {
+    // One measured month, but a customer since May: this is the first month we
+    // have FIGURES for, not their first month with us. Telling a spring
+    // customer that August was their first is simply wrong.
+    const august = month("2026-08");
+    const singleMonth: GrowthReport = {
+      months: [august],
+      latest: august,
+      previous: null,
+      changes: null,
+      projection: null,
+      latestMonthIncomplete: false,
+      recentlyActive: true
+    };
+    const d = deps({
+      loadReport: vi.fn(async () => singleMonth),
+      loadBusinesses: vi.fn(async () => [biz({ created_at: "2026-05-01T00:00:00Z" })])
+    });
+    await sweepMonthlyGrowthEmails(d);
+    expect(sentBody(d.sendEmail).text).toContain("first month we have complete figures for");
+    expect(sentBody(d.sendEmail).text).not.toContain("your first full month");
+  });
+
+  it("still says first full month for a genuinely new customer", async () => {
+    const august = month("2026-08");
+    const singleMonth: GrowthReport = {
+      months: [august],
+      latest: august,
+      previous: null,
+      changes: null,
+      projection: null,
+      latestMonthIncomplete: false,
+      recentlyActive: true
+    };
+    const d = deps({
+      loadReport: vi.fn(async () => singleMonth),
+      loadBusinesses: vi.fn(async () => [biz({ created_at: "2026-08-04T00:00:00Z" })])
+    });
+    await sweepMonthlyGrowthEmails(d);
+    expect(sentBody(d.sendEmail).text).toContain("your first full month");
   });
 });
 

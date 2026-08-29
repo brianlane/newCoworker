@@ -30,6 +30,7 @@ import { defaultLocale } from "@/i18n/routing";
 import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 import {
   GROWTH_METRICS,
+  growthStats,
   type GrowthMetric,
   type GrowthMonth,
   type GrowthReport
@@ -40,6 +41,12 @@ export type MonthlyGrowthEmailInput = {
   businessName: string;
   /** Owner's display name; only the first word is used, and it may be absent. */
   ownerName?: string | null;
+  /**
+   * When the business signed up (ISO). Distinguishes "your first month with
+   * us" from "the first month we have figures for", which are very different
+   * sentences to send a customer who has been here since spring.
+   */
+  customerSince?: string | null;
   recipientEmail: string;
   /** App origin without trailing slash. */
   siteUrl: string;
@@ -69,18 +76,55 @@ function nextMonthOf(month: string): string {
 }
 
 /**
- * ", Amy" for a greeting, or "" when we have no name.
+ * First words that mean the "owner name" is a mailbox or a company, not a
+ * person. Greeting a team inbox by its first word produces "Hi Support," and
+ * "Hi The,".
+ */
+const NON_PERSON_FIRST_WORDS = new Set([
+  "the",
+  "team",
+  "support",
+  "admin",
+  "info",
+  "sales",
+  "billing",
+  "accounts",
+  "office",
+  "contact",
+  "hello",
+  "hi"
+]);
+
+/**
+ * " Amy" for a greeting, or "" when the name we hold is not a person's.
  *
  * First word only: owner_name carries a full name, and "Hi Amy Laidlaw," in a
  * monthly note reads like a form letter, which is exactly what this is trying
  * not to be.
+ *
+ * TWO WAYS THAT GOES WRONG, both seen on the first live send. HQ's owner_name
+ * is "New Coworker Team", so the first word produced "Hi New,". So:
+ *
+ * - if the owner name CONTAINS the business name it is the organisation, not
+ *   a person. Deliberately only that direction: a business named after its
+ *   owner ("Amy Laidlaw Real Estate" for "Amy Laidlaw") is the common case
+ *   and must still be greeted by name;
+ * - if the first word is a mailbox or collective word, skip it.
  */
-function greetingSuffix(ownerName: string | null | undefined): string {
+function greetingSuffix(
+  ownerName: string | null | undefined,
+  businessName: string
+): string {
+  const name = (ownerName ?? "").trim();
+  if (!name) return "";
+  const business = businessName.trim().toLowerCase();
+  if (business && name.toLowerCase().includes(business)) return "";
   // `split(sep, 1).join("")` rather than `[0]`: indexing needs a fallback for
   // an empty result that split can never produce, and an unreachable fallback
   // is a branch nothing can test.
-  const first = (ownerName ?? "").trim().split(/\s+/, 1).join("");
-  return first ? ` ${first}` : "";
+  const first = name.split(/\s+/, 1).join("");
+  if (NON_PERSON_FIRST_WORDS.has(first.toLowerCase())) return "";
+  return ` ${first}`;
 }
 
 /** Minutes render whole; everything else is a plain count. */
@@ -93,6 +137,70 @@ function changeLabel(percent: number | null, newLabel: string): string {
   if (percent === null) return newLabel;
   const rounded = Math.round(percent);
   return `${rounded > 0 ? "+" : ""}${rounded}%`;
+}
+
+/**
+ * Leads by month as horizontal bars.
+ *
+ * Widths, not heights: an email client will honour a percentage width on a
+ * table cell and will not reliably honour a height on a div, so a column
+ * chart silently collapses in Outlook while this does not. Everything is a
+ * nested table with inline styles for the same reason.
+ */
+function chartHtml(months: GrowthMonth[], peak: number, title: string): string {
+  const rows = months
+    .map((m, i) => {
+      const isLatest = i === months.length - 1;
+      // A month with real leads never renders as nothing: 2% keeps a small
+      // month visible next to a big one, which is the honest picture.
+      const pct = peak > 0 && m.leads > 0 ? Math.max(Math.round((m.leads / peak) * 100), 2) : 0;
+      const colour = isLatest ? "#1BD96A" : "#2f5673";
+      const bar =
+        pct > 0
+          ? `<table role="presentation" cellpadding="0" cellspacing="0" width="${pct}%" ` +
+            `style="border-collapse:collapse;"><tr><td style="background-color:${colour};` +
+            `height:10px;line-height:10px;font-size:0;border-radius:3px;">&nbsp;</td></tr></table>`
+          : "";
+      return (
+        `<tr>` +
+        `<td style="padding:3px 10px 3px 0;font-size:13px;color:#8a9bb0;white-space:nowrap;">` +
+        `${escapeHtml(m.month)}</td>` +
+        `<td width="100%" style="padding:3px 10px;">${bar}</td>` +
+        `<td align="right" style="padding:3px 0;font-size:13px;font-weight:600;` +
+        `color:${isLatest ? "#1BD96A" : "#e8eef5"};">${escapeHtml(String(m.leads))}</td>` +
+        `</tr>`
+      );
+    })
+    .join("");
+  return (
+    `<p style="margin:0 0 8px;font-size:14px;color:#8a9bb0;font-weight:600;">` +
+    `${escapeHtml(title)}</p>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
+    `style="border-collapse:collapse;margin:0 0 8px;">${rows}</table>`
+  );
+}
+
+/**
+ * The metrics the table shows: everything except the ones that went DOWN.
+ *
+ * Brian's call, Aug 2026. Filtered on the ROUNDED percentage so that what is
+ * hidden matches what would have been displayed: a -0.4% month renders as
+ * "0%", so it stays.
+ *
+ * A metric with no previous month (`percent === null`, shown as "new") is
+ * kept: nothing declined, there is simply nothing to compare against.
+ *
+ * NOTE the deliberate limit of this. It hides declining ROWS, not declines:
+ * the leads chart, the "gone from A to B" line and the "on where you started"
+ * percentage all still print a fall, because a recap that could only ever
+ * show good news would stop being worth reading. See buildMonthlyGrowthEmail.
+ */
+function visibleMetrics(changes: GrowthReport["changes"]): GrowthMetric[] {
+  if (!changes) return [...GROWTH_METRICS];
+  return GROWTH_METRICS.filter((metric) => {
+    const percent = changes[metric].percent;
+    return percent === null || Math.round(percent) >= 0;
+  });
 }
 
 /** The comparison table, as email-safe inline-styled HTML. */
@@ -116,7 +224,7 @@ function tableHtml(
       .join("") +
     `</tr>`;
 
-  const rows = GROWTH_METRICS.map((metric) => {
+  const rows = visibleMetrics(changes).map((metric) => {
     const change = changes ? changes[metric] : null;
     // Green only for a real rise. Every metric here counts work done, so up is
     // good across the board; a fall is stated plainly rather than coloured
@@ -154,21 +262,32 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
   const site = input.siteUrl.replace(/\/$/, "");
   const analyticsUrl = `${site}/dashboard/analytics`;
   const month = monthLabel(report.latest.month, locale);
-  const ownerFirstName = greetingSuffix(input.ownerName);
+  const ownerFirstName = greetingSuffix(input.ownerName, input.businessName);
+  const stats = growthStats(report);
 
   const subject = fmtEmail(copy.subject, { businessName: input.businessName, month });
   const heading = fmtEmail(copy.heading, { month });
 
+  // Three cases, not two. "No previous month" used to mean "your first full
+  // month", which told Amy, a customer since spring, that July was her first:
+  // her June has no snapshot rows because the table only starts in July, not
+  // because nothing happened. If the business predates the reported month, say
+  // the honest thing instead.
+  const startedBeforeReportedMonth =
+    typeof input.customerSince === "string" &&
+    input.customerSince.slice(0, 7) < report.latest.month;
   const intro = report.previous
-    ? fmtEmail(copy.intro, {
-        ownerFirstName,
-        businessName: input.businessName,
-        month
-      })
-    : fmtEmail(copy.firstMonthIntro, {
-        ownerFirstName,
-        businessName: input.businessName
-      });
+    ? fmtEmail(copy.intro, { ownerFirstName, businessName: input.businessName, month })
+    : startedBeforeReportedMonth
+      ? fmtEmail(copy.firstMeasuredIntro, {
+          ownerFirstName,
+          businessName: input.businessName,
+          month
+        })
+      : fmtEmail(copy.firstMonthIntro, {
+          ownerFirstName,
+          businessName: input.businessName
+        });
 
   const labels: Record<GrowthMetric, string> = {
     leads: copy.metricLeads,
@@ -189,6 +308,26 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
         })
       : null;
 
+  const totalsLine =
+    stats.measuredMonths > 1
+      ? fmtEmail(copy.totalsLine, {
+          monthCount: String(stats.measuredMonths),
+          leads: stats.totals.leads.toLocaleString("en-US"),
+          texts: stats.totals.texts.toLocaleString("en-US"),
+          calls: stats.totals.calls.toLocaleString("en-US"),
+          minutes: Math.round(stats.totals.voiceMinutes).toLocaleString("en-US")
+        })
+      : null;
+
+  const growthPctLine =
+    stats.leadsGrowthPct === null
+      ? null
+      : fmtEmail(copy.growthPctLine, { pct: changeLabel(stats.leadsGrowthPct, copy.changeNew) });
+
+  const bestMonthLine = stats.latestIsBestForLeads
+    ? fmtEmail(copy.bestMonthLine, { month })
+    : null;
+
   const projectionLine = report.projection
     ? fmtEmail(copy.projectionLine, {
         nextMonth: monthLabel(nextMonthOf(report.latest.month), locale),
@@ -208,11 +347,18 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
       })
     : null;
 
-  const tail = [trendLine, projectionLine, projectionCaveat, coverageNote].filter(
-    (line): line is string => line !== null
-  );
+  const tail = [
+    trendLine,
+    growthPctLine,
+    bestMonthLine,
+    totalsLine,
+    projectionLine,
+    projectionCaveat,
+    coverageNote
+  ].filter((line): line is string => line !== null);
 
-  const textTable = GROWTH_METRICS.map((metric) => {
+  const shown = visibleMetrics(report.changes);
+  const textTable = shown.map((metric) => {
     const current = metricValue(metric, report.latest![metric]);
     const previous = report.previous ? metricValue(metric, report.previous[metric]) : "-";
     const change = changeLabel(
@@ -222,13 +368,24 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
     return `- ${labels[metric]}: ${current} (${previous} last month, ${change})`;
   }).join("\n");
 
+  const chartText =
+    stats.measuredMonths > 1
+      ? [copy.chartTitle, ...report.months.map((m) => `  ${m.month}: ${m.leads}`)].join("\n")
+      : null;
+
   const signoff = emailMessagesForLocale(locale).ncSignoff;
+  // Every metric down means no rows survive the filter. Print no table and no
+  // caption rather than a heading over nothing; the chart, the totals and the
+  // coverage note still carry the month.
+  const tableBlock =
+    shown.length > 0
+      ? [report.previous ? fmtEmail(copy.tableCaption, { month, previousMonth }) : month, textTable]
+      : [];
+
   const text = [
     intro,
-    report.previous
-      ? fmtEmail(copy.tableCaption, { month, previousMonth })
-      : month,
-    textTable,
+    ...tableBlock,
+    ...(chartText ? [chartText] : []),
     ...tail,
     fmtEmail(copy.fallback, { analyticsUrl }),
     signoff
@@ -240,8 +397,10 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
     heading,
     bodyBlocks: [
       { kind: "text", text: intro },
-      {
-        kind: "raw",
+      ...(shown.length === 0
+        ? []
+        : [{
+        kind: "raw" as const,
         html: tableHtml(
           report.latest,
           report.previous,
@@ -257,7 +416,15 @@ export function buildMonthlyGrowthEmail(input: MonthlyGrowthEmailInput): Monthly
           },
           copy.changeNew
         )
-      },
+      }]),
+      ...(stats.measuredMonths > 1
+        ? [
+            {
+              kind: "raw" as const,
+              html: chartHtml(report.months, stats.peakLeads, copy.chartTitle)
+            }
+          ]
+        : []),
       ...tail.map((t) => ({ kind: "text" as const, text: t }))
     ],
     cta: { label: copy.cta, href: analyticsUrl },

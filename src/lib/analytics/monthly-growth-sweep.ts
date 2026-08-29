@@ -2,11 +2,12 @@
  * Daily sweep that sends each owner one recap a month, about the month that
  * just ended.
  *
- * WHY IT WAITS A FEW DAYS. The figures come from `analytics_daily_snapshots`,
- * written by the nightly snapshot sweep, so the last day of a month is not on
- * disk until the following day. Sending on the 1st would report a month
- * missing its busiest-looking final day. {@link GROWTH_EMAIL_SEND_DAY} is the
- * settle margin.
+ * WHY IT WAITS A FEW DAYS, AND ONLY A FEW. The figures come from
+ * `analytics_daily_snapshots`, written by the nightly snapshot sweep, so the
+ * last day of a month is not on disk until the following day. Sending on the
+ * 1st would report a month missing its busiest-looking final day. The window
+ * is CLOSED at the top as well: see the constants below for what an
+ * open-ended one did on its first day in production.
  *
  * IDEMPOTENCE. `businesses.monthly_growth_email_sent_for` holds the month
  * ("YYYY-MM") already reported, and is claimed BEFORE the send with a
@@ -57,13 +58,21 @@ import { logger } from "@/lib/logger";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /**
- * Day of the month from which the previous month's recap may go out.
+ * The days of the month on which the previous month's recap may go out.
  *
  * Third, not first: the nightly snapshot sweep writes a day after it ends, so
  * the month's final day lands on the 1st, and one spare day absorbs a skipped
  * or retried nightly run.
+ *
+ * CLOSED AT THE TOP, and that is the load-bearing half. An open-ended
+ * ">= 3" fires on the first daily tick after ANY deploy, so shipping this on
+ * Aug 29 sent every eligible tenant a July recap that evening instead of on
+ * Sep 3 as intended. Two real customers got an unannounced email. Three days
+ * is still three retries if a send fails, without a mid-month deploy being
+ * able to surprise anyone.
  */
-const GROWTH_EMAIL_SEND_DAY = 3;
+const GROWTH_EMAIL_SEND_FIRST_DAY = 3;
+const GROWTH_EMAIL_SEND_LAST_DAY = 5;
 
 /** Per-pass ceiling so one long run cannot starve the rest of the fleet. */
 const GROWTH_EMAIL_BATCH_LIMIT = 200;
@@ -111,9 +120,10 @@ function targetMonth(now: Date): string {
     .slice(0, 7);
 }
 
-/** Whether the previous month has settled enough to report on. */
+/** Whether today is one of the few days the recap may go out. */
 function isSendWindowOpen(now: Date): boolean {
-  return now.getUTCDate() >= GROWTH_EMAIL_SEND_DAY;
+  const day = now.getUTCDate();
+  return day >= GROWTH_EMAIL_SEND_FIRST_DAY && day <= GROWTH_EMAIL_SEND_LAST_DAY;
 }
 
 /**
@@ -199,9 +209,9 @@ export async function sweepMonthlyGrowthEmails(
   };
 
   if (!isSendWindowOpen(now)) {
-    logger.info("monthly-growth-sweep: before the send day, nothing to do", {
+    logger.info("monthly-growth-sweep: outside the send window, nothing to do", {
       month,
-      sendDay: GROWTH_EMAIL_SEND_DAY
+      window: `${GROWTH_EMAIL_SEND_FIRST_DAY}-${GROWTH_EMAIL_SEND_LAST_DAY}`
     });
     return result;
   }
@@ -306,6 +316,7 @@ export async function sweepMonthlyGrowthEmails(
         report,
         businessName: business.name,
         ownerName: business.owner_name ?? null,
+        customerSince: business.created_at ?? null,
         recipientEmail: toEmail,
         siteUrl,
         unsubscribeUrl,

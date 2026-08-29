@@ -122,6 +122,132 @@ describe("buildMonthlyGrowthEmail", () => {
     }
   });
 
+  it("does not greet the company by its first word", async () => {
+    // The live send said "Hi New," because HQ's owner_name is
+    // "New Coworker Team" and the business is "New Coworker".
+    const report = await threeMonths();
+    const email = buildMonthlyGrowthEmail({
+      ...base,
+      businessName: "New Coworker",
+      ownerName: "New Coworker Team",
+      report
+    })!;
+    expect(email.text).toMatch(/^Hi,/);
+    expect(email.text).not.toContain("Hi New");
+  });
+
+  it("still greets a person whose name the business is named after", async () => {
+    // The opposite direction has to keep working: "Amy Laidlaw Real Estate"
+    // CONTAINS "Amy Laidlaw", and she should still be greeted by name.
+    const report = await threeMonths();
+    expect(buildMonthlyGrowthEmail({ ...base, report })!.text).toMatch(/^Hi Amy,/);
+  });
+
+  it("skips a mailbox word rather than greeting it", async () => {
+    const report = await threeMonths();
+    for (const ownerName of ["Support", "The Smith Group", "billing dept"]) {
+      expect(
+        buildMonthlyGrowthEmail({ ...base, ownerName, report })!.text
+      ).toMatch(/^Hi,/);
+    }
+  });
+
+  it("tells a long-standing customer it is the first MEASURED month, not their first", async () => {
+    const report = await reportFor(
+      fullMonth("2026-08", { calls: 3, sms: 30, minutes: 6 }),
+      [12],
+      1
+    );
+    const email = buildMonthlyGrowthEmail({
+      ...base,
+      report,
+      customerSince: "2026-05-01T00:00:00Z"
+    })!;
+    expect(email.text).toContain("first month we have complete figures for");
+    expect(email.text).not.toContain("your first full month");
+  });
+
+  it("charts leads by month, marking the reported month", async () => {
+    const email = buildMonthlyGrowthEmail({ ...base, report: await threeMonths() })!;
+    expect(email.html).toContain("New leads by month");
+    // The newest bar takes the accent colour; earlier months are muted.
+    expect(email.html).toContain("#1BD96A");
+    expect(email.html).toContain("#2f5673");
+    // The plain-text part gets the same series as a list.
+    expect(email.text).toContain("2026-06: 51");
+    expect(email.text).toContain("2026-08: 127");
+  });
+
+  it("totals the window and states the growth since the first measured month", async () => {
+    const email = buildMonthlyGrowthEmail({ ...base, report: await threeMonths() })!;
+    // 51 + 108 + 127 leads across three months.
+    expect(email.text).toContain("286 leads");
+    expect(email.text).toContain("Across the 3 months we have measured");
+    // 51 -> 127 is +149%.
+    expect(email.text).toContain("+149% on where you started");
+  });
+
+  it("calls out a best month only when this one actually is", async () => {
+    const rising = buildMonthlyGrowthEmail({ ...base, report: await threeMonths() })!;
+    expect(rising.text).toContain("best month for new leads so far");
+
+    const falling = await reportFor(
+      [
+        ...fullMonth("2026-06", { calls: 1, sms: 10, minutes: 2 }),
+        ...fullMonth("2026-07", { calls: 1, sms: 10, minutes: 2 }),
+        ...fullMonth("2026-08", { calls: 1, sms: 10, minutes: 2 })
+      ],
+      [200, 150, 40],
+      3
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report: falling })!;
+    expect(email.text).not.toContain("best month for new leads");
+    expect(email.text).toContain("-80% on where you started");
+  });
+
+  it("draws no bar for a month with no leads, rather than a misleading stub", async () => {
+    const report = await reportFor(
+      [
+        ...fullMonth("2026-07", { calls: 1, sms: 10, minutes: 2 }),
+        ...fullMonth("2026-08", { calls: 1, sms: 10, minutes: 2 })
+      ],
+      [0, 40],
+      2
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.text).toContain("2026-07: 0");
+    // One bar table for the month that had leads, none for the empty one.
+    expect(email.html.match(/background-color:#(1BD96A|2f5673);height:10px/g)).toHaveLength(1);
+  });
+
+  it("draws no bars at all when no month captured a lead", async () => {
+    const report = await reportFor(
+      [
+        ...fullMonth("2026-07", { calls: 2, sms: 20, minutes: 4 }),
+        ...fullMonth("2026-08", { calls: 2, sms: 20, minutes: 4 })
+      ],
+      [0, 0],
+      2
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.html).toContain("New leads by month");
+    expect(email.html).not.toContain("height:10px");
+    // And no growth percentage, because there is nothing to divide by.
+    expect(email.text).not.toContain("on where you started");
+  });
+
+  it("omits the chart, totals and growth line on a single measured month", async () => {
+    const report = await reportFor(
+      fullMonth("2026-08", { calls: 3, sms: 30, minutes: 6 }),
+      [12],
+      1
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.text).not.toContain("New leads by month");
+    expect(email.text).not.toContain("months we have measured");
+    expect(email.text).not.toContain("on where you started");
+  });
+
   it("puts every metric and its comparison in the plain-text part", async () => {
     const email = buildMonthlyGrowthEmail({ ...base, report: await threeMonths() })!;
     expect(email.text).toContain("New leads captured: 127 (108 last month, +18%)");
@@ -214,7 +340,57 @@ describe("buildMonthlyGrowthEmail", () => {
     expect(email.text).not.toContain("of its 31 days");
   });
 
-  it("states a fall plainly instead of colouring it alarming", async () => {
+  it("leaves a declining metric out of the table", async () => {
+    // Leads up, calls and minutes down: only the rows that grew are listed.
+    const report = await reportFor(
+      [
+        ...fullMonth("2026-07", { calls: 4, sms: 10, minutes: 8 }),
+        ...fullMonth("2026-08", { calls: 1, sms: 20, minutes: 2 })
+      ],
+      [10, 40],
+      2
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.text).toContain("New leads captured: 40");
+    expect(email.text).toContain("Texts sent");
+    expect(email.text).not.toContain("Calls answered");
+    expect(email.text).not.toContain("Minutes on the phone");
+    expect(email.html).not.toContain("Calls answered");
+  });
+
+  it("keeps a flat metric, which did not decline", async () => {
+    const report = await reportFor(
+      [
+        ...fullMonth("2026-07", { calls: 2, sms: 10, minutes: 4 }),
+        ...fullMonth("2026-08", { calls: 2, sms: 20, minutes: 4 })
+      ],
+      [10, 40],
+      2
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.text).toContain("Calls answered");
+    expect(email.text).toContain("last month, 0%)");
+  });
+
+  it("keeps a metric with no previous month, which is new rather than down", async () => {
+    const report = await reportFor(
+      fullMonth("2026-08", { calls: 3, sms: 30, minutes: 6 }),
+      [12],
+      1
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    for (const label of [
+      "New leads captured",
+      "Texts sent",
+      "Calls answered",
+      "Minutes on the phone"
+    ]) {
+      expect(email.text).toContain(label);
+    }
+  });
+
+  it("prints no table at all when every metric declined", async () => {
+    // The alternative is a caption over an empty table.
     const report = await reportFor(
       [
         ...fullMonth("2026-07", { calls: 4, sms: 40, minutes: 8 }),
@@ -224,9 +400,30 @@ describe("buildMonthlyGrowthEmail", () => {
       2
     );
     const email = buildMonthlyGrowthEmail({ ...base, report })!;
-    expect(email.text).toContain("New leads captured: 40 (100 last month, -60%)");
-    // Only a rise is coloured; a fall stays in the muted body colour.
-    expect(email.html).not.toContain("#1BD96A;font-weight:600");
+    expect(email.text).not.toContain("New leads captured");
+    expect(email.text).not.toContain("August 2026 vs July 2026");
+    expect(email.html).not.toContain("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"border-collapse:collapse;margin:0 0 8px;\"><tr><th");
+    // The month is still carried by the chart and the totals.
+    expect(email.text).toContain("New leads by month");
+    expect(email.text).toContain("months we have measured");
+  });
+
+  it("still surfaces a fall in the lines the row filter does not touch", async () => {
+    // The row is gone, but the recap does not pretend the month went up: the
+    // chart, the "gone from" line and the growth percentage all show it.
+    const report = await reportFor(
+      [
+        ...fullMonth("2026-07", { calls: 4, sms: 40, minutes: 8 }),
+        ...fullMonth("2026-08", { calls: 1, sms: 10, minutes: 2 })
+      ],
+      [100, 40],
+      2
+    );
+    const email = buildMonthlyGrowthEmail({ ...base, report })!;
+    expect(email.text).not.toContain("New leads captured: 40");
+    expect(email.text).toContain("from 100 to 40");
+    expect(email.text).toContain("-60% on where you started");
+    expect(email.text).toContain("2026-08: 40");
   });
 
   it("does not sign a rounded-to-zero change", async () => {

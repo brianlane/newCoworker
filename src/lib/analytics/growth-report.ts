@@ -279,6 +279,60 @@ function composeGrowthReport(input: ComposeGrowthReportInput): GrowthReport {
  *   an email, either because coverage is too short to represent a month or
  *   because almost nothing happened in it.
  */
+/**
+ * Derived figures the recap uses to show growth rather than just this month.
+ *
+ * Computed from the measured months only, which is what makes them safe to
+ * put in front of a customer: a window that starts where the snapshots start
+ * cannot quietly count a period nobody measured as a zero and turn it into
+ * dramatic growth.
+ */
+export type GrowthStats = {
+  /** Totals across every measured month in the window. */
+  totals: { leads: number; texts: number; calls: number; voiceMinutes: number };
+  /** How many months are actually measured, which is what "since" refers to. */
+  measuredMonths: number;
+  /** The most leads any measured month saw, for scaling a bar chart. */
+  peakLeads: number;
+  /** True when the reported month is the best month for leads so far. */
+  latestIsBestForLeads: boolean;
+  /**
+   * Percent change in leads from the FIRST measured month to the latest.
+   * Null when there is only one month, or when the first month was zero (an
+   * "up from nothing" percentage is noise, not news).
+   */
+  leadsGrowthPct: number | null;
+};
+
+export function growthStats(report: GrowthReport): GrowthStats {
+  const months = report.months;
+  const totals = months.reduce(
+    (t, m) => ({
+      leads: t.leads + m.leads,
+      texts: t.texts + m.texts,
+      calls: t.calls + m.calls,
+      voiceMinutes: t.voiceMinutes + m.voiceMinutes
+    }),
+    { leads: 0, texts: 0, calls: 0, voiceMinutes: 0 }
+  );
+  const leadCounts = months.map((m) => m.leads);
+  const peakLeads = leadCounts.reduce((a, b) => (b > a ? b : a), 0);
+  const first = months[0];
+  const latest = report.latest;
+  return {
+    totals,
+    measuredMonths: months.length,
+    peakLeads,
+    // ">= peak" not "=== peak": a tie means this month matched the best, and
+    // for a customer reading it that is still their best month.
+    latestIsBestForLeads: latest !== null && months.length > 1 && latest.leads >= peakLeads && peakLeads > 0,
+    leadsGrowthPct:
+      first && latest && months.length > 1 && first.leads > 0
+        ? ((latest.leads - first.leads) / first.leads) * 100
+        : null
+  };
+}
+
 export type RecapVerdict = "send" | "no_month" | "dormant" | "thin";
 
 export function classifyRecap(report: GrowthReport): RecapVerdict {
