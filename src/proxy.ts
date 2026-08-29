@@ -224,6 +224,16 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     // one-click opt-out, breaking the compliance path campaign mail
     // advertises. Same rationale as the exemptions above.
     pathname !== "/api/marketing/unsubscribe" &&
+    // /api/notifications/unsubscribe is the same RFC 8058 one-click target
+    // for OPERATOR mail (urgent alerts, the daily/weekly digest, the monthly
+    // recap), which advertises List-Unsubscribe-Post exactly as campaign mail
+    // does. It is authenticated solely by the business UUID in the URL, never
+    // by a session cookie, so CSRF protects nothing here: anyone holding the
+    // bid can POST it from their own server without a victim's browser. What
+    // the gate DID do was 403 Gmail and Apple Mail's native Unsubscribe
+    // control, which is the compliance path the headers promise. Same
+    // rationale as /api/marketing/unsubscribe above.
+    pathname !== "/api/notifications/unsubscribe" &&
     // /api/public/v1/* is the public REST API (Zapier et al.) authenticated
     // solely by an `Authorization: Bearer nck_…` API key hashed against
     // api_keys (authenticatePublicApiRequest), never by a session cookie.

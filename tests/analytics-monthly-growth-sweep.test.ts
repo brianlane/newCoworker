@@ -90,10 +90,21 @@ function claimClient(won = true) {
   return { client, update };
 }
 
-/** The body of the first send: the options argument sendOwnerEmail received. */
-function sentBody(sendEmail: unknown): { text: string; html: string } {
+/**
+ * The options argument `sendOwnerEmail` received on the first send.
+ *
+ * Goes through `unknown`: the mock is declared with no parameters, so its
+ * `calls` are typed as empty tuples and indexing them directly does not
+ * compile. That is a real trap rather than noise, because `next build` does
+ * not typecheck tests, so this only shows up in CI's own tsc step.
+ */
+function sentBody(sendEmail: unknown): {
+  text: string;
+  html: string;
+  unsubscribeUrl?: string;
+} {
   const calls = (sendEmail as { mock: { calls: unknown[][] } }).mock.calls;
-  return calls[0]![3] as { text: string; html: string };
+  return calls[0]![3] as { text: string; html: string; unsubscribeUrl?: string };
 }
 
 function deps(over: Record<string, unknown> = {}) {
@@ -315,8 +326,7 @@ describe("sweepMonthlyGrowthEmails", () => {
     // left a text-only reader with no way out at all.
     const d = deps();
     await sweepMonthlyGrowthEmails(d);
-    const opts = vi.mocked(d.sendEmail).mock.calls[0]![3] as { unsubscribeUrl?: string };
-    expect(opts.unsubscribeUrl).toBe(
+    expect(sentBody(d.sendEmail).unsubscribeUrl).toBe(
       "https://www.newcoworker.com/api/notifications/unsubscribe?bid=biz-1&scope=monthly_recap"
     );
   });

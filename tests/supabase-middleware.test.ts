@@ -203,6 +203,16 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/notifications/unsubscribe without origin (RFC 8058 one-click)", async () => {
+    // Gmail and Apple Mail POST List-Unsubscribe-Post server-to-server with
+    // no Origin. Without this the native Unsubscribe control 403s, which is
+    // the opt-out path the header itself advertises.
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/notifications/unsubscribe?bid=x", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
   it("allows POST to /api/rowboat without origin (token-authed external route)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/rowboat", { method: "POST" });
