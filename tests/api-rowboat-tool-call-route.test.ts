@@ -1194,6 +1194,22 @@ describe("POST /api/rowboat/tool-call dashboard_schedule_text (OwnerCoworker fal
     expect(vi.mocked(scheduleTextTool)).not.toHaveBeenCalled();
   });
 
+  it("cancel reaches a non-NANP number (a cancel sends nothing, so reachability must not block it)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(scheduleTextTool).mockResolvedValue({ ok: true });
+    const content = makeContent("dashboard_schedule_text", {
+      phone: "+525512345678",
+      action: "cancel"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(vi.mocked(scheduleTextTool)).toHaveBeenCalledWith(BIZ, {
+      phone: "+525512345678",
+      action: "cancel"
+    });
+  });
+
   it("the bare texting-coworker name keeps NO reachability check of its own", async () => {
     // The customer surface is NANP by construction (the recipient is the
     // conversation); pinning that here so a future refactor does not

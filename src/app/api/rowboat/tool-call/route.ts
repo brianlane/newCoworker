@@ -602,6 +602,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       if (
         toolSurface(name) === "dashboard" &&
+        // Scheduling only (Bugbot): a cancel sends nothing and must always
+        // be able to reach an existing row, whatever number it points at.
+        parsed.data.action !== "cancel" &&
         smsReachability(parsed.data.phone) !== "nanp"
       ) {
         return {

@@ -348,6 +348,23 @@ describe("schedule_text", () => {
     expect(scheduleText).not.toHaveBeenCalled();
   });
 
+  it("cancel reaches a non-NANP number (Bugbot: a cancel sends nothing, so reachability must not block it)", async () => {
+    const scheduleText = vi.fn(async () => ({ ok: true, message: "Canceled." }));
+    const res = await executeActionTool(
+      BIZ,
+      { name: "schedule_text", args: { phone: "+525512345678", action: "cancel" } },
+      happyDeps({ scheduleText: scheduleText as never })
+    );
+    expect(res).toMatchObject({ ok: true });
+    expect(scheduleText).toHaveBeenCalledWith(BIZ, {
+      phone: "+525512345678",
+      action: "cancel",
+      sendAtIso: undefined,
+      text: undefined,
+      confirmed: undefined
+    });
+  });
+
   it("refuses a non-NANP destination up front, naming the silent-queue problem", async () => {
     const scheduleText = vi.fn();
     const deps = happyDeps({ scheduleText: scheduleText as never });

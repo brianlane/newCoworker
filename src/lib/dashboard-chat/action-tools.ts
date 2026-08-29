@@ -1393,8 +1393,11 @@ export async function executeActionTool(
         // MORE here: an unreachable immediate send fails in front of the
         // model, an unreachable QUEUED send fails days later with nobody
         // watching, which is exactly the broken-promise class this tool
-        // exists to end.
-        if (smsReachability(toPhone) !== "nanp") {
+        // exists to end. SCHEDULING only (Bugbot): a cancel sends nothing,
+        // and rows for such numbers can exist (the bare SMS path carries no
+        // reachability check), so a cancel must always be able to reach
+        // them.
+        if (parsed.data.action !== "cancel" && smsReachability(toPhone) !== "nanp") {
           return {
             ok: false,
             message:

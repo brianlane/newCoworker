@@ -144,6 +144,22 @@ describe("POST /api/voice/tools/schedule-text", () => {
     expect(scheduleTextTool).not.toHaveBeenCalled();
   });
 
+  it("cancel reaches a non-NANP number (a cancel sends nothing, so reachability must not block it)", async () => {
+    vi.mocked(scheduleTextTool).mockResolvedValue({ ok: true, message: "Canceled." });
+    const res = await POST(
+      req({ businessId: BIZ, callerE164: "+525512345678", args: { action: "cancel" } })
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(scheduleTextTool).toHaveBeenCalledWith(BIZ, {
+      phone: "+525512345678",
+      action: "cancel",
+      sendAtIso: undefined,
+      text: undefined,
+      confirmed: undefined
+    });
+  });
+
   it("400s on args that fail the schema", async () => {
     const res = await POST(
       req({ businessId: BIZ, callerE164: "+15555550100", args: { action: "postpone" } })

@@ -72,8 +72,10 @@ export async function POST(request: Request) {
   // schedule_text): our long codes deliver SMS to NANP (+1) numbers only,
   // and a queued text that dies at dispatch days later is a silently broken
   // promise, the exact class this tool exists to end. An international
-  // caller gets an honest "I can't text that number" instead.
-  if (smsReachability(normalized.value) !== "nanp") {
+  // caller gets an honest "I can't text that number" instead. SCHEDULING
+  // only (Bugbot): a cancel sends nothing and must always be able to reach
+  // an existing row, whatever number it points at.
+  if (args.action !== "cancel" && smsReachability(normalized.value) !== "nanp") {
     return voiceToolResponse({
       ok: false,
       detail: "sms_unreachable_destination",
