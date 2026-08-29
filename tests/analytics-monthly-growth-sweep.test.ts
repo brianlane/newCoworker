@@ -53,7 +53,8 @@ function reportWith(over: { leads?: number; texts?: number; calls?: number } = {
     previous,
     changes: null,
     projection: null,
-    latestMonthIncomplete: false
+    latestMonthIncomplete: false,
+    recentlyActive: true
   };
 }
 
@@ -63,7 +64,8 @@ const EMPTY_REPORT: GrowthReport = {
   previous: null,
   changes: null,
   projection: null,
-  latestMonthIncomplete: false
+  latestMonthIncomplete: false,
+  recentlyActive: false
 };
 
 /** Client mock that only has to answer the claim update. */
@@ -101,6 +103,11 @@ function deps(over: Record<string, unknown> = {}) {
     siteUrl: "https://www.newcoworker.com",
     resendApiKey: "re_test",
     loadBusinesses: vi.fn(async () => [biz()]),
+    loadLiveSubscriptions: vi.fn(async (ids: string[]) => ({
+      stripeBacked: new Set(ids),
+      stripeless: new Set<string>(),
+      cancelAtPeriodEnd: new Set<string>()
+    })),
     loadReport: vi.fn(async () => reportWith()),
     loadPreferences: vi.fn(
       async () => ({ unsubscribed_at: null, email_monthly_recap: true }) as never
@@ -161,6 +168,35 @@ describe("who is skipped", () => {
       loadBusinesses: vi.fn(async () => [biz({ monthly_growth_email_sent_for: "2026-07" })])
     });
     expect(result.sent).toBe(1);
+  });
+
+  it("skips a tenant with no live subscription, which is what keeps the recap off the sandboxes", async () => {
+    // Every demo / app-review sandbox has zero live rows and every real
+    // customer has one, so this is a data signal rather than a name match.
+    // Dormancy alone would not do it: a reviewer exercising a sandbox during
+    // an app review makes it look active, and the recap would go to a
+    // reviewer address.
+    const d = deps({
+      loadLiveSubscriptions: vi.fn(async () => ({
+        stripeBacked: new Set<string>(),
+        stripeless: new Set<string>(),
+        cancelAtPeriodEnd: new Set<string>()
+      }))
+    });
+    const result = await sweepMonthlyGrowthEmails(d);
+    expect(result.skipReasons).toEqual({ no_subscription: 1 });
+    expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("counts a Stripe-less enterprise row as a customer", async () => {
+    const d = deps({
+      loadLiveSubscriptions: vi.fn(async (ids: string[]) => ({
+        stripeBacked: new Set<string>(),
+        stripeless: new Set(ids),
+        cancelAtPeriodEnd: new Set<string>()
+      }))
+    });
+    expect((await sweepMonthlyGrowthEmails(d)).sent).toBe(1);
   });
 
   it("skips a wiped tenant and one with no owner email", async () => {
@@ -298,7 +334,8 @@ describe("sweepMonthlyGrowthEmails", () => {
       previous: null,
       changes: null,
       projection: null,
-      latestMonthIncomplete: false
+      latestMonthIncomplete: false,
+      recentlyActive: true
     };
     const d = deps({ loadReport: vi.fn(async () => stale) });
     const result = await sweepMonthlyGrowthEmails(d);
@@ -306,10 +343,18 @@ describe("sweepMonthlyGrowthEmails", () => {
     expect(d.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("skips a silent month rather than mailing a table of zeros", async () => {
-    const d = deps({ loadReport: vi.fn(async () => reportWith({ leads: 0, texts: 0, calls: 0 })) });
+  it("skips a month too thin to be worth an email", async () => {
+    const d = deps({ loadReport: vi.fn(async () => reportWith({ leads: 1, texts: 1, calls: 1 })) });
     const result = await sweepMonthlyGrowthEmails(d);
-    expect(result.skipReasons).toEqual({ no_activity: 1 });
+    expect(result.skipReasons).toEqual({ thin_data: 1 });
+    expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("skips a tenant who has gone quiet since the month it would report on", async () => {
+    const dormant = { ...reportWith(), recentlyActive: false };
+    const d = deps({ loadReport: vi.fn(async () => dormant) });
+    const result = await sweepMonthlyGrowthEmails(d);
+    expect(result.skipReasons).toEqual({ dormant: 1 });
     expect(d.sendEmail).not.toHaveBeenCalled();
   });
 
@@ -392,6 +437,7 @@ describe("sweepMonthlyGrowthEmails", () => {
       const result = await sweepMonthlyGrowthEmails({
         client: d.client,
         loadBusinesses: d.loadBusinesses,
+        loadLiveSubscriptions: d.loadLiveSubscriptions,
         loadReport: d.loadReport,
         loadPreferences: d.loadPreferences,
         sendEmail: d.sendEmail,
@@ -438,6 +484,7 @@ describe("sweepMonthlyGrowthEmails", () => {
         now: NOW,
         siteUrl: d.siteUrl,
         loadBusinesses: d.loadBusinesses,
+        loadLiveSubscriptions: d.loadLiveSubscriptions,
         loadReport: d.loadReport,
         loadPreferences: d.loadPreferences,
         sendEmail: d.sendEmail,

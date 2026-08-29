@@ -53,21 +53,24 @@ async function reportFor(
   now: Date = NOW
 ): Promise<GrowthReport> {
   let i = 0;
-  const snapshotBuilder = {
-    select: () => snapshotBuilder,
-    eq: () => snapshotBuilder,
-    gte: () => snapshotBuilder,
-    lt: () => Promise.resolve({ data: snapshots, error: null })
+  // Thenable rather than resolving on a terminal method: the snapshot query
+  // has no upper bound (the days after the reported month answer "are they
+  // still active?"), so a mock keyed to `.lt()` would hand back the builder.
+  const builder = (result: () => unknown): Record<string, unknown> => {
+    const b: Record<string, unknown> = {
+      then: (onFulfilled?: (v: unknown) => unknown, onRejected?: (r: unknown) => unknown) =>
+        Promise.resolve(result()).then(onFulfilled, onRejected)
+    };
+    for (const method of ["select", "eq", "gte", "lt", "order"]) b[method] = () => b;
+    return b;
   };
-  const countBuilder = {
-    select: () => countBuilder,
-    eq: () => countBuilder,
-    gte: () => countBuilder,
-    lt: () => Promise.resolve({ count: leads[i++] ?? 0, error: null })
-  };
+  const snapshotBuilder = builder(() => ({ data: snapshots, error: null }));
   return await loadGrowthReport("biz-1", {
     client: {
-      from: (t: string) => (t === "analytics_daily_snapshots" ? snapshotBuilder : countBuilder)
+      from: (t: string) =>
+        t === "analytics_daily_snapshots"
+          ? snapshotBuilder
+          : builder(() => ({ count: leads[i++] ?? 0, error: null }))
     } as never,
     now,
     months

@@ -43,6 +43,31 @@ const DEFAULT_GROWTH_MONTHS = 6;
 /** Fewest complete months before a forward projection is honest. */
 const MIN_MONTHS_FOR_TREND = 3;
 
+/**
+ * A tenant with no calls and no texts in this many trailing days has stopped
+ * using the product. Sending them a cheerful summary of a month they have
+ * since abandoned is the wrong message at the wrong time, and it is the kind
+ * of email that gets a product marked as spam.
+ *
+ * Measured from the send date, so it OVERLAPS the reported month: a tenant who
+ * was busy all August is active on Sep 3 by construction. What it actually
+ * catches is the tenant who was busy early in the month and then stopped.
+ */
+const RECAP_DORMANT_DAYS = 30;
+
+/**
+ * Below this many days of snapshot coverage the reported month is a sample,
+ * not a month, and a "recap" of it would overstate what we know.
+ */
+const RECAP_MIN_COVERED_DAYS = 7;
+
+/**
+ * Fewest leads + texts + calls in the reported month worth an email. Under
+ * this, a table of near-zeros tells the owner less than the silence does, and
+ * it invites the reasonable question of why we bothered.
+ */
+const RECAP_MIN_MONTH_EVENTS = 5;
+
 export type GrowthMonth = {
   /** "YYYY-MM". */
   month: string;
@@ -80,6 +105,14 @@ export type GrowthReport = {
    * The email says so rather than presenting a short month as a real dip.
    */
   latestMonthIncomplete: boolean;
+  /**
+   * Any calls or texts in the {@link RECAP_DORMANT_DAYS} days before `now`.
+   *
+   * Snapshot-derived, so a lead captured with neither a message nor a call
+   * does not count. That is rare in practice (the coworker texts a new lead)
+   * and the failure is in the safe direction: a quiet tenant is not emailed.
+   */
+  recentlyActive: boolean;
 };
 
 function daysInMonth(month: string): number {
@@ -154,6 +187,8 @@ type SnapshotRow = {
 };
 
 type ComposeGrowthReportInput = {
+  /** Now, for the trailing-activity window. */
+  now: Date;
   /**
    * One entry per month in the window, oldest first, with `leads` and
    * `daysInMonth` already filled and the snapshot counters at zero.
@@ -170,12 +205,21 @@ type ComposeGrowthReportInput = {
 /** Fold snapshot days into the seeded months. */
 function composeGrowthReport(input: ComposeGrowthReportInput): GrowthReport {
   const byMonth = new Map<string, GrowthMonth>(input.seeded.map((m) => [m.month, m]));
+  // Days on or after this are the "still using it?" window. It reaches past
+  // the reported month into the days since, which is the whole point.
+  const dormantCutoff = new Date(input.now.getTime() - RECAP_DORMANT_DAYS * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  let recentlyActive = false;
 
   for (const row of input.snapshots) {
+    const calls = Number(row.calls ?? 0);
+    const texts = Number(row.sms_sent ?? 0);
+    if (row.snapshot_date >= dormantCutoff && calls + texts > 0) recentlyActive = true;
     const entry = byMonth.get(row.snapshot_date.slice(0, 7));
     if (!entry) continue;
-    entry.calls += Number(row.calls ?? 0);
-    entry.texts += Number(row.sms_sent ?? 0);
+    entry.calls += calls;
+    entry.texts += texts;
     entry.voiceMinutes += Number(row.voice_minutes ?? 0);
     entry.coveredDays += 1;
   }
@@ -215,15 +259,35 @@ function composeGrowthReport(input: ComposeGrowthReportInput): GrowthReport {
     previous,
     changes,
     projection,
-    latestMonthIncomplete: latest !== null && latest.coveredDays < latest.daysInMonth
+    latestMonthIncomplete: latest !== null && latest.coveredDays < latest.daysInMonth,
+    recentlyActive
   };
 }
 
-/** True when the reported month has nothing worth emailing about. */
-export function hasReportableActivity(report: GrowthReport): boolean {
+/**
+ * Whether this tenant should get a recap at all, and if not, why.
+ *
+ * Three different "no"s, kept apart because they mean different things to
+ * whoever reads the sweep's summary:
+ *
+ * - `no_month`: nothing measured has finished yet. A tenant in their first
+ *   calendar month, or one whose snapshots do not reach back far enough.
+ * - `dormant`: they have not made a call or sent a text in
+ *   RECAP_DORMANT_DAYS. They stopped, and a summary of a month they have
+ *   since abandoned is the wrong message.
+ * - `thin`: the month is measured but there is not enough in it to be worth
+ *   an email, either because coverage is too short to represent a month or
+ *   because almost nothing happened in it.
+ */
+export type RecapVerdict = "send" | "no_month" | "dormant" | "thin";
+
+export function classifyRecap(report: GrowthReport): RecapVerdict {
   const m = report.latest;
-  if (!m) return false;
-  return m.leads > 0 || m.texts > 0 || m.calls > 0;
+  if (!m) return "no_month";
+  if (!report.recentlyActive) return "dormant";
+  if (m.coveredDays < RECAP_MIN_COVERED_DAYS) return "thin";
+  if (m.leads + m.texts + m.calls < RECAP_MIN_MONTH_EVENTS) return "thin";
+  return "send";
 }
 
 // ---------------------------------------------------------------------------
@@ -285,19 +349,18 @@ export async function loadGrowthReport(
   const now = opts.now ?? new Date();
   const months = completeMonths(now, opts.months ?? DEFAULT_GROWTH_MONTHS);
   if (months.length === 0) {
-    return composeGrowthReport({ seeded: [], snapshots: [] });
+    return composeGrowthReport({ now, seeded: [], snapshots: [] });
   }
 
   const windowStart = `${months[0]}-01`;
-  // Exclusive upper bound: the first day of the month currently in progress.
-  const windowEnd = monthStart(now).toISOString().slice(0, 10);
-
+  // Deliberately NOT capped at the start of the current month. Days since the
+  // month ended are what answer "are they still using this?", and the fold
+  // below ignores any day outside the reported months anyway.
   const snapshotRes = await db
     .from("analytics_daily_snapshots")
     .select("snapshot_date, calls, sms_sent, voice_minutes")
     .eq("business_id", businessId)
-    .gte("snapshot_date", windowStart)
-    .lt("snapshot_date", windowEnd);
+    .gte("snapshot_date", windowStart);
   if (snapshotRes.error) {
     throw new Error(`growth report snapshots: ${snapshotRes.error.message}`);
   }
@@ -320,6 +383,7 @@ export async function loadGrowthReport(
   }
 
   return composeGrowthReport({
+    now,
     seeded,
     snapshots: (snapshotRes.data ?? []) as SnapshotRow[]
   });

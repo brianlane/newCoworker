@@ -21,14 +21,22 @@
  *   has its own flag because the footer link has to be proportionate: sending
  *   someone to the global unsubscribe to stop a monthly summary would have
  *   cost them urgent lead alerts on every channel.
- * - tenants with nothing to report: a month with no leads, no texts and no
- *   calls produces a table of zeros, which is worse than silence.
+ * - tenants who have stopped (`dormant`) and tenants whose month is too thin
+ *   to be worth an email (`thin_data`). See `classifyRecap`: a summary of a
+ *   month someone has since abandoned is the wrong message, and a table of
+ *   near-zeros tells the reader less than silence does.
  * - tenants with no complete month yet: nothing to say, and the template
  *   returns null for them anyway.
  * - tenants whose newest MEASURED month is older than the one being reported
  *   (onboarded last week, or a snapshot sweep behind): claiming the month and
  *   mailing an older one would also burn the stamp, so the month is left for
  *   a later pass.
+ * - tenants with no live subscription. This is what keeps the recap off the
+ *   demo and app-review sandboxes, and it is a data signal rather than a name
+ *   heuristic: every sandbox has zero live rows and every real customer has
+ *   one. Dormancy alone would not do it, because a reviewer exercising a
+ *   sandbox during an app review makes it look active for that month, and the
+ *   recap would go to a reviewer address.
  * - wiped tenants and tenants with no owner email: no recipient.
  *
  * Every skip is COUNTED and the reason is returned, so "why did nobody get
@@ -38,10 +46,11 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listBusinesses, type BusinessRow } from "@/lib/db/businesses";
+import { listBusinessIdsWithLiveSubscription } from "@/lib/db/subscriptions";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildMonthlyGrowthEmail } from "@/lib/email/templates/monthly-growth";
-import { hasReportableActivity, loadGrowthReport } from "@/lib/analytics/growth-report";
+import { classifyRecap, loadGrowthReport } from "@/lib/analytics/growth-report";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { logger } from "@/lib/logger";
 
@@ -64,9 +73,11 @@ type MonthlyGrowthSkipReason =
   | "already_sent"
   | "no_owner_email"
   | "wiped"
+  | "no_subscription"
   | "unsubscribed"
   | "recap_declined"
-  | "no_activity"
+  | "dormant"
+  | "thin_data"
   | "no_complete_month"
   | "no_data_for_month";
 
@@ -84,6 +95,7 @@ export type MonthlyGrowthSweepDeps = {
   client?: SupabaseClient;
   now?: Date;
   loadBusinesses?: typeof listBusinesses;
+  loadLiveSubscriptions?: typeof listBusinessIdsWithLiveSubscription;
   loadReport?: typeof loadGrowthReport;
   loadPreferences?: typeof getNotificationPreferences;
   sendEmail?: typeof sendOwnerEmail;
@@ -136,7 +148,7 @@ type BusinessWithStamp = BusinessRow & { monthly_growth_email_sent_for?: string 
  */
 function preflightSkip(
   business: BusinessWithStamp,
-  consent: { unsubscribed: boolean; recapEnabled: boolean }
+  consent: { unsubscribed: boolean; recapEnabled: boolean; paying: boolean }
 ): MonthlyGrowthSkipReason | null {
   // No stamp check here: the candidate filter already dropped rows reported
   // this month, and a row stamped between that read and now is caught by the
@@ -144,6 +156,7 @@ function preflightSkip(
   // second check here would be a branch nothing could reach.
   if (business.status === "wiped") return "wiped";
   if (!business.owner_email?.trim()) return "no_owner_email";
+  if (!consent.paying) return "no_subscription";
   if (consent.unsubscribed) return "unsubscribed";
   if (!consent.recapEnabled) return "recap_declined";
   return null;
@@ -155,6 +168,7 @@ export async function sweepMonthlyGrowthEmails(
   /* c8 ignore start -- production defaults; unit tests inject every dependency */
   const db = deps.client ?? (await createSupabaseServiceClient());
   const loadBusinesses = deps.loadBusinesses ?? listBusinesses;
+  const loadLiveSubscriptions = deps.loadLiveSubscriptions ?? listBusinessIdsWithLiveSubscription;
   const loadReport = deps.loadReport ?? loadGrowthReport;
   const loadPreferences = deps.loadPreferences ?? getNotificationPreferences;
   const send = deps.sendEmail ?? sendOwnerEmail;
@@ -220,6 +234,16 @@ export async function sweepMonthlyGrowthEmails(
     return result;
   }
 
+  // One read for the whole batch rather than one per tenant, and only once we
+  // know a send is possible at all. Both kinds of live row count: an
+  // admin-created enterprise account with no Stripe id is still a customer
+  // who should hear how their month went.
+  const live = await loadLiveSubscriptions(
+    businesses.map((b) => b.id),
+    db
+  );
+  const paying = new Set([...live.stripeBacked, ...live.stripeless]);
+
   for (const business of businesses) {
     try {
       // Preferences failing open would email someone who opted out, so a read
@@ -228,6 +252,7 @@ export async function sweepMonthlyGrowthEmails(
       // missed lead alert costs a lead).
       const prefs = await loadPreferences(business.id, db).catch(() => null);
       const consent = {
+        paying: paying.has(business.id),
         unsubscribed: prefs === null || prefs.unsubscribed_at !== null,
         // `?? true` for rows written before 20260829061823, matching the
         // column default rather than silently muting every existing tenant.
@@ -241,8 +266,17 @@ export async function sweepMonthlyGrowthEmails(
       }
 
       const report = await loadReport(business.id, { client: db, now });
-      if (!report.latest) {
+      const verdict = classifyRecap(report);
+      if (verdict === "no_month") {
         skip("no_complete_month");
+        continue;
+      }
+      if (verdict === "dormant") {
+        skip("dormant");
+        continue;
+      }
+      if (verdict === "thin") {
+        skip("thin_data");
         continue;
       }
       // The report DROPS months with no snapshot coverage, so its newest month
@@ -250,12 +284,8 @@ export async function sweepMonthlyGrowthEmails(
       // week, or a snapshot sweep that has not caught up, leaves the newest
       // measured month older than `month`. Sending then would stamp August and
       // mail a July recap, and the stamp would stop August ever going out.
-      if (report.latest.month !== month) {
+      if (report.latest!.month !== month) {
         skip("no_data_for_month");
-        continue;
-      }
-      if (!hasReportableActivity(report)) {
-        skip("no_activity");
         continue;
       }
 

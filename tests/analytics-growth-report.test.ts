@@ -6,7 +6,7 @@
  * serving the one snapshot read and the per-month contact counts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { hasReportableActivity, loadGrowthReport } from "@/lib/analytics/growth-report";
+import { classifyRecap, loadGrowthReport } from "@/lib/analytics/growth-report";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -48,9 +48,13 @@ function fullMonth(month: string, over: Partial<SnapshotRow> = {}): SnapshotRow[
 }
 
 /**
- * One snapshot read (`.select().eq().gte().lt()`) and then one head count per
- * month (`.select().eq().eq().gte().lt()`), which is the shape the loader
- * issues.
+ * The snapshot read and the per-month head counts, as thenable builders.
+ *
+ * Thenable rather than resolving on a specific terminal method: the snapshot
+ * query deliberately has no upper bound any more (the days AFTER the reported
+ * month are what answer "are they still using this?"), and a mock that only
+ * resolved on `.lt()` would silently hand back the builder instead of a row
+ * set the moment that changed.
  */
 function mockClient(opts: {
   snapshots?: SnapshotRow[];
@@ -63,33 +67,32 @@ function mockClient(opts: {
   countError?: string;
 }) {
   let countIndex = 0;
-  const snapshotBuilder = {
-    select: () => snapshotBuilder,
-    eq: () => snapshotBuilder,
-    gte: () => snapshotBuilder,
-    lt: () =>
-      Promise.resolve(
-        opts.snapshotError
-          ? { data: null, error: { message: opts.snapshotError } }
-          : { data: opts.nullSnapshots ? null : (opts.snapshots ?? []), error: null }
-      )
+
+  const snapshotResult = () =>
+    opts.snapshotError
+      ? { data: null, error: { message: opts.snapshotError } }
+      : { data: opts.nullSnapshots ? null : (opts.snapshots ?? []), error: null };
+
+  const countResult = () => {
+    if (opts.countError) return { count: null, error: { message: opts.countError } };
+    const value = opts.counts?.[countIndex] ?? 0;
+    countIndex += 1;
+    return { count: opts.nullCount ? null : value, error: null };
   };
-  const countBuilder = {
-    select: () => countBuilder,
-    eq: () => countBuilder,
-    gte: () => countBuilder,
-    lt: () => {
-      const value = opts.counts?.[countIndex] ?? 0;
-      countIndex += 1;
-      if (opts.countError) {
-        return Promise.resolve({ count: null, error: { message: opts.countError } });
-      }
-      return Promise.resolve({ count: opts.nullCount ? null : value, error: null });
-    }
+
+  const builder = (result: () => unknown): Record<string, unknown> => {
+    const b: Record<string, unknown> = {
+      then: (onFulfilled?: (v: unknown) => unknown, onRejected?: (r: unknown) => unknown) =>
+        Promise.resolve(result()).then(onFulfilled, onRejected)
+    };
+    for (const method of ["select", "eq", "gte", "lt", "order"]) b[method] = () => b;
+    return b;
   };
+
+  const snapshotBuilder = builder(snapshotResult);
   return {
     from: (table: string) =>
-      table === "analytics_daily_snapshots" ? snapshotBuilder : countBuilder
+      table === "analytics_daily_snapshots" ? snapshotBuilder : builder(countResult)
   } as never;
 }
 
@@ -350,40 +353,144 @@ describe("the projection", () => {
   });
 });
 
-describe("hasReportableActivity", () => {
-  const withMonth = async (over: { leads?: number; texts?: number; calls?: number }) =>
-    await loadGrowthReport("biz-1", {
-      client: mockClient({
-        snapshots: [
-          snapshot("2026-08-01", {
-            calls: over.calls ?? 0,
-            sms_sent: over.texts ?? 0,
-            voice_minutes: 0
-          })
-        ],
-        counts: [over.leads ?? 0]
-      }),
+describe("classifyRecap", () => {
+  /** A busy, fully-covered August, plus days in September so they read active. */
+  const busy = () => [
+    ...fullMonth("2026-08", { calls: 2, sms_sent: 20, voice_minutes: 5 }),
+    snapshot("2026-09-02", { calls: 1, sms_sent: 5 })
+  ];
+
+  it("sends for a covered, busy, still-active month", async () => {
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({ snapshots: busy(), counts: [40] }),
       now: NOW,
       months: 1
     });
-
-  it("is false for a silent month", async () => {
-    expect(hasReportableActivity(await withMonth({}))).toBe(false);
+    expect(classifyRecap(report)).toBe("send");
   });
 
-  it("is true when any of the three headline metrics moved", async () => {
-    expect(hasReportableActivity(await withMonth({ leads: 1 }))).toBe(true);
-    expect(hasReportableActivity(await withMonth({ texts: 1 }))).toBe(true);
-    expect(hasReportableActivity(await withMonth({ calls: 1 }))).toBe(true);
-  });
-
-  it("is false when there is no complete month", async () => {
-    const empty = await loadGrowthReport("biz-1", {
+  it("says no_month when nothing measured has finished", async () => {
+    const report = await loadGrowthReport("biz-1", {
       client: mockClient({}),
       now: NOW,
       months: 0
     });
-    expect(hasReportableActivity(empty)).toBe(false);
+    expect(classifyRecap(report)).toBe("no_month");
+  });
+
+  it("says dormant when the tenant stopped after a busy start", async () => {
+    // Real shape: they worked leads Aug 1-4, then nothing. `now` is Sep 4, so
+    // the trailing 30 days start Aug 5 and are empty. A cheerful August recap
+    // would land on someone who has already left.
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: Array.from({ length: 4 }, (_, i) =>
+          snapshot(`2026-08-0${i + 1}`, { calls: 4, sms_sent: 40 })
+        ),
+        counts: [30]
+      }),
+      now: NOW,
+      months: 1
+    });
+    expect(report.recentlyActive).toBe(false);
+    expect(classifyRecap(report)).toBe("dormant");
+  });
+
+  it("counts a day exactly on the window edge as inside it", async () => {
+    // Sep 4 minus 30 days is Aug 5, and the comparison is inclusive, so a
+    // tenant whose last activity was that day is active, not dormant.
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: [snapshot("2026-08-05", { calls: 4, sms_sent: 40 })],
+        counts: [30]
+      }),
+      now: NOW,
+      months: 1
+    });
+    expect(report.recentlyActive).toBe(true);
+  });
+
+  it("counts a call or a text in the trailing window as still active", async () => {
+    for (const recent of [{ calls: 1, sms_sent: 0 }, { calls: 0, sms_sent: 1 }]) {
+      const report = await loadGrowthReport("biz-1", {
+        client: mockClient({
+          snapshots: [...fullMonth("2026-08", { calls: 1, sms_sent: 10 }), snapshot("2026-09-02", recent)],
+          counts: [20]
+        }),
+        now: NOW,
+        months: 1
+      });
+      expect(report.recentlyActive).toBe(true);
+    }
+  });
+
+  it("does not count a silent day in the trailing window as activity", async () => {
+    // Everything real is before the Aug 5 cutoff; the only day inside the
+    // window is a snapshot row with nothing on it, which the sweep writes for
+    // every business every day whether or not anything happened.
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: [
+          ...Array.from({ length: 4 }, (_, i) =>
+            snapshot(`2026-08-0${i + 1}`, { calls: 1, sms_sent: 10 })
+          ),
+          snapshot("2026-09-02", { calls: 0, sms_sent: 0 })
+        ],
+        counts: [20]
+      }),
+      now: NOW,
+      months: 1
+    });
+    expect(report.recentlyActive).toBe(false);
+  });
+
+  it("says thin when the month is barely covered", async () => {
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: [
+          ...Array.from({ length: 6 }, (_, i) =>
+            snapshot(`2026-08-0${i + 1}`, { calls: 5, sms_sent: 50 })
+          ),
+          snapshot("2026-09-02", { calls: 1, sms_sent: 5 })
+        ],
+        counts: [40]
+      }),
+      now: NOW,
+      months: 1
+    });
+    // Active and busy, but six days is a sample, not a month.
+    expect(report.recentlyActive).toBe(true);
+    expect(classifyRecap(report)).toBe("thin");
+  });
+
+  it("says thin when almost nothing happened in a fully covered month", async () => {
+    const days = fullMonth("2026-08", { calls: 0, sms_sent: 0, voice_minutes: 0 });
+    days[0] = snapshot("2026-08-01", { calls: 1, sms_sent: 1, voice_minutes: 0 });
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: [...days, snapshot("2026-09-02", { calls: 1, sms_sent: 0 })],
+        counts: [1]
+      }),
+      now: NOW,
+      months: 1
+    });
+    // 1 lead + 1 text + 1 call = 3 events, under the bar.
+    expect(classifyRecap(report)).toBe("thin");
+  });
+
+  it("sends at exactly the event bar", async () => {
+    const days = fullMonth("2026-08", { calls: 0, sms_sent: 0, voice_minutes: 0 });
+    days[0] = snapshot("2026-08-01", { calls: 2, sms_sent: 2, voice_minutes: 0 });
+    const report = await loadGrowthReport("biz-1", {
+      client: mockClient({
+        snapshots: [...days, snapshot("2026-09-02", { calls: 1, sms_sent: 0 })],
+        counts: [1]
+      }),
+      now: NOW,
+      months: 1
+    });
+    // 1 lead + 2 texts + 2 calls = 5.
+    expect(classifyRecap(report)).toBe("send");
   });
 });
 

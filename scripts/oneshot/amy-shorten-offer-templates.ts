@@ -20,8 +20,9 @@
  *
  *   1. REPLY-SYNTAX BLOCK -> ONE LINE. The two explanatory lines ("You can
  *      also reply \"1, <ETA>\"..." and "Passing? You can reply
- *      \"2, <reason>\"...") become one shorter line carrying the same two
- *      examples. ~130 characters off every offer.
+ *      \"2, <reason>\"...") become one shorter line that names all three
+ *      things a reply can carry, including the lead-name form the old copy
+ *      never mentioned. ~80 characters off every offer.
  *   2. CALL-SUMMARY SENTENCE -> SHORTER. "Whoever the AI rang first has the
  *      full call summary with what they want, their timeline, and when they
  *      asked to be called back." keeps its meaning in a third of the space.
@@ -110,7 +111,17 @@ export const ETA_LINE =
 export const PASS_LINE_LONG =
   'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").';
 export const PASS_LINE_SHORT = 'Passing? Reply "2, <reason>" to say why (e.g. "2, out of town").';
-export const COMPACT_REPLY_LINE = 'Add a note if useful: "1, 20 min" or "2, out of town".';
+/**
+ * Names all three things a reply can carry, in one line instead of two
+ * sentences. The lead-name form is real and has been since PR #1270: with two
+ * or more offers pending, "1, <name>" matches against the sender's own live
+ * offers (accents folded, exact beats partial) and only falls through to the
+ * ETA parser when nothing matches. A bare "1" with several pending asks which
+ * lead, which is the confusion this line exists to prevent.
+ */
+export const COMPACT_REPLY_LINE =
+  '1 to claim, or add a note if useful: "1, <ETA to call>", ' +
+  '"1, <Name of lead (if multiple)>" or "2, out of town".';
 
 /**
  * Collapse the reply-syntax boilerplate to one line.
