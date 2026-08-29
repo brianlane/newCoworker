@@ -210,6 +210,44 @@ describe("vps/data-api/schema.sql covers the email_log columns the dashboard rea
 });
 
 /**
+ * The same trap, one table over, and it had already been sprung.
+ *
+ * `notifications` is residency-moved, and its `delivery_channel` CHECK lives
+ * in the box schema exactly like `email_log.source`. The email_log half had
+ * a value-parity assertion; this one did not, so when Telegram widened the
+ * central CHECK the box copy silently stayed five channels behind. A
+ * residency tenant's first Telegram alert would have failed that CHECK and
+ * stalled their write journal, queueing every later write behind it.
+ *
+ * Derived from NotificationDeliveryChannel rather than hand-listed, so the
+ * next channel is covered on the day it lands rather than the day somebody
+ * remembers this file.
+ */
+describe("vps/data-api/schema.sql accepts every delivery channel the app can write", () => {
+  const sql = readFileSync(SCHEMA_PATH, "utf8");
+  const centralChannels = [
+    ...readFileSync(join(__dirname, "..", "src/lib/db/notifications.ts"), "utf8")
+      .match(/export type NotificationDeliveryChannel =([^;]+);/)![1]
+      .matchAll(/"([a-z]+)"/g)
+  ].map((m) => m[1]);
+
+  it("has found the central channel list it is checking against", () => {
+    expect(centralChannels.length).toBeGreaterThanOrEqual(5);
+    expect(centralChannels).toContain("dashboard");
+  });
+
+  it.each(centralChannels)("accepts %s", (channel) => {
+    const constraint =
+      /add constraint notifications_delivery_channel_check CHECK \(\(delivery_channel = ANY \(ARRAY\[([^\]]*)\]/.exec(
+        sql
+      );
+    expect(constraint).not.toBeNull();
+    const boxChannels = [...(constraint?.[1] ?? "").matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+    expect(boxChannels).toContain(channel);
+  });
+});
+
+/**
  * `voice_call_transcripts` columns the box must carry, DERIVED from the
  * projection the call drill-down actually sends. Two of them,
  * `answering_machine_result` and `voicemail_left`, were missing from the box

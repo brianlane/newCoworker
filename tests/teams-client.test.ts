@@ -15,6 +15,7 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: 
 
 import {
   buildTeamsAlertCard,
+  teamsFetchMember,
   teamsSendActivity,
   resetTeamsTokenStateForTests
 } from "@/lib/teams/client";
@@ -36,6 +37,23 @@ const REF = {
   conversationId: "19:abc@thread.tacv2"
 };
 
+/**
+ * Is this the Microsoft login endpoint?
+ *
+ * Parsed and compared by HOSTNAME rather than matched as a substring. A
+ * substring test says yes to `https://evil.test/?x=login.microsoftonline.com`
+ * as readily as to the real thing, which in a fetch stub means a test can
+ * hand a token to a call it was meant to fail, and the assertion still
+ * passes. The same reasoning as normalizeServiceUrl's own allowlist.
+ */
+function isLoginUrl(raw: unknown): boolean {
+  try {
+    return new URL(String(raw)).hostname === "login.microsoftonline.com";
+  } catch {
+    return false;
+  }
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   resetTeamsTokenStateForTests();
@@ -52,8 +70,8 @@ describe("the service url is checked, not trusted", () => {
   ])("accepts %s", async (url) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (u: string) =>
-        u.includes("login.microsoftonline.com")
+      vi.fn(async (url: string) =>
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
           : new Response(JSON.stringify({ id: "act-1" }))
       )
@@ -83,8 +101,8 @@ describe("the service url is checked, not trusted", () => {
   it("appends to the base path rather than replacing its last segment", async () => {
     // `new URL("v3/...", base)` drops the final path segment unless the base
     // ends in a slash, which would post to the wrong path.
-    const fetchMock = vi.fn(async (u: string) =>
-      u.includes("login.microsoftonline.com")
+    const fetchMock = vi.fn(async (url: string) =>
+      isLoginUrl(url)
         ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
         : new Response(JSON.stringify({ id: "act-1" }))
     );
@@ -97,11 +115,11 @@ describe("the service url is checked, not trusted", () => {
 describe("the app token", () => {
   /** Counts only the credential exchanges, not the sends. */
   const logins = (m: ReturnType<typeof vi.fn>) =>
-    m.mock.calls.filter((c) => String(c[0]).includes("login.microsoftonline.com")).length;
+    m.mock.calls.filter((c) => isLoginUrl(c[0])).length;
 
   function stubOk() {
-    const m = vi.fn(async (u: string) =>
-      u.includes("login.microsoftonline.com")
+    const m = vi.fn(async (url: string) =>
+      isLoginUrl(url)
         ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
         : new Response(JSON.stringify({ id: "act-1" }))
     );
@@ -142,8 +160,8 @@ describe("the app token", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-29T12:00:00Z"));
-      const m = vi.fn(async (u: string) =>
-        u.includes("login.microsoftonline.com")
+      const m = vi.fn(async (url: string) =>
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok" }))
           : new Response(JSON.stringify({ id: "act-1" }))
       );
@@ -219,7 +237,7 @@ describe("the app token", () => {
 describe("sending an activity", () => {
   function okToken() {
     return vi.fn(async (url: string) =>
-      url.includes("login.microsoftonline.com")
+      isLoginUrl(url)
         ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
         : new Response(JSON.stringify({ id: "activity-1" }))
     );
@@ -242,7 +260,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.includes("login.microsoftonline.com")
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
           : ({
               ok: false,
@@ -260,7 +278,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.includes("login.microsoftonline.com")
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
           : new Response("not json")
       )
@@ -272,7 +290,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.includes("login.microsoftonline.com")
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
           : new Response("forbidden", { status: 403 })
       )
@@ -284,7 +302,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("login.microsoftonline.com")) {
+        if (isLoginUrl(url)) {
           return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }));
         }
         throw "socket exploded";
@@ -297,7 +315,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("login.microsoftonline.com")) {
+        if (isLoginUrl(url)) {
           return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }));
         }
         throw new Error("socket hang up");
@@ -313,7 +331,7 @@ describe("sending an activity", () => {
         "fetch",
         vi.fn(
           (url: string, init: RequestInit) =>
-            url.includes("login.microsoftonline.com")
+            isLoginUrl(url)
               ? Promise.resolve(
                   new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
                 )
@@ -344,7 +362,7 @@ describe("sending an activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.includes("login.microsoftonline.com")
+        isLoginUrl(url)
           ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
           : new Response(JSON.stringify({}))
       )
@@ -391,5 +409,134 @@ describe("the alert card", () => {
       content: { body: { text: string }[] };
     };
     expect(card.content.body[2].text).toBe("Dana called");
+  });
+});
+
+describe("looking a member up in the directory", () => {
+  /**
+   * This is where a Teams identity comes from, and the reason it exists at
+   * all is that the obvious alternative is wrong: an inbound activity does
+   * NOT carry the sender's address. `from` is a ChannelAccount and
+   * `entities` is clientInfo and mentions.
+   *
+   * It returns null on every failure rather than throwing, because from the
+   * caller's side a tenant that hides addresses and a Microsoft outage are
+   * the same condition: fall back to a link code, do not answer 500 at a
+   * webhook that already stored the message.
+   */
+  const stubMember = (body: unknown, status = 200) => {
+    const m = vi.fn(async (url: string, _init?: RequestInit) =>
+      isLoginUrl(url)
+        ? new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
+        : new Response(typeof body === "string" ? body : JSON.stringify(body), { status })
+    );
+    vi.stubGlobal("fetch", m);
+    return m;
+  };
+
+  it("asks the members endpoint, with the ids escaped into the path", async () => {
+    const m = stubMember({ objectId: "obj-1", email: "Dana@Acme.com", name: "Dana Ruiz" });
+    expect(await teamsFetchMember(REF, "29:xyz")).toEqual({
+      aadObjectId: "obj-1",
+      // Case-folded, because it is matched against roster rows.
+      email: "dana@acme.com",
+      name: "Dana Ruiz"
+    });
+    const [url, init] = m.mock.calls.find(([u]) => !isLoginUrl(u))!;
+    // Both ids are encoded: a conversation id contains `:` and `@`, and an
+    // unescaped one would reshape the path we send our own bearer token to.
+    expect(url).toBe(
+      "https://smba.trafficmanager.net/teams/v3/conversations/19%3Aabc%40thread.tacv2/members/29%3Axyz"
+    );
+    expect(init?.headers).toMatchObject({ Authorization: "Bearer tok" });
+  });
+
+  it("falls back to the userPrincipalName when there is no mail attribute", async () => {
+    stubMember({ userPrincipalName: "dana@acme.com" });
+    expect(await teamsFetchMember(REF, "29:xyz")).toMatchObject({ email: "dana@acme.com" });
+  });
+
+  it.each([
+    ["the directory exposes no address", { objectId: "obj-1", name: "Dana" }],
+    ["the address is not one at all", { email: "dana" }],
+    ["the address is blank", { email: "   " }]
+  ])("reports a null address when %s", async (_label, body) => {
+    stubMember(body);
+    expect(await teamsFetchMember(REF, "29:xyz")).toMatchObject({ email: null });
+  });
+
+  it.each([
+    ["the member is not found", "{}", 404],
+    ["the app is not permitted to read it", "{}", 403],
+    ["the response is not JSON", "not json", 200],
+    ["the response is a bare null", "null", 200]
+  ])("returns null rather than throwing when %s", async (_label, body, status) => {
+    stubMember(body, status);
+    expect(await teamsFetchMember(REF, "29:xyz")).toBeNull();
+  });
+
+  it("returns null when the network throws", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("socket hang up");
+      })
+    );
+    expect(await teamsFetchMember(REF, "29:xyz")).toBeNull();
+  });
+
+  it("throws nothing that is not an Error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw "gone";
+      })
+    );
+    expect(await teamsFetchMember(REF, "29:xyz")).toBeNull();
+  });
+
+  it("REFUSES a non-Microsoft service url without sending anything", async () => {
+    // The same credential-disclosure argument as the send path, and it has
+    // to be made again here: this request carries the identical bearer
+    // token, so a lookup that skipped the allowlist would leak it just as
+    // completely as a send that did.
+    const m = stubMember({ email: "dana@acme.com" });
+    expect(
+      await teamsFetchMember({ ...REF, serviceUrl: "https://evil.test/" }, "29:xyz")
+    ).toBeNull();
+    expect(m).not.toHaveBeenCalled();
+  });
+
+  it("aborts a hung lookup rather than holding the webhook open", async () => {
+    // The timeout matters more here than on the send path: this call sits
+    // INSIDE the webhook's ack window, so a directory that never answers
+    // would make Bot Framework time us out and redeliver the message.
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) =>
+          isLoginUrl(url)
+            ? Promise.resolve(
+                new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }))
+              )
+            : new Promise((_r, reject) => {
+                init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+              })
+        )
+      );
+      const pending = teamsFetchMember(REF, "29:xyz");
+      const assertion = expect(pending).resolves.toBeNull();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts a caller-supplied token instead of minting one", async () => {
+    const m = stubMember({ email: "dana@acme.com" });
+    await teamsFetchMember(REF, "29:xyz", { token: "given" });
+    expect(m.mock.calls.some(([u]) => isLoginUrl(u))).toBe(false);
   });
 });

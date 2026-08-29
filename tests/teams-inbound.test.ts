@@ -3,12 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Teams inbound.
  *
- * Identity is easier here than on Telegram, and the tests say why: an
- * activity carries a directory address, so `resolveSurfaceSpeaker` answers
- * owner / teammate / customer the way it already does for Slack. What is
- * NOT easier is delivery, because Teams cannot start a conversation: the
- * first conversation the bot sees has to be captured or an alert has
- * nowhere to go, and that capture is pinned below.
+ * Identity is easier here than on Telegram, and the tests say why: the
+ * tenant's own directory answers who is speaking, so `resolveSurfaceSpeaker`
+ * answers owner / teammate / customer the way it already does for Slack.
+ *
+ * The tests below pin WHERE that address comes from, because the obvious
+ * answer is wrong and its failure is silent. It is not on the activity: it
+ * is fetched from the Bot Connector's members endpoint. An implementation
+ * that reads `activity.entities` or `activity.from` gets undefined every
+ * time, raises nothing, and quietly treats every colleague as a stranger.
+ *
+ * What is NOT easier is delivery, because Teams cannot start a
+ * conversation: the first conversation the bot sees has to be captured or
+ * an alert has nowhere to go, and that capture is pinned below.
  */
 
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -44,7 +51,6 @@ function activity(overrides: Partial<TeamsActivity> = {}): TeamsActivity {
     conversation: { id: "19:abc@thread.tacv2" },
     from: { id: "29:xyz", name: "Dana Ruiz", aadObjectId: "obj-1" },
     channelData: { tenant: { id: TENANT } },
-    entities: [{ type: "clientInfo", email: "dana@acme.com" }],
     ...overrides
   };
 }
@@ -53,6 +59,12 @@ function deps(overrides: TeamsInboundDeps = {}): TeamsInboundDeps {
   return {
     send: vi.fn(async () => ({ activityId: "1" })),
     findIdentity: vi.fn(async () => null),
+    fetchMember: vi.fn(async () => ({
+      aadObjectId: "obj-1",
+      email: "dana@acme.com",
+      name: "Dana Ruiz"
+    })),
+    upsertIdentity: vi.fn(async () => ({ id: "ident-1" }) as never),
     redeem: vi.fn(async () => ({ ok: false as const, reason: "unknown" as const })),
     resolveSpeaker: vi.fn(async () => ({
       kind: "teammate" as const,
@@ -77,40 +89,142 @@ function deps(overrides: TeamsInboundDeps = {}): TeamsInboundDeps {
 beforeEach(() => vi.clearAllMocks());
 
 describe("identity comes from the directory", () => {
-  it("resolves the speaker by the address Teams supplies", async () => {
+  it("resolves the speaker by the address the DIRECTORY returns", async () => {
     const d = deps();
     await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    // The lookup is made against the CHANNEL ACCOUNT id, which is what the
+    // members endpoint keys on, while the binding and the speaker are keyed
+    // on the Entra object id, which survives a rename or an address change.
+    expect(d.fetchMember).toHaveBeenCalledWith(
+      { serviceUrl: "https://smba.trafficmanager.net/amer/", conversationId: "19:abc@thread.tacv2" },
+      "29:xyz"
+    );
     expect(d.resolveSpeaker).toHaveBeenCalledWith(BIZ, {
       email: "dana@acme.com",
-      // The Entra object id, not the channel account id: it survives renames
-      // and address changes, which is what a binding must key on.
       externalRef: { channel: "teams", externalUserId: "obj-1" }
     });
   });
 
-  it.each([
-    ["an email entity", [{ type: "clientInfo", email: "dana@acme.com" }], "dana@acme.com"],
-    // Teams does not put this in one fixed place: which one arrives depends
-    // on the client and the tenant's settings. Both are directory-owned
-    // rather than self-asserted, which is what makes either safe to match a
-    // roster row on.
-    [
-      "a userPrincipalName, case-folded",
-      [{ type: "clientInfo", userPrincipalName: "Dana@Acme.com" }],
-      "dana@acme.com"
-    ],
-    ["no entities at all", [], null],
-    ["an entity carrying neither", [{ type: "clientInfo" }], null]
-  ])("reads the sender address from %s", async (_label, entities, expected) => {
-    const d = deps();
+  it("does not go looking for the address on the activity", async () => {
+    // The regression this pins. `from` and `entities` never carry it, so an
+    // implementation that reads them resolves EVERY sender as a stranger,
+    // with no error anywhere. Here the directory withholds the address and
+    // the activity is stuffed with plausible-looking ones; the only correct
+    // answer is null.
+    const d = deps({ fetchMember: vi.fn(async () => null) });
     await handleTeamsActivity(
-      { connection: CONNECTION, activity: activity({ entities: entities as never }) },
+      {
+        connection: CONNECTION,
+        activity: {
+          ...activity(),
+          from: { id: "29:xyz", name: "Dana Ruiz", aadObjectId: "obj-1" },
+          ...({
+            entities: [{ type: "clientInfo", email: "dana@acme.com" }]
+          } as object)
+        } as TeamsActivity
+      },
       d
     );
     expect(d.resolveSpeaker).toHaveBeenCalledWith(
       BIZ,
+      expect.objectContaining({ email: null })
+    );
+  });
+
+  it.each([
+    ["the directory answers with an address", { email: "dana@acme.com" }, "dana@acme.com"],
+    ["the directory withholds it", { email: null }, null]
+  ])("carries the address through when %s", async (_label, member, expected) => {
+    const d = deps({
+      fetchMember: vi.fn(async () => ({ aadObjectId: null, name: null, ...member }))
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.resolveSpeaker).toHaveBeenCalledWith(
+      BIZ,
       expect.objectContaining({ email: expected })
     );
+  });
+
+  it("costs a directory lookup ONCE, then reads the recorded binding", async () => {
+    // A lookup per message would put a Microsoft round trip inside every
+    // webhook ack window, and would hand a flaky directory the power to
+    // tell somebody mid-conversation that we no longer know who they are.
+    const d = deps({
+      findIdentity: vi.fn(async () => ({
+        id: "ident-1",
+        verified_email: "dana@acme.com"
+      }) as never)
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.fetchMember).not.toHaveBeenCalled();
+    expect(d.upsertIdentity).not.toHaveBeenCalled();
+    expect(d.resolveSpeaker).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ email: "dana@acme.com" })
+    );
+  });
+
+  it("records the binding as `directory`, not as an act by the person", async () => {
+    // `linked_via` is an audit column about how somebody came to hold staff
+    // powers. Filing a directory answer under `shared_contact` would
+    // overstate the evidence behind the grant.
+    const d = deps();
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.upsertIdentity).toHaveBeenCalledWith({
+      businessId: BIZ,
+      channel: "teams",
+      externalUserId: "obj-1",
+      employeeId: null,
+      isOwner: false,
+      verifiedEmail: "dana@acme.com",
+      linkedVia: "directory"
+    });
+  });
+
+  it("records nothing for someone the roster does not place", async () => {
+    // Otherwise the first stranger to message the bot gets a row asserting
+    // a binding, and `resolveSurfaceSpeaker` is handed an externalRef that
+    // says somebody vouched for them.
+    const d = deps({
+      resolveSpeaker: vi.fn(async () => ({
+        kind: "customer" as const,
+        name: null,
+        readFailed: false
+      }))
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.upsertIdentity).not.toHaveBeenCalled();
+  });
+
+  it("records an owner as an owner", async () => {
+    const d = deps({
+      resolveSpeaker: vi.fn(async () => ({
+        kind: "owner" as const,
+        name: "Dana",
+        readFailed: false
+      }))
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.upsertIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({ isOwner: true })
+    );
+  });
+
+  it("answers the message even when the binding write fails", async () => {
+    const d = deps({
+      upsertIdentity: vi.fn(async () => {
+        throw new Error("write down");
+      })
+    });
+    expect(
+      await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d)
+    ).toEqual({ enqueued: true });
+  });
+
+  it("writes no binding when the directory withheld the address", async () => {
+    const d = deps({ fetchMember: vi.fn(async () => null) });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
+    expect(d.upsertIdentity).not.toHaveBeenCalled();
   });
 
   it("falls back to the channel account id when there is no Entra object id", async () => {
@@ -192,12 +306,40 @@ describe("capturing where a proactive alert can go", () => {
     const d = deps();
     await handleTeamsActivity(
       {
-        connection: { ...CONNECTION, alert_target_id: "19:other@thread.tacv2" },
+        connection: {
+          ...CONNECTION,
+          alert_target_id: "19:other@thread.tacv2",
+          alert_target_name: "https://smba.trafficmanager.net/amer/"
+        },
         activity: activity()
       },
       d
     );
     expect(d.setAlertTarget).not.toHaveBeenCalled();
+  });
+
+  it("follows the service url when Microsoft moves it, keeping the target", async () => {
+    // Both replies and alerts POST to the STORED url. Microsoft varies it
+    // by region and relocates tenants, so a pinned one keeps failing after
+    // a move until somebody disconnects and starts over. The conversation
+    // id is deliberately not re-claimed, so a later thread cannot quietly
+    // move where alerts land.
+    const d = deps();
+    await handleTeamsActivity(
+      {
+        connection: {
+          ...CONNECTION,
+          alert_target_id: "19:other@thread.tacv2",
+          alert_target_name: "https://smba.trafficmanager.net/emea/"
+        },
+        activity: activity()
+      },
+      d
+    );
+    expect(d.setAlertTarget).toHaveBeenCalledWith(BIZ, "teams", {
+      id: "19:other@thread.tacv2",
+      name: "https://smba.trafficmanager.net/amer/"
+    });
   });
 
   it("survives a failed capture rather than dropping the message", async () => {
@@ -244,6 +386,23 @@ describe("queueing the turn", () => {
     expect(d.insertMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "how many leads?" })
     );
+  });
+
+  it("strips mentions in linear time on hostile text", async () => {
+    // The character class is `[^<]*` rather than `.*?` on purpose. This
+    // endpoint is public and the text is attacker-controlled, and `.*?`
+    // backtracks quadratically on many unclosed `<at>`s: measured, 60k of
+    // them takes under a millisecond with the right class and about five
+    // seconds with `.*?`, so the threshold below has three orders of
+    // magnitude of headroom and cannot flake on a slow CI box.
+    const d = deps();
+    const started = process.hrtime.bigint();
+    await handleTeamsActivity(
+      { connection: CONNECTION, activity: activity({ text: `${"<at>".repeat(60000)}x` }) },
+      d
+    );
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(elapsedMs).toBeLessThan(1000);
   });
 
   it("writes the directory address onto the conversation, for liveness", async () => {
@@ -360,15 +519,21 @@ describe("failures that must not become webhook errors", () => {
     expect(out).toEqual({ enqueued: false, reason: "link_expired" });
   });
 
-  it("copes with an activity carrying no entities at all", async () => {
-    const d = deps();
-    await handleTeamsActivity(
-      { connection: CONNECTION, activity: activity({ entities: undefined }) },
-      d
-    );
+  it("falls back to the recorded address when the directory is down", async () => {
+    // teamsFetchMember returns null on any failure, so a Microsoft outage
+    // and a tenant that hides addresses look identical from here. A bound
+    // teammate must keep working through both.
+    const d = deps({
+      findIdentity: vi.fn(async () => ({
+        id: "ident-1",
+        verified_email: "dana@acme.com"
+      }) as never),
+      fetchMember: vi.fn(async () => null)
+    });
+    await handleTeamsActivity({ connection: CONNECTION, activity: activity() }, d);
     expect(d.resolveSpeaker).toHaveBeenCalledWith(
       BIZ,
-      expect.objectContaining({ email: null })
+      expect.objectContaining({ email: "dana@acme.com" })
     );
   });
 

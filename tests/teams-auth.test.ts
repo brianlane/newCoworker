@@ -248,6 +248,100 @@ describe("fetching the signing keys", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("re-fetches ONCE when a kid is not in the cached set, then accepts", async () => {
+    /**
+     * A key rotation must not take the channel dark for a day.
+     *
+     * The cache holds Microsoft's keys for 24 hours. When they rotate,
+     * every activity arrives signed by a kid that is not in it. Answering
+     * 401 makes Bot Framework stop retrying, so those messages are not
+     * delayed, they are LOST, and the tenant sees a coworker that simply
+     * stopped replying until the cache happened to expire.
+     */
+    resetTeamsJwksStateForTests();
+    let served = [jwkFor(publicKey, "key-1")];
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("openidconfiguration")
+        ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+        : new Response(JSON.stringify({ keys: served }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Warm the cache on the old key.
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    const afterWarm = fetchMock.mock.calls.length;
+
+    // Microsoft rotates. Same token shape, a kid we have never seen.
+    served = [jwkFor(other.publicKey, "key-2")];
+    expect(
+      await verify(sign(goodPayload, { kid: "key-2", key: other.privateKey }))
+    ).toMatchObject({ ok: true });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(afterWarm);
+  });
+
+  it("spends exactly one refresh on a forged kid, then refuses", async () => {
+    // The other half of the same behaviour: an unknown kid buys ONE forced
+    // fetch, not one per request. Otherwise anyone can make us hammer
+    // Microsoft's key endpoint by sending garbage at our webhook.
+    resetTeamsJwksStateForTests();
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("openidconfiguration")
+        ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+        : new Response(JSON.stringify({ keys: [jwkFor(publicKey, "key-1")] }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    const afterWarm = fetchMock.mock.calls.length;
+    expect(await verify(sign(goodPayload, { kid: "key-99" }))).toEqual({
+      ok: false,
+      reason: "unknown_key"
+    });
+    // Two calls: the metadata document and the key set, once.
+    expect(fetchMock.mock.calls.length - afterWarm).toBe(2);
+  });
+
+  it("reports the refresh failing as OURS, so Microsoft redelivers", async () => {
+    // A 401 here would look like a rejected activity and never come back.
+    resetTeamsJwksStateForTests();
+    let healthy = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (!healthy) return new Response("nope", { status: 503 });
+        return url.includes("openidconfiguration")
+          ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+          : new Response(JSON.stringify({ keys: [jwkFor(publicKey, "key-1")] }));
+      })
+    );
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    healthy = false;
+    expect(await verify(sign(goodPayload, { kid: "key-99" }))).toEqual({
+      ok: false,
+      reason: "jwks_unavailable"
+    });
+  });
+
+  it("survives the refresh throwing something that is not an Error", async () => {
+    resetTeamsJwksStateForTests();
+    let healthy = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (!healthy) throw "network gone";
+        return url.includes("openidconfiguration")
+          ? new Response(JSON.stringify({ jwks_uri: "https://login.botframework.com/keys" }))
+          : new Response(JSON.stringify({ keys: [jwkFor(publicKey, "key-1")] }));
+      })
+    );
+    expect(await verify(sign(goodPayload))).toMatchObject({ ok: true });
+    healthy = false;
+    expect(await verify(sign(goodPayload, { kid: "key-99" }))).toEqual({
+      ok: false,
+      reason: "jwks_unavailable"
+    });
+  });
+
   it.each([
     [
       "the metadata document is down",

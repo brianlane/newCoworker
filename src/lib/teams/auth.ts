@@ -52,8 +52,10 @@ export function resetTeamsJwksStateForTests(): void {
   jwksCache = null;
 }
 
-async function loadJwks(now: number): Promise<Jwk[]> {
-  if (jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
+async function loadJwks(now: number, opts: { force?: boolean } = {}): Promise<Jwk[]> {
+  if (!opts.force && jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) {
+    return jwksCache.keys;
+  }
 
   const configRes = await fetch(OPENID_CONFIG_URL);
   if (!configRes.ok) throw new Error(`openid config: http_${configRes.status}`);
@@ -148,7 +150,32 @@ export async function verifyTeamsToken(
     return { ok: false, reason: "jwks_unavailable" };
   }
 
-  const jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
+  let jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
+  if (!jwk) {
+    /**
+     * A kid we do not hold is the SIGNATURE OF A KEY ROTATION, not of a
+     * forged token, and treating it as the latter is how this channel would
+     * go dark for a day.
+     *
+     * The cache holds Microsoft's keys for 24 hours. When they rotate, every
+     * activity arrives signed by a key that is not in it. Answering 401
+     * makes Bot Framework stop retrying, so those messages are not delayed,
+     * they are LOST, and the tenant sees a coworker that simply stopped
+     * replying until the cache happened to expire.
+     *
+     * So an unknown kid buys exactly one forced refresh. A genuinely forged
+     * token still fails, one fetch later.
+     */
+    try {
+      keys = await loadJwks(now, { force: true });
+    } catch (err) {
+      logger.error("teams auth: jwks refresh failed after an unknown kid", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return { ok: false, reason: "jwks_unavailable" };
+    }
+    jwk = keys.find((k) => k.kid === jwtHeader.kid && k.kty === "RSA");
+  }
   if (!jwk) return { ok: false, reason: "unknown_key" };
 
   let verified = false;

@@ -3,11 +3,17 @@
  * writing, keep the conversation reference fresh, and queue a reply job.
  *
  * IDENTITY IS EASIER HERE THAN ON TELEGRAM, and that is the whole reason
- * Teams needs no binding table. An activity carries an Entra identity, and
- * `from.aadObjectId` plus the userPrincipalName or email that Teams puts on
- * the activity resolves through the SAME `resolveSurfaceSpeaker` that Slack
- * uses. A directory that exposes no address falls back to the shared
- * link-code path, which Telegram already built.
+ * Teams needs no binding table of its own. An activity carries an Entra
+ * object id, and the Bot Connector's members endpoint turns that into a UPN
+ * or email address, which resolves through the SAME `resolveSurfaceSpeaker`
+ * that Slack uses. A directory that exposes no address falls back to the
+ * shared link-code path, which Telegram already built.
+ *
+ * THE ADDRESS IS NOT ON THE ACTIVITY, which is the trap here. `from` is a
+ * ChannelAccount (id, display name, object id) and `entities` carries
+ * clientInfo and mentions. Reading an address off either yields undefined
+ * forever, and the visible symptom is not an error: every colleague is
+ * quietly treated as a stranger and told to go and find a link code.
  *
  * THE TENANT BOUNDARY IS `channelData.tenant.id`. Our Azure bot registration
  * is multi-tenant, so any Entra tenant that finds the app can install it and
@@ -32,6 +38,7 @@ import {
 import {
   findChannelIdentity,
   redeemLinkCode,
+  upsertChannelIdentity,
   normalizeLinkCode
 } from "@/lib/db/coworker-identities";
 import {
@@ -40,7 +47,11 @@ import {
 } from "@/lib/db/coworker-connections";
 import { resolveSurfaceSpeaker } from "@/lib/owner-surfaces/speaker";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
-import { teamsSendActivity, type TeamsConversationReference } from "@/lib/teams/client";
+import {
+  teamsFetchMember,
+  teamsSendActivity,
+  type TeamsConversationReference
+} from "@/lib/teams/client";
 import { teamsNeedsLinkingMessage, teamsOnboardingMessage } from "@/lib/teams/chat";
 import { logger } from "@/lib/logger";
 
@@ -54,30 +65,12 @@ export type TeamsActivity = {
   from?: { id?: string; name?: string; aadObjectId?: string };
   recipient?: { id?: string };
   channelData?: { tenant?: { id?: string } };
-  /** Teams puts the sender's directory address here when it exposes one. */
-  entities?: { type?: string; email?: string; userPrincipalName?: string }[];
 };
 
 export type TeamsInboundResult = { enqueued: boolean; reason?: string };
 
 /** Recent messages replayed for continuity (owner-SMS convention). */
 const TEAMS_HISTORY_PROBE = 1;
-
-/**
- * The sender's directory address, when the activity carries one.
- *
- * Teams does not put this in a fixed place: depending on the client and the
- * tenant's settings it arrives as an entity's `email` or as a
- * `userPrincipalName`. Both are directory-owned rather than self-asserted,
- * which is what makes either safe to match a roster row on.
- */
-function teamsSenderAddress(activity: TeamsActivity): string | null {
-  for (const entity of activity.entities ?? []) {
-    const address = (entity.email ?? entity.userPrincipalName ?? "").trim();
-    if (address.includes("@")) return address.toLowerCase();
-  }
-  return null;
-}
 
 function looksLikeLinkCode(text: string): boolean {
   return /^[A-Za-z0-9]{8}$/.test(normalizeLinkCode(text));
@@ -95,6 +88,8 @@ async function ownerLocale(businessId: string) {
 export type TeamsInboundDeps = {
   send?: typeof teamsSendActivity;
   findIdentity?: typeof findChannelIdentity;
+  fetchMember?: typeof teamsFetchMember;
+  upsertIdentity?: typeof upsertChannelIdentity;
   redeem?: typeof redeemLinkCode;
   resolveSpeaker?: typeof resolveSurfaceSpeaker;
   getConversation?: typeof getOrCreateCoworkerConversation;
@@ -113,6 +108,8 @@ export async function handleTeamsActivity(
   /* c8 ignore start -- production defaults; tests inject */
   const send = deps.send ?? teamsSendActivity;
   const findIdentity = deps.findIdentity ?? findChannelIdentity;
+  const fetchMember = deps.fetchMember ?? teamsFetchMember;
+  const upsertIdentity = deps.upsertIdentity ?? upsertChannelIdentity;
   const redeem = deps.redeem ?? redeemLinkCode;
   const resolveSpeaker = deps.resolveSpeaker ?? resolveSurfaceSpeaker;
   const getConversation = deps.getConversation ?? getOrCreateCoworkerConversation;
@@ -144,22 +141,29 @@ export async function handleTeamsActivity(
 
   // Strip the bot's own @mention out of a channel message. Left in, the
   // model answers the mention as though it were part of the question.
-  const text = (activity.text ?? "").replace(/<at>.*?<\/at>/gi, "").trim();
+  //
+  // The character class is NOT `.` on purpose. `<at>.*?</at>` backtracks
+  // polynomially on a message that is many repetitions of `<at>` with no
+  // closing tag, which is attacker-controlled text arriving on a public
+  // endpoint. `[^<]*` cannot cross a `<`, so there is nothing to backtrack.
+  const text = (activity.text ?? "").replace(/<at>[^<]*<\/at>/gi, "").trim();
   if (!text) return { enqueued: false, reason: "no_text" };
 
   const reference: TeamsConversationReference = { serviceUrl, conversationId };
 
-  // Who is speaking. Address first, because it is what Teams supplies and it
-  // resolves through the roster the same way Slack's profile email does; the
-  // recorded binding covers a directory that exposes no address.
-  const address = teamsSenderAddress(activity);
-  const [binding, speaker] = await Promise.all([
-    findIdentity(businessId, "teams", externalUserId),
-    resolveSpeaker(businessId, {
-      email: address,
-      externalRef: { channel: "teams", externalUserId }
-    })
-  ]);
+  // Who is speaking.
+  //
+  // A recorded binding answers it without a round trip, which is the common
+  // case after somebody's first message. Only a stranger costs a directory
+  // lookup, and only once: a lookup that resolves them to staff is written
+  // back as a binding below.
+  const binding = await findIdentity(businessId, "teams", externalUserId);
+  const address =
+    binding?.verified_email ?? (await fetchMember(reference, fromId))?.email ?? null;
+  const speaker = await resolveSpeaker(businessId, {
+    email: address,
+    externalRef: { channel: "teams", externalUserId }
+  });
 
   if (speaker.kind === "customer") {
     // Not somebody we can place. A code is the way in, so honour one before
@@ -179,6 +183,24 @@ export async function handleTeamsActivity(
     return { enqueued: false, reason: "not_linked" };
   }
 
+  // Remember what the directory said, so the next message from this person
+  // skips the lookup. Recorded against the Entra object id, which survives a
+  // rename or an address change.
+  if (!binding && address) {
+    await upsertIdentity({
+      businessId,
+      channel: "teams",
+      externalUserId,
+      // Resolved fresh from the roster on every turn by the address, the
+      // same reasoning as Telegram's shared-contact path: a snapshot of the
+      // roster here would go stale on the next edit.
+      employeeId: null,
+      isOwner: speaker.kind === "owner",
+      verifiedEmail: address,
+      linkedVia: "directory"
+    }).catch(() => undefined);
+  }
+
   const conversation = await getConversation({
     businessId,
     channel: "teams",
@@ -191,13 +213,22 @@ export async function handleTeamsActivity(
   });
 
   // Capture where to send a PROACTIVE message. Teams has no "message this
-  // user" call, so without a stored reference an alert has nowhere to go,
-  // and Microsoft varies serviceUrl by region so it is refreshed rather than
-  // recorded once. The FIRST conversation the bot sees becomes the alert
-  // target, which is what makes "message your bot once" the whole of setup.
-  if (connection.alert_target_id !== conversationId && !connection.alert_target_id) {
+  // user" call, so without a stored reference an alert has nowhere to go.
+  // The FIRST conversation the bot sees becomes the alert target, which is
+  // what makes "message your bot once" the whole of setup.
+  //
+  // The SERVICE URL is refreshed whenever it changes, and that half is not
+  // optional. Microsoft varies it by region and relocates tenants; both
+  // replies and alerts POST to the stored value, so a pinned one keeps
+  // failing after a move until somebody disconnects and starts over. The
+  // conversation id is only claimed once, so a later thread does not quietly
+  // move where alerts land.
+  const claimTarget = !connection.alert_target_id;
+  const urlMoved =
+    Boolean(connection.alert_target_id) && connection.alert_target_name !== serviceUrl;
+  if (claimTarget || urlMoved) {
     await setAlertTarget(businessId, "teams", {
-      id: conversationId,
+      id: connection.alert_target_id ?? conversationId,
       name: serviceUrl
     }).catch(() => undefined);
   }

@@ -23,8 +23,14 @@ import type { CoworkerChannel } from "@/lib/db/coworker-chat";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** How the binding was established. Not equally strong; see the header. */
-export type CoworkerIdentityLinkMethod = "shared_contact" | "link_code";
+/**
+ * How the binding was established. NOT equally strong, which is the whole
+ * reason it is recorded: `shared_contact` and `link_code` are acts by the
+ * person, while `directory` is the tenant's own Entra directory answering
+ * on their behalf (Teams). Anything that ever weighs one binding against
+ * another has to be able to tell them apart.
+ */
+export type CoworkerIdentityLinkMethod = "shared_contact" | "link_code" | "directory";
 
 export type CoworkerChannelIdentityRow = {
   id: string;

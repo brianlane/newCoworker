@@ -151,6 +151,69 @@ export async function teamsSendActivity(
   }
 }
 
+export type TeamsMember = {
+  aadObjectId: string | null;
+  email: string | null;
+  name: string | null;
+};
+
+/**
+ * Look one conversation member up in the directory.
+ *
+ * This is where a Teams identity actually comes from, and it is worth being
+ * explicit because the obvious guess is wrong: an inbound activity does NOT
+ * carry the sender's address. `activity.from` is a ChannelAccount with an
+ * id, a display name and an Entra object id, and `activity.entities` holds
+ * clientInfo and mentions. The address lives behind
+ * `/v3/conversations/{id}/members/{userId}`, which is what the Bot Framework
+ * SDK's TeamsInfo.getMember calls.
+ *
+ * Returns null rather than throwing when the directory withholds it: a
+ * tenant can configure Teams so apps never see addresses, and that is a
+ * "fall back to a link code" condition, not an error.
+ */
+export async function teamsFetchMember(
+  reference: TeamsConversationReference,
+  userId: string,
+  opts: { token?: string } = {}
+): Promise<TeamsMember | null> {
+  const base = normalizeServiceUrl(reference.serviceUrl);
+  if (!base) return null;
+  try {
+    const token = opts.token ?? (await teamsAccessToken());
+    const url = new URL(
+      `v3/conversations/${encodeURIComponent(reference.conversationId)}/members/${encodeURIComponent(userId)}`,
+      base
+    ).toString();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
+      });
+      if (!res.ok) return null;
+      const body = (await res.json().catch(() => null)) as
+        | { objectId?: string; email?: string; userPrincipalName?: string; name?: string }
+        | null;
+      if (!body) return null;
+      const address = (body.email ?? body.userPrincipalName ?? "").trim().toLowerCase();
+      return {
+        aadObjectId: body.objectId?.trim() || null,
+        email: address.includes("@") ? address : null,
+        name: body.name?.trim() || null
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    logger.warn("teams: member lookup failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
 /**
  * Accept only a Microsoft-hosted service URL.
  *
