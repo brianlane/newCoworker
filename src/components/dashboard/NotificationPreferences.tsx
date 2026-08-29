@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { NotificationPreferencesRow } from "@/lib/db/notification-preferences";
+import { allChannelTogglesOff } from "@/lib/notifications/channel-toggles";
 import { smsReachability } from "@/lib/phone/deliverability";
 
 type Props = {
@@ -229,23 +230,10 @@ export function NotificationPreferences({ businessId, initial, whatsappConnected
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId,
-          sms_urgent: false,
-          whatsapp_urgent: false,
-          slack_urgent: false,
-          telegram_urgent: false,
-          teams_urgent: false,
-          google_chat_urgent: false,
-          slack_digest: false,
-          push_urgent: false,
-          email_digest: false,
-          email_digest_weekly: false,
-          email_urgent: false,
-          dashboard_alerts: false,
-          sms_warm_transfer: false,
-          image_limit_alerts: false,
-          aiflow_failure_alerts: false,
-          customer_reply_alerts: false,
-          unassigned_booking_alerts: false,
+          // Shared with the one-click unsubscribe link in our email footers,
+          // which used to clear a different set. Hand-listing them here is
+          // what left email_monthly_recap ON under the unsubscribed banner.
+          ...allChannelTogglesOff(),
           unsubscribed_at: "now"
         })
       });

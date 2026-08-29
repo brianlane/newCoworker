@@ -29,9 +29,23 @@ deliberately two fields: `{ channel, runJob(job) }`.
 both `gatedChannels` arrays in `dispatch.ts`, `ResolvedTargets` + the leg,
 `channel-liveness-read.ts` (the Promise.all AND the returned array),
 `email_log` source (3 TS sites), prefs (row/defaults/keys/reSubscribed/
-zod/`NOTIFICATION_TOGGLE_KEYS`), integrations registry + context + status +
-the `[slug]` page `case`, and the Deno mirror (union, prefs SELECT string,
-`ResolvedTargets`, the leg).
+zod/`NOTIFICATION_TOGGLE_KEYS`/`CHANNEL_TOGGLE_KEYS`), integrations registry +
+context + status + the `[slug]` page `case`, and the Deno mirror (union, prefs
+SELECT string, `ResolvedTargets`, the leg).
+
+*The two unsubscribe payloads, which drifted for four channels:* "unsubscribe
+from all" used to be hand-listed twice, in the dashboard button and in the
+one-click link in our email footers. Push (#1717) and every chat channel
+reached `NOTIFICATION_TOGGLE_KEYS` and the dashboard's toggle list but not the
+email payload; the monthly recap (#1727) missed the dashboard button. Nothing
+failed: `dispatch` suppresses on `unsubscribed_at` alone, so the only symptom
+was the forgotten toggle rendering ON under the "you unsubscribed" banner.
+#1738 collapsed both onto `CHANNEL_TOGGLE_KEYS`
+(`src/lib/notifications/channel-toggles.ts`), which is `satisfies`-pinned to
+real columns and test-pinned to `NOTIFICATION_TOGGLE_KEYS` minus the four
+narrowing keys, so a new channel now reaches both surfaces or neither. The
+`reSubscribed` list in `updateNotificationPreferences` is still hand-written,
+but a test now drives every `CHANNEL_TOGGLE_KEYS` entry through it.
 
 *Residency, the one that already bit us:* `notifications.delivery_channel`
 AND `email_log.source` are mirrored in `vps/data-api/schema.sql` at TWO sites
