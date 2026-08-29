@@ -105,7 +105,15 @@ async function automaticReminderLeadMinutes(
   return Math.max(...leads);
 }
 
-/** The one pending row for this contact, if any. */
+/**
+ * Rows this tool created. The owner queues into the SAME table from the Text
+ * history composer, and the dashboard lets them stack freely, so scoping on
+ * `created_by` is what stops a customer asking for a reminder from cancelling
+ * and overwriting the owner's birthday text to the same number.
+ */
+const AGENT_CREATED_BY = "sms_coworker";
+
+/** The one pending row THIS TOOL has for the contact, if any. */
 async function pendingForContact(
   businessId: string,
   phone: string,
@@ -117,6 +125,7 @@ async function pendingForContact(
     .eq("business_id", businessId)
     .eq("to_e164", phone)
     .eq("status", "pending")
+    .eq("created_by", AGENT_CREATED_BY)
     .order("send_at", { ascending: true })
     .limit(1);
   if (error || !Array.isArray(data) || data.length === 0) return null;
@@ -204,7 +213,12 @@ export async function scheduleTextTool(
     };
   }
 
-  const sendAtMs = Date.parse(args.sendAtIso);
+  // A naive "2026-08-31T18:30:00" parses fine and is read as the SERVER's
+  // local time (UTC in production), so a 6:30 PM Eastern reminder would queue
+  // four hours early instead of being refused. The offset is mandatory.
+  const sendAtMs = /(Z|[+-]\d{2}:?\d{2})$/.test(args.sendAtIso.trim())
+    ? Date.parse(args.sendAtIso)
+    : Number.NaN;
   if (!Number.isFinite(sendAtMs)) {
     return {
       ok: false,
@@ -253,7 +267,11 @@ export async function scheduleTextTool(
     };
   }
 
-  if (!args.confirmed) {
+  // Only ask about the tenant's automatic reminder the FIRST time. A pending
+  // row means this texter already heard about it and said yes, so moving that
+  // reminder ("make it 6:45") must not re-open a settled question, which is
+  // exactly what a reschedule does on a tenant that runs one.
+  if (!args.confirmed && !pending) {
     const leadMinutes = await automaticReminderLeadMinutes(businessId, db);
     if (leadMinutes !== null) {
       return {
@@ -269,24 +287,22 @@ export async function scheduleTextTool(
     }
   }
 
-  // One queued text per contact: a second schedule MOVES the first.
-  let replacedSendAtLocal: string | undefined;
-  if (pending && (await cancelRow(pending.id, db))) {
-    replacedSendAtLocal = formatBookingStartLocal(pending.send_at, timezone);
-  }
-
+  // Insert BEFORE retiring the old row. Cancelling first would mean a failed
+  // insert leaves the texter with NOTHING where they had a standing reminder,
+  // while the tool reports the failure and the model tells them it is not set.
   const sendAtIso = new Date(sendAtMs).toISOString();
-  const { error } = await db
+  const { data: insertedRow, error } = await db
     .from("scheduled_sms")
     .insert({
       business_id: businessId,
       to_e164: args.phone,
       body: text,
-      send_at: sendAtIso
+      send_at: sendAtIso,
+      created_by: AGENT_CREATED_BY
     })
     .select("id")
     .single();
-  if (error) {
+  if (error || !insertedRow) {
     return {
       ok: false,
       detail: "queue_failed",
@@ -294,6 +310,26 @@ export async function scheduleTextTool(
         "The text could not be queued. Say plainly that you could not set the reminder up " +
         "and that someone from the team will follow up; never say it is scheduled."
     };
+  }
+
+  // One queued text per contact: the new row replaces the old one.
+  let replacedSendAtLocal: string | undefined;
+  if (pending) {
+    if (await cancelRow(pending.id, db)) {
+      replacedSendAtLocal = formatBookingStartLocal(pending.send_at, timezone);
+    } else {
+      // The old row would not retire. Rather than leave the texter with two
+      // live sends, retire the one just made and say plainly it did not move.
+      await cancelRow((insertedRow as { id: string }).id, db);
+      return {
+        ok: false,
+        detail: "move_failed",
+        message:
+          "The reminder could not be moved, so the one already queued for " +
+          `${formatBookingStartLocal(pending.send_at, timezone)} still stands. Tell them ` +
+          "the new time did not take and that the original reminder is unchanged."
+      };
+    }
   }
 
   const sendAtLocal = formatBookingStartLocal(sendAtIso, timezone);

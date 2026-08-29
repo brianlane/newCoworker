@@ -186,7 +186,10 @@ describe("scheduling", () => {
       business_id: BIZ,
       to_e164: TEXTER,
       body: "Reminder: your call with James is in 30 minutes.",
-      send_at: new Date(MONDAY_630_ET).toISOString()
+      send_at: new Date(MONDAY_630_ET).toISOString(),
+      // Stamped so this tool can never see, move, or cancel a text the
+      // OWNER queued from the dashboard composer to the same number.
+      created_by: "sms_coworker"
     });
     // The confirmable label the model is told to quote back, in the
     // business timezone with the zone named (SMS_TIMEZONE_LINE).
@@ -346,6 +349,145 @@ describe("scheduling", () => {
       text: "Reminder"
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("what the owner queued is not the agent's to move (Bugbot, high)", () => {
+  it("scopes its one pending row to rows it created", async () => {
+    const from = mockDb({
+      ai_flows: { select: { data: [], error: null } },
+      scheduled_sms: {
+        select: { data: [], error: null },
+        insert: { data: { id: "sched-1" }, error: null }
+      }
+    });
+    await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    // The lookup must carry created_by; without it an owner-composed send to
+    // the same number is "the one pending row" and gets overwritten.
+    const chain = from.mock.results.find((r) => r.type === "return")?.value as Record<
+      string,
+      { mock: { calls: unknown[][] } }
+    >;
+    const eqArgs = chain.eq.mock.calls;
+    expect(eqArgs).toContainEqual(["created_by", "sms_coworker"]);
+  });
+});
+
+describe("a failed move never drops the standing reminder (Bugbot, high)", () => {
+  it("inserts before retiring the old row, so a failed insert keeps the original", async () => {
+    mockDb({
+      ai_flows: { select: { data: [], error: null } },
+      scheduled_sms: {
+        select: {
+          data: [{ id: "old-1", send_at: "2026-08-31T22:00:00.000Z", body: "older" }],
+          error: null
+        },
+        insert: { data: null, error: { message: "constraint" } }
+      }
+    });
+    const result = await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    expect(result.detail).toBe("queue_failed");
+    // Nothing was cancelled: the 6:00 reminder they already had still stands.
+    expect(calls.update).toHaveLength(0);
+  });
+
+  it("retires the new row and says so when the old one will not cancel", async () => {
+    mockDb({
+      ai_flows: { select: { data: [], error: null } },
+      scheduled_sms: {
+        select: {
+          data: [{ id: "old-1", send_at: "2026-08-31T22:00:00.000Z", body: "older" }],
+          error: null
+        },
+        insert: { data: { id: "new-1" }, error: null },
+        // Zero rows matched: the cancel did not land.
+        update: { data: [], error: null }
+      }
+    });
+    const result = await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("move_failed");
+    // Both the old cancel attempt and the compensating one for the new row.
+    expect(calls.update).toHaveLength(2);
+    expect(result.message).toMatch(/still stands/);
+  });
+});
+
+describe("moving an already-confirmed reminder (Bugbot, medium)", () => {
+  it("does not re-ask about the automatic reminder when one is already queued", async () => {
+    mockDb({
+      ai_flows: { select: { data: [precallReminderFlow(60)], error: null } },
+      scheduled_sms: {
+        select: {
+          data: [{ id: "old-1", send_at: "2026-08-31T22:30:00.000Z", body: "older" }],
+          error: null
+        },
+        insert: { data: { id: "new-1" }, error: null },
+        update: { data: [{ id: "old-1" }], error: null }
+      }
+    });
+    // No `confirmed` flag: they confirmed when the first one was queued.
+    const result = await scheduleTextTool(BIZ, {
+      phone: TEXTER,
+      action: "schedule",
+      sendAtIso: MONDAY_630_ET,
+      text: "Reminder"
+    });
+    expect(result.ok).toBe(true);
+    expect(calls.insert).toHaveLength(1);
+  });
+});
+
+describe("the send time must carry its offset (Bugbot, medium)", () => {
+  it("refuses a naive local time rather than reading it as the server clock", async () => {
+    mockDb({});
+    for (const naive of ["2026-08-31T18:30:00", "2026-08-31 18:30", "2026-08-31T18:30:00.000"]) {
+      const result = await scheduleTextTool(BIZ, {
+        phone: TEXTER,
+        action: "schedule",
+        sendAtIso: naive,
+        text: "Reminder"
+      });
+      expect(result.detail, naive).toBe("invalid_time");
+    }
+    expect(calls.insert).toHaveLength(0);
+  });
+
+  it("accepts Z and both offset spellings", async () => {
+    for (const iso of [
+      "2026-08-31T22:30:00Z",
+      "2026-08-31T18:30:00-04:00",
+      "2026-08-31T18:30:00-0400"
+    ]) {
+      mockDb({
+        ai_flows: { select: { data: [], error: null } },
+        scheduled_sms: {
+          select: { data: [], error: null },
+          insert: { data: { id: "sched-1" }, error: null }
+        }
+      });
+      expect((await scheduleTextTool(BIZ, {
+        phone: TEXTER,
+        action: "schedule",
+        sendAtIso: iso,
+        text: "Reminder"
+      })).ok, iso).toBe(true);
+    }
   });
 });
 
