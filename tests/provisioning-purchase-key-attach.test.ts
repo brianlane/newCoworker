@@ -44,7 +44,9 @@ vi.mock("@/lib/provisioning/progress", async (importOriginal) => {
   return { ...actual, recordProvisioningProgress };
 });
 
-const { defaultVpsProvisioner } = await import("@/lib/provisioning/orchestrate");
+const { defaultVpsProvisioner, waitForPostInstallQuiescence, isSshAuthFailure } = await import(
+  "@/lib/provisioning/orchestrate"
+);
 
 /** A real-shaped OpenSSH public key; the script builder validates the format. */
 const PUBLIC_KEY =
@@ -166,5 +168,184 @@ describe("production purchase wiring", () => {
       deps.onProgress("purchase_initiated", { itemId: "i", hostname: "h" })
     ).not.toThrow();
     await vi.waitFor(() => expect(recordProvisioningProgress).toHaveBeenCalledTimes(2));
+  });
+});
+
+/**
+ * The purchase path's OTHER missing guard.
+ *
+ * Hostinger runs an attached post-install script through its own runner, not
+ * cloud-init, so the `cloud-init status --wait` the bootstrap command prefixes
+ * cannot see it. `adopt.ts` has waited for that runner since it was written;
+ * the purchase path never did, because until #1696 no purchase ever reached
+ * this step.
+ *
+ * Measured: KIN's box ran the loader 15:53:13 to 15:54:22 (69s) on 2026-08-28,
+ * while on the purchase path Hostinger reported VM 1939337 running 103s after
+ * create and the orchestrator SSHed in one second later. Overlapping.
+ */
+describe("waitForPostInstallQuiescence", () => {
+  const base = {
+    host: "1.2.3.4",
+    username: "root",
+    privateKeyPem: "pem"
+  };
+  const ok = (stdout: string) => ({ exitCode: 0, signal: null, stdout, stderr: "" });
+
+  it("returns idle on the first probe when the box is already quiet", async () => {
+    const remoteExec = vi.fn().mockResolvedValue(ok("idle\n"));
+    const sleep = vi.fn();
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      now: () => 0
+    });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(1);
+    // One SSH round trip and no waiting: this must stay cheap on the adopt
+    // path, which has already done its own wait before handing the host over.
+    expect(sleep).not.toHaveBeenCalled();
+    // The probe must not match its own command line, hence the [e] class.
+    expect(remoteExec.mock.calls[0][0].command).toContain("te[e] -a /post_install.log");
+    expect(remoteExec.mock.calls[0][0].command).toContain("pgrep -x apt ");
+  });
+
+  /**
+   * Fail-open default, and the reason the pre-existing orchestrator test
+   * `vps_bootstrapping/_bootstrapped messages reflect PIS attached` caught the
+   * first draft of this guard: it injects a generic successful executor whose
+   * stdout says neither word, and the loop sat there. In production the same
+   * shape (empty stdout, no `pgrep` on a minimal template) would have burned
+   * the whole ten-minute budget inside a 1800s sweep and CAUSED a failure that
+   * would not otherwise happen. Only an explicit "busy" may keep us waiting.
+   */
+  it("proceeds when the probe answers anything other than busy", async () => {
+    for (const stdout of ["", "idle\n", "sh: 1: pgrep: not found\n"]) {
+      const remoteExec = vi.fn().mockResolvedValue(ok(stdout));
+      const sleep = vi.fn();
+      const out = await waitForPostInstallQuiescence({
+        ...base,
+        remoteExec,
+        sleep,
+        now: () => 0
+      });
+      expect(out).toBe("idle");
+      expect(sleep).not.toHaveBeenCalled();
+    }
+  });
+
+  /**
+   * Exercises the REAL timers rather than injected ones, so the production
+   * defaults are covered code instead of an assumption behind a `c8 ignore`.
+   * A zero poll interval keeps it instant while still routing through the
+   * actual `setTimeout` sleep and the actual `Date.now` clock.
+   */
+  it("uses real timers when the caller injects none", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValueOnce(ok("busy\n"))
+      .mockResolvedValueOnce(ok("idle\n"));
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      pollIntervalMs: 0
+    });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps polling while the runner is busy, then proceeds once it goes idle", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValueOnce(ok("busy\n"))
+      .mockResolvedValueOnce(ok("busy\n"))
+      .mockResolvedValueOnce(ok("idle\n"));
+    const sleep = vi.fn();
+    let t = 0;
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      now: () => t,
+      pollIntervalMs: 15_000
+    });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(15_000);
+    void t;
+  });
+
+  it("treats a refused port as still-coming-up, not as a reason to give up", async () => {
+    // sshd binding late is indistinguishable from "still busy" here, and the
+    // bootstrap phase has its own connect-retry behind this.
+    const remoteExec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("sshExec: connection error: ECONNREFUSED"))
+      .mockResolvedValueOnce(ok("idle\n"));
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep: vi.fn(),
+      now: () => 0
+    });
+    expect(out).toBe("idle");
+    expect(remoteExec).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up at the deadline and reports timed_out rather than hanging", async () => {
+    const remoteExec = vi.fn().mockResolvedValue(ok("busy\n"));
+    const sleep = vi.fn();
+    const times = [0, 0, 999_999];
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      now: () => times.shift() ?? 999_999,
+      timeoutMs: 1000
+    });
+    expect(out).toBe("timed_out");
+  });
+
+  /**
+   * The regression that makes this guard safe to add. Scar Fairy's box
+   * rejected the key permanently; waiting cannot install it. If this loop
+   * treated auth failure as "busy" it would spend its whole budget before the
+   * bootstrap phase raised the real error, turning a 76-second failure into a
+   * 10-minute one and eating the sweep's runway.
+   */
+  it("returns immediately on an auth rejection instead of waiting out the budget", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("sshExec: connection error: All configured authentication methods failed")
+      );
+    const sleep = vi.fn();
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      now: () => 0
+    });
+    expect(out).toBe("unauthenticated");
+    expect(remoteExec).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("isSshAuthFailure", () => {
+  it("separates a rejected key from a port that would not open", () => {
+    // The auth message carries the same "connection error:" prefix that
+    // isSshConnectError matches, which is exactly why this needs its own test.
+    expect(
+      isSshAuthFailure(
+        new Error("sshExec: connection error: All configured authentication methods failed")
+      )
+    ).toBe(true);
+    expect(isSshAuthFailure(new Error("Permission denied (publickey)"))).toBe(true);
+    expect(isSshAuthFailure(new Error("SSH authentication failure"))).toBe(true);
+    expect(isSshAuthFailure(new Error("sshExec: connection error: ECONNREFUSED"))).toBe(false);
+    expect(isSshAuthFailure("not an error")).toBe(false);
   });
 });

@@ -3412,6 +3412,49 @@ describe("provisioning/orchestrate", () => {
     });
 
     /**
+     * The post-install quiescence wait sits between "VPS provisioned" and the
+     * SSH bootstrap whenever a PIS is attached, because Hostinger runs that
+     * script through its own runner and `cloud-init status --wait` cannot see
+     * it. When the probe cannot settle the question, the provision must go
+     * ahead anyway: the bootstrap is the step allowed to fail, and it is the
+     * one whose error names the real problem.
+     *
+     * Driven here through an auth rejection, which is the outcome Scar Fairy's
+     * stranded box produced on 2026-08-29. The probe must return at once
+     * rather than spend its budget, so the first remoteExec call rejects and
+     * every later one succeeds: the bootstrap still runs, and still reports.
+     */
+    it("bootstraps anyway when the post-install quiescence probe cannot confirm idle", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const vpsProvisioner = vi
+        .fn()
+        .mockResolvedValue(makeVpsStub("42", "1.2.3.4", "PEM", 8888));
+      const remoteExec = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error("sshExec: connection error: All configured authentication methods failed")
+        )
+        .mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pis-quiescence", tier: "starter" },
+        { vpsProvisioner, remoteExec, sleep: vi.fn() }
+      );
+
+      const calls = recordMock.mock.calls.map((c) => c[0]);
+      // The provision continued past the probe and completed the bootstrap.
+      expect(calls.find((p) => p.phase === "vps_bootstrapped")?.message).toMatch(
+        /PIS id=8888.*SSH re-run/
+      );
+      // First call is the probe, and it is the quiescence command, not the
+      // bootstrap: pins the ordering so the wait cannot drift after the thing
+      // it exists to wait for.
+      expect(remoteExec.mock.calls[0][0].command).toContain("/post_install.log");
+      expect(remoteExec.mock.calls[1][0].command).toContain("newcoworker-bootstrap.sh");
+    });
+
+    /**
      * PIS-skipped path (default for fresh accounts): message reads
      * "Bootstrapping" and explicitly mentions the SSH-only fallback.
      */
