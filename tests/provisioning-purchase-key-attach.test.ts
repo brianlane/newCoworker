@@ -44,7 +44,7 @@ vi.mock("@/lib/provisioning/progress", async (importOriginal) => {
   return { ...actual, recordProvisioningProgress };
 });
 
-const { defaultVpsProvisioner, waitForPostInstallQuiescence, isSshAuthFailure } = await import(
+const { defaultVpsProvisioner, waitForPostInstallQuiescence } = await import(
   "@/lib/provisioning/orchestrate"
 );
 
@@ -334,18 +334,50 @@ describe("waitForPostInstallQuiescence", () => {
   });
 });
 
-describe("isSshAuthFailure", () => {
-  it("separates a rejected key from a port that would not open", () => {
-    // The auth message carries the same "connection error:" prefix that
-    // isSshConnectError matches, which is exactly why this needs its own test.
-    expect(
-      isSshAuthFailure(
-        new Error("sshExec: connection error: All configured authentication methods failed")
-      )
-    ).toBe(true);
-    expect(isSshAuthFailure(new Error("Permission denied (publickey)"))).toBe(true);
-    expect(isSshAuthFailure(new Error("SSH authentication failure"))).toBe(true);
-    expect(isSshAuthFailure(new Error("sshExec: connection error: ECONNREFUSED"))).toBe(false);
-    expect(isSshAuthFailure("not an error")).toBe(false);
+/**
+ * The auth predicate is private, like its sibling `isSshConnectError`, so
+ * assert it through the loop that consumes it. Each phrase must short-circuit
+ * to "unauthenticated" on the FIRST probe; a message that only looks like a
+ * connect error must not.
+ */
+describe("auth rejection vs a port that will not open", () => {
+  const base = { host: "1.2.3.4", username: "root", privateKeyPem: "pem" };
+
+  it.each([
+    "sshExec: connection error: All configured authentication methods failed",
+    "Permission denied (publickey)",
+    "SSH authentication failure"
+  ])("stops immediately on: %s", async (message) => {
+    const remoteExec = vi.fn().mockRejectedValue(new Error(message));
+    const sleep = vi.fn();
+    const out = await waitForPostInstallQuiescence({
+      ...base,
+      remoteExec,
+      sleep,
+      now: () => 0
+    });
+    expect(out).toBe("unauthenticated");
+    expect(remoteExec).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting on a refused port and on a non-Error throw", async () => {
+    for (const thrown of [
+      new Error("sshExec: connection error: ECONNREFUSED"),
+      "a bare string, not an Error"
+    ]) {
+      const remoteExec = vi
+        .fn()
+        .mockRejectedValueOnce(thrown)
+        .mockResolvedValueOnce({ exitCode: 0, signal: null, stdout: "idle", stderr: "" });
+      const out = await waitForPostInstallQuiescence({
+        ...base,
+        remoteExec,
+        sleep: vi.fn(),
+        now: () => 0
+      });
+      expect(out).toBe("idle");
+      expect(remoteExec).toHaveBeenCalledTimes(2);
+    }
   });
 });

@@ -437,7 +437,7 @@ const PIS_QUIESCENCE_PROBE_COMMAND =
  * sweep's 1800s route budget most of its room. Adopt allows 25 minutes, but
  * adopt runs from a debug script with no route deadline over it.
  */
-export const PIS_QUIESCENCE_TIMEOUT_MS = 10 * 60 * 1000;
+const PIS_QUIESCENCE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Gap between probes. Adopt uses the same 15s. */
 const DEFAULT_QUIESCENCE_POLL_MS = 15_000;
@@ -531,7 +531,7 @@ export async function waitForPostInstallQuiescence(input: {
  * broader "sshExec: connection error: ..." prefix that auth failures also
  * carry: retrying a refused port is right, retrying a rejected key is not.
  */
-export function isSshAuthFailure(err: unknown): boolean {
+function isSshAuthFailure(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const m = err.message.toLowerCase();
   return (

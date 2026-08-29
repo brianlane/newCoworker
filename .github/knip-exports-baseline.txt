@@ -1462,6 +1462,7 @@ src/lib/provisioning/orchestrate.ts :: DEPLOY_CLIENT_LOCK_BUSY_EXIT
 src/lib/provisioning/orchestrate.ts :: MIGRATION_CUTOVER_RESERVE_MS
 src/lib/provisioning/orchestrate.ts :: MIGRATION_DEPLOY_MIN_DEADLINE_MS
 src/lib/provisioning/orchestrate.ts :: MIGRATION_ROUTE_BUDGET_MS
+src/lib/provisioning/orchestrate.ts :: defaultVpsProvisioner
 src/lib/provisioning/orchestrate.ts :: deployDeadlineForBudget
 src/lib/provisioning/orchestrate.ts :: describeAttachError
 src/lib/provisioning/orchestrate.ts :: describeProvisioningError
@@ -1470,6 +1471,7 @@ src/lib/provisioning/orchestrate.ts :: formatHostingerErrorBody
 src/lib/provisioning/orchestrate.ts :: formatTendlcAttachProgress
 src/lib/provisioning/orchestrate.ts :: remainingDeployDeadlineMs
 src/lib/provisioning/orchestrate.ts :: waitForDetachedDeployClient
+src/lib/provisioning/orchestrate.ts :: waitForPostInstallQuiescence
 src/lib/provisioning/progress.ts :: ProvisioningLogRowStatus
 src/lib/provisioning/progress.ts :: STUCK_ALERT_DEDUPE_WINDOW_MS
 src/lib/provisioning/progress.ts :: hasPriorSuccessfulProvision
