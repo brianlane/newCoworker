@@ -21,7 +21,17 @@ export default function manifest(): MetadataRoute.Manifest {
      */
     id: "/dashboard",
     name: "New Coworker",
-    short_name: "Coworker",
+    /**
+     * This is the label iOS prints under the Home Screen icon, and it is what
+     * the Add to Home Screen sheet pre-fills. Safari prefers the manifest's
+     * short_name over apple-mobile-web-app-title, so "Coworker" here showed up
+     * as a Home Screen icon called "Coworker" and the brand name never
+     * appeared on the device at all.
+     *
+     * Twelve characters still fits without an ellipsis at every Home Screen
+     * icon size, so there is nothing to buy by shortening it.
+     */
+    short_name: "New Coworker",
     description: "Alerts from your AI coworker, on your home screen.",
     /**
      * `?source=pwa` makes launches from an installed app separable in

@@ -10,7 +10,16 @@ describe("web app manifest", () => {
   it("declares a standalone app so an installed launch has no browser chrome", () => {
     expect(m.display).toBe("standalone");
     expect(m.name).toBe("New Coworker");
-    expect(m.short_name).toBeTruthy();
+  });
+
+  /**
+   * short_name is what iOS actually prints under the Home Screen icon, and
+   * what the Add to Home Screen sheet pre-fills; Safari prefers it over
+   * apple-mobile-web-app-title. It shipped as "Coworker", so the installed
+   * app was called that and the brand name never reached the device.
+   */
+  it("puts the brand name on the Home Screen, not a shortened one", () => {
+    expect(m.short_name).toBe("New Coworker");
   });
 
   /**
