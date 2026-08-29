@@ -43,11 +43,12 @@ export type NotificationPreferencesRow = {
    * Deliver urgent alerts by push INSTEAD of SMS when a live subscription
    * exists. Optional on the type for rows read before 20260829182428.
    *
-   * Default FALSE, unlike the other push toggles: this suppresses a metered
-   * channel that always arrives in favour of one that can die quietly, so
-   * nobody is opted in by a migration.
+   * TRI-STATE. null means nobody has decided, and only that state is
+   * eligible for the channel-liveness sweep to turn on; an explicit false is
+   * an owner's decision the sweep must never overturn. Read it with
+   * `=== true`, never for truthiness.
    */
-  push_replaces_sms?: boolean;
+  push_replaces_sms?: boolean | null;
   email_digest: boolean;
   email_digest_weekly: boolean;
   /**
@@ -286,12 +287,11 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   // is optional on the row type (it postdates the table), so Omit<> does not
   // demand it here. Add every new channel toggle by hand.
   push_urgent: true,
-  // FALSE, unlike every other push toggle. Turning this on suppresses a
-  // metered channel that always arrives in favour of one that can die
-  // quietly (an uninstalled app, a revoked permission, a dropped
-  // subscription), so it is opt-in rather than something a migration decides
-  // for an owner.
-  push_replaces_sms: false,
+  // NULL, not false: "nobody has decided yet", which is the only state the
+  // liveness sweep is allowed to act on. A false here would be an owner
+  // decision, and inventing one at insert time would make the sweep look like
+  // it was overturning people.
+  push_replaces_sms: null,
   email_digest: true,
   email_digest_weekly: true,
   email_monthly_recap: true,

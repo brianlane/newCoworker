@@ -5,26 +5,38 @@
 -- for per message, and an owner with push on already gets the alert on the
 -- same handset, seconds earlier, for nothing.
 --
--- DEFAULT FALSE, unlike every other push preference, and that is the whole
--- safety story. Turning this on trades a metered channel that always arrives
--- for one that can die silently: an uninstalled app, a revoked permission, a
--- subscription the push service dropped. Nobody should be opted into that by
--- a migration. The delivery-time gate is pushDeliverable (a live subscription
--- exists), never pushConnected (which fails toward TRUE and would suppress
--- the text on a read blip), so a push channel that cannot deliver leaves the
--- SMS alone.
+-- NULLABLE, WITH NO DEFAULT, and the three states are the point:
 --
--- Push earns this in a way WhatsApp cannot, though, and that is why it is
--- worth offering: a notificationclick is a real read receipt, so
--- channel-liveness can tell whether the substituted channel is actually being
--- read rather than merely accepted. Suppressing a paid channel is only safe
--- when you can see the replacement working.
+--   NULL   nobody has decided. The channel-liveness sweep may turn it on for
+--          this tenant once it can SEE that push is read and the text is not.
+--   true   substitute. Either the owner asked, or the sweep measured it.
+--   false  never substitute. The owner said so, and no sweep may undo that.
+--
+-- A plain `default false` cannot express the difference between "never
+-- decided" and "decided against", so an automatic enable would keep
+-- overturning owners who had deliberately turned it off. A `default true`
+-- would be worse: it would silence a paid channel that always arrives in
+-- favour of one that can die quietly (an uninstalled app, a revoked
+-- permission, a dropped subscription) for every tenant at once, on no
+-- evidence at all.
+--
+-- The evidence is what makes the automatic case defensible, and push is the
+-- first channel that can produce it. A notificationclick is a real read
+-- receipt, so the sweep waits for push to be judged `live` (taps, not merely
+-- a subscription) AND for SMS to be judged `silent` (alerts landed, nobody
+-- answered). It deliberately does NOT act on an `unused` SMS verdict: that
+-- means too few alerts to judge, which is absence of evidence, not evidence
+-- of absence.
+--
+-- Delivery is additionally gated on pushDeliverable (a live subscription
+-- exists) and never on the softer never-connected check, so a push channel
+-- that cannot deliver right now always leaves the text alone.
 
 alter table public.notification_preferences
-  add column if not exists push_replaces_sms boolean not null default false;
+  add column if not exists push_replaces_sms boolean;
 
 comment on column public.notification_preferences.push_replaces_sms is
-  'Deliver urgent owner alerts by Web Push INSTEAD of SMS when a live push subscription exists. Default false: this suppresses a metered channel that always arrives in favour of one that can die quietly, so it is opt-in. Gated at delivery on a live subscription, never on the softer never-connected check, and never applied to a team broadcast (push reaches only devices that installed the app, while the text reaches the whole tagged roster) or to an alert redirected to one teammate.';
+  'Deliver urgent owner alerts by Web Push INSTEAD of SMS. NULL = undecided (the channel-liveness sweep may enable it once push reads as live and SMS as silent); true = substitute; false = never, set by the owner and never overturned by the sweep. Gated at delivery on a live subscription, and never applied to a team broadcast (push reaches only devices that installed the app, while the text reaches the whole tagged roster) or to an alert redirected to one teammate.';
 
 -- grants: none (push_replaces_sms): adds a column to notification_preferences,
 -- which already grants service_role. No new object is created here.

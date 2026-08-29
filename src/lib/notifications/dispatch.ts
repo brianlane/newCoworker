@@ -340,8 +340,9 @@ export async function resolveNotificationTargets(
     slackUrgent = prefs.slack_urgent ?? true;
     // ?? true: rows read before 20260829044308, same posture.
     pushUrgent = prefs.push_urgent ?? true;
-    // ?? false: rows read before 20260829182428 keep SMS delivery unchanged.
-    pushReplacesSms = prefs.push_replaces_sms ?? false;
+    // === true, never truthiness: the column is tri-state and NULL means
+    // undecided, which must behave as "keep texting" until something decides.
+    pushReplacesSms = prefs.push_replaces_sms === true;
     telegramUrgent = prefs.telegram_urgent ?? true;
     teamsUrgent = prefs.teams_urgent ?? true;
     googleChatUrgent = prefs.google_chat_urgent ?? true;

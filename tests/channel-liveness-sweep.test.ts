@@ -6,6 +6,11 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: vi.fn().mockResolvedValue(undefined)
 }));
+vi.mock("@/lib/db/notification-preferences", () => ({
+  getNotificationPreferences: vi.fn(),
+  updateNotificationPreferences: vi.fn()
+}));
+
 vi.mock("@/lib/db/contact-names", () => ({
   businessOwnerNumbers: vi.fn().mockResolvedValue([])
 }));
@@ -13,6 +18,10 @@ vi.mock("@/lib/db/contact-names", () => ({
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { businessOwnerNumbers } from "@/lib/db/contact-names";
+import {
+  getNotificationPreferences,
+  updateNotificationPreferences
+} from "@/lib/db/notification-preferences";
 import { reportChannelLiveness } from "@/lib/notifications/channel-liveness-read";
 import { sweepChannelLiveness } from "@/lib/notifications/channel-liveness-sweep";
 import { LIVENESS_CHANNELS } from "@/lib/notifications/channel-liveness";
@@ -192,6 +201,8 @@ async function judgeOne(legs: Legs = {}, opts: { fail?: (q: Query) => boolean } 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(businessOwnerNumbers).mockResolvedValue([]);
+  // Undecided by default, the only state the auto-enable may act on.
+  vi.mocked(getNotificationPreferences).mockResolvedValue({ push_replaces_sms: null } as never);
 });
 
 describe("the alert audience", () => {
@@ -789,5 +800,102 @@ describe("sweepChannelLiveness", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect((await sweepChannelLiveness()).checked).toBe(0);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("push instead of text, decided by measurement", () => {
+  /**
+   * The tenant this is for: alerts land on the phone, the owner taps the push
+   * and ignores the text, and we keep paying per message for the text.
+   */
+  function readsPushIgnoresSms(over: Record<string, unknown> = {}) {
+    return fleetDb(ONE_TENANT, (q) =>
+      answer(q, {
+        sends: { ...BUSY },
+        // SMS: alerts landed, nobody answered in 35 days.
+        sms: { data: [{ created_at: daysAgo(35) }] },
+        clicks: { data: [] },
+        // Push: tapped yesterday.
+        pushClicks: { data: [{ clicked_at: daysAgo(1) }] },
+        ...over
+      })
+    );
+  }
+
+  it("turns it on when push is read and the text is not", async () => {
+    const db = readsPushIgnoresSms();
+    const result = await sweepChannelLiveness({ now: NOW, client: db });
+
+    expect(result.pushReplacedSms).toBe(1);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      "biz",
+      { push_replaces_sms: true },
+      db
+    );
+    // And says so, so a substitution nobody asked for is visible.
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "push_replaces_sms_enabled" }),
+      db
+    );
+  });
+
+  /**
+   * An explicit false is an owner's decision. A sweep that overturned it
+   * would be worse than one that never ran.
+   */
+  it("never overturns an owner who turned it off", async () => {
+    vi.mocked(getNotificationPreferences).mockResolvedValue({
+      push_replaces_sms: false
+    } as never);
+    const result = await sweepChannelLiveness({ now: NOW, client: readsPushIgnoresSms() });
+    expect(result.pushReplacedSms).toBe(0);
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite a tenant already switched", async () => {
+    vi.mocked(getNotificationPreferences).mockResolvedValue({
+      push_replaces_sms: true
+    } as never);
+    const result = await sweepChannelLiveness({ now: NOW, client: readsPushIgnoresSms() });
+    expect(result.pushReplacedSms).toBe(0);
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  it("leaves the text alone when nobody has tapped a push", async () => {
+    // Push subscribed but never read: a subscription is not a reader.
+    const db = readsPushIgnoresSms({ pushClicks: { data: [] } });
+    const result = await sweepChannelLiveness({ now: NOW, client: db });
+    expect(result.pushReplacedSms).toBe(0);
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `unused` means too few alerts to judge: absence of evidence, not evidence
+   * of absence. Suppressing a paid channel on it is the exact mistake this
+   * whole check exists to prevent.
+   */
+  it("leaves the text alone when SMS is merely low-volume, not ignored", async () => {
+    const db = fleetDb(ONE_TENANT, (q) =>
+      answer(q, {
+        sends: { ...BUSY, sms: 2 },
+        sms: { data: [] },
+        clicks: { data: [] },
+        pushClicks: { data: [{ clicked_at: daysAgo(1) }] }
+      })
+    );
+    const result = await sweepChannelLiveness({ now: NOW, client: db });
+    expect(result.pushReplacedSms).toBe(0);
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  it("leaves the text alone when the owner still answers it", async () => {
+    // An owner number is required for the reply to attach to the alert
+    // audience at all; without one lastStaffSmsAt has nobody to match and
+    // SMS reads silent no matter what the inbox says.
+    vi.mocked(businessOwnerNumbers).mockResolvedValue(["+15145188192"]);
+    const db = readsPushIgnoresSms({ sms: { data: [{ created_at: daysAgo(1) }] } });
+    const result = await sweepChannelLiveness({ now: NOW, client: db });
+    expect(result.pushReplacedSms).toBe(0);
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
   });
 });
