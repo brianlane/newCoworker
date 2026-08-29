@@ -500,8 +500,18 @@ function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
 }
 /* c8 ignore stop */
 
-/* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
-function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
+/**
+ * The production purchase wiring. EXPORTED so a test can assert what it
+ * actually sends, rather than what a hand-written fixture claims it sends.
+ *
+ * It used to be private behind a `c8 ignore` that read "production-only
+ * default factory; tests inject vpsProvisioner", and that is exactly how the
+ * missing key-embed survived: every test injected its own provisioner, so
+ * nothing ever looked at the real one. See
+ * tests/hostinger-provision.test.ts, "production purchase wiring embeds the
+ * minted key in the post-install script".
+ */
+export function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
   return ({ businessId, tier, vpsSize, billingPeriod, hostingerTerm }) =>
     provisionVpsForBusiness(
       {
@@ -516,7 +526,15 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
         // the SSH-bootstrap phase below always runs the same content
         // afterward. Either path produces the same state because the
         // script is idempotent.
-        postInstallScript: buildDefaultPostInstallScript({ tier, vpsSize })
+        //
+        // A BUILDER, not a string: the script has to carry the public key
+        // as an authorized_keys write, and that key does not exist until
+        // provisionVpsForBusiness mints it. Passing a finished string here
+        // is what left the purchase path unable to embed the key at all,
+        // depending instead on Hostinger's `public_key_ids`, which drops
+        // silently and stranded a paid box for Scar Fairy on 2026-08-29.
+        buildPostInstallScript: (authorizedSshPublicKey) =>
+          buildDefaultPostInstallScript({ tier, vpsSize, authorizedSshPublicKey })
       },
       {
         client,
@@ -545,7 +563,6 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
       }
     );
 }
-/* c8 ignore stop */
 
 /**
  * Placeholder provisioner for providers that have no generic purchase path.

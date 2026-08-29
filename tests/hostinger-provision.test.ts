@@ -522,7 +522,7 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
+        buildPostInstallScript: () => "#!/bin/bash\necho hi",
         postInstallScriptName: "custom-pis-name",
         pollIntervalMs: 1
       },
@@ -542,6 +542,70 @@ describe("provisionVpsForBusiness", () => {
     expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBe(9001);
     expect(result.postInstallScriptId).toBe(9001);
     expect(phases).toContain("post_install_script_registered");
+  });
+
+  /**
+   * Regression, Scar Fairy 2026-08-29. `buildPostInstallScript` used to be a
+   * finished STRING built by the caller, so the purchase path could not embed
+   * the key it had not yet minted and leaned entirely on Hostinger honouring
+   * `setup.public_key_ids`. Hostinger dropped it, VM 1939337 came up without
+   * the key, and the provision died on "All configured authentication methods
+   * failed" holding a box we had already paid for.
+   *
+   * Assert the argument the builder RECEIVES, so the key that reaches the
+   * script is provably the key we persist and later SSH with.
+   */
+  it("hands the builder the public half of the keypair it just minted", async () => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const seenByBuilder: string[] = [];
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        buildPostInstallScript: (key) => {
+          seenByBuilder.push(key);
+          return `#!/bin/bash\n# key=${key.trim()}`;
+        },
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(seenByBuilder).toEqual([fakeKeypair.publicKey]);
+    // The key handed to the builder is the same one we upload to Hostinger
+    // and the same one we persist, so the box, the account, and the row
+    // cannot drift apart.
+    expect(client.createPublicKey.mock.calls[0][1]).toBe(fakeKeypair.publicKey.trim());
+    expect(dbInsert.mock.calls[0][0].public_key).toBe(fakeKeypair.publicKey);
+    expect(result.sshKey.public_key).toBe(fakeKeypair.publicKey);
+    // And the built content, not some other string, is what gets registered.
+    expect(client.createPostInstallScript.mock.calls[0][1]).toContain(
+      `# key=${fakeKeypair.publicKey.trim()}`
+    );
   });
 
   it("falls back gracefully when post-install-script attach hits 403 (chicken-and-egg on fresh accounts)", async () => {
@@ -578,7 +642,7 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
+        buildPostInstallScript: () => "#!/bin/bash\necho hi",
         pollIntervalMs: 1
       },
       {
@@ -638,7 +702,7 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
+        buildPostInstallScript: () => "#!/bin/bash\necho hi",
         pollIntervalMs: 1
       },
       {
@@ -689,7 +753,7 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
+        buildPostInstallScript: () => "#!/bin/bash\necho hi",
         pollIntervalMs: 1
       },
       {
@@ -725,7 +789,7 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-500",
           tier: "starter",
-          postInstallScript: "#!/bin/bash\n",
+          buildPostInstallScript: () => "#!/bin/bash\n",
           pollIntervalMs: 1
         },
         {
@@ -777,7 +841,7 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-stringly-status",
           tier: "starter",
-          postInstallScript: "#!/bin/bash\n",
+          buildPostInstallScript: () => "#!/bin/bash\n",
           pollIntervalMs: 1
         },
         {
@@ -803,7 +867,7 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-econn",
           tier: "starter",
-          postInstallScript: "#!/bin/bash\n",
+          buildPostInstallScript: () => "#!/bin/bash\n",
           pollIntervalMs: 1
         },
         {
@@ -845,7 +909,7 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-default-name",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\n",
+        buildPostInstallScript: () => "#!/bin/bash\n",
         pollIntervalMs: 1
       },
       {
