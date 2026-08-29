@@ -103,6 +103,7 @@ type Legs = {
   whatsapp?: Fixture;
   slack?: Fixture;
   telegram?: Fixture;
+  teams?: Fixture;
   email?: Fixture;
 };
 
@@ -116,7 +117,8 @@ const BUSY: Record<LivenessChannel, number> = {
   dashboard: 40,
   whatsapp: 40,
   slack: 40,
-  telegram: 40
+  telegram: 40,
+  teams: 40
 };
 
 function answer(q: Query, legs: Legs): Fixture {
@@ -137,7 +139,12 @@ function answer(q: Query, legs: Legs): Fixture {
     // channel filter the production code sent, which is also what proves
     // the filter is there at all.
     const channel = q.filters.find((f) => f[1] === "channel")?.[2];
-    return (channel === "telegram" ? legs.telegram : legs.slack) ?? { data: [] };
+    const perChannel: Record<string, Fixture | undefined> = {
+      slack: legs.slack,
+      telegram: legs.telegram,
+      teams: legs.teams
+    };
+    return perChannel[String(channel)] ?? { data: [] };
   }
   return legs.email ?? { data: [] };
 }
@@ -570,7 +577,8 @@ describe("reportChannelLiveness", () => {
       "dashboard",
       "whatsapp",
       "slack",
-      "telegram"
+      "telegram",
+      "teams"
     ]);
     expect(recordSystemLog).not.toHaveBeenCalled();
   });

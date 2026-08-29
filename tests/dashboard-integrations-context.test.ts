@@ -493,3 +493,22 @@ describe("the Telegram tile", () => {
     else expect(status.state).toBe("connected");
   });
 });
+
+describe("the Microsoft Teams tile", () => {
+  it.each([
+    ["disconnected", null, "Not connected"],
+    ["paused", { is_active: false, alert_target_id: "19:x" }, "Paused"],
+    // The state no other channel has: installed, but nobody has messaged
+    // the bot, so there is no conversation to deliver an alert into.
+    ["awaiting a first message", { is_active: true, alert_target_id: null }, "Message your bot once"],
+    ["fully connected", { is_active: true, alert_target_id: "19:x" }, null]
+  ])("reports %s", async (_label, row, label) => {
+    vi.mocked(getPublicCoworkerConnection).mockImplementation(async (_biz, channel) =>
+      channel === "teams" ? (row as never) : null
+    );
+    const ctx = await loadIntegrationsContext("/dashboard/integrations");
+    const status = computeIntegrationStatuses(ctx).teams;
+    if (label) expect(status.label).toBe(label);
+    else expect(status.state).toBe("connected");
+  });
+});

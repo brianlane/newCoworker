@@ -30,7 +30,8 @@ export const LIVENESS_CHANNELS = [
   "dashboard",
   "whatsapp",
   "slack",
-  "telegram"
+  "telegram",
+  "teams"
 ] as const;
 
 export type LivenessChannel = (typeof LIVENESS_CHANNELS)[number];
@@ -103,6 +104,12 @@ const CHANNEL_MAX_SILENCE_DAYS: Record<LivenessChannel, number | null> = {
   whatsapp: 21,
   slack: 30,
   telegram: 21,
+  // Teams is a room somebody sits in all day, like Slack, so silence
+  // there says less than an unanswered phone message. Same 30 as Slack,
+  // and just as uncalibrated as Telegram until a tenant connects: every
+  // Teams row reads `unused` below the ten-send floor, so an unproven
+  // number cannot raise a false alarm meanwhile.
+  teams: 30,
   dashboard: 21,
   email: null
 };

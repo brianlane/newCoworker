@@ -104,14 +104,24 @@ export async function getCoworkerConnection(
   return data ? hydrate(data as StoredRow) : null;
 }
 
-/** Null unless the connection exists AND the owner has not paused it. */
+/**
+ * Null unless the connection exists AND the owner has not paused it.
+ *
+ * Deliberately does NOT require a credential. Not every channel stores one:
+ * Teams authenticates with our own Azure app credentials rather than a
+ * per-tenant secret, so its row carries an empty string by design, and a
+ * blanket "empty credential means dead" rule here would make Teams look
+ * permanently disconnected. The channels that DO hold a secret check it
+ * themselves, where "empty" means the specific thing they can act on
+ * (needs reconnect).
+ */
 export async function getActiveCoworkerConnection(
   businessId: string,
   channel: CoworkerChannel,
   client?: SupabaseClient
 ): Promise<CoworkerConnectionRow | null> {
   const row = await getCoworkerConnection(businessId, channel, client);
-  if (!row || !row.is_active || row.credential.length === 0) return null;
+  if (!row || !row.is_active) return null;
   return row;
 }
 
@@ -122,13 +132,12 @@ export async function getActiveCoworkerConnection(
  * PROVIDER's own workspace id and nothing the sender can assert. An event
  * whose workspace is not bound here belongs to nobody and is dropped.
  */
-async function getCoworkerConnectionByWorkspace(
+export async function getCoworkerConnectionByWorkspaceForChannel(
   channel: CoworkerChannel,
   externalWorkspaceId: string,
-  // Required, not optional: the only caller already holds a client, and an
-  // unreachable fallback is dead code rather than defence.
-  db: SupabaseClient
+  client?: SupabaseClient
 ): Promise<CoworkerConnectionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("coworker_connections")
     .select(FULL_COLUMNS)
@@ -174,7 +183,7 @@ export async function upsertCoworkerConnection(
   // Without this the unique index would still hold, but the error surfaces
   // as an opaque 23505 the connect route cannot explain to whoever is
   // standing at the settings page.
-  const existing = await getCoworkerConnectionByWorkspace(
+  const existing = await getCoworkerConnectionByWorkspaceForChannel(
     input.channel,
     input.externalWorkspaceId,
     db

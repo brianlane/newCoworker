@@ -43,6 +43,7 @@ export const NOTIFICATION_TOGGLE_KEYS = [
   "whatsapp_urgent",
   "slack_urgent",
   "telegram_urgent",
+  "teams_urgent",
   "slack_digest",
   "email_urgent",
   "email_digest",

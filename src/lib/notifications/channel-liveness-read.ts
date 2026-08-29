@@ -245,7 +245,7 @@ async function lastOwnerWhatsappAt(
  */
 async function lastAudienceMessageAt(
   businessId: string,
-  channel: "slack" | "telegram",
+  channel: "slack" | "telegram" | "teams",
   audience: AlertAudience,
   db: SupabaseClient
 ): Promise<string | null> {
@@ -402,7 +402,7 @@ async function gatherChannelEvidence(
 ): Promise<ChannelEvidence[]> {
   const sinceIso = windowStartIso(nowMs);
   const audience = await loadAlertAudience(businessId, db);
-  const [sends, smsReply, linkClick, whatsapp, slack, telegram, dashboard, email] =
+  const [sends, smsReply, linkClick, whatsapp, slack, telegram, teams, dashboard, email] =
     await Promise.all([
       countSendsByChannel(businessId, sinceIso, db),
       lastStaffSmsAt(businessId, audience, db),
@@ -410,6 +410,7 @@ async function gatherChannelEvidence(
       lastOwnerWhatsappAt(businessId, audience, db),
       lastAudienceMessageAt(businessId, "slack", audience, db),
       lastAudienceMessageAt(businessId, "telegram", audience, db),
+      lastAudienceMessageAt(businessId, "teams", audience, db),
       lastDashboardReadAt(businessId, db),
       emailReceiptTally(businessId, sinceIso, audience, db)
     ]);
@@ -461,6 +462,17 @@ async function gatherChannelEvidence(
       lastHumanSignalAt: telegram,
       // Attributed with confidence: nobody reaches this surface at all
       // without a recorded binding to the owner or an active roster row.
+      attributed: true,
+      receipted: 0,
+      hardFailures: 0
+    },
+    {
+      channel: "teams",
+      sends: sends.teams,
+      lastHumanSignalAt: teams,
+      // Attributed with confidence: an activity only reaches a turn at all
+      // once the platform has matched it to the owner or an active roster
+      // row, by Microsoft-supplied address or a recorded binding.
       attributed: true,
       receipted: 0,
       hardFailures: 0
