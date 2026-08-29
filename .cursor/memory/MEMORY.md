@@ -136,3 +136,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Live transfers are invisible to AMD](project_live_transfer_amd_blindspot.md) - partner bridges the client in, so no leg to detect on; 5 of 8 hit voicemail, none recorded; adding a tool means DELETING the old prompt path
 - [Push PWA is the sixth channel](project_push_pwa_channel.md) - only TRUE read receipt; iOS detect-order, 403 never revokes, SSRF allowlist, invisible Deno mirror
 - [Coworker channel architecture](project_coworker_channel_architecture.md) - shared pipeline + the 12 non-enforced widening sites; per-channel traps
+- [Teams multi-tenant bots are retired](project_teams_multitenant_retired.md) - Single Tenant only since Jul 2025; app REGISTRATION carries cross-tenant; token endpoint is tenant-scoped; channels blade undrivable

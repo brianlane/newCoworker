@@ -59,6 +59,7 @@ beforeEach(() => {
   resetTeamsTokenStateForTests();
   process.env.MICROSOFT_APP_ID = "app-id";
   process.env.MICROSOFT_APP_SECRET = "app-secret";
+  process.env.MICROSOFT_APP_TENANT_ID = "our-tenant-id";
 });
 
 describe("the service url is checked, not trusted", () => {
@@ -126,6 +127,38 @@ describe("the app token", () => {
     vi.stubGlobal("fetch", m);
     return m;
   }
+
+  /**
+   * Microsoft retired multi-tenant bot creation after 31 July 2025, so this
+   * registration is single-tenant and the client-credentials grant only
+   * exists inside the directory that owns the app. The old shared
+   * `botframework.com` tenant answers AADSTS700016 for it, which surfaces as
+   * an auth failure that looks exactly like a bad secret. Asserting on the
+   * PATH is the only way a unit test can tell those two apart.
+   */
+  it("exchanges credentials in OUR OWN tenant, not the shared botframework one", async () => {
+    const m = stubOk();
+    await sendTo(REF.serviceUrl);
+    const loginCall = m.mock.calls.find(([u]) => isLoginUrl(u))!;
+    expect(new URL(String(loginCall[0])).pathname).toBe(
+      "/our-tenant-id/oauth2/v2.0/token"
+    );
+    // The value that USED to be here. If it ever comes back, every send
+    // fails against a real Azure registration while the suite stays green.
+    expect(String(loginCall[0])).not.toContain("botframework.com/oauth2");
+  });
+
+  it("refuses when the tenant id is unset, without spending a request", async () => {
+    // Under the multi-tenant flow this variable did not exist, so an
+    // environment carried over from before the switch has an id and a secret
+    // and no tenant. Failing loudly here beats posting to
+    // `https://login.microsoftonline.com//oauth2/v2.0/token`.
+    delete process.env.MICROSOFT_APP_TENANT_ID;
+    const m = vi.fn();
+    vi.stubGlobal("fetch", m);
+    await expect(sendTo(REF.serviceUrl)).rejects.toThrow(/tenant id is not configured/);
+    expect(m).not.toHaveBeenCalled();
+  });
 
   it("is cached across calls, because it is per-app rather than per-tenant", async () => {
     // A busy fleet would otherwise exchange credentials once per alert and
