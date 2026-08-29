@@ -1763,10 +1763,15 @@ function main(): void {
                   ) {
                     return "speaking";
                   }
-                  // The screening event clears machine_detected and stamps
-                  // ios_screening; either shape means the verdict is
-                  // withdrawn and a person may be deciding whether to talk.
-                  if (ctx.ios_screening === true || ctx.machine_detected !== true) {
+                  // Withdrawal is EXPLICIT: `clearProvisionalMachine` (edge)
+                  // writes `machine_detected: false` and `ios_screening:
+                  // true`; it never deletes the key. An ABSENT key means the
+                  // stamp has not landed yet (this poll can start before the
+                  // execute() write on a slow path), and reading that as
+                  // "live" would unmute the model at a mailbox and let it
+                  // hang up before the sweep speaks, the exact incident the
+                  // hold exists to prevent (Bugbot, PR #1742).
+                  if (ctx.ios_screening === true || ctx.machine_detected === false) {
                     return "live";
                   }
                   return "pending";

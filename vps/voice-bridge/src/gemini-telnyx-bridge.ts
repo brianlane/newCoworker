@@ -2485,11 +2485,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (opts.deterministicVoicemail) {
           // First report starts the clock; a repeat must NOT re-credit the
           // end_call hold, or a model looping this tool could pin the leg
-          // past the failsafe window. The resolution poll starts with the
-          // clock: it is the lift for a verdict the platform later withdraws.
-          if (voicemailDeterministicPendingAtMs === 0) {
+          // past the failsafe window.
+          const firstDeterministicReport = voicemailDeterministicPendingAtMs === 0;
+          if (firstDeterministicReport) {
             voicemailDeterministicPendingAtMs = Date.now();
-            startVoicemailResolutionPoll();
           }
           modelAudioMuted = true;
           try {
@@ -2515,6 +2514,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
                 detail: "voicemail record failed: say nothing and call end_call now"
               });
             } else {
+              // The resolution poll (the lift for a verdict the platform
+              // later withdraws) starts only NOW, with the stamp known
+              // written: a tick that reads the session before the stamp
+              // lands would see the key absent and misread a fresh no-AMD
+              // leg as a withdrawn verdict (Bugbot, PR #1742). The
+              // capability's own read is belt to this ordering's braces.
+              if (firstDeterministicReport) startVoicemailResolutionPoll();
               sendToolResponse(call.id, name, {
                 ok: true,
                 detail: VOICEMAIL_DETERMINISTIC_TOOL_REPLY
