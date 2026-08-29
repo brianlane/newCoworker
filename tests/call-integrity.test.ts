@@ -432,6 +432,15 @@ describe("detectCallIntegrity: the partner never let us in", () => {
     expect(isAcceptPrompt(ACCEPT_CONNECT)).toBe(true);
   });
 
+  it("covers a rewording HomeLight has not used yet", () => {
+    // The two errors do not cost the same. An unmatched rewording turns the
+    // rule silently off and loses a referral exactly the way the incident
+    // did; an extra verb costs one line in a digest a human reads.
+    expect(isAcceptPrompt("Press 1 to accept this referral.")).toBe(true);
+    // The keypress and the same-sentence window still have to hold.
+    expect(isAcceptPrompt("We accept referrals. Press one.")).toBe(false);
+  });
+
   /**
    * The false-positive that would have muted this rule. Both of these ended
    * calls that reached the seller (28f9c228 and dbd44742): the AI was put

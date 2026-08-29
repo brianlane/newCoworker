@@ -146,9 +146,15 @@ export const DEFAULT_MIN_ASSISTANT_TURNS = 3;
  * `[^.!?]` window is what does that: in both mailbox menus the option ends
  * at a full stop before any other word, whereas the partner's prompt reads
  * "press one to agree ... and to be connected to the client" unbroken.
+ *
+ * "accept" is in the verb list although HomeLight has never used it, because
+ * the cost of the two errors is not symmetric: an unmatched rewording turns
+ * this rule silently off and loses a referral exactly the way the incident
+ * did, while an extra verb costs one line in a digest a human reads. The
+ * keypress and the same-sentence window still have to hold.
  */
 const ACCEPT_PROMPT =
-  /press\s+(?:\d+|one|two|three|four|five|zero|pound|star)\b[^.!?]{0,90}?\b(?:agree|be\s+connected|connect\s+you|connected\s+to)\b/i;
+  /press\s+(?:\d+|one|two|three|four|five|zero|pound|star)\b[^.!?]{0,90}?\b(?:agree|accept|be\s+connected|connect\s+you|connected\s+to)\b/i;
 
 /** True when this caller turn is a partner accept prompt (see ACCEPT_PROMPT). */
 export function isAcceptPrompt(text: string): boolean {
