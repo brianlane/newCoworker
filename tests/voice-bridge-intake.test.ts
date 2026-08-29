@@ -9,6 +9,7 @@ import {
   intakeSystemInstruction,
   iosScreeningLine,
   OUTBOUND_VOICEMAIL_TOOL_LINE,
+  OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC,
   STAR_ROW,
   TRANSFER_PARTNER_MENU_LINE
 } from "../vps/voice-bridge/src/intake";
@@ -114,6 +115,75 @@ describe("intakeSystemInstruction", () => {
     // A list that is ONLY phone degrades to notes, never an empty list.
     const onlyPhone = intakeSystemInstruction("Acme", undefined, null, ["phone"], false, undefined, true);
     expect(onlyPhone).toContain("confirming as you go: notes.");
+  });
+
+  it("names the script's callback number as the ONLY one the model may speak", () => {
+    // The 45-day fabrication audit found every invented number on a call
+    // where the model held NO number: this line is the missing DATA, not a
+    // new rule. The number renders in spoken 3-3-4 form whatever shape the
+    // author wrote.
+    const instr = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      true,
+      false,
+      "Hi, this is the Amy Laidlaw Team. Give us a call back at (602) 695-1142. Thanks."
+    );
+    expect(instr).toContain("the ONLY one you may say is 602-695-1142");
+  });
+
+  it("adds no callback line when the script has no number, or there is no script", () => {
+    const noNumber = intakeSystemInstruction(
+      "Acme",
+      undefined,
+      null,
+      [],
+      true,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      true,
+      false,
+      "Hi, this is Acme. We will try you again shortly."
+    );
+    expect(noNumber).not.toContain("ONLY one you may say");
+    const noScript = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(noScript).not.toContain("ONLY one you may say");
+  });
+
+  it("deterministic delivery swaps the tool rule: report and stay silent, never read", () => {
+    const build = (deterministicMode: boolean) =>
+      intakeSystemInstruction(
+        "Amy Laidlaw",
+        undefined,
+        "America/Phoenix",
+        [],
+        true,
+        undefined,
+        true,
+        undefined,
+        undefined,
+        true,
+        false,
+        "Give us a call back at 602-695-1142.",
+        deterministicMode
+      );
+    const deterministic = build(true);
+    const modelRead = build(false);
+    expect(deterministic).toContain(OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC);
+    // Never BOTH: two live rules describing different endings for the same
+    // tool is the competing-procedures trap from PR #1716.
+    expect(deterministic).not.toContain(OUTBOUND_VOICEMAIL_TOOL_LINE);
+    expect(modelRead).toContain(OUTBOUND_VOICEMAIL_TOOL_LINE);
+    expect(modelRead).not.toContain(OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC);
   });
 
   it("outbound default opener drops the call-you-right-back promise", () => {

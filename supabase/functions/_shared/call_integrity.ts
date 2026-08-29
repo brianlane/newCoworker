@@ -81,6 +81,14 @@ export type CallIntegrityFinding = {
   kind: CallIntegrityKind;
   /** Human-readable evidence, safe to put in a log line. */
   detail: string;
+  /**
+   * `invented_contact_number` only: the offending number in spoken 3-3-4
+   * form. Structured (not just embedded in `detail`) so the sweep can match
+   * it against the bridge's suppressed-number record and report a firewalled
+   * fabrication as BLOCKED rather than paging a human about audio the
+   * spoken-number guard cut before it played.
+   */
+  number?: string;
 };
 
 /**
@@ -393,6 +401,7 @@ export function detectCallIntegrity(
         flagged.add(n);
         findings.push({
           kind: "invented_contact_number",
+          number: n,
           detail:
             `spoke ${n}, which is not a number this business owns: ` +
             `"${text.replace(/\s+/g, " ").slice(0, 140)}"`
@@ -546,6 +555,48 @@ export function formatCallIntegrityAlert(items: readonly CallIntegrityAlertItem[
   const rest = items.length - Math.min(items.length, ALERT_MAX_ITEMS);
   if (rest > 0) lines.push(`• and ${rest} more`);
   return [head, ...lines].join("\n");
+}
+
+/**
+ * Split one call's findings into real failures and firewall-blocked attempts.
+ *
+ * The voice bridge's spoken-number guard (vps/voice-bridge/src/
+ * spoken-number-guard.ts) cuts a fabricated number's audio before it finishes
+ * playing and records the cut on the handoff session context as
+ * `suppressed_spoken_numbers`. The transcript still contains what the model
+ * GENERATED, so without this split the sweep would page a human about digits
+ * nobody heard, and an alert that cries wolf gets muted. A blocked finding is
+ * still reported, as a `voice_call_integrity_blocked` log line, because the
+ * model ATTEMPTING a fabrication is worth a daily count even when the guard
+ * held.
+ *
+ * Only `invented_contact_number` findings can be blocked (the guard acts on
+ * numbers alone), and matching is by the shared spoken 3-3-4 form so the
+ * bridge's record and the detector's finding cannot disagree about format.
+ * `suppressed` values are normalized defensively; anything unparsable is
+ * ignored rather than trusted.
+ */
+export function partitionBlockedFindings(
+  findings: readonly CallIntegrityFinding[],
+  suppressed: unknown
+): { failures: CallIntegrityFinding[]; blocked: CallIntegrityFinding[] } {
+  const suppressedSet = new Set<string>();
+  if (Array.isArray(suppressed)) {
+    for (const v of suppressed) {
+      const n = spokenNumberForm(v);
+      if (n) suppressedSet.add(n);
+    }
+  }
+  const failures: CallIntegrityFinding[] = [];
+  const blocked: CallIntegrityFinding[] = [];
+  for (const f of findings) {
+    if (f.kind === "invented_contact_number" && f.number && suppressedSet.has(f.number)) {
+      blocked.push(f);
+    } else {
+      failures.push(f);
+    }
+  }
+  return { failures, blocked };
 }
 
 /**
