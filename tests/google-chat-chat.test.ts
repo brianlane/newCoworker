@@ -15,6 +15,7 @@ import {
   GOOGLE_CHAT_SURFACE_BLOCK,
   GOOGLE_CHAT_TEAM_PREAMBLE,
   googleChatAlreadyBoundMessage,
+  googleChatBindFailedMessage,
   googleChatLinkRejectedMessage,
   googleChatNeedsLinkingMessage,
   googleChatOnboardingMessage,
@@ -29,6 +30,7 @@ const ALL = [
   googleChatUnboundSpaceMessage,
   googleChatNeedsLinkingMessage,
   googleChatAlreadyBoundMessage,
+  googleChatBindFailedMessage,
   googleChatLinkRejectedMessage,
   googleChatOverCapMessage,
   googleChatTierBlockedMessage,
@@ -71,6 +73,17 @@ describe("the two different 'I cannot help you' messages", () => {
 
   it("tells somebody spending a code in a second space how to move it", () => {
     expect(googleChatAlreadyBoundMessage()).toContain("disconnect");
+  });
+
+  it("says the code is gone in BOTH messages that are sent after it is spent", () => {
+    // A code is single use, and which business it belongs to is only
+    // knowable by redeeming it, so neither of these outcomes could have
+    // been checked first. Not saying so sends the owner back to a space
+    // with a code that will be refused.
+    for (const fn of [googleChatAlreadyBoundMessage, googleChatBindFailedMessage]) {
+      expect(fn("en"), fn.name).toContain("used up");
+      expect(fn("es"), fn.name).toContain("gastado");
+    }
   });
 });
 

@@ -167,6 +167,67 @@ describe("a space nobody has connected", () => {
     expect(out.reason).toBe("already_bound_elsewhere");
     expect(d.upsertConnection).not.toHaveBeenCalled();
     expect(out.reply).toContain("disconnect");
+    // And it says the code is gone, because it is. Which business a code
+    // belongs to is only knowable by redeeming it, so no ordering could
+    // have checked this first, and leaving that unsaid sends the owner
+    // back to a space with a code that will be refused.
+    expect(out.reply).toContain("used up");
+  });
+
+  it("NEVER THROWS once the code has been spent", async () => {
+    /**
+     * The sharpest failure on this path, and it is not the lost code.
+     *
+     * A throw here becomes a 500, Google redelivers, and the retry meets a
+     * code that has already been redeemed. The owner is then told their
+     * code was invalid, which is untrue and is a dead end they cannot get
+     * out of without guessing that a fresh code is what is needed.
+     *
+     * So a bind failure is answered, once, honestly.
+     */
+    const d = deps({
+      redeem: vi.fn(async () => ({
+        ok: true as const,
+        identity: { business_id: BIZ } as never
+      })),
+      upsertConnection: vi.fn(async () => {
+        throw new Error("write down");
+      })
+    });
+    const out = await handleGoogleChatEvent(
+      {
+        connection: null,
+        event: event({
+          message: { ...event().message, text: "ABCD2345", argumentText: "ABCD2345" }
+        })
+      },
+      d
+    );
+    expect(out).toMatchObject({ enqueued: false, reason: "bind_failed" });
+    expect(out.reply).toContain("used up");
+    expect(out.reply).toContain("new connect code");
+  });
+
+  it("says the same thing when the bind rejects with a non-Error", async () => {
+    const d = deps({
+      redeem: vi.fn(async () => ({
+        ok: true as const,
+        identity: { business_id: BIZ } as never
+      })),
+      upsertConnection: vi.fn(async () => {
+        throw "write down";
+      })
+    });
+    const out = await handleGoogleChatEvent(
+      {
+        connection: null,
+        event: event({
+          message: { ...event().message, text: "ABCD2345", argumentText: "ABCD2345" }
+        })
+      },
+      d
+    );
+    expect(out.reason).toBe("bind_failed");
   });
 
   it("records a null space name rather than an empty one", async () => {

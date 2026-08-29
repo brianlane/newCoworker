@@ -50,6 +50,7 @@ import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { isSpaceName } from "@/lib/google-chat/client";
 import {
   googleChatAlreadyBoundMessage,
+  googleChatBindFailedMessage,
   googleChatLinkRejectedMessage,
   googleChatNeedsLinkingMessage,
   googleChatOnboardingMessage,
@@ -175,7 +176,19 @@ export async function handleGoogleChatEvent(
       };
     }
 
+    // THE CODE IS SPENT FROM HERE ON, and everything below has to be
+    // written knowing that. Which business a code belongs to is only
+    // knowable by redeeming it, so there is no ordering that checks the
+    // conditions below first, and a code is deliberately single use.
+    //
+    // What that costs must therefore be paid honestly rather than hidden:
+    // every failure past this point says the code has been used up, and
+    // none of them throws. A throw would become a 500, Google would
+    // redeliver, and the retry would meet an already-redeemed code and tell
+    // the owner their code was invalid, which is both untrue and a dead
+    // end they cannot get out of without guessing.
     const businessId = outcome.identity.business_id;
+
     // A business gets ONE Chat space, and a second code must not silently
     // move it. Alerts go to the bound space, so relocating it from inside a
     // chat message would send them somewhere the owner never chose and
@@ -188,16 +201,31 @@ export async function handleGoogleChatEvent(
         reply: googleChatAlreadyBoundMessage(await locale(businessId))
       };
     }
-    await upsertConnection({
-      businessId,
-      channel: "google_chat",
-      externalWorkspaceId: space,
-      externalWorkspaceName: event.space?.displayName?.trim() || null,
-      // No per-tenant secret exists for this channel: the app authenticates
-      // with our own Google service account, exactly as Teams uses our
-      // Azure app. The column is NOT NULL, so it holds an empty string.
-      credential: ""
-    });
+
+    try {
+      await upsertConnection({
+        businessId,
+        channel: "google_chat",
+        externalWorkspaceId: space,
+        externalWorkspaceName: event.space?.displayName?.trim() || null,
+        // No per-tenant secret exists for this channel: the app
+        // authenticates with our own Google service account, exactly as
+        // Teams uses our Azure app. The column is NOT NULL, so it holds an
+        // empty string.
+        credential: ""
+      });
+    } catch (err) {
+      logger.error("google chat: space bind failed after the code was spent", {
+        businessId,
+        space,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return {
+        enqueued: false,
+        reason: "bind_failed",
+        reply: googleChatBindFailedMessage(await locale(businessId))
+      };
+    }
     logger.info("google chat: space bound by code", { businessId, space });
     return {
       enqueued: false,

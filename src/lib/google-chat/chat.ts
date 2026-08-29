@@ -72,8 +72,22 @@ const NEEDS_LINKING: Record<AppLocale, string> = {
  * message would send them somewhere the owner never chose.
  */
 const ALREADY_BOUND: Record<AppLocale, string> = {
-  en: "This business is already connected to a different Google Chat space. To move it here, disconnect Google Chat in Settings, then Integrations, and set it up again.",
-  es: "Este negocio ya está conectado a otro espacio de Google Chat. Para moverlo aquí, desconecta Google Chat en Configuración, luego Integraciones, y vuelve a configurarlo."
+  en: "This business is already connected to a different Google Chat space, so I've left it where it is. That code is now used up. To move alerts here, disconnect Google Chat in Settings, then Integrations, and set it up again from this space.",
+  es: "Este negocio ya está conectado a otro espacio de Google Chat, así que lo he dejado donde estaba. Ese código ya está gastado. Para mover los avisos aquí, desconecta Google Chat en Configuración, luego Integraciones, y vuelve a configurarlo desde este espacio."
+};
+
+/**
+ * Shown when the code was accepted but the space could not be saved.
+ *
+ * Says the code is used up, because it is: a code is single use and which
+ * business it belongs to is only knowable by redeeming it, so there is no
+ * ordering that could have checked first. Being told to fetch a new one is
+ * mildly annoying; being told the code was invalid, which is what a silent
+ * retry produces, is untrue and a dead end.
+ */
+const BIND_FAILED: Record<AppLocale, string> = {
+  en: "I couldn't finish connecting this space, and that code is now used up. Generate a new connect code in Settings, then Integrations, then Google Chat, and send it here again.",
+  es: "No he podido terminar de conectar este espacio, y ese código ya está gastado. Genera un código de conexión nuevo en Configuración, luego Integraciones y luego Google Chat, y envíalo aquí otra vez."
 };
 
 const LINK_REJECTED: Record<AppLocale, string> = {
@@ -103,6 +117,7 @@ export const googleChatOnboardingMessage = (l?: AppLocale) => pick(ONBOARDING, l
 export const googleChatUnboundSpaceMessage = (l?: AppLocale) => pick(UNBOUND_SPACE, l);
 export const googleChatNeedsLinkingMessage = (l?: AppLocale) => pick(NEEDS_LINKING, l);
 export const googleChatAlreadyBoundMessage = (l?: AppLocale) => pick(ALREADY_BOUND, l);
+export const googleChatBindFailedMessage = (l?: AppLocale) => pick(BIND_FAILED, l);
 export const googleChatLinkRejectedMessage = (l?: AppLocale) => pick(LINK_REJECTED, l);
 export const googleChatOverCapMessage = (l?: AppLocale) => pick(OVER_CAP, l);
 export const googleChatTierBlockedMessage = (l?: AppLocale) => pick(TIER_BLOCKED, l);
