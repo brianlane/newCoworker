@@ -187,3 +187,16 @@ export async function telegramSendMessage(
 export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+/**
+ * Escape for use INSIDE a double-quoted attribute, e.g. an anchor's href.
+ *
+ * The text escaper above is not enough there, and the difference matters:
+ * it leaves `"` alone, so a URL carrying one would close the attribute
+ * early and let whatever followed be parsed as further markup. Telegram
+ * renders a restricted HTML subset, but "restricted" is not "inert", and
+ * the URL is data we hand it on a tenant's behalf.
+ */
+export function escapeTelegramAttribute(value: string): string {
+  return escapeTelegramHtml(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}

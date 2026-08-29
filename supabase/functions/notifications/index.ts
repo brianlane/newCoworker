@@ -1281,9 +1281,13 @@ serve(async (req: Request) => {
         body: JSON.stringify({
           businessId: record.business_id,
           summary: phiFree?.summary ?? summary,
-          // Under HIPAA content-free mode the body is withheld entirely,
-          // exactly as the other legs withhold it.
-          details: phiFree ? null : null,
+          // Always null, and NOT the same field as the Node path's
+          // `input.smsBody`. This pipeline builds a notification from a
+          // system_logs row, which carries a summary and a payload but no
+          // separate body, so there is nothing further to say. Written as a
+          // constant rather than a ternary because the ternary previously
+          // read `phiFree ? null : null`, which looks like a dropped branch.
+          details: null,
           detailsUrl: dashboardUrl
         })
       });

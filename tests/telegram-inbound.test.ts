@@ -379,6 +379,37 @@ describe("a connected account gets a turn", () => {
     expect(d.send).not.toHaveBeenCalled();
   });
 
+  it("writes the VERIFIED PHONE onto the conversation, not just the name", async () => {
+    // Channel liveness reads coworker_conversations to decide whether a
+    // human is still on this channel, and for Telegram the only thing that
+    // can place a row in the alert audience is user_phone_e164 (there is no
+    // email here). Leave it null and a teammate's thread can never certify
+    // the channel as live, however much real traffic it carries.
+    const d = deps({ findIdentity: vi.fn(async () => LINKED) });
+    await handleTelegramMessage({ connection: CONNECTION, update: update() }, d);
+    expect(d.updateIdentity).toHaveBeenCalledWith(
+      "conv-1",
+      expect.objectContaining({ phoneE164: "+15145188192" })
+    );
+  });
+
+  it("writes the phone even when the display name has not changed", async () => {
+    const d = deps({
+      findIdentity: vi.fn(async () => LINKED),
+      getConversation: vi.fn(async () => ({
+        id: "conv-1",
+        user_display_name: "Dana Ruiz",
+        user_email: null,
+        user_phone_e164: null
+      }) as never)
+    });
+    await handleTelegramMessage({ connection: CONNECTION, update: update() }, d);
+    expect(d.updateIdentity).toHaveBeenCalledWith(
+      "conv-1",
+      expect.objectContaining({ phoneE164: "+15145188192" })
+    );
+  });
+
   it("refreshes a display name that changed, best effort", async () => {
     const d = deps({ findIdentity: vi.fn(async () => LINKED) });
     await handleTelegramMessage({ connection: CONNECTION, update: update() }, d);
@@ -412,13 +443,34 @@ describe("a connected account gets a turn", () => {
     });
   });
 
-  it("skips the refresh when the name has not changed", async () => {
+  it("clears a stale phone when the binding no longer carries one", async () => {
+    // A code-linked account has no verified phone. If it previously had one
+    // (re-linked a different way), the conversation must stop claiming it,
+    // or liveness would keep counting a number nobody proved.
+    const d = deps({
+      findIdentity: vi.fn(async () => ({ ...LINKED, verified_phone_e164: null })),
+      getConversation: vi.fn(async () => ({
+        id: "conv-1",
+        user_display_name: "Dana Ruiz",
+        user_email: null,
+        user_phone_e164: "+15145188192"
+      }) as never)
+    });
+    await handleTelegramMessage({ connection: CONNECTION, update: update() }, d);
+    expect(d.updateIdentity).toHaveBeenCalledWith(
+      "conv-1",
+      expect.objectContaining({ phoneE164: null })
+    );
+  });
+
+  it("writes nothing when the conversation already matches the binding", async () => {
     const d = deps({
       findIdentity: vi.fn(async () => LINKED),
       getConversation: vi.fn(async () => ({
         id: "conv-1",
         user_display_name: "Dana Ruiz",
-        user_email: null
+        user_email: null,
+        user_phone_e164: "+15145188192"
       }) as never)
     });
     await handleTelegramMessage({ connection: CONNECTION, update: update() }, d);
@@ -493,13 +545,26 @@ describe("failures that must not become webhook errors", () => {
     expect(out).toEqual({ enqueued: false, reason: "no_text" });
   });
 
-  it("has no display name to record when Telegram sent neither name nor username", async () => {
-    const d = deps({ findIdentity: vi.fn(async () => LINKED) });
+  it("keeps the stored name when Telegram sent neither name nor username", async () => {
+    // The phone still has to land, so the write happens; what must NOT
+    // happen is overwriting a known name with nothing.
+    const d = deps({
+      findIdentity: vi.fn(async () => LINKED),
+      getConversation: vi.fn(async () => ({
+        id: "conv-1",
+        user_display_name: "Dana Ruiz",
+        user_email: null,
+        user_phone_e164: null
+      }) as never)
+    });
     await handleTelegramMessage(
       { connection: CONNECTION, update: update({ from: { id: 4242 } }) },
       d
     );
-    expect(d.updateIdentity).not.toHaveBeenCalled();
+    expect(d.updateIdentity).toHaveBeenCalledWith(
+      "conv-1",
+      expect.objectContaining({ displayName: "Dana Ruiz", phoneE164: "+15145188192" })
+    );
   });
 });
 

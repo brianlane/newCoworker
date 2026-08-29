@@ -257,11 +257,23 @@ export async function handleTelegramMessage(
     return { enqueued: false, reason: "duplicate_delivery" };
   }
 
-  if (displayName && displayName !== conversation.user_display_name) {
-    // Best effort: a stale display name costs a label, never a decision.
+  // Keep the conversation's copy of the identity in step with the binding.
+  //
+  // The PHONE half is not cosmetic. Channel liveness reads
+  // coworker_conversations to decide whether a human is still on this
+  // channel, and for Telegram the only thing that can place a row in the
+  // alert audience is `user_phone_e164` (there is no email here). Leave it
+  // null and a teammate's thread can never certify the channel as live, no
+  // matter how much real traffic it carries.
+  const nameChanged = Boolean(displayName) && displayName !== conversation.user_display_name;
+  const phoneChanged =
+    (existing.verified_phone_e164 ?? null) !== (conversation.user_phone_e164 ?? null);
+  if (nameChanged || phoneChanged) {
+    // Best effort: a stale label costs a label, never a decision.
     await updateIdentity(conversation.id, {
-      displayName,
+      displayName: displayName ?? conversation.user_display_name,
       email: conversation.user_email,
+      phoneE164: existing.verified_phone_e164 ?? null,
       isOwner: existing.is_owner
     }).catch(() => undefined);
   }

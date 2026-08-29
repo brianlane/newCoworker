@@ -110,6 +110,27 @@ describe("the code itself", () => {
     }
   });
 
+  it("draws each letter without modulo bias", async () => {
+    // 256 is not a multiple of the 31-letter alphabet, so `byte % 31` would
+    // make the first eight letters roughly 13% more likely and quietly
+    // shrink the search space of a code that grants staff access. With
+    // rejection sampling the distribution is flat, so no letter should run
+    // far ahead of the mean over a large sample.
+    const counts = new Map<string, number>();
+    const draws = 400;
+    for (let i = 0; i < draws; i += 1) {
+      for (const ch of (await mint()).code) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    }
+    const mean = (draws * 8) / 31;
+    for (const [ch, n] of counts) {
+      // Generous band: this is catching a systematic 13% skew on the first
+      // eight letters, not asserting a particular random draw.
+      expect(n, `letter ${ch}`).toBeLessThan(mean * 1.6);
+      expect(n, `letter ${ch}`).toBeGreaterThan(mean * 0.4);
+    }
+    expect(counts.size).toBe(31);
+  });
+
   it("is not predictable across calls", async () => {
     const seen = new Set<string>();
     for (let i = 0; i < 100; i += 1) seen.add((await mint()).code);

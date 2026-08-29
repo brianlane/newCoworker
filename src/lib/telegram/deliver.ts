@@ -17,7 +17,11 @@ import {
   type CoworkerConnectionRow
 } from "@/lib/db/coworker-connections";
 import { coworkerChannelAllowedForBusiness } from "@/lib/coworker-channels/tier-gate";
-import { escapeTelegramHtml, telegramSendMessage } from "@/lib/telegram/client";
+import {
+  escapeTelegramAttribute,
+  escapeTelegramHtml,
+  telegramSendMessage
+} from "@/lib/telegram/client";
 import { logger } from "@/lib/logger";
 
 export type TelegramDeliveryResult =
@@ -63,7 +67,7 @@ function buildTelegramAlertText(input: {
   // Only http(s). A javascript: or data: href in an anchor is a link we
   // would be publishing on the tenant's behalf.
   if (/^https?:\/\//i.test(url)) {
-    parts.push(`<a href="${escapeTelegramHtml(url)}">Open in New Coworker</a>`);
+    parts.push(`<a href="${escapeTelegramAttribute(url)}">Open in New Coworker</a>`);
   }
   return parts.join("\n\n");
 }

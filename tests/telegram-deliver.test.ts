@@ -56,6 +56,18 @@ describe("the alert card", () => {
     expect(sentText()).toContain("a &gt; b");
   });
 
+  it("escapes a quote in the href, so a URL cannot close the attribute", async () => {
+    // The text escaper leaves `"` alone, which inside an attribute would end
+    // it early and let whatever followed be parsed as further markup.
+    await deliverTelegramAlert({
+      businessId: BIZ,
+      summary: "x",
+      detailsUrl: 'https://app/x?q="onmouseover=1'
+    });
+    expect(sentText()).toContain("&quot;");
+    expect(sentText()).not.toMatch(/href="[^"]*"[^>]/);
+  });
+
   it("links to the dashboard when the URL is http(s)", async () => {
     await deliverTelegramAlert({ businessId: BIZ, summary: "x", detailsUrl: "https://app/x" });
     expect(sentText()).toContain('<a href="https://app/x">');
