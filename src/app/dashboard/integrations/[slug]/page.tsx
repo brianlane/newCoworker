@@ -18,6 +18,7 @@ import { GoogleMeetToggle } from "@/components/dashboard/GoogleMeetToggle";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCard";
 import { TeamsIntegrationCard } from "@/components/dashboard/TeamsIntegrationCard";
+import { GoogleChatIntegrationCard } from "@/components/dashboard/GoogleChatIntegrationCard";
 import { TelegramIntegrationCard } from "@/components/dashboard/TelegramIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { McpConnectorCard } from "@/components/dashboard/McpConnectorCard";
@@ -225,6 +226,14 @@ function IntegrationBody({
           businessId={businessId}
           initialConnection={ctx.teamsConnection}
           tierAllowed={ctx.teamsEnabled}
+        />
+      );
+    case "google_chat":
+      return (
+        <GoogleChatIntegrationCard
+          businessId={businessId}
+          initialConnection={ctx.googleChatConnection}
+          tierAllowed={ctx.googleChatEnabled}
         />
       );
     case "custom":

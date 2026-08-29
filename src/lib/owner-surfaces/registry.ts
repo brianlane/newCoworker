@@ -33,7 +33,8 @@ export type OwnerSurfaceKey =
   | "slack"
   | "whatsapp"
   | "telegram"
-  | "teams";
+  | "teams"
+  | "google_chat";
 
 export type OwnerSurfaceDefinition = {
   key: OwnerSurfaceKey;
@@ -125,6 +126,16 @@ export const OWNER_SURFACES: readonly OwnerSurfaceDefinition[] = [
     customTableSource: "ai_teams",
     changeNoticeLabel: "in Microsoft Teams",
     historyLabel: "Edited by your coworker, in Microsoft Teams"
+  },
+  {
+    key: "google_chat",
+    label: "Google Chat",
+    description:
+      "When you or a team member messages your coworker in Google Chat, it answers you as staff. Identity comes from your Google Workspace account.",
+    flowEditSource: "ai_edit_google_chat",
+    customTableSource: "ai_google_chat",
+    changeNoticeLabel: "in Google Chat",
+    historyLabel: "Edited by your coworker, in Google Chat"
   }
 ];
 

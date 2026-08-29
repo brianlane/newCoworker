@@ -68,10 +68,12 @@ export type IntegrationsContext = {
   slackConnection: Awaited<ReturnType<typeof getPublicSlackConnection>>;
   telegramConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
   teamsConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
+  googleChatConnection: Awaited<ReturnType<typeof getPublicCoworkerConnection>>;
   /** False on starter: the Slack integration is a Standard-tier perk. */
   slackEnabled: boolean;
   telegramEnabled: boolean;
   teamsEnabled: boolean;
+  googleChatEnabled: boolean;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
@@ -146,9 +148,13 @@ export async function loadIntegrationsContext(
       ? await getPublicCoworkerConnection(businessId, "telegram")
       : null,
     teamsConnection: businessId ? await getPublicCoworkerConnection(businessId, "teams") : null,
+    googleChatConnection: businessId
+      ? await getPublicCoworkerConnection(businessId, "google_chat")
+      : null,
     slackEnabled: slackAllowedForTier(businessRow?.tier),
     telegramEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
     teamsEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
+    googleChatEnabled: coworkerChannelAllowedForTier(businessRow?.tier),
     // Never load key metadata for non-owners: the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
@@ -220,6 +226,16 @@ export function computeIntegrationStatuses(
         ? connected
         : { state: "attention", label: "Message your bot once" };
 
+  // NO third state for Google Chat, and the contrast with Teams above is
+  // the point: a Chat app that is a member of a space can post into it
+  // whenever, and the space IS the connection here, so a connection that
+  // exists is a connection that can deliver.
+  const googleChatStatus: IntegrationStatus = !ctx.googleChatConnection
+    ? disconnected
+    : ctx.googleChatConnection.is_active
+      ? connected
+      : { state: "attention", label: "Paused" };
+
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
 
@@ -271,6 +287,7 @@ export function computeIntegrationStatuses(
     slack: slackStatus,
     telegram: telegramStatus,
     teams: teamsStatus,
+    google_chat: googleChatStatus,
     custom:
       customCount > 0
         ? { state: "connected", label: `${customCount} connected` }

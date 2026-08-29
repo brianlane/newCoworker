@@ -24,6 +24,11 @@ import {
   TEAMS_SURFACE_BLOCK,
   TEAMS_TEAM_PREAMBLE
 } from "@/lib/teams/chat";
+import {
+  GOOGLE_CHAT_REPLY_MAX_CHARS,
+  GOOGLE_CHAT_SURFACE_BLOCK,
+  GOOGLE_CHAT_TEAM_PREAMBLE
+} from "@/lib/google-chat/chat";
 import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
 import type { OwnerSurfaceKey } from "./registry";
 import type { SpeakerKind, SurfaceSpeaker } from "./speaker";
@@ -31,7 +36,7 @@ import type { SpeakerKind, SurfaceSpeaker } from "./speaker";
 /** Surfaces that actually run a turn through the shared owner engine. */
 export type OwnerTurnSurfaceKey = Extract<
   OwnerSurfaceKey,
-  "sms" | "slack" | "whatsapp" | "telegram" | "teams"
+  "sms" | "slack" | "whatsapp" | "telegram" | "teams" | "google_chat"
 >;
 
 export type OwnerTurnSurface = {
@@ -191,6 +196,26 @@ export const OWNER_TURN_SURFACES: Readonly<Record<OwnerTurnSurfaceKey, OwnerTurn
         : `The speaker is ${speaker.name ?? "a team member"}, on the business's roster, from their Microsoft account (${ref}).`,
     transcriptLabel: `Recent Microsoft Teams exchange ${TRANSCRIPT_SUFFIX}`,
     replyMaxChars: TEAMS_REPLY_MAX_CHARS,
+    budgetMs: 60_000,
+    maxToolSteps: 6
+  },
+  google_chat: {
+    key: "google_chat",
+    flowEditSource: "ai_edit_google_chat",
+    // Same posture as Teams: the owner's own assistant reached from
+    // somewhere else, so it reads the dashboard toggles rather than needing
+    // a settings card nobody has filled in. That is also why Google Chat
+    // adds no AgentKey and no Rowboat seed.
+    toolGateAgentKey: "dashboard",
+    serves: ["owner", "teammate"],
+    surfaceBlock: GOOGLE_CHAT_SURFACE_BLOCK,
+    teamPreamble: GOOGLE_CHAT_TEAM_PREAMBLE,
+    speakerLine: (speaker, ref) =>
+      speaker.kind === "owner"
+        ? `The speaker is the business OWNER${speaker.name ? `, ${speaker.name}` : ""}, verified from their Google Workspace account (${ref}).`
+        : `The speaker is ${speaker.name ?? "a team member"}, on the business's roster, from their Google Workspace account (${ref}).`,
+    transcriptLabel: `Recent Google Chat exchange ${TRANSCRIPT_SUFFIX}`,
+    replyMaxChars: GOOGLE_CHAT_REPLY_MAX_CHARS,
     budgetMs: 60_000,
     maxToolSteps: 6
   }

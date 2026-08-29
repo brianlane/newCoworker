@@ -24,6 +24,7 @@ import {
   Mail,
   Megaphone,
   MessageCircle,
+  MessagesSquare,
   Plug,
   Video
 } from "lucide-react";
@@ -35,6 +36,7 @@ export type IntegrationSlug =
   | "slack"
   | "telegram"
   | "teams"
+  | "google_chat"
   | "vagaro"
   | "acuity"
   | "calendly"
@@ -112,6 +114,15 @@ export const INTEGRATIONS: IntegrationDef[] = [
       "Bring your coworker into Microsoft Teams: alerts land where your team already works, and anyone on your roster can message it back using their Microsoft account.",
     // lucide dropped brand icons; Users stands in for a Teams workspace.
     icon: Users
+  },
+  {
+    slug: "google_chat",
+    name: "Google Chat",
+    category: "Team chat",
+    benefit:
+      "Bring your coworker into Google Chat: alerts land in the space your team already uses, and anyone on your roster can message it back using their Google Workspace account.",
+    // lucide dropped brand icons; MessagesSquare stands in for a Chat space.
+    icon: MessagesSquare
   },
   {
     slug: "vagaro",
