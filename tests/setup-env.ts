@@ -72,6 +72,16 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   // App Manifest API pair (scripts only, never runtime).
   "SLACK_APP_ACCESS_TOKEN",
   "SLACK_APP_REFRESH_TOKEN",
+  // Teams bot (Bot Connector), distinct from MICROSOFT_CLIENT_* above. The
+  // tenant id is not a secret, but it steers the token endpoint, so leaving
+  // it set would let a local run take a different branch from CI.
+  "MICROSOFT_APP_ID",
+  "MICROSOFT_APP_SECRET",
+  "MICROSOFT_APP_TENANT_ID",
+  // Google Chat app: the service-account key signs our outbound calls, and
+  // the audience is checked on every inbound webhook token.
+  "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
+  "GOOGLE_CHAT_AUDIENCE",
   // First-party Google Workspace OAuth. Shares one client with Supabase
   // "Log in with Google", so a sourced .env holds the REAL verified client:
   // without stripping, any suite touching the authorize URL or a token

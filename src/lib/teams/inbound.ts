@@ -15,10 +15,14 @@
  * forever, and the visible symptom is not an error: every colleague is
  * quietly treated as a stranger and told to go and find a link code.
  *
- * THE TENANT BOUNDARY IS `channelData.tenant.id`. Our Azure bot registration
- * is multi-tenant, so any Entra tenant that finds the app can install it and
- * message it. An activity whose tenant is not bound to a business belongs to
- * nobody and is dropped, which is the same rule as an unbound Slack team_id.
+ * THE TENANT BOUNDARY IS `channelData.tenant.id`. The Azure Bot RESOURCE is
+ * single-tenant (Microsoft retired multi-tenant bot creation in July 2025),
+ * but the Entra APP REGISTRATION behind it is multi-tenant, and that is the
+ * half that decides who may talk to us: any Entra tenant that installs the
+ * Teams app can message the bot. So an activity whose tenant is not bound to
+ * a business belongs to nobody and is dropped, the same rule as an unbound
+ * Slack team_id. Do not relax this on the strength of the portal showing
+ * "Single Tenant": that field does not narrow who can reach this code.
  *
  * THE CONVERSATION REFERENCE IS CAPTURED ON EVERY MESSAGE. Teams has no
  * "message this user" call: a proactive alert can only continue a

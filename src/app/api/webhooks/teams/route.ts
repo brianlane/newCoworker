@@ -52,8 +52,9 @@ export async function POST(request: Request) {
   }
 
   // The tenant comes from the VERIFIED token where the token carries one,
-  // and falls back to the activity's channelData. Our Azure registration is
-  // multi-tenant, so an unbound tenant belongs to nobody.
+  // and falls back to the activity's channelData. Activities reach us from
+  // any Entra tenant that has installed the Teams app, so an unbound tenant
+  // belongs to nobody and is dropped rather than guessed at.
   const tenantId = verdict.claims.tenantId ?? activity.channelData?.tenant?.id?.trim() ?? "";
   if (!tenantId) return NextResponse.json({ ok: true, skipped: "no_tenant" });
 

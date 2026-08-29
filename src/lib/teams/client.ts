@@ -23,7 +23,25 @@
 
 import { logger } from "@/lib/logger";
 
-const LOGIN_URL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token";
+/**
+ * The token endpoint is TENANT-SCOPED, and that is not cosmetic.
+ *
+ * The multi-tenant bot flow posted to the shared `botframework.com` tenant
+ * here. Microsoft deprecated multi-tenant bot CREATION after 31 July 2025,
+ * so our registration is single-tenant, and a single-tenant app only exists
+ * inside the directory that owns it. Posting client credentials to
+ * `botframework.com` gets AADSTS700016 (application not found in that
+ * directory), which reads like a bad secret and is not one.
+ *
+ * The tenant here is always OURS, never the customer's. A customer's Entra
+ * tenant never appears in this URL: cross-tenant reach comes from the app
+ * registration being multi-tenant and the Teams app being installed there,
+ * not from where we mint our own bearer token.
+ */
+function loginUrl(tenantId: string): string {
+  return `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`;
+}
+
 const TOKEN_SCOPE = "https://api.botframework.com/.default";
 
 /** Microsoft's tokens last an hour; refresh early rather than on failure. */
@@ -60,12 +78,17 @@ async function teamsAccessToken(opts: { now?: number } = {}): Promise<string> {
 
   const appId = (process.env.MICROSOFT_APP_ID ?? "").trim();
   const appSecret = (process.env.MICROSOFT_APP_SECRET ?? "").trim();
+  // Named separately from the id and secret so an operator reading the log
+  // knows WHICH of the three to go and set. The tenant id is the one that is
+  // easy to miss: it was not needed at all under the multi-tenant flow.
+  const tenantId = (process.env.MICROSOFT_APP_TENANT_ID ?? "").trim();
   if (!appId || !appSecret) throw new TeamsApiError("app credentials are not configured", null);
+  if (!tenantId) throw new TeamsApiError("app tenant id is not configured", null);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(LOGIN_URL, {
+    const res = await fetch(loginUrl(tenantId), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

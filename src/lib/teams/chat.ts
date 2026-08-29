@@ -45,10 +45,10 @@ const ONBOARDING: Record<AppLocale, string> = {
 /**
  * Shown to someone the platform cannot place.
  *
- * Deliberately says nothing about the business. Our Azure bot registration
- * is multi-tenant, so an unbound tenant can install it and message it;
- * confirming which business it serves would tell a stranger something they
- * did not know.
+ * Deliberately says nothing about the business. Our Entra app registration
+ * is multi-tenant, so an unbound tenant can install the Teams app and
+ * message us; confirming which business the bot serves would tell a stranger
+ * something they did not know.
  */
 const NEEDS_LINKING: Record<AppLocale, string> = {
   en: "Before I can help, someone from the business needs to connect this Microsoft Teams account. Ask them to open Settings, then Integrations, then Microsoft Teams.",
