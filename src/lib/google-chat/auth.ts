@@ -5,11 +5,19 @@
  * own Chat service account. The mechanics are shared with Teams in
  * `webhook-auth/jwks.ts`; what is Google Chat is here.
  *
- * THE AUDIENCE IS THE APP'S CONFIGURED AUDIENCE, which for an HTTPS
- * endpoint is the Google Cloud project number of the project the Chat app
- * is configured in. It is the check that stops a valid token minted for
- * somebody else's Chat app being replayed at our webhook, so it fails
- * closed when unset.
+ * THE AUDIENCE IS THE APP'S CONFIGURED AUDIENCE, and Google offers two
+ * shapes for it: the Cloud project number, or the endpoint URL Chat posts
+ * to. Which one a token carries is set by an "Authentication Audience"
+ * option that does NOT appear on the configuration page of an app built in
+ * the Workspace add-on shape, so it cannot be read off before the first
+ * event arrives, and guessing wrong rejects every event with a 401 that
+ * looks exactly like a forged token.
+ *
+ * So this accepts a COMMA-SEPARATED LIST and matches any member. That is
+ * not a loosening: each entry still has to be an identifier of ours, and
+ * the check it performs is unchanged, which is what stops a valid token
+ * minted for somebody else's Chat app being replayed at our webhook. It
+ * fails closed when unset.
  *
  * The key set is served DIRECTLY rather than through an OpenID discovery
  * document, which is the one structural difference from Teams and the
@@ -37,14 +45,17 @@ export async function verifyGoogleChatToken(
   authorizationHeader: string | null,
   opts: { audience?: string; now?: number } = {}
 ): Promise<VerifyGoogleChatTokenResult> {
-  const audience = (opts.audience ?? process.env.GOOGLE_CHAT_AUDIENCE ?? "").trim();
+  const audiences = (opts.audience ?? process.env.GOOGLE_CHAT_AUDIENCE ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   // Named for what is missing on THIS channel rather than the shared
   // "audience_unconfigured": an operator reading the log needs to know
   // which environment variable to go and set.
-  if (!audience) return { ok: false, reason: "audience_unconfigured" };
+  if (audiences.length === 0) return { ok: false, reason: "audience_unconfigured" };
 
   const verdict = await verifyWebhookToken(GOOGLE_CHAT_PROVIDER, authorizationHeader, {
-    audience,
+    audience: audiences,
     now: opts.now
   });
   return verdict.ok ? { ok: true, audience: verdict.token.audience } : verdict;

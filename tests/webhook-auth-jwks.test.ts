@@ -165,9 +165,14 @@ describe("the two key-source shapes", () => {
 });
 
 describe("the audience guard", () => {
-  it.each([
+  it.each<[string, string | string[]]>([
     ["empty", ""],
-    ["only whitespace", "   "]
+    ["only whitespace", "   "],
+    // The list form, which Google Chat uses because Chat picks the audience
+    // from either the project number or the endpoint URL and never says
+    // which. An empty list must fail closed exactly like an empty string.
+    ["an empty list", []],
+    ["a list of nothing but blanks", ["", "   "]]
   ])("refuses everything when our expected audience is %s", async (_label, audience) => {
     // Fails CLOSED. An empty expected audience must never mean "match any",
     // which is what a naive equality check against `undefined` would do.
@@ -177,6 +182,28 @@ describe("the audience guard", () => {
         now: NOW
       })
     ).toEqual({ ok: false, reason: "audience_unconfigured" });
+  });
+
+  it("accepts a token matching ANY of several identifiers we own", async () => {
+    // Widening the SET of our own identifiers, not weakening the check: the
+    // rejection below proves an audience outside the set is still refused.
+    for (const aud of ["our-app", "https://app.test/hook"]) {
+      expect(
+        await verifyWebhookToken(
+          ALPHA,
+          `Bearer ${sign({ ...payloadFor(ALPHA.issuer), aud }, alpha.privateKey)}`,
+          { audience: ["our-app", "https://app.test/hook"], now: NOW }
+        )
+      ).toMatchObject({ ok: true, token: { audience: aud } });
+    }
+
+    expect(
+      await verifyWebhookToken(
+        ALPHA,
+        `Bearer ${sign({ ...payloadFor(ALPHA.issuer), aud: "someone-elses-app" }, alpha.privateKey)}`,
+        { audience: ["our-app", "https://app.test/hook"], now: NOW }
+      )
+    ).toEqual({ ok: false, reason: "unexpected_audience" });
   });
 
   it("hands the full claim set back, for the channel to read what it needs", async () => {

@@ -15,7 +15,11 @@
  *   - ISSUER, or a token minted by some other service the same provider
  *     signs for is accepted here
  *   - AUDIENCE equal to OUR app identifier, or a valid token addressed to a
- *     DIFFERENT app is replayed into ours
+ *     DIFFERENT app is replayed into ours. A provider may mint this from
+ *     more than one identifier of ours (Google Chat picks either the Cloud
+ *     project number or the endpoint URL, and does not say which), so the
+ *     caller may supply several. They are matched as a SET OF OURS, never
+ *     as a wildcard: every candidate still has to be an identifier we own.
  *   - EXPIRY, with a small clock-skew allowance
  *
  * Deliberately no JWT library. Node's `createPublicKey` takes a JWK
@@ -153,11 +157,14 @@ export type VerifyWebhookTokenResult =
 export async function verifyWebhookToken(
   provider: WebhookTokenProvider,
   authorizationHeader: string | null,
-  opts: { audience: string; now?: number }
+  opts: { audience: string | string[]; now?: number }
 ): Promise<VerifyWebhookTokenResult> {
-  const expectedAudience = opts.audience.trim();
-  // Fails CLOSED. An empty expected audience must never mean "match any".
-  if (!expectedAudience) return { ok: false, reason: "audience_unconfigured" };
+  const expectedAudiences = (Array.isArray(opts.audience) ? opts.audience : [opts.audience])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  // Fails CLOSED. An empty expected audience must never mean "match any",
+  // and neither must a list that is empty once the blanks are dropped.
+  if (expectedAudiences.length === 0) return { ok: false, reason: "audience_unconfigured" };
 
   const header = (authorizationHeader ?? "").trim();
   if (!/^Bearer\s+\S+$/i.test(header)) return { ok: false, reason: "malformed_header" };
@@ -184,11 +191,16 @@ export async function verifyWebhookToken(
   // The audience is OUR app. Without this check a perfectly valid token
   // addressed to somebody else's app would be accepted here.
   const audience = typeof payload.aud === "string" ? payload.aud.trim() : "";
-  const a = Buffer.from(audience, "utf8");
-  const b = Buffer.from(expectedAudience, "utf8");
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return { ok: false, reason: "unexpected_audience" };
+  // Every candidate is compared, with no early exit, so the work does not
+  // depend on WHICH of our identifiers matched.
+  let audienceMatches = false;
+  for (const expected of expectedAudiences) {
+    const a = Buffer.from(audience, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    const matched = a.length === b.length && timingSafeEqual(a, b);
+    audienceMatches = audienceMatches || matched;
   }
+  if (!audienceMatches) return { ok: false, reason: "unexpected_audience" };
 
   const now = opts.now ?? Date.now();
   const exp = payload.exp;

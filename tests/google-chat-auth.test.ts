@@ -207,3 +207,89 @@ describe("configuration", () => {
     expect(await verify(sign(goodPayload))).toEqual({ ok: false, reason: "jwks_unavailable" });
   });
 });
+
+describe("more than one audience, because Google will not say which it sends", () => {
+  /**
+   * Chat mints the audience from EITHER the Cloud project number OR the
+   * endpoint URL, chosen by an "Authentication Audience" setting that does
+   * not appear on the configuration page of an app built in the Workspace
+   * add-on shape. There is no API that reports it and no way to read it off
+   * before the first event lands, and guessing wrong rejects every event
+   * with a 401 indistinguishable from a forged token.
+   *
+   * So both of OUR identifiers are accepted. These tests exist to prove
+   * that this widened the set of identifiers rather than weakening the
+   * check: an audience belonging to somebody else is still refused, and an
+   * empty configuration still refuses everything.
+   */
+  const URL_AUDIENCE = "https://www.newcoworker.com/api/webhooks/google-chat";
+  const BOTH = `${AUDIENCE},${URL_AUDIENCE}`;
+
+  it.each([
+    ["the project number", AUDIENCE],
+    ["the endpoint URL", URL_AUDIENCE]
+  ])("accepts a token whose audience is %s", async (_label, aud) => {
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud })}`, {
+        audience: BOTH,
+        now: NOW
+      })
+    ).toEqual({ ok: true, audience: aud });
+  });
+
+  it("still refuses an audience that is neither of ours", async () => {
+    // The whole point of the check. Holding two of our own identifiers must
+    // not become "accept any audience".
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: "999888777666" })}`, {
+        audience: BOTH,
+        now: NOW
+      })
+    ).toEqual({ ok: false, reason: "unexpected_audience" });
+  });
+
+  it("refuses a URL that merely CONTAINS one of ours", async () => {
+    // A prefix or suffix match here would accept an attacker-chosen host,
+    // so the comparison stays whole-string.
+    expect(
+      await verifyGoogleChatToken(
+        `Bearer ${sign({ ...goodPayload, aud: `${URL_AUDIENCE}.evil.test` })}`,
+        { audience: BOTH, now: NOW }
+      )
+    ).toEqual({ ok: false, reason: "unexpected_audience" });
+  });
+
+  it("tolerates the spacing an operator actually types", async () => {
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: URL_AUDIENCE })}`, {
+        audience: ` ${AUDIENCE} ,  ${URL_AUDIENCE} `,
+        now: NOW
+      })
+    ).toMatchObject({ ok: true });
+  });
+
+  it("fails CLOSED on a list that is nothing but separators", async () => {
+    // ",  ," must never collapse into "match anything". This is the shape a
+    // half-finished env var edit leaves behind.
+    expect(
+      await verifyGoogleChatToken(`Bearer ${sign(goodPayload)}`, {
+        audience: " , ,, ",
+        now: NOW
+      })
+    ).toEqual({ ok: false, reason: "audience_unconfigured" });
+  });
+
+  it("reads the list from the environment too", async () => {
+    // The deployed shape: one variable holding both identifiers.
+    process.env.GOOGLE_CHAT_AUDIENCE = BOTH;
+    try {
+      expect(
+        await verifyGoogleChatToken(`Bearer ${sign({ ...goodPayload, aud: URL_AUDIENCE })}`, {
+          now: NOW
+        })
+      ).toMatchObject({ ok: true, audience: URL_AUDIENCE });
+    } finally {
+      delete process.env.GOOGLE_CHAT_AUDIENCE;
+    }
+  });
+});
