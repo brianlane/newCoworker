@@ -13,7 +13,13 @@
  *
  *   - SIGNATURE, against a key from the provider's own published set
  *   - ISSUER, or a token minted by some other service the same provider
- *     signs for is accepted here
+ *     signs for is accepted here. A provider may legitimately use more than
+ *     one issuer string (Google spells its OIDC issuer both with and
+ *     without a scheme), so this may be a list. Note what an issuer does
+ *     NOT prove: a shared issuer like Google's OIDC endpoint signs for
+ *     EVERY account it hosts, so pinning it identifies the signer's
+ *     platform and not the sender. A provider on a shared issuer needs a
+ *     claim check of its own on top; see google-chat/auth.ts.
  *   - AUDIENCE equal to OUR app identifier, or a valid token addressed to a
  *     DIFFERENT app is replayed into ours. A provider may mint this from
  *     more than one identifier of ours (Google Chat picks either the Cloud
@@ -65,8 +71,8 @@ export type WebhookTokenProvider = {
   /** Names the cache bucket and the log lines. */
   name: string;
   source: JwksSource;
-  /** The only issuer a token from this provider may carry. */
-  issuer: string;
+  /** The only issuer(s) a token from this provider may carry. */
+  issuer: string | string[];
 };
 
 type CacheEntry = {
@@ -186,7 +192,10 @@ export async function verifyWebhookToken(
   // Pinned, not merely "whatever the header says". Accepting the token's own
   // algorithm choice is how `alg: none` and HMAC-confusion attacks work.
   if (jwtHeader.alg !== "RS256") return { ok: false, reason: "unexpected_alg" };
-  if (payload.iss !== provider.issuer) return { ok: false, reason: "unexpected_issuer" };
+  const issuers = Array.isArray(provider.issuer) ? provider.issuer : [provider.issuer];
+  if (typeof payload.iss !== "string" || !issuers.includes(payload.iss)) {
+    return { ok: false, reason: "unexpected_issuer" };
+  }
 
   // The audience is OUR app. Without this check a perfectly valid token
   // addressed to somebody else's app would be accepted here.

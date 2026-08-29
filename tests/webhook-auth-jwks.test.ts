@@ -54,8 +54,9 @@ function sign(payload: Record<string, unknown>, key: typeof alpha.privateKey, ki
   return `${signing}.${createSign("RSA-SHA256").update(signing).sign(key).toString("base64url")}`;
 }
 
-const payloadFor = (issuer: string) => ({
-  iss: issuer,
+// Providers may declare several issuer spellings; a token carries one.
+const payloadFor = (issuer: string | string[]) => ({
+  iss: Array.isArray(issuer) ? issuer[0] : issuer,
   aud: "our-app",
   exp: Math.floor(NOW / 1000) + 600
 });
