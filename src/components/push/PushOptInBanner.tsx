@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { PushSetupCard } from "@/components/push/PushSetupCard";
+import { readPushOptedOut } from "@/components/push/PushRegistrar";
 
 /**
  * Versioned so a future change to what the banner says can ask again. Bumping
@@ -40,7 +41,15 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
     // exception, same as TasksWorkspace): reading localStorage during render
     // would desync the SSR markup from the first client paint.
     try {
-      const stored = window.localStorage.getItem(DISMISS_KEY) === "1";
+      /**
+       * Turning alerts OFF in settings is a decision too, and it is the one
+       * this banner must respect most. Without the opt-out check the coach
+       * state falls back to `prompt` the moment someone disables push, so
+       * walking back to the dashboard would put "Turn on alerts" in front of
+       * the person who had just turned them off.
+       */
+      const stored =
+        window.localStorage.getItem(DISMISS_KEY) === "1" || readPushOptedOut();
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDismissed(stored);
     } catch {

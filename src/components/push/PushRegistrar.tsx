@@ -18,7 +18,7 @@ import { urlBase64ToUint8Array } from "@/lib/push/vapid";
  */
 const PUSH_OPTED_OUT_KEY = "ncw_push_opted_out_v1";
 
-function readPushOptedOut(): boolean {
+export function readPushOptedOut(): boolean {
   try {
     return window.localStorage.getItem(PUSH_OPTED_OUT_KEY) === "1";
   } catch {
@@ -140,11 +140,26 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
         }
         if (cancelled) return;
 
-        await fetch("/api/push/subscribe", {
+        const saved = await fetch("/api/push/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ businessId, subscription: subscription.toJSON() })
         });
+
+        if (!saved.ok) {
+          /**
+           * The browser has a subscription the server refused to record (a
+           * tier downgrade answers 403, for instance). Announcing success here
+           * would refresh every mounted card into "Alerts are on" for a device
+           * that will never be sent to.
+           *
+           * Only a subscription THIS pass created is dropped. An existing one
+           * is left alone: a transient server error must not destroy a
+           * registration that is already recorded and working.
+           */
+          if (!existing) await subscription.unsubscribe();
+          return;
+        }
 
         // A card mounted before this finished is still showing "Turn on
         // alerts" for a device that is now subscribed, so tell it to re-read.
