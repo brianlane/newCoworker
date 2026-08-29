@@ -2,8 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { installCoachState, type InstallCoachState } from "@/lib/push/install";
+import {
+  installCoachState,
+  shouldOfferPushBanner,
+  type InstallCoachState
+} from "@/lib/push/install";
 import { urlBase64ToUint8Array } from "@/lib/push/vapid";
+import {
+  PUSH_SUBSCRIBED_EVENT,
+  writePushOptedOut
+} from "@/components/push/PushRegistrar";
 
 /**
  * The push opt-in surface.
@@ -13,7 +21,21 @@ import { urlBase64ToUint8Array } from "@/lib/push/vapid";
  * globals, hands them over, and renders the answer, which is the same split
  * HipaaIdleLogout uses against src/lib/hipaa/session-timeout.ts.
  */
-export function PushSetupCard({ businessId }: { businessId: string | null }) {
+export function PushSetupCard({
+  businessId,
+  variant = "card",
+  onDismiss
+}: {
+  businessId: string | null;
+  /**
+   * "card" is the settings surface: it explains every state, including the
+   * ones nobody can act on from here, because someone who went looking
+   * deserves the whole picture. "banner" interrupts, so it renders only the
+   * actionable states and carries a dismiss.
+   */
+  variant?: "card" | "banner";
+  onDismiss?: () => void;
+}) {
   const [state, setState] = useState<InstallCoachState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +78,13 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
   }, []);
 
   useEffect(() => {
+    // The registrar can create a subscription AFTER this mounted (the silent
+    // re-create for an already-granted permission). Without this the card
+    // would keep offering "Turn on alerts" for a device that is already
+    // subscribed, and a "Not now" would record a decision that consent had
+    // already overtaken.
+    const onSubscribed = () => void refresh();
+    window.addEventListener(PUSH_SUBSCRIBED_EVENT, onSubscribed);
     void refresh();
     void fetch("/api/push/vapid-key")
       .then((r) => (r.ok ? r.json() : null))
@@ -66,6 +95,7 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
       .catch(() => {
         // The click handler re-fetches as a cold fallback.
       });
+    return () => window.removeEventListener(PUSH_SUBSCRIBED_EVENT, onSubscribed);
   }, [refresh]);
 
   async function enable() {
@@ -99,6 +129,8 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ businessId, subscription: subscription.toJSON() })
       });
+      // Consent supersedes any previous "off on this device".
+      writePushOptedOut(false);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setError(body?.error?.message ?? "Could not turn on notifications.");
@@ -117,6 +149,9 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
     setBusy(true);
     setError(null);
     try {
+      // Recorded BEFORE the unsubscribe, so a failure part way through leaves
+      // the device off rather than silently re-subscribed on the next load.
+      writePushOptedOut(true);
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = await registration?.pushManager?.getSubscription();
       if (subscription) {
@@ -138,6 +173,47 @@ export function PushSetupCard({ businessId }: { businessId: string | null }) {
   // Nothing is rendered until the browser has been read, so the card never
   // flashes the wrong advice on first paint.
   if (state === null) return null;
+
+  if (variant === "banner") {
+    // The banner never renders a state it cannot resolve; see
+    // shouldOfferPushBanner for which those are and why.
+    if (!shouldOfferPushBanner(state)) return null;
+    return (
+      // The margin lives HERE, on the element that actually renders. An
+      // always-present wrapper in the layout would leave an empty mb-6 pushing
+      // every dashboard page down in the common case, which is precisely when
+      // this returns null (dismissed, already on, or nothing to act on).
+      <div className="mb-6 rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 flex flex-wrap items-start gap-3">
+        <div className="flex-1 min-w-[16rem]">
+          <p className="text-sm font-medium text-parchment">
+            {state === "prompt"
+              ? "Get urgent alerts on this device"
+              : "Add New Coworker to your Home Screen for alerts"}
+          </p>
+          <p className="text-xs text-parchment/60 mt-1">
+            {state === "prompt"
+              ? "One tap. Alerts arrive even when the dashboard is closed."
+              : "iPhone and iPad only deliver alerts to apps on the Home Screen: Share, then Add to Home Screen, then open it from there."}
+          </p>
+          {error && (
+            <p className="text-xs text-spark-orange mt-1" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {state === "prompt" && (
+            <Button type="button" size="sm" onClick={enable} loading={busy}>
+              Turn on alerts
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
+            Not now
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
