@@ -70,7 +70,8 @@ type DeliveryChannel =
   | "whatsapp"
   | "slack"
   | "telegram"
-  | "teams";
+  | "teams"
+  | "google_chat";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
@@ -92,6 +93,7 @@ type ResolvedTargets = {
   slackUrgent: boolean;
   telegramUrgent: boolean;
   teamsUrgent: boolean;
+  googleChatUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -177,6 +179,7 @@ async function resolveTargets(
   let slackUrgent = true;
   let telegramUrgent = true;
   let teamsUrgent = true;
+  let googleChatUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -185,7 +188,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, telegram_urgent, teams_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, telegram_urgent, teams_urgent, google_chat_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -207,6 +210,7 @@ async function resolveTargets(
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
     telegramUrgent = Boolean(prefs.telegram_urgent ?? true);
     teamsUrgent = Boolean(prefs.teams_urgent ?? true);
+    googleChatUrgent = Boolean(prefs.google_chat_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -247,6 +251,7 @@ async function resolveTargets(
     slackUrgent,
     telegramUrgent,
     teamsUrgent,
+    googleChatUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
@@ -1472,6 +1477,132 @@ serve(async (req: Request) => {
       kind,
       basePayload,
       "teams_bridge_unconfigured"
+    );
+  }
+
+  // Google Chat, through /api/internal/google-chat-send for the same reason
+  // as the three above: the service-account key and the Chat client live in
+  // src/lib, so no credential lands in an edge function. Mirrors the eighth
+  // arm of src/lib/notifications/dispatch.ts.
+  //
+  // `.maybeSingle()` is right here and would NOT be on a per-device table:
+  // coworker_connections holds at most one row per (business, channel), so
+  // there is nothing for it to throw on.
+  let googleChatConnected = true;
+  {
+    const { data: gcConn, error: gcConnErr } = await supa
+      .from("coworker_connections")
+      .select("business_id")
+      .eq("business_id", record.business_id)
+      .eq("channel", "google_chat")
+      .maybeSingle();
+    if (!gcConnErr) googleChatConnected = gcConn !== null;
+  }
+  if (!googleChatConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.googleChatUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "google_chat",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "google_chat_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "google_chat",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "recent_team_notify"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const gcRes = await fetch(`${appUrl}/api/internal/google-chat-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          summary: phiFree?.summary ?? summary,
+          // Always null on this path, and NOT the Node side's
+          // `input.smsBody`: this pipeline builds a notification from a
+          // system_logs row, which carries a summary and a payload but no
+          // separate body.
+          details: null,
+          detailsUrl: dashboardUrl
+        })
+      });
+      const gcJson = gcRes.ok
+        ? ((await gcRes.json().catch(() => null)) as {
+            data?: { ok?: boolean; space?: string; reason?: string; detail?: string };
+          } | null)
+        : null;
+      if (gcJson?.data?.ok) {
+        await recordRow(supa, record.business_id, "google_chat", "sent", summary, kind, {
+          ...basePayload,
+          recipient: gcJson.data.space ?? "google_chat"
+        });
+      } else if (gcRes.ok) {
+        const gcReason = gcJson?.data?.reason ?? "send_failed";
+        if (gcReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "google_chat",
+            gcReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            basePayload,
+            gcJson?.data?.detail ? `${gcReason}:${gcJson.data.detail}` : gcReason
+          );
+        }
+      } else {
+        errors.push(`Google Chat failed: ${gcRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "google_chat",
+          "failed",
+          summary,
+          kind,
+          basePayload,
+          `google_chat_bridge_${gcRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Google Chat error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "google_chat",
+        "failed",
+        summary,
+        kind,
+        basePayload,
+        msg
+      );
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "google_chat",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "google_chat_bridge_unconfigured"
     );
   }
 

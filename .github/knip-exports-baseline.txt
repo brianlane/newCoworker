@@ -993,9 +993,9 @@ src/lib/fub-import/run.ts :: FUB_IMPORT_STATUSES
 src/lib/fub-import/run.ts :: FubCsvPreview
 src/lib/fub-import/run.ts :: FubImportStatus
 src/lib/gemini-chat.ts :: GeminiFunctionCall
+src/lib/google-chat/client.ts :: resetGoogleChatTokenStateForTests
 src/lib/google/bigquery.ts :: BIGQUERY_READONLY_SCOPE
 src/lib/google/bigquery.ts :: buildServiceAccountJwt
-src/lib/google/bigquery.ts :: fetchGoogleAccessToken
 src/lib/google/client.ts :: GOOGLE_TOKEN_REFRESH_MARGIN_MS
 src/lib/google/client.ts :: resetGoogleRefreshStateForTests
 src/lib/google/meet.ts :: MEET_CONFERENCE_SOLUTION

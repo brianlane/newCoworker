@@ -27,6 +27,7 @@ export type NotificationPreferencesRow = {
   slack_urgent?: boolean;
   telegram_urgent?: boolean;
   teams_urgent?: boolean;
+  google_chat_urgent?: boolean;
   /** Post the daily/weekly digest to the same Slack channel. */
   slack_digest?: boolean;
   email_digest: boolean;
@@ -172,6 +173,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "slack_urgent"
     | "telegram_urgent"
     | "teams_urgent"
+    | "google_chat_urgent"
     | "slack_digest"
     | "email_digest"
     | "email_digest_weekly"
@@ -203,6 +205,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   slack_urgent: true,
   telegram_urgent: true,
   teams_urgent: true,
+  google_chat_urgent: true,
   slack_digest: true,
   email_digest: true,
   email_digest_weekly: true,
@@ -315,6 +318,7 @@ export async function updateNotificationPreferences(
     "slack_urgent",
     "telegram_urgent",
     "teams_urgent",
+    "google_chat_urgent",
     "slack_digest",
     "email_digest",
     "email_digest_weekly",
@@ -360,6 +364,7 @@ export async function updateNotificationPreferences(
       patch.slack_urgent === true ||
       patch.telegram_urgent === true ||
       patch.teams_urgent === true ||
+      patch.google_chat_urgent === true ||
       patch.slack_digest === true ||
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||

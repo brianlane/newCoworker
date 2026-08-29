@@ -7,6 +7,7 @@
  * terms and let the batch continue, not take the pass down with it.
  */
 
+import { googleChatChannelAdapter } from "@/lib/google-chat/adapter";
 import { slackChannelAdapter } from "@/lib/slack/worker";
 import { teamsChannelAdapter } from "@/lib/teams/adapter";
 import { telegramChannelAdapter } from "@/lib/telegram/adapter";
@@ -15,7 +16,8 @@ import type { CoworkerChannelAdapter } from "./types";
 const ADAPTERS: readonly CoworkerChannelAdapter[] = [
   slackChannelAdapter,
   telegramChannelAdapter,
-  teamsChannelAdapter
+  teamsChannelAdapter,
+  googleChatChannelAdapter
 ];
 
 const BY_CHANNEL = new Map(ADAPTERS.map((a) => [a.channel as string, a]));

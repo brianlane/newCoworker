@@ -104,6 +104,7 @@ type Legs = {
   slack?: Fixture;
   telegram?: Fixture;
   teams?: Fixture;
+  google_chat?: Fixture;
   email?: Fixture;
 };
 
@@ -118,7 +119,8 @@ const BUSY: Record<LivenessChannel, number> = {
   whatsapp: 40,
   slack: 40,
   telegram: 40,
-  teams: 40
+  teams: 40,
+  google_chat: 40
 };
 
 function answer(q: Query, legs: Legs): Fixture {
@@ -578,7 +580,8 @@ describe("reportChannelLiveness", () => {
       "whatsapp",
       "slack",
       "telegram",
-      "teams"
+      "teams",
+      "google_chat"
     ]);
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
