@@ -111,24 +111,41 @@ describe("the code itself", () => {
   });
 
   it("draws each letter without modulo bias", async () => {
-    // 256 is not a multiple of the 31-letter alphabet, so `byte % 31` would
-    // make the first eight letters roughly 13% more likely and quietly
-    // shrink the search space of a code that grants staff access. With
-    // rejection sampling the distribution is flat, so no letter should run
-    // far ahead of the mean over a large sample.
-    const counts = new Map<string, number>();
-    const draws = 400;
-    for (let i = 0; i < draws; i += 1) {
-      for (const ch of (await mint()).code) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    // 256 is not a multiple of the 31-letter alphabet, so `byte % 31` maps
+    // NINE byte values onto each of the first eight letters and eight onto
+    // each of the rest: those eight become ~13% more likely, shrinking the
+    // search space of a code that grants staff access.
+    //
+    // A per-letter band cannot see that. The skew is about 1.25 standard
+    // deviations per letter at any sane sample size, so a band loose enough
+    // to avoid flaking is loose enough to miss the bug (the first version of
+    // this test did exactly that, and passed against the biased code). The
+    // AGGREGATE share of the eight affected letters is the signal: modulo
+    // puts it at 72/256 = 0.28125, a flat draw at 8/31 = 0.2581, and those
+    // are ~7 standard deviations apart over this sample.
+    const CODES = 2000;
+    const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    const FIRST_EIGHT = new Set(ALPHABET.slice(0, 8));
+
+    let affected = 0;
+    let total = 0;
+    const seenLetters = new Set<string>();
+    for (let i = 0; i < CODES; i += 1) {
+      for (const ch of (await mint()).code) {
+        total += 1;
+        seenLetters.add(ch);
+        if (FIRST_EIGHT.has(ch)) affected += 1;
+      }
     }
-    const mean = (draws * 8) / 31;
-    for (const [ch, n] of counts) {
-      // Generous band: this is catching a systematic 13% skew on the first
-      // eight letters, not asserting a particular random draw.
-      expect(n, `letter ${ch}`).toBeLessThan(mean * 1.6);
-      expect(n, `letter ${ch}`).toBeGreaterThan(mean * 0.4);
-    }
-    expect(counts.size).toBe(31);
+
+    const share = affected / total;
+    // Four standard deviations around the flat expectation, which excludes
+    // the modulo value with room to spare.
+    expect(share).toBeGreaterThan(0.2445);
+    expect(share).toBeLessThan(0.2717);
+    // And every letter is reachable, so a generator that simply dropped the
+    // tail of the alphabet could not pass the share check by accident.
+    expect(seenLetters.size).toBe(ALPHABET.length);
   });
 
   it("is not predictable across calls", async () => {

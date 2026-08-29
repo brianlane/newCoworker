@@ -49,11 +49,25 @@ const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 8;
 
+/**
+ * REJECTION SAMPLING, not modulo.
+ *
+ * 256 is not a multiple of the 31-letter alphabet: `byte % 31` maps nine of
+ * the 256 byte values onto each of the first eight letters and eight onto
+ * each of the rest, making those eight about 13% more likely. That is a
+ * measurable dent in the search space of a code that grants staff access to
+ * a business's coworker, for no gain. Draw again instead of folding the
+ * remainder.
+ */
 function generateLinkCode(): string {
-  const bytes = randomBytes(CODE_LENGTH);
+  const limit = Math.floor(256 / CODE_ALPHABET.length) * CODE_ALPHABET.length;
   let out = "";
-  for (let i = 0; i < CODE_LENGTH; i += 1) {
-    out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
+  while (out.length < CODE_LENGTH) {
+    for (const byte of randomBytes(CODE_LENGTH)) {
+      if (byte >= limit) continue;
+      out += CODE_ALPHABET[byte % CODE_ALPHABET.length];
+      if (out.length === CODE_LENGTH) break;
+    }
   }
   return out;
 }
