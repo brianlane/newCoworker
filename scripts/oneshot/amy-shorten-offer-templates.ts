@@ -516,13 +516,18 @@ async function main(): Promise<void> {
   // template (the vars fill in) and goes to up to four teammates, so the only
   // honest number comes from replaying real sent bodies through these same
   // transforms. Measured over Amy's 450 agent_offer sends of Aug 1-28 2026:
-  // 2,072 billed segments as sent -> 1,889 with this reword, which is 183
-  // segments or about $1.54 a month at $0.0084/segment.
+  // 2,072 billed segments as sent -> 1,964 with this reword, which is 108
+  // segments or about $0.91 a month at $0.0084/segment.
+  //
+  // It was $1.54 before the reply line grew to name the "1, <name>" form.
+  // That is a deliberate trade: a bare "1" with several offers pending asks
+  // which lead, and a teammate who does not know the name form has to answer
+  // a second text. Sixty cents a month is worth less than that round trip.
   console.log(
     `Template segments are not the saving: a rendered offer is longer than its ` +
       `template and goes to up to 4 teammates. Replaying Amy's 450 real Aug 2026 ` +
-      `offer sends through these transforms gives 2,072 -> 1,889 billed segments, ` +
-      `about $${(183 * CENTS_PER_SEGMENT_USD).toFixed(2)} a month.`
+      `offer sends through these transforms gives 2,072 -> 1,964 billed segments, ` +
+      `about $${(108 * CENTS_PER_SEGMENT_USD).toFixed(2)} a month.`
   );
   console.log(
     `Two ENGINE fixes are worth more than this script and are not tenant copy: ` +

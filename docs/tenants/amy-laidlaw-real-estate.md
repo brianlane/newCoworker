@@ -961,8 +961,15 @@ largest line in any offer at roughly nine segments per send: cutting the raw
 vendor blob is Amy's editorial call, not a mechanical saving, and the dry run
 prints a note saying so.
 
+The compact reply line names all three forms a reply can carry, including
+`"1, <Name of lead (if multiple)>"`, which the old copy never mentioned even
+though it has worked since PR #1270. That costs some of the saving on purpose:
+a bare "1" with several offers pending asks WHICH lead, so a teammate who does
+not know the name form has to answer a second text.
+
 Measured by replaying her 450 real August offer sends through the transforms:
-2,072 billed segments -> 1,889, about $1.54 a month. TWO ENGINE FIXES ARE WORTH
+2,072 billed segments -> 1,964, about $0.91 a month (it was $1.54 with the
+terser line that omitted the name form). TWO ENGINE FIXES ARE WORTH
 MORE and are not tenant copy, so they are not in this script: `{{offer.deadline}}`
 renders through `formatInTimeZone`, whose `Intl.DateTimeFormat` emits U+202F (a
 narrow no-break space) before "PM" on the Edge runtime's ICU, forcing UCS-2 on
