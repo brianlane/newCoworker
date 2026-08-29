@@ -150,7 +150,7 @@ export function messengerBookingPhone(
  * queued text to +52... would sit until dispatch and then silently skip,
  * which is the broken-promise class the tool exists to end).
  */
-export function messengerScheduleTextPhone(
+function messengerScheduleTextPhone(
   conversation: Pick<MessengerConversationRow, "platform" | "psid" | "contact_phone">
 ): string | null {
   if (conversation.platform !== "whatsapp") return null;
@@ -164,7 +164,7 @@ export function messengerScheduleTextPhone(
  * verified wa_id (the executor injects it), so a prompt-injected "text my
  * friend at ..." has no path on this surface at all.
  */
-export const MESSENGER_SCHEDULE_TEXT_DECLARATION: GeminiFunctionDeclaration = {
+const MESSENGER_SCHEDULE_TEXT_DECLARATION: GeminiFunctionDeclaration = {
   name: "schedule_text",
   description:
     "Queue ONE text message (SMS) to the person in this conversation for a LATER time, delivered to the WhatsApp number they are messaging from, never anyone else. Use when they ask for a reminder or a text at a future time. Say a later text is set ONLY after this returns ok, quoting the result's sendAtLocal. Only one queued text can be pending for them, scheduling again MOVES it (the result names the time it replaced). If it returns automatic_reminder_exists, an automation already texts them before their booked call: say so, and only re-call with confirmed true if they still want it. action cancel drops the pending queued text.",

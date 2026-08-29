@@ -8,9 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMessengerContents,
   buildMessengerPreamble,
-  MESSENGER_SCHEDULE_TEXT_DECLARATION,
   messengerEngineModel,
-  messengerScheduleTextPhone,
   MESSENGER_ENGINE_DEFAULT_MODEL,
   MESSENGER_ENGINE_HISTORY_LIMIT,
   MESSENGER_ENGINE_MAX_TOOL_ROUNDS,
@@ -169,38 +167,6 @@ describe("buildMessengerPreamble", () => {
     );
     expect(preamble).toContain("Instagram Direct Messages");
     expect(preamble).toContain("name is not known yet");
-  });
-});
-
-describe("messengerScheduleTextPhone", () => {
-  it("returns the wa_id as E.164 for a NANP WhatsApp conversation", () => {
-    expect(
-      messengerScheduleTextPhone({ platform: "whatsapp", psid: "15145188192", contact_phone: null })
-    ).toBe("+15145188192");
-  });
-
-  it("refuses non-NANP wa_ids (our long codes cannot originate texts there)", () => {
-    expect(
-      messengerScheduleTextPhone({
-        platform: "whatsapp",
-        psid: "5215512345678",
-        contact_phone: null
-      })
-    ).toBeNull();
-  });
-
-  it("refuses malformed wa_ids", () => {
-    expect(
-      messengerScheduleTextPhone({ platform: "whatsapp", psid: "psid-1", contact_phone: null })
-    ).toBeNull();
-  });
-
-  it("never trusts a captured contact_phone on Messenger or Instagram", () => {
-    for (const platform of ["messenger", "instagram"] as const) {
-      expect(
-        messengerScheduleTextPhone({ platform, psid: "psid-1", contact_phone: "+15145188192" })
-      ).toBeNull();
-    }
   });
 });
 
@@ -689,7 +655,20 @@ describe("runMessengerGeminiTurn, schedule_text (WhatsApp customers only)", () =
       ...WEBCHAT_TOOL_DECLARATIONS.map((t) => t.name),
       "schedule_text"
     ]);
-    expect(step.tools[step.tools.length - 1]).toBe(MESSENGER_SCHEDULE_TEXT_DECLARATION);
+    // No phone parameter ON PURPOSE: the recipient is structurally this
+    // conversation's verified wa_id, injected by the executor.
+    const decl = step.tools[step.tools.length - 1] as {
+      description: string;
+      parameters: { properties: Record<string, unknown>; required: string[] };
+    };
+    expect(decl.parameters.properties).not.toHaveProperty("phone");
+    expect(Object.keys(decl.parameters.properties).sort()).toEqual([
+      "action",
+      "confirmed",
+      "sendAtIso",
+      "text"
+    ]);
+    expect(decl.description).toContain("never anyone else");
     expect(step.systemInstruction).toContain("schedule_text");
   });
 
@@ -709,13 +688,45 @@ describe("runMessengerGeminiTurn, schedule_text (WhatsApp customers only)", () =
     expect(checkScheduleTextEnabled).not.toHaveBeenCalled();
     expect(vi.mocked(deps.chatStep).mock.calls[0][0].tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
 
-    // WhatsApp but international wa_id: same, the declaration is withheld.
+    // WhatsApp but international wa_id: same, the declaration is withheld
+    // (our long codes cannot originate texts to non-NANP numbers).
     const intl = makeDeps({ checkScheduleTextEnabled: vi.fn(async () => true) });
     await runMessengerGeminiTurn(
       { ...ARGS, conversation: { ...WA, psid: "5215512345678" } },
       intl
     );
     expect(vi.mocked(intl.chatStep).mock.calls[0][0].tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
+
+    // WhatsApp with a malformed psid (not a wa_id number shape): withheld.
+    const malformed = makeDeps({ checkScheduleTextEnabled: vi.fn(async () => true) });
+    await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...WA, psid: "psid-1" } },
+      malformed
+    );
+    expect(vi.mocked(malformed.chatStep).mock.calls[0][0].tools).toBe(
+      WEBCHAT_TOOL_DECLARATIONS
+    );
+
+    // Instagram with a CAPTURED contact_phone: still withheld. A number a
+    // stranger typed into a lead form is the exact shape the web-chat
+    // exclusion is protecting against.
+    const capturedGate = vi.fn(async () => true);
+    const captured = makeDeps({ checkScheduleTextEnabled: capturedGate });
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: {
+          ...CONVERSATION,
+          platform: "instagram" as const,
+          contact_phone: "+15145188192"
+        }
+      },
+      captured
+    );
+    expect(capturedGate).not.toHaveBeenCalled();
+    expect(vi.mocked(captured.chatStep).mock.calls[0][0].tools).toBe(
+      WEBCHAT_TOOL_DECLARATIONS
+    );
   });
 
   it("executes with the recipient pinned to the wa_id, ignoring any model-sent phone", async () => {
