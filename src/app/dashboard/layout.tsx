@@ -236,11 +236,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {/* Asks once per device, then never again: any decision ends it. The
             permanent opt-in stays on the notifications settings page. Not
             shown while the terms gate is up, which owns the screen. */}
-        {businessId && !requireAcceptance && (
-          <div className="mb-6">
-            <PushOptInBanner businessId={businessId} />
-          </div>
-        )}
+        {businessId && !requireAcceptance && <PushOptInBanner businessId={businessId} />}
         {hipaaMode && <HipaaIdleLogout />}
         {requireAcceptance && <TermsAcceptanceGate />}
         {children}

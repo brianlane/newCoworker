@@ -162,7 +162,11 @@ export function PushSetupCard({
     // shouldOfferPushBanner for which those are and why.
     if (!shouldOfferPushBanner(state)) return null;
     return (
-      <div className="rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 flex flex-wrap items-start gap-3">
+      // The margin lives HERE, on the element that actually renders. An
+      // always-present wrapper in the layout would leave an empty mb-6 pushing
+      // every dashboard page down in the common case, which is precisely when
+      // this returns null (dismissed, already on, or nothing to act on).
+      <div className="mb-6 rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 flex flex-wrap items-start gap-3">
         <div className="flex-1 min-w-[16rem]">
           <p className="text-sm font-medium text-parchment">
             {state === "prompt"

@@ -40,9 +40,24 @@ export function PushRegistrar({ businessId }: { businessId: string | null }) {
         if (!("pushManager" in registration)) return;
 
         const existing = await registration.pushManager.getSubscription();
-        // Not opted in on this browser. Registering the worker is all that is
-        // wanted; PushSetupCard drives the opt-in.
-        if (!existing || cancelled) return;
+        /**
+         * No subscription on this browser. If permission was never granted,
+         * registering the worker is all that is wanted: asking needs a user
+         * gesture, so PushSetupCard drives that.
+         *
+         * A GRANTED permission with no subscription is a different case, and
+         * it used to be handled identically, which sent someone who had
+         * already said yes back to tap the same button for nothing. It happens
+         * whenever the subscription is lost while the grant survives:
+         * reinstalling the app, clearing site data, signing in on a second
+         * device, or a send discovering a 410 and revoking the row.
+         * `subscribe()` needs no gesture once permission exists, so the right
+         * answer is to re-create it silently.
+         */
+        const permission =
+          typeof Notification === "undefined" ? "default" : Notification.permission;
+        if (!existing && permission !== "granted") return;
+        if (cancelled) return;
 
         const res = await fetch("/api/push/vapid-key");
         if (!res.ok || cancelled) return;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { PushSetupCard } from "@/components/push/PushSetupCard";
 
 /**
@@ -29,6 +30,7 @@ const DISMISS_KEY = "ncw_push_banner_dismissed_v1";
  * says nothing about a laptop that has never been asked.
  */
 export function PushOptInBanner({ businessId }: { businessId: string | null }) {
+  const pathname = usePathname();
   // Starts hidden and is revealed after the read, so a dismissed banner never
   // flashes on first paint.
   const [dismissed, setDismissed] = useState(true);
@@ -51,6 +53,18 @@ export function PushOptInBanner({ businessId }: { businessId: string | null }) {
   }, []);
 
   if (dismissed) return null;
+
+  /**
+   * Never on the notifications page, where the permanent opt-in card already
+   * lives. Two independent copies of the same control mount there with
+   * separate state, so acting on one leaves the other stale: the page would
+   * show "Alerts are on" and "Turn on alerts" at the same time until a
+   * remount. Suppressing the banner there fixes that by removing the
+   * duplicate rather than syncing it, which is also the better answer on its
+   * own terms: this exists to reach people who never open settings, and it
+   * has nothing to tell someone already standing in them.
+   */
+  if (pathname?.startsWith("/dashboard/notifications")) return null;
 
   return (
     <PushSetupCard
