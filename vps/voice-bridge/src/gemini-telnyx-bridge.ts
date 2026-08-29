@@ -34,7 +34,10 @@ import {
 import {
   VOICEMAIL_DETERMINISTIC_END_CALL_REPLY,
   VOICEMAIL_DETERMINISTIC_TOOL_REPLY,
-  VOICEMAIL_END_CALL_HOLD_MS
+  VOICEMAIL_END_CALL_HOLD_MS,
+  VOICEMAIL_MUTE_LIFTED_CUE,
+  VOICEMAIL_RESOLUTION_POLL_MS,
+  type VoicemailResolutionState
 } from "./voicemail-mode.js";
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
@@ -258,6 +261,17 @@ export type VoicemailCapability = {
    * message reads as never left.
    */
   confirmSpoken?: () => Promise<void>;
+  /**
+   * DETERMINISTIC MODE ONLY: what the platform currently believes about this
+   * leg's machine verdict (see VoicemailResolutionState). Polled while the
+   * mute-and-hold is pending, because the verdict can be WITHDRAWN: Apple
+   * call screening clears the machine stamp edge-side and the resolution
+   * sweep then deliberately never speaks, so without a lift a screened call
+   * a real person answers would sit against a muted model until the hold
+   * expires (Bugbot, PR #1742). Must never throw; an unreadable state
+   * reports "pending", which keeps yesterday's behavior.
+   */
+  checkResolution?: () => Promise<VoicemailResolutionState>;
 };
 
 /**
@@ -1041,6 +1055,55 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         console.error("gemini-bridge: number-suppressed cue failed", err);
       }
     }
+  };
+
+  /**
+   * The deterministic hold's LIFT. While the mute-and-hold is pending, poll
+   * the platform's view of the verdict: Apple call screening WITHDRAWS the
+   * machine stamp edge-side and the resolution sweep then deliberately never
+   * speaks, so without this poll a screened call that a real person answers
+   * would sit against a muted model until the hold expired (Bugbot, PR
+   * #1742). A standalone timer chain, never in `timers`: it dies with the
+   * session (`ended`), when the hold resolves either way, or when the hold
+   * window expires.
+   */
+  const startVoicemailResolutionPoll = (): void => {
+    const check = opts.voicemail?.checkResolution;
+    if (!check) return;
+    const tick = (): void => {
+      if (ended || voicemailDeterministicPendingAtMs === 0) return;
+      if (Date.now() - voicemailDeterministicPendingAtMs >= VOICEMAIL_END_CALL_HOLD_MS) return;
+      void (async () => {
+        let state: VoicemailResolutionState = "pending";
+        try {
+          state = await check();
+        } catch (err) {
+          console.error("gemini-bridge: voicemail resolution check threw", err);
+        }
+        if (ended || voicemailDeterministicPendingAtMs === 0) return;
+        if (state === "speaking") {
+          // The edge owns the leg now: its TTS is playing and
+          // call.speak.ended hangs up. The mute stays (model chatter over
+          // the script is the double-speak the claim exists to prevent),
+          // and polling is done.
+          emitDiag("voice_bridge_voicemail_resolution_speaking", {});
+          return;
+        }
+        if (state === "live") {
+          voicemailDeterministicPendingAtMs = 0;
+          modelAudioMuted = false;
+          emitDiag("voice_bridge_voicemail_mute_lifted", {});
+          try {
+            session.sendRealtimeInput({ text: VOICEMAIL_MUTE_LIFTED_CUE });
+          } catch (err) {
+            console.error("gemini-bridge: mute-lift cue failed", err);
+          }
+          return;
+        }
+        setTimeout(tick, VOICEMAIL_RESOLUTION_POLL_MS);
+      })();
+    };
+    setTimeout(tick, VOICEMAIL_RESOLUTION_POLL_MS);
   };
 
   const transcriptRecorder: TranscriptRecorder | null = opts.transcriptAdapter
@@ -2422,9 +2485,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (opts.deterministicVoicemail) {
           // First report starts the clock; a repeat must NOT re-credit the
           // end_call hold, or a model looping this tool could pin the leg
-          // past the failsafe window.
+          // past the failsafe window. The resolution poll starts with the
+          // clock: it is the lift for a verdict the platform later withdraws.
           if (voicemailDeterministicPendingAtMs === 0) {
             voicemailDeterministicPendingAtMs = Date.now();
+            startVoicemailResolutionPoll();
           }
           modelAudioMuted = true;
           try {

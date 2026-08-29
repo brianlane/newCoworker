@@ -128,3 +128,40 @@ export const VOICEMAIL_DETERMINISTIC_END_CALL_REPLY =
  * (60-180s) bounds the leg regardless.
  */
 export const VOICEMAIL_END_CALL_HOLD_MS = 120_000;
+
+/**
+ * How often the bridge re-reads the session while the deterministic hold is
+ * pending. The poll is the LIFT for a verdict that turns out wrong: Apple
+ * call screening clears the machine stamp edge-side, and the sweep then
+ * deliberately never speaks, so without this poll a screened call that a
+ * real person answers would sit against a muted model until the hold
+ * expires (Bugbot, PR #1742). Light: one indexed select, only on legs in
+ * the deterministic-pending state, bounded by the hold window.
+ */
+export const VOICEMAIL_RESOLUTION_POLL_MS = 3_000;
+
+/**
+ * What the deterministic hold's poll can learn about the leg.
+ *
+ *  - "pending": still an unresolved machine verdict; keep the mute and hold.
+ *  - "live": the verdict was withdrawn (screening event cleared it, or the
+ *    stamp is gone): a real person may be on the line. Lift the mute, lift
+ *    the hold, and cue the model back into the conversation.
+ *  - "speaking": the edge holds the voicemail claim and its TTS is playing
+ *    or about to. Stop polling; the mute stays (chatter over the script is
+ *    the double-speak the claim exists to prevent) and `call.speak.ended`
+ *    ends the leg.
+ */
+export type VoicemailResolutionState = "pending" | "live" | "speaking";
+
+/**
+ * Cue sent when the hold lifts because the leg turned out to be live. Must
+ * explicitly override the earlier "say nothing more for the rest of this
+ * call" tool reply, or the model stays silent at a real person.
+ */
+export const VOICEMAIL_MUTE_LIFTED_CUE =
+  "[Coordinator] Disregard the earlier instruction to stay silent: this line is NOT a " +
+  "confirmed recording after all (call screening or a live pickup). A real person may be " +
+  "on the line. Continue the conversation normally: if they speak, respond; if the line " +
+  "is quiet, greet them once with your opening line. End with the end_call tool when the " +
+  "conversation is genuinely over.";

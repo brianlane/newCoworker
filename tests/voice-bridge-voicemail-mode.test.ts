@@ -7,7 +7,9 @@ import {
   rolloutIncludes,
   VOICEMAIL_DETERMINISTIC_END_CALL_REPLY,
   VOICEMAIL_DETERMINISTIC_TOOL_REPLY,
-  VOICEMAIL_END_CALL_HOLD_MS
+  VOICEMAIL_END_CALL_HOLD_MS,
+  VOICEMAIL_MUTE_LIFTED_CUE,
+  VOICEMAIL_RESOLUTION_POLL_MS
 } from "../vps/voice-bridge/src/voicemail-mode";
 import {
   AMD_RESOLUTION_SETTINGS_KEY as EDGE_AMD_KEY,
@@ -122,5 +124,19 @@ describe("deterministic-mode constants", () => {
     // needs playout; a mailbox bounds the leg at 60-180s regardless.
     expect(VOICEMAIL_END_CALL_HOLD_MS).toBeGreaterThanOrEqual(60_000);
     expect(VOICEMAIL_END_CALL_HOLD_MS).toBeLessThanOrEqual(180_000);
+  });
+
+  it("the resolution poll runs several times inside the hold window", () => {
+    // The poll is the lift for a withdrawn verdict (Apple screening clears
+    // the machine stamp and the sweep then never speaks); a poll slower than
+    // the hold would make the lift decorative.
+    expect(VOICEMAIL_RESOLUTION_POLL_MS).toBeGreaterThanOrEqual(1_000);
+    expect(VOICEMAIL_RESOLUTION_POLL_MS * 5).toBeLessThanOrEqual(VOICEMAIL_END_CALL_HOLD_MS);
+  });
+
+  it("the mute-lift cue explicitly overrides the earlier stay-silent instruction", () => {
+    expect(VOICEMAIL_MUTE_LIFTED_CUE.startsWith("[Coordinator]")).toBe(true);
+    expect(VOICEMAIL_MUTE_LIFTED_CUE).toMatch(/Disregard/i);
+    expect(VOICEMAIL_MUTE_LIFTED_CUE).toMatch(/end_call/);
   });
 });

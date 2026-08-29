@@ -184,6 +184,10 @@ describe("intakeSystemInstruction", () => {
     expect(deterministic).not.toContain(OUTBOUND_VOICEMAIL_TOOL_LINE);
     expect(modelRead).toContain(OUTBOUND_VOICEMAIL_TOOL_LINE);
     expect(modelRead).not.toContain(OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC);
+    // Screening is a robotic voice a real person is behind: reporting it as
+    // a mailbox mutes the model at a human (Bugbot, PR #1742), so the
+    // deterministic rule carves it out by name.
+    expect(OUTBOUND_VOICEMAIL_TOOL_LINE_DETERMINISTIC).toContain("CALL SCREENING IS NOT A MAILBOX");
   });
 
   it("outbound default opener drops the call-you-right-back promise", () => {

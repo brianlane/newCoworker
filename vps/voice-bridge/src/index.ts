@@ -1737,6 +1737,43 @@ function main(): void {
                   .update({ answering_machine_result: "machine", voicemail_left: true })
                   .eq("call_control_id", callControlId);
                 if (rowErr) console.error("voice-bridge: transfer voicemail row write failed", rowErr);
+              },
+              /**
+               * What the platform currently believes about this leg's machine
+               * verdict, for the deterministic hold's poll. "speaking" beats
+               * "live" on purpose: once someone holds the voicemail claim the
+               * TTS is (about to be) playing, and unmuting the model under it
+               * is the double-speak the claim exists to prevent. A failed or
+               * empty read is "pending", which keeps the hold: the failsafe
+               * window bounds it regardless.
+               */
+              checkResolution: async () => {
+                try {
+                  const { data: sessRow, error } = await supabase
+                    .from("voice_handoff_sessions")
+                    .select("context")
+                    .eq("call_control_id", callControlId)
+                    .maybeSingle();
+                  if (error || !sessRow) return "pending";
+                  const ctx = ((sessRow as { context?: unknown }).context ??
+                    {}) as Record<string, unknown>;
+                  if (
+                    ctx.voicemail_claimed === true ||
+                    typeof ctx.voicemail_speak_started_at === "string"
+                  ) {
+                    return "speaking";
+                  }
+                  // The screening event clears machine_detected and stamps
+                  // ios_screening; either shape means the verdict is
+                  // withdrawn and a person may be deciding whether to talk.
+                  if (ctx.ios_screening === true || ctx.machine_detected !== true) {
+                    return "live";
+                  }
+                  return "pending";
+                } catch (err) {
+                  console.error("voice-bridge: voicemail resolution check threw", err);
+                  return "pending";
+                }
               }
             }
           : undefined;
