@@ -61,6 +61,7 @@ afterEach(() => {
 const GATES_WITH_EDIT: ActionToolGates = {
   send_sms: true,
   send_whatsapp: false,
+  schedule_text: true,
   calendar_find_slots: false,
   calendar_book_appointment: false,
   calendar_reschedule_appointment: false,

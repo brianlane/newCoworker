@@ -84,6 +84,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "schedule_text",
+        label: "Schedule a text for later",
+        description:
+          "Queue a text to go out at a future time when you ask for it in chat. One queued text per recipient; it shows on your Text history page, where you can cancel it. Standard and Enterprise plans.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "memory_capture",
         label: "Business memory capture",
         description:
@@ -379,6 +387,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "send_follow_up_sms",
         label: "Send follow-up text",
         description: "Text a follow-up to a caller from your business number.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "schedule_text",
+        label: "Schedule a text for later",
+        description:
+          "Queue a text to the caller for a future time (a reminder they asked for on the call). One queued text per caller, cancelable on the Text history page. Standard and Enterprise plans.",
         defaultEnabled: true,
         configurable: true
       },
@@ -727,6 +743,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "send_whatsapp",
         label: "Send WhatsApp messages",
         description: "Message a customer on WhatsApp when someone asks in Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "schedule_text",
+        label: "Schedule a text for later",
+        description:
+          "Queue a text to a customer or teammate for a future time when someone asks in Slack. One queued text per recipient, cancelable on the Text history page. Standard and Enterprise plans.",
         defaultEnabled: true,
         configurable: true
       },

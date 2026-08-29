@@ -66,6 +66,9 @@ const JAMES_REQUEST =
 const ALL_GATES: ActionToolGates = {
   send_sms: true,
   send_whatsapp: false,
+  // Declared since the Aug 29 2026 widening: the owner-SMS surface carries
+  // the deferred-send tool in production, so the replay must too.
+  schedule_text: true,
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,

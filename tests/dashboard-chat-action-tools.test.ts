@@ -247,6 +247,126 @@ describe("send_whatsapp", () => {
   });
 });
 
+describe("schedule_text", () => {
+  const OK = {
+    ok: true,
+    data: { sendAtLocal: "Aug 31, 6:30 PM EDT" },
+    message: "Queued."
+  };
+
+  it("canonicalizes, files the recipient by name, and delegates to the core", async () => {
+    const scheduleText = vi.fn(async () => OK);
+    const deps = happyDeps({ scheduleText: scheduleText as never });
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "schedule_text",
+        args: {
+          phone: "(514) 518-8192",
+          sendAtIso: "2026-08-31T18:30:00-04:00",
+          text: "Reminder: call at 6:30",
+          contactName: "Uday Nandam"
+        }
+      },
+      deps
+    );
+    expect(res).toEqual(OK);
+    expect(scheduleText).toHaveBeenCalledWith(BIZ, {
+      phone: "+15145188192",
+      action: "schedule",
+      sendAtIso: "2026-08-31T18:30:00-04:00",
+      text: "Reminder: call at 6:30",
+      confirmed: undefined
+    });
+    // The KYP/Ayanna rule: an outbound-first recipient exists as a contact.
+    expect(deps.recordContactInteraction).toHaveBeenCalledWith(
+      BIZ,
+      "+15145188192",
+      "sms",
+      { displayName: "Uday Nandam" },
+      expect.anything()
+    );
+  });
+
+  it("cancel passes through with the action intact and touches no contact", async () => {
+    const scheduleText = vi.fn(async () => ({ ok: true, message: "Canceled." }));
+    const deps = happyDeps({ scheduleText: scheduleText as never });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "schedule_text", args: { phone: "+15145188192", action: "cancel" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: true });
+    expect(scheduleText).toHaveBeenCalledWith(BIZ, {
+      phone: "+15145188192",
+      action: "cancel",
+      sendAtIso: undefined,
+      text: undefined,
+      confirmed: undefined
+    });
+    expect(deps.recordContactInteraction).not.toHaveBeenCalled();
+  });
+
+  it("returns core refusals verbatim so the handshake reaches the model", async () => {
+    const scheduleText = vi.fn(async () => ({
+      ok: false,
+      detail: "automatic_reminder_exists",
+      data: { leadMinutes: 60 },
+      message: "An automation already texts them."
+    }));
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "schedule_text",
+        args: { phone: "+15145188192", sendAtIso: "2026-08-31T18:30:00-04:00", text: "x" }
+      },
+      happyDeps({ scheduleText: scheduleText as never })
+    );
+    expect(res).toMatchObject({ ok: false, detail: "automatic_reminder_exists" });
+  });
+
+  it("rejects invalid args without touching the core", async () => {
+    const scheduleText = vi.fn();
+    const res = await executeActionTool(
+      BIZ,
+      { name: "schedule_text", args: { phone: "+15145188192", action: "postpone" } },
+      happyDeps({ scheduleText: scheduleText as never })
+    );
+    expect(res).toMatchObject({ ok: false });
+    expect(String((res as { message: string }).message)).toContain("invalid_args");
+    expect(scheduleText).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unnormalizable destination", async () => {
+    const scheduleText = vi.fn();
+    const res = await executeActionTool(
+      BIZ,
+      { name: "schedule_text", args: { phone: "not a phone" } },
+      happyDeps({ scheduleText: scheduleText as never })
+    );
+    expect(res).toEqual({ ok: false, message: "invalid_destination" });
+    expect(scheduleText).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-NANP destination up front, naming the silent-queue problem", async () => {
+    const scheduleText = vi.fn();
+    const deps = happyDeps({ scheduleText: scheduleText as never });
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "schedule_text",
+        args: { phone: "+525512345678", sendAtIso: "2026-08-31T18:30:00-04:00", text: "hola" }
+      },
+      deps
+    );
+    const message = String((res as { message: string }).message);
+    expect(message).toContain("sms_unreachable_destination");
+    expect(message).toContain("scheduled text");
+    expect(scheduleText).not.toHaveBeenCalled();
+    expect(deps.recordContactInteraction).not.toHaveBeenCalled();
+  });
+});
+
 describe("declarations & naming", () => {
   it("filters declarations to the gates that are ON, in stable order", () => {
     const all = actionToolDeclarations(ALL_ON);

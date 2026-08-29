@@ -589,13 +589,26 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       return await startAiFlowForContactTool(businessId, parsed.data);
     }
-    // The only FUTURE send the texting coworker has. The core binds the
-    // queue to the number passed here and holds one pending row per
-    // contact, so this case adds no reachability of its own.
+    // The only FUTURE send. On the texting coworker the recipient is the
+    // conversation (NANP by construction), so the bare name adds no
+    // reachability of its own. The dashboard_ twin (OwnerCoworker fallback)
+    // takes any contact the owner names, so it gets the same up-front
+    // NANP refusal as inline send_sms/schedule_text: a queued text that
+    // dies at dispatch days later is a silently broken promise.
     case "schedule_text": {
       const parsed = scheduleTextArgsSchema.safeParse(args);
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      if (
+        toolSurface(name) === "dashboard" &&
+        smsReachability(parsed.data.phone) !== "nanp"
+      ) {
+        return {
+          ok: false,
+          detail: "sms_unreachable_destination",
+          message: `Our texting numbers can only deliver SMS to US and Canada (+1) numbers, so a scheduled text to ${parsed.data.phone} would sit in the queue and never arrive. Tell the owner honestly; voice calls, email, and WhatsApp still work internationally.`
+        };
       }
       return await scheduleTextTool(businessId, parsed.data);
     }

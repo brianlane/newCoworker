@@ -12,10 +12,12 @@ export type ScheduledSmsItem = {
   status: string;
   error: string | null;
   /**
-   * "sms_coworker" when the texting coworker queued it for a customer who
-   * asked (schedule_text), anything else means the owner composed it here.
-   * Without the label an owner opens this panel and finds a text they never
-   * wrote, with nothing saying where it came from.
+   * "sms_coworker" when the coworker queued it via schedule_text (any AI
+   * surface: the texting coworker for a customer who asked, or the
+   * dashboard/owner-chat/voice coworker for the owner), anything else means
+   * the owner composed it here. Without the label an owner opens this panel
+   * and finds a text they never wrote, with nothing saying where it came
+   * from.
    */
   createdBy?: string;
 };
@@ -152,7 +154,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
                   <p className="truncate text-sm text-parchment/90">{s.body}</p>
                   <p className="text-xs text-parchment/40">
                     {new Date(s.sendAt).toLocaleString()}
-                    {s.createdBy === "sms_coworker" ? " · queued by your texting coworker" : ""}
+                    {s.createdBy === "sms_coworker" ? " · queued by your coworker" : ""}
                   </p>
                 </div>
                 <button

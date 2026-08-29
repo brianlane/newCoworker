@@ -54,6 +54,7 @@ const ZOOM_URL = "https://zoom.example.com/j/84948156425";
 const EMAIL_GATES: ActionToolGates = {
   send_sms: false,
   send_whatsapp: false,
+  schedule_text: false,
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,

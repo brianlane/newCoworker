@@ -168,14 +168,20 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // enrollment is never restarted (loop guard in the core). Deliberately NO
   // webchat twin: the anonymous surface must not start automations at all.
   start_aiflow_for_contact: { agentKey: "sms", toolKey: "start_aiflow_for_contact" },
-  // The texting coworker's only path to a FUTURE send. Recipient is not a
-  // parameter the model can aim: the core queues to the number it is passed
-  // and nothing else, and holds ONE pending row per contact, so a
-  // prompt-injected "text my friend at ..." has no path and a chatty thread
-  // cannot stack metered sends. No dashboard_ twin (the owner has the real
-  // composer with Send later on the Text history page) and emphatically no
-  // webchat twin (anonymous surface, no verified recipient at all).
+  // The coworker's only path to a FUTURE send. The core queues to the
+  // number it is passed and nothing else, and holds ONE pending row per
+  // contact, so a chatty thread cannot stack metered sends. Shared bare on
+  // OwnerCoworker like send_sms (owner decision, Aug 29 2026: every worker
+  // schedules texts); the inline owner surfaces carry their own declaration
+  // (action-tools.ts). Emphatically no webchat twin (anonymous surface, no
+  // verified recipient at all), and the customer email coworker stays
+  // hard-false for the same reason (emailToolGates).
   schedule_text: { agentKey: "sms", toolKey: "schedule_text" },
+  // The OwnerCoworker fallback twin (Aug 29 2026 widening): its own seed
+  // declaration because the customer one is hard-framed to "only ever text
+  // THEM", which is exactly wrong for an owner naming a contact. Rides the
+  // dashboard channel toggle like every other dashboard_ twin.
+  dashboard_schedule_text: { agentKey: "dashboard", toolKey: "schedule_text" },
   // Notification toggles from the texting surface (KYP, Jul 20 2026: "let
   // me know when clients text back"). ENABLE-ONLY at dispatch, the SMS
   // Coworker serves customers and staff alike, so a prompt-injected

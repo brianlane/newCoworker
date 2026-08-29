@@ -713,6 +713,7 @@ export async function POST(request: Request) {
       "business_knowledge_lookup",
       "send_sms",
       "send_whatsapp",
+      "schedule_text",
       "calendar_find_slots",
       "calendar_book_appointment",
       "calendar_reschedule_appointment",
@@ -741,6 +742,7 @@ export async function POST(request: Request) {
     const {
       send_sms: smsToolEnabled,
       send_whatsapp: whatsappToolEnabled,
+      schedule_text: scheduleTextToolEnabled,
       calendar_find_slots: calFindEnabled,
       calendar_book_appointment: calBookEnabled,
       calendar_reschedule_appointment: calRescheduleEnabled,
@@ -809,6 +811,9 @@ export async function POST(request: Request) {
         whatsappToolEnabled &&
         (await getPublicWhatsAppConnection(body.businessId).catch(() => null))?.is_active ===
           true,
+      // Deferred send_sms, same trust class and the same plain toggle; the
+      // Standard/Enterprise tier gate lives inside the core.
+      schedule_text: scheduleTextToolEnabled,
       calendar_find_slots: calFindEnabled,
       calendar_book_appointment: calBookEnabled,
       calendar_reschedule_appointment: calRescheduleEnabled,

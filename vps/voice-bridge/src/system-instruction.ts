@@ -239,6 +239,7 @@ export function systemInstructionForBusiness(
         "- `calendar_find_slots` then `calendar_book_appointment` to help them schedule something.",
         "- `document_share` to text them an expiring link to a document listed in your documents.md briefing when they need a copy.",
         "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
+        "- `schedule_text` to queue ONE text for a LATER time (a reminder they ask for). A later text exists ONLY if `schedule_text` returned ok on this call, never promise one otherwise; confirm by speaking the result's sendAtLocal.",
         "- `notify_team` when they ask you to pass a message to someone else on the team.",
         // Staff-only AND Settings-gated: taught only when the bridge actually
         // declared it, since there is no adapter to answer "tool_disabled" for a
@@ -269,6 +270,7 @@ export function systemInstructionForBusiness(
         "- `calendar_find_slots` then `calendar_book_appointment` when the caller wants to schedule something (consultations, viewings, intake calls). Do not lead with a slot that starts within the hour: an appointment someone has to leave for right now is not a real offer, so open with the soonest option that gives them a day's notice and only mention a sooner one if they ask for the earliest possible. Ask about timing ONCE and then let them answer: while the caller is still supplying information, acknowledge what they said and wait, and never repeat a scheduling question they have not had the chance to answer yet.",
         "- `document_share` when the caller asks for a copy of a document listed in your documents.md briefing (price sheet, policy, contract), it texts them an expiring link.",
         "- `send_follow_up_sms` to text the caller a short summary or link.",
+        "- `schedule_text` to queue ONE text to the caller for a LATER time (a reminder they ask for). A later text exists ONLY if `schedule_text` returned ok on this call, NEVER promise a reminder or say one is set otherwise; confirm by speaking the result's sendAtLocal. If it returns `automatic_reminder_exists`, an automation already texts them before their booked call, tell them that instead and only re-call with confirmed true if they still want an extra one.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         // Aug 3 2026: asked what a consultation involves, the AI said it did
         // not have specifics and "I'll have the team follow up with you",
