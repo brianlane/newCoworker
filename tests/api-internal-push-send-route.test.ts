@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/cron-auth", () => ({ assertCronAuth: vi.fn() }));
 vi.mock("@/lib/push/send", () => ({ deliverPush: vi.fn() }));
+vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 
 import { POST } from "@/app/api/internal/push-send/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { deliverPush } from "@/lib/push/send";
+import { getBusiness } from "@/lib/db/businesses";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -23,6 +25,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(assertCronAuth).mockReturnValue(true);
   vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 2, revoked: 0 });
+  vi.mocked(getBusiness).mockResolvedValue({ hipaa_mode: false } as never);
 });
 
 describe("api/internal/push-send", () => {
@@ -64,6 +67,58 @@ describe("api/internal/push-send", () => {
     const res = await POST(post(VALID));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, data: { ok: false, reason: "not_connected" } });
+  });
+
+  /**
+   * The Deno dispatcher cannot import notificationLink (it lives in src/lib
+   * and an edge function cannot reach it), so it sends the alert's kind and
+   * payload and this route resolves the destination. One implementation of
+   * "where did this alert happen", shared with the Node dispatcher and the
+   * dashboard's notification list, instead of a second one drifting in
+   * another runtime.
+   */
+  it("resolves the tap target from kind when the caller sends no url", async () => {
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post({ ...noUrl, kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/dashboard/calls" })
+    );
+  });
+
+  /**
+   * A derived link can carry a patient identifier
+   * (/dashboard/customers/%2B15551234567 IS the identifier) into a payload
+   * bound for a third-party push vendor. The caller is supposed to withhold
+   * kind/payload for a HIPAA tenant, but that class of mistake is a
+   * reportable breach rather than a bug, so the decision is re-made here.
+   */
+  it("never derives a link for a HIPAA tenant", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ hipaa_mode: true } as never);
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post({ ...noUrl, kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(expect.objectContaining({ url: "/dashboard" }));
+  });
+
+  it("fails closed to the plain dashboard when the business cannot be read", async () => {
+    // getBusiness swallows its errors and returns null; an unknown hipaa_mode
+    // must read as "redact", never as "safe".
+    vi.mocked(getBusiness).mockResolvedValue(null as never);
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post({ ...noUrl, kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(expect.objectContaining({ url: "/dashboard" }));
+  });
+
+  it("prefers an explicit url over the derived one", async () => {
+    await POST(post({ ...VALID, url: "/dashboard/bookings", kind: "voice_capture" }));
+    expect(deliverPush).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/dashboard/bookings" })
+    );
+  });
+
+  it("falls back to the dashboard when it is given neither", async () => {
+    const { url: _drop, ...noUrl } = VALID;
+    await POST(post(noUrl));
+    expect(deliverPush).toHaveBeenCalledWith(expect.objectContaining({ url: "/dashboard" }));
   });
 
   it.each([

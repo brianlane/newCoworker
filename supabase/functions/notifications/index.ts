@@ -1674,9 +1674,20 @@ serve(async (req: Request) => {
           // The banner sits on a lock screen, so it takes the phiFree copy on
           // the same terms as every other leg here.
           body: phiFree?.summary ?? summary.replace(/\.+$/, ""),
-          // App-relative: the bridge and buildPushPayload both refuse an
-          // absolute URL, and this pipeline has no ctaPath to deep-link with.
-          url: "/dashboard"
+          // No ctaPath in this pipeline, so send the two inputs and let the
+          // bridge resolve the destination with notificationLink, the same
+          // function the Node dispatcher and the dashboard's notification
+          // list use. Hardcoding "/dashboard" here dropped the owner on a
+          // generic page to go hunting for whatever the alert was about.
+          //
+          // EXCEPT under HIPAA, where the deep link is itself a disclosure: a
+          // derived path like /dashboard/customers/%2B15551234567 carries a
+          // patient identifier, and this payload goes to a third-party push
+          // vendor. Pinned to the plain dashboard, the same override the Node
+          // dispatcher applies. `payload` is withheld entirely rather than
+          // sent alongside a pinned url, because it is the thing that carries
+          // the identifier.
+          ...(phiFree ? { url: "/dashboard" } : { kind, payload: basePayload })
         })
       });
       const pushJson = pushRes.ok

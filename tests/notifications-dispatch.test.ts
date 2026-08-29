@@ -1977,6 +1977,40 @@ describe("notifications/dispatch", () => {
       expect(pushRows()).toHaveLength(0);
     });
 
+    /**
+     * Most callers pass no ctaPath (5 of 12 do), and those pushes used to land
+     * on the generic dashboard, leaving the owner to go find whatever the
+     * alert was about. notificationLink already answers that for every kind,
+     * and is what the dashboard's own notification row uses, so a push and its
+     * row now agree about where the alert happened.
+     */
+    it("deep-links by kind when the caller passes no ctaPath", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      await dispatch({ kind: "voice_capture", summary: "Missed call" });
+      expect(deliverPush).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "/dashboard/calls" })
+      );
+    });
+
+    it("prefers an explicit ctaPath over the derived link", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      await dispatch({ kind: "voice_capture", ctaPath: "/dashboard/aiflows?edit=7" });
+      expect(deliverPush).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "/dashboard/aiflows?edit=7" })
+      );
+    });
+
+    it("falls back to the activity feed for a kind nobody has mapped", async () => {
+      subscribed();
+      vi.mocked(deliverPush).mockResolvedValue({ ok: true, sent: 1, revoked: 0 });
+      await dispatch({ kind: "some_kind_invented_later" });
+      expect(deliverPush).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "/dashboard/activity" })
+      );
+    });
+
     it("goes content-free under HIPAA mode, and drops the deep link", async () => {
       // A banner sits on a lock screen, at least as exposed as an SMS
       // preview, and a ctaPath like /dashboard/customers/%2B1555... is itself
