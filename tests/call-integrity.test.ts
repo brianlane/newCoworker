@@ -11,6 +11,7 @@ import {
   extractSpokenNumbers,
   formatCallIntegrityAlert,
   hasRoleLeak,
+  kindPhrase,
   isAcceptPrompt,
   looksMachineGenerated,
   spokenAmounts,
@@ -623,5 +624,36 @@ describe("amountIsSourced", () => {
 
   it("is false against an empty source set", () => {
     expect(amountIsSourced(375_000, new Set())).toBe(false);
+  });
+});
+
+/**
+ * One phrase source for both readers.
+ *
+ * The alert email and the per-tenant `system_logs` row the fleet dashboard
+ * reads used to build their wording separately, and the sweep's copy was a
+ * chained ternary that ENDED on the recording sentence. Every kind it did not
+ * name inherited that ending, so a forfeited referral and an invented price
+ * were each shown to the client as the AI holding a conversation with a
+ * recording (Bugbot, this PR).
+ */
+describe("kindPhrase", () => {
+  const KINDS = [
+    "role_leak",
+    "talked_to_recording",
+    "invented_contact_number",
+    "gate_never_cleared",
+    "invented_amount"
+  ] as const;
+
+  it("gives every kind its own sentence, and none inherits another's", () => {
+    const phrases = KINDS.map((k) => kindPhrase(k));
+    expect(new Set(phrases).size).toBe(KINDS.length);
+    for (const p of phrases) expect(p.length).toBeGreaterThan(0);
+  });
+
+  it("does not describe the two new kinds as talking to a recording", () => {
+    expect(kindPhrase("gate_never_cleared")).not.toContain("recording");
+    expect(kindPhrase("invented_amount")).not.toContain("recording");
   });
 });

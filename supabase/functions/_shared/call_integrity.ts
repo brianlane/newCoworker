@@ -487,17 +487,38 @@ const ALERT_MAX_ITEMS = 10;
 /** Per-finding evidence clip, so one long turn cannot dominate the post. */
 const ALERT_DETAIL_CHARS = 160;
 
-function kindPhrase(kind: CallIntegrityKind): string {
-  if (kind === "role_leak") return "spoke the caller's side";
-  if (kind === "invented_contact_number") return "gave out a number it does not own";
-  if (kind === "invented_amount") return "quoted a figure nothing gave it";
-  // The alert reads "the AI <phrase>". This is the one finding that is NOT
-  // the model misbehaving (on the incident call it stayed correctly silent),
-  // so the phrase names the lost referral rather than an act of disobedience.
-  if (kind === "gate_never_cleared") {
-    return "never got past the partner's accept menu, so the referral was lost";
+/**
+ * The predicate for one finding, reading after "the AI ...".
+ *
+ * Exported and shared because there are TWO places a finding gets described
+ * to a human: this module's alert email, and the per-tenant `system_logs`
+ * row that the fleet dashboard reads. Those were separate copies, written as
+ * a chained ternary that ENDED on the recording wording, so the two kinds
+ * added here were each stored and displayed as "the AI held a conversation
+ * with a recording" (Bugbot, this PR). A forfeited referral shown to a client
+ * as the AI chatting to a machine is worse than no alert.
+ *
+ * A `switch` rather than an if-chain so the compiler, not a reviewer, is what
+ * catches the next kind: TypeScript proves the union exhaustive, and a sixth
+ * member fails to build here instead of silently inheriting somebody else's
+ * sentence.
+ */
+export function kindPhrase(kind: CallIntegrityKind): string {
+  switch (kind) {
+    case "role_leak":
+      return "spoke the caller's side";
+    case "invented_contact_number":
+      return "gave out a number it does not own";
+    case "invented_amount":
+      return "quoted a figure nothing gave it";
+    // The one finding that is NOT the model misbehaving: on the incident call
+    // it stayed correctly silent. So the phrase names the lost referral
+    // rather than an act of disobedience.
+    case "gate_never_cleared":
+      return "never got past the partner's accept menu, so the referral was lost";
+    case "talked_to_recording":
+      return "talked to a recording";
   }
-  return "talked to a recording";
 }
 
 /**

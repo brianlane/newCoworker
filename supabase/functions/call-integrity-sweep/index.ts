@@ -35,6 +35,7 @@ import {
   collectAllowedNumbers,
   detectCallIntegrity,
   formatCallIntegrityAlert,
+  kindPhrase,
   spokenNumberForm,
   type CallIntegrityAlertItem,
   type CallIntegrityFinding,
@@ -313,12 +314,14 @@ serve(async (req: Request) => {
         // argument for warn does not apply either.
         level: "error",
         event: EVENT,
+        // Shares kindPhrase with the alert email. This was a separate chained
+        // ternary that fell through to the recording wording for any kind it
+        // did not name, so a forfeited referral and an invented price were
+        // each stored, and shown to the client, as the AI holding a
+        // conversation with a recording (Bugbot, this PR).
         message:
-          finding.kind === "role_leak"
-            ? `The AI spoke the caller's side of a call (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
-            : finding.kind === "invented_contact_number"
-              ? `The AI gave out a phone number this business does not own (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`
-              : `The AI held a conversation with a recording (${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
+          `The AI ${kindPhrase(finding.kind)} ` +
+          `(${call.caller_e164 ?? "unknown caller"}). ${finding.detail}`,
         payload: {
           transcript_id: call.id,
           kind: finding.kind,
