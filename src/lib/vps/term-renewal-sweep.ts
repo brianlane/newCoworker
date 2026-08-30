@@ -113,11 +113,28 @@ export type TermRenewalSweepFinding = {
   savingsRatio?: number;
 };
 
+/** One recorder-countable line per failed migration. */
+export function sweepFailureLines(
+  findings: Array<{ kind: string; businessName: string; vmId: number; detail: string }>
+): string[] {
+  return findings
+    .filter((f) => f.kind === "migration_failed")
+    .map((f) => `${f.businessName} (vm ${f.vmId}): ${f.detail}`);
+}
+
 export type TermRenewalSweepResult = {
   checked: number;
   skippedEconomics: number;
   migrated: number;
   findings: TermRenewalSweepFinding[];
+  /**
+   * migration_failed findings, one line each, under the key the run recorder
+   * counts (src/lib/cron/sweep-run.ts reads errors/failures). Without this,
+   * the 2026-08-28/29 failed migrations recorded ok=true, error_count=0, and
+   * the watchdog paged nothing on night one: a money-path failure must page
+   * the same night as a partial failure.
+   */
+  failures: string[];
 };
 
 export type TermRenewalSweepOptions = {
@@ -649,7 +666,8 @@ export async function runTermRenewalSweep(
     checked: candidates.length,
     skippedEconomics,
     migrated,
-    findings
+    findings,
+    failures: sweepFailureLines(findings)
   };
 }
 
