@@ -10,7 +10,7 @@ import type { PlanCopyLocale } from "@/lib/plans/tier-display";
  * unit tested.
  *
  * It exists because the plan CARDS are deliberately short: Standard genuinely
- * carries 24 feature bullets and rendering all of them produced a wall nobody
+ * carries 25 feature bullets and rendering all of them produced a wall nobody
  * read, so each card now shows only the handful that differentiate it. That
  * is only honest if the full list is still on the page, always open, which is
  * what this table is. Baymard's testing found users overlook "show all
@@ -184,7 +184,8 @@ export function buildComparisonGroups(locale: PlanCopyLocale = "en"): Comparison
       rows: [
         standardUpRow("rowZapier", { standard: [5] }),
         standardUpRow("rowWebhooks", { standard: [6] }),
-        standardUpRow("rowSlack", { standard: [24] })
+        standardUpRow("rowTeamChat", { standard: [24] }),
+        standardUpRow("rowPush", { standard: [25] })
       ]
     },
     {

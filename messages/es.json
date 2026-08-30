@@ -88,6 +88,7 @@
       "privacy": "Política de privacidad",
       "terms": "Términos de servicio",
       "developers": "Desarrolladores",
+      "mobileApp": "App para el teléfono",
       "openMenu": "Abrir menú",
       "closeMenu": "Cerrar menú",
       "security": "Seguridad",
@@ -190,7 +191,8 @@
       "rowOutboundCalls": "Llamadas de IA salientes a tus leads",
       "rowScheduledCampaigns": "Campañas de correo e Instagram programadas",
       "rowWebhooks": "Webhooks: anuncios de leads de Meta, DMs de Instagram y REST API",
-      "rowSlack": "Slack: chat con el coworker y aprobaciones",
+      "rowTeamChat": "Chat de equipo: Slack, Telegram, Microsoft Teams y Google Chat",
+      "rowPush": "Notificaciones push en tu teléfono (app instalable)",
       "rowTranslator": "Traductor en vivo tras transferir una llamada",
       "rowDesignatedModels": "Modelos de razonamiento designados",
       "rowVoices": "Elección de voces profesionales",
@@ -559,7 +561,7 @@
         },
         "notifications": {
           "title": "Notificaciones para el dueño",
-          "description": "Elige exactamente qué eventos te llegan (por SMS, correo o panel) y cuándo."
+          "description": "Elige exactamente qué eventos te llegan, cómo y cuándo: SMS, correo, panel, WhatsApp, Slack, Telegram, Microsoft Teams, Google Chat o una notificación push en tu teléfono."
         }
       },
       "pipeline": {
@@ -1088,9 +1090,9 @@
     },
     "integrationsPage": {
       "metaTitle": "Integraciones",
-      "metaDescription": "Conecta New Coworker a anuncios de leads de Meta, Slack, Zoom, Claude, ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google Workspace y Microsoft 365, una API REST pública y webhooks.",
+      "metaDescription": "Conecta New Coworker a anuncios de leads de Meta, Slack, Telegram, Microsoft Teams, Google Chat, Zoom, Claude, ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google Workspace y Microsoft 365, una API REST pública y webhooks.",
       "ogTitle": "Integraciones | New Coworker",
-      "ogDescription": "Anuncios de leads de Meta, Slack, Zoom, conectores de Claude y ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google y Microsoft, API pública y webhooks.",
+      "ogDescription": "Anuncios de leads de Meta, Slack, Telegram, Teams y Google Chat, Zoom, conectores de Claude y ChatGPT, 8,000+ apps vía Zapier, calendario y correo nativos de Google y Microsoft, API pública y webhooks.",
       "heroEyebrow": "Integraciones",
       "heroTitle": "Conecta tu coworker a",
       "heroHighlight": "8,000+ apps",
@@ -1157,6 +1159,18 @@
       "slack": {
         "title": "Slack",
         "description": "Tu coworker dentro de Slack: responde mensajes directos y @menciones, publica alertas de leads y reservas en el canal que elijas, y permite al dueño aprobar automatizaciones con un botón. Plan Standard y superiores."
+      },
+      "telegram": {
+        "title": "Telegram",
+        "description": "Tu coworker en Telegram: las alertas urgentes llegan a tu teléfono sin aprobación de plantillas ni costo por mensaje, y puedes responder para preguntarle lo que sea. Plan Standard en adelante."
+      },
+      "teams": {
+        "title": "Microsoft Teams",
+        "description": "Tu coworker en Microsoft Teams: las alertas llegan donde ya trabaja tu equipo, y cualquiera de tu roster puede escribirle con su cuenta de Microsoft. Plan Standard en adelante."
+      },
+      "googleChat": {
+        "title": "Google Chat",
+        "description": "Tu coworker en Google Chat: las alertas llegan al espacio que ya usa tu equipo, y cualquiera de tu roster puede escribirle con su cuenta de Google Workspace. Plan Standard en adelante."
       },
       "zoom": {
         "title": "Zoom",

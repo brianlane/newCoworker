@@ -88,6 +88,7 @@
       "privacy": "Privacy Policy",
       "terms": "Terms of Service",
       "developers": "Developers",
+      "mobileApp": "Phone app",
       "openMenu": "Open menu",
       "closeMenu": "Close menu",
       "security": "Security",
@@ -190,7 +191,8 @@
       "rowOutboundCalls": "Outbound AI calls to your leads",
       "rowScheduledCampaigns": "Scheduled email campaigns & Instagram posts",
       "rowWebhooks": "Webhooks: Meta lead ads, Instagram DMs & REST API",
-      "rowSlack": "Slack: coworker chat & approvals",
+      "rowTeamChat": "Team chat: Slack, Telegram, Microsoft Teams & Google Chat",
+      "rowPush": "Push notifications on your phone (installable app)",
       "rowTranslator": "Live translator after a call transfer",
       "rowDesignatedModels": "Designated reasoning models",
       "rowVoices": "Choice of professional voices",
@@ -559,7 +561,7 @@
         },
         "notifications": {
           "title": "Owner Notifications",
-          "description": "Choose exactly which events reach you (by SMS, email, or dashboard) and when."
+          "description": "Choose exactly which events reach you, how, and when: text, email, dashboard, WhatsApp, Slack, Telegram, Microsoft Teams, Google Chat, or a push notification on your phone."
         }
       },
       "pipeline": {
@@ -1088,9 +1090,9 @@
     },
     "integrationsPage": {
       "metaTitle": "Integrations",
-      "metaDescription": "Connect New Coworker to Meta lead ads, Slack, Zoom, Claude, ChatGPT, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
+      "metaDescription": "Connect New Coworker to Meta lead ads, Slack, Telegram, Microsoft Teams, Google Chat, Zoom, Claude, ChatGPT, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
       "ogTitle": "Integrations | New Coworker",
-      "ogDescription": "Meta lead ads, Slack, Zoom, Claude and ChatGPT connectors, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
+      "ogDescription": "Meta lead ads, Slack, Telegram, Teams and Google Chat, Zoom, Claude and ChatGPT connectors, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
       "heroEyebrow": "Integrations",
       "heroTitle": "Connect your coworker to",
       "heroHighlight": "8,000+ apps",
@@ -1157,6 +1159,18 @@
       "slack": {
         "title": "Slack",
         "description": "Your coworker inside Slack: it answers DMs and @mentions, posts lead and booking alerts to a channel you pick, and lets the owner approve automations with one button. Standard plan and up."
+      },
+      "telegram": {
+        "title": "Telegram",
+        "description": "Your coworker in Telegram: urgent alerts arrive on your phone with no template approval and no per-message fee, and you can message back to ask it anything. Standard plan and up."
+      },
+      "teams": {
+        "title": "Microsoft Teams",
+        "description": "Your coworker in Microsoft Teams: alerts land where your team already works, and anyone on your roster can message it back with their Microsoft account. Standard plan and up."
+      },
+      "googleChat": {
+        "title": "Google Chat",
+        "description": "Your coworker in Google Chat: alerts land in the space your team already uses, and anyone on your roster can message it back with their Google Workspace account. Standard plan and up."
       },
       "zoom": {
         "title": "Zoom",
