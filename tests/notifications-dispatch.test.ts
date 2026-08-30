@@ -68,6 +68,7 @@ vi.mock("@/lib/push/db", () => ({
 }));
 
 vi.mock("@/lib/push/send", () => ({ deliverPush: vi.fn() }));
+vi.mock("@/lib/push/platform-alert", () => ({ pushPlatformAlert: vi.fn() }));
 
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
@@ -126,6 +127,7 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { deliverSlackAlert, slackAlertTargetState } from "@/lib/slack/deliver";
 import { pushTargetState } from "@/lib/push/db";
 import { deliverPush } from "@/lib/push/send";
+import { pushPlatformAlert } from "@/lib/push/platform-alert";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
 import { deliverTeamsAlert, teamsAlertTargetState } from "@/lib/teams/deliver";
 import {
@@ -3268,6 +3270,39 @@ describe("failed alert delivery reaches the admin System Errors card", () => {
     });
     const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
     expect(logged.message).toContain("reached NOBODY");
+  });
+
+  it("also puts the failure on an HQ admin's phone, not only on the card", async () => {
+    // The card is a page somebody has to remember to open. This is the leg
+    // that reaches an admin who is not looking at it.
+    await reportFailedChannels(BIZ, "sms_team_notify", "Take over", [
+      { channel: "sms", status: "failed", reason: "carrier_rejected" },
+      { channel: "email", status: "failed", reason: "bounced" },
+      { channel: "dashboard", status: "sent" }
+    ] as never);
+    expect(pushPlatformAlert).toHaveBeenCalledWith({
+      event: "alert_delivery_failed",
+      businessId: BIZ,
+      failedChannels: ["sms", "email"]
+    });
+  });
+
+  it("never hands the alert's own summary to the platform push", async () => {
+    // On a HIPAA tenant that summary can carry a patient identifier, and this
+    // payload goes to a third-party push vendor. The signature has no
+    // parameter it could be passed as; this pins that it stays that way.
+    await reportFailedChannels(BIZ, "sms_team_notify", "Patient Jane Doe needs a callback", [
+      { channel: "sms", status: "failed", reason: "carrier_rejected" }
+    ] as never);
+    const arg = vi.mocked(pushPlatformAlert).mock.calls[0][0];
+    expect(JSON.stringify(arg)).not.toContain("Jane Doe");
+  });
+
+  it("stays quiet on the platform channel when nothing failed", async () => {
+    await reportFailedChannels(BIZ, "sms_team_notify", "All fine", [
+      { channel: "sms", status: "sent" }
+    ] as never);
+    expect(pushPlatformAlert).not.toHaveBeenCalled();
   });
 
   it("reads sensibly when a failure carries no reason", async () => {

@@ -53,6 +53,7 @@ import {
   slackAlertTargetState
 } from "@/lib/slack/deliver";
 import { deliverPush } from "@/lib/push/send";
+import { pushPlatformAlert } from "@/lib/push/platform-alert";
 import { notificationLink } from "@/lib/notifications/display";
 import { pushTargetState } from "@/lib/push/db";
 import { deliverTelegramAlert, telegramAlertTargetState } from "@/lib/telegram/deliver";
@@ -1664,6 +1665,16 @@ export async function reportFailedChannels(
       failedChannels: failed.map((f) => ({ channel: f.channel, reason: f.reason ?? null })),
       deliveredChannels: delivered.map((d) => d.channel)
     }
+  });
+
+  // And put it on an HQ admin's phone, not only in a card somebody has to
+  // remember to open. Channel names only: the summary above can carry a
+  // patient identifier on a HIPAA tenant, and pushPlatformAlert has no
+  // parameter it could be passed as.
+  await pushPlatformAlert({
+    event: "alert_delivery_failed",
+    businessId,
+    failedChannels: failed.map((f) => f.channel)
   });
 }
 
