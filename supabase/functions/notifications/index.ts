@@ -49,6 +49,7 @@ import {
 import { resolveInternationalFrom } from "../_shared/sms_international_gateway.ts";
 import { smsDestinationCountry } from "../_shared/sms_destination_rates.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
+import { systemLog } from "../_shared/system_log.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -271,8 +272,91 @@ async function resolveTargets(
   };
 }
 
+/**
+ * One channel's outcome, in memory, alongside the row written for it.
+ *
+ * The rows alone cannot answer "did this alert reach anybody", because
+ * answering that means looking at ALL of them together, and each leg writes
+ * its own in isolation. Mirrors the `results` array the Node dispatcher
+ * accumulates for exactly the same reason.
+ */
+type ChannelOutcome = {
+  channel: DeliveryChannel;
+  status: DeliveryStatus;
+  reason?: string;
+};
+
+/**
+ * The client plus the per-dispatch outcome list.
+ *
+ * Bundled into one parameter rather than threaded as a second argument
+ * because `recordRow` is called from nine legs in several branches each, and
+ * an accumulator that any one of them could forget to pass is an accumulator
+ * that will eventually be wrong. Request-scoped, never module-scope: one
+ * isolate serves concurrent requests, so shared mutable state here would mix
+ * one tenant's outcomes into another's alert.
+ */
+type RecordCtx = {
+  supa: SupaClient;
+  outcomes: ChannelOutcome[];
+};
+
+/**
+ * Raise `alert_delivery_failed` when a channel did not deliver.
+ *
+ * THE EDGE PIPELINE HAD NO SUCH ALARM. The Node dispatcher has raised this
+ * since it was written, but this mirror only accumulated an `errors` array,
+ * returned it in the HTTP response, and dropped it on the floor: the webhook
+ * caller is pg_net or a VPS script, and nothing reads what it answers. So an
+ * alert raised through the edge function that failed on EVERY channel told
+ * nobody, while the per-channel `notifications` rows sat there honestly
+ * recording `failed` on a page no one had a reason to open.
+ *
+ * `errors` was not usable as the source of truth either, and this is the
+ * subtle half. It is pushed on transport failures only, so a leg that records
+ * a `failed` row through its structured-outcome branch (the push bridge
+ * answering ok:false with reason send_failed, for one) never appears in it.
+ * Reading the recorded outcomes instead means the alarm and the rows can
+ * never disagree.
+ *
+ * Wording and payload shape are copied from reportFailedChannels in
+ * src/lib/notifications/dispatch.ts on purpose: both pipelines write to the
+ * same admin card, and an operator should not be able to tell which one
+ * raised the row.
+ */
+async function reportFailedChannels(
+  ctx: RecordCtx,
+  businessId: string,
+  kind: string,
+  summary: string
+): Promise<void> {
+  const failed = ctx.outcomes.filter((o) => o.status === "failed");
+  if (failed.length === 0) return;
+  const delivered = ctx.outcomes.filter((o) => o.status === "sent");
+  await systemLog(ctx.supa, {
+    businessId,
+    level: "error",
+    source: "notifications",
+    event: "alert_delivery_failed",
+    message:
+      (delivered.length === 0
+        ? "An urgent alert reached NOBODY: "
+        : "An urgent alert failed on some channels: ") +
+      failed.map((f) => `${f.channel} (${f.reason ?? "no reason given"})`).join(", ") +
+      (delivered.length > 0
+        ? `. Delivered on ${delivered.map((d) => d.channel).join(", ")}.`
+        : "."),
+    payload: {
+      kind,
+      summary,
+      failedChannels: failed.map((f) => ({ channel: f.channel, reason: f.reason ?? null })),
+      deliveredChannels: delivered.map((d) => d.channel)
+    }
+  });
+}
+
 async function recordRow(
-  supa: SupaClient,
+  ctx: RecordCtx,
   businessId: string,
   channel: DeliveryChannel,
   status: DeliveryStatus,
@@ -290,8 +374,13 @@ async function recordRow(
    */
   rowId?: string
 ): Promise<void> {
+  // Recorded whether or not the insert below lands, matching the Node
+  // dispatcher: this is the CHANNEL's outcome, not the row's. A history write
+  // that fails is a persistence bug, and it must not also erase our knowledge
+  // that the alert itself failed to reach anyone.
+  ctx.outcomes.push({ channel, status, reason });
   const id = rowId ?? crypto.randomUUID();
-  const { error } = await supa.from("notifications").insert({
+  const { error } = await ctx.supa.from("notifications").insert({
     id,
     business_id: businessId,
     delivery_channel: channel,
@@ -528,6 +617,9 @@ serve(async (req: Request) => {
       : {})
   };
   const errors: string[] = [];
+  // Request-scoped. Every recordRow below appends its channel's outcome here,
+  // and reportFailedChannels reads the whole set once the fan-out is done.
+  const ctx: RecordCtx = { supa, outcomes: [] };
 
   // Transport-level dedupe (Amy Laidlaw, Jul 31 2026, four leads in one
   // week): persona-driven turns often call notify_team AND set reasoning
@@ -577,10 +669,10 @@ serve(async (req: Request) => {
 
   // 1) Dashboard channel
   if (targets.dashboardAlerts && !targets.unsubscribed) {
-    await recordRow(supa, record.business_id, "dashboard", "sent", summary, kind, basePayload);
+    await recordRow(ctx, record.business_id, "dashboard", "sent", summary, kind, basePayload);
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "dashboard",
       "skipped",
@@ -667,7 +759,7 @@ serve(async (req: Request) => {
     // record; attempting it again here would re-fail, or worse, double
     // text the owner. Email and dashboard are the point.
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -678,7 +770,7 @@ serve(async (req: Request) => {
     );
   } else if (!targets.phone) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -689,7 +781,7 @@ serve(async (req: Request) => {
     );
   } else if (!targets.smsUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -700,7 +792,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -720,7 +812,7 @@ serve(async (req: Request) => {
     targets.routing?.target !== "contact_owner"
   ) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -741,7 +833,7 @@ serve(async (req: Request) => {
     // (Bugbot f574b3a4). Never for an alert redirected to a teammate's
     // phone, whose number may not have WhatsApp at all. Mirrors dispatch.ts.
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -821,7 +913,7 @@ serve(async (req: Request) => {
           telnyxMessageId
         });
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "sms",
           "sent",
@@ -833,7 +925,7 @@ serve(async (req: Request) => {
         const errBody = await smsRes.text().catch(() => "");
         errors.push(`SMS failed: ${smsRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "sms",
           "failed",
@@ -853,7 +945,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`SMS error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "sms",
         "failed",
@@ -865,7 +957,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "sms",
       "skipped",
@@ -880,7 +972,7 @@ serve(async (req: Request) => {
   const resendKey = Deno.env.get("RESEND_API_KEY");
   if (!targets.email) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "email",
       "skipped",
@@ -891,7 +983,7 @@ serve(async (req: Request) => {
     );
   } else if (!targets.emailUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "email",
       "skipped",
@@ -902,7 +994,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "email",
       "skipped",
@@ -970,7 +1062,7 @@ serve(async (req: Request) => {
       });
       if (emailRes.ok) {
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "email",
           "sent",
@@ -982,7 +1074,7 @@ serve(async (req: Request) => {
         const errBody = await emailRes.text().catch(() => "");
         errors.push(`Email failed: ${emailRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "email",
           "failed",
@@ -996,7 +1088,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Email error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "email",
         "failed",
@@ -1008,7 +1100,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "email",
       "skipped",
@@ -1035,7 +1127,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.phone) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "whatsapp",
       "skipped",
@@ -1046,7 +1138,7 @@ serve(async (req: Request) => {
     );
   } else if (!targets.whatsappUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "whatsapp",
       "skipped",
@@ -1057,7 +1149,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "whatsapp",
       "skipped",
@@ -1093,7 +1185,7 @@ serve(async (req: Request) => {
         : null;
       if (waJson?.data?.ok) {
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "whatsapp",
           "sent",
@@ -1109,7 +1201,7 @@ serve(async (req: Request) => {
         const waReason = waJson?.data?.reason ?? "send_failed";
         if (waReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "whatsapp",
             waReason === "send_failed" ? "failed" : "skipped",
@@ -1122,7 +1214,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`WhatsApp failed: ${waRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "whatsapp",
           "failed",
@@ -1136,7 +1228,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`WhatsApp error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "whatsapp",
         "failed",
@@ -1148,7 +1240,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "whatsapp",
       "skipped",
@@ -1179,7 +1271,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.slackUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "slack",
       "skipped",
@@ -1190,7 +1282,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "slack",
       "skipped",
@@ -1244,7 +1336,7 @@ serve(async (req: Request) => {
           } | null)
         : null;
       if (slJson?.data?.ok) {
-        await recordRow(supa, record.business_id, "slack", "sent", summary, kind, {
+        await recordRow(ctx, record.business_id, "slack", "sent", summary, kind, {
           ...basePayload,
           recipient: slJson.data.channelName
             ? `#${slJson.data.channelName}`
@@ -1256,7 +1348,7 @@ serve(async (req: Request) => {
         const slReason = slJson?.data?.reason ?? "send_failed";
         if (slReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "slack",
             slReason === "send_failed" ? "failed" : "skipped",
@@ -1269,7 +1361,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`Slack failed: ${slRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "slack",
           "failed",
@@ -1283,7 +1375,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Slack error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "slack",
         "failed",
@@ -1295,7 +1387,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "slack",
       "skipped",
@@ -1327,7 +1419,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.telegramUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "telegram",
       "skipped",
@@ -1338,7 +1430,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "telegram",
       "skipped",
@@ -1377,7 +1469,7 @@ serve(async (req: Request) => {
           } | null)
         : null;
       if (tgJson?.data?.ok) {
-        await recordRow(supa, record.business_id, "telegram", "sent", summary, kind, {
+        await recordRow(ctx, record.business_id, "telegram", "sent", summary, kind, {
           ...basePayload,
           recipient: tgJson.data.chatId ?? "telegram"
         });
@@ -1387,7 +1479,7 @@ serve(async (req: Request) => {
         const tgReason = tgJson?.data?.reason ?? "send_failed";
         if (tgReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "telegram",
             tgReason === "send_failed" ? "failed" : "skipped",
@@ -1400,7 +1492,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`Telegram failed: ${tgRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "telegram",
           "failed",
@@ -1414,7 +1506,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Telegram error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "telegram",
         "failed",
@@ -1426,7 +1518,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "telegram",
       "skipped",
@@ -1455,7 +1547,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.teamsUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "teams",
       "skipped",
@@ -1466,7 +1558,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "teams",
       "skipped",
@@ -1501,7 +1593,7 @@ serve(async (req: Request) => {
           } | null)
         : null;
       if (tmJson?.data?.ok) {
-        await recordRow(supa, record.business_id, "teams", "sent", summary, kind, {
+        await recordRow(ctx, record.business_id, "teams", "sent", summary, kind, {
           ...basePayload,
           recipient: tmJson.data.conversationId ?? "teams"
         });
@@ -1509,7 +1601,7 @@ serve(async (req: Request) => {
         const tmReason = tmJson?.data?.reason ?? "send_failed";
         if (tmReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "teams",
             tmReason === "send_failed" ? "failed" : "skipped",
@@ -1522,7 +1614,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`Teams failed: ${tmRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "teams",
           "failed",
@@ -1535,11 +1627,11 @@ serve(async (req: Request) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Teams error: ${msg}`);
-      await recordRow(supa, record.business_id, "teams", "failed", summary, kind, basePayload, msg);
+      await recordRow(ctx, record.business_id, "teams", "failed", summary, kind, basePayload, msg);
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "teams",
       "skipped",
@@ -1572,7 +1664,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.googleChatUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "google_chat",
       "skipped",
@@ -1583,7 +1675,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "google_chat",
       "skipped",
@@ -1618,7 +1710,7 @@ serve(async (req: Request) => {
           } | null)
         : null;
       if (gcJson?.data?.ok) {
-        await recordRow(supa, record.business_id, "google_chat", "sent", summary, kind, {
+        await recordRow(ctx, record.business_id, "google_chat", "sent", summary, kind, {
           ...basePayload,
           recipient: gcJson.data.space ?? "google_chat"
         });
@@ -1626,7 +1718,7 @@ serve(async (req: Request) => {
         const gcReason = gcJson?.data?.reason ?? "send_failed";
         if (gcReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "google_chat",
             gcReason === "send_failed" ? "failed" : "skipped",
@@ -1639,7 +1731,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`Google Chat failed: ${gcRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "google_chat",
           "failed",
@@ -1653,7 +1745,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Google Chat error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "google_chat",
         "failed",
@@ -1665,7 +1757,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "google_chat",
       "skipped",
@@ -1685,7 +1777,7 @@ serve(async (req: Request) => {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.pushUrgent || targets.unsubscribed) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "push",
       "skipped",
@@ -1696,7 +1788,7 @@ serve(async (req: Request) => {
     );
   } else if (suppressTransports) {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "push",
       "skipped",
@@ -1756,7 +1848,7 @@ serve(async (req: Request) => {
         : null;
       if (pushJson?.data?.ok) {
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "push",
           "sent",
@@ -1777,7 +1869,7 @@ serve(async (req: Request) => {
         const pushReason = pushJson?.data?.reason ?? "send_failed";
         if (pushReason !== "not_connected") {
           await recordRow(
-            supa,
+            ctx,
             record.business_id,
             "push",
             pushReason === "send_failed" ? "failed" : "skipped",
@@ -1793,7 +1885,7 @@ serve(async (req: Request) => {
       } else {
         errors.push(`Push failed: ${pushRes.status}`);
         await recordRow(
-          supa,
+          ctx,
           record.business_id,
           "push",
           "failed",
@@ -1808,7 +1900,7 @@ serve(async (req: Request) => {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Push error: ${msg}`);
       await recordRow(
-        supa,
+        ctx,
         record.business_id,
         "push",
         "failed",
@@ -1821,7 +1913,7 @@ serve(async (req: Request) => {
     }
   } else {
     await recordRow(
-      supa,
+      ctx,
       record.business_id,
       "push",
       "skipped",
@@ -1831,6 +1923,11 @@ serve(async (req: Request) => {
       "push_bridge_unconfigured"
     );
   }
+
+  // Raise the admin alarm for anything that failed, AFTER every leg has had
+  // its turn, because "did this reach anybody" can only be answered by
+  // looking at all of them together.
+  await reportFailedChannels(ctx, record.business_id, kind, summary);
 
   return new Response(
     JSON.stringify({ ok: errors.length === 0, errors }),
