@@ -33,6 +33,27 @@ zod/`NOTIFICATION_TOGGLE_KEYS`/`CHANNEL_TOGGLE_KEYS`), integrations registry +
 context + status + the `[slug]` page `case`, and the Deno mirror (union, prefs
 SELECT string, `ResolvedTargets`, the leg).
 
+*Every site in that sweep is INSIDE the product, and that is the blind spot.*
+Telegram, Teams, Google Chat and push all shipped fully wired and completely
+absent from the public site, because nothing in the checklist, and no test,
+looks at marketing copy. #1749 caught up seven surfaces at once: the
+`NATIVE_DEFS` grid on `/integrations` plus its `metaDescription` and
+`ogDescription` (what search results quote), the plan bullet in
+`buildStandardFeatures` AND its row in `comparison.ts` (`covers` fails CI only
+in the bullet-without-a-row direction, never the reverse, so a shipped feature
+sells itself nowhere and nothing complains), the Owner Notifications line on
+`/features`, and the Privacy and Terms pages. Prices and legal text are the two
+that actually cost something: four Standard-gated features nobody could see,
+and collected data we had not disclosed. Both message catalogs, both locales.
+Note push adds a genuinely new recipient class to Privacy that chat channels do
+not, the relay service (Apple / Google / Mozilla), which sees a delivery
+address and ciphertext and never the alert.
+
+*Naming, when a row grows past one channel:* `rowSlack` became `rowTeamChat`
+when its bullet grew to cover four. A key naming one channel while holding copy
+about four is the same drift as [[feedback_verify_the_constant_not_the_comment]],
+and it is cheap to fix at the moment the copy widens.
+
 *The two unsubscribe payloads, which drifted for four channels:* "unsubscribe
 from all" used to be hand-listed twice, in the dashboard button and in the
 one-click link in our email footers. Push (#1717) and every chat channel
