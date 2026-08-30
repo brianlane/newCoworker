@@ -216,8 +216,11 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
       ? "Habilidades completas de navegador: opera sitios web como una persona"
       : "Full browser skills: operates websites like a person",
     es
-      ? "Slack: chatea con tu coworker y aprueba sus automatizaciones desde Slack"
-      : "Slack: chat with your coworker and approve its automations from Slack"
+      ? "Chat de equipo: Slack, Telegram, Microsoft Teams y Google Chat, con aprobaciones desde Slack"
+      : "Team chat: Slack, Telegram, Microsoft Teams, and Google Chat, with approvals from Slack",
+    es
+      ? "Notificaciones push: instala el panel en tu teléfono y recibe alertas urgentes al instante"
+      : "Push notifications: install the dashboard on your phone for instant urgent alerts"
   ];
 }
 

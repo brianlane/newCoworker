@@ -48,6 +48,8 @@ export default function PrivacyPolicyPage() {
           <li>Provisioning and configuration data, such as infrastructure identifiers, voice-agent configuration, deployment status, and service-integrator metadata.</li>
           <li>Voice call data, such as call metadata, text transcripts of calls, and AI-generated call summaries and conversation signals (for example caller sentiment). Call audio is processed by AI in real time, and calls handled by the service are stored as text transcripts rather than audio recordings. AI assistance (for example live translation) may remain active when a call is transferred to a person.</li>
           <li>Messaging channel content from channels a business connects, such as WhatsApp, Facebook Messenger, and Instagram conversations, and lead form submissions received through connected lead ads.</li>
+          <li>Team chat content from services a business connects for its own team, such as Slack, Telegram, Microsoft Teams, and Google Chat: the messages exchanged with the coworker there, and the account identifiers needed to route a reply back to the right teammate.</li>
+          <li>Push notification registrations for devices a user chooses to enable alerts on, such as the delivery address issued by that device&apos;s browser, the encryption keys that device generates, and a description of the browser and device.</li>
           <li>Website chat conversations and the visitor information described in the Website Chat Widget section below.</li>
           <li>Calendar and meeting data from providers a business connects, such as availability, event details, and meeting transcripts imported from connected accounts (for example Zoom).</li>
           <li>Electronic signature records for documents sent through the service, such as signer name and contact details, signing timestamp, IP address, browser information, and a cryptographic fingerprint of the signed content.</li>
@@ -111,13 +113,19 @@ export default function PrivacyPolicyPage() {
           and RCS), Resend (email delivery), Hostinger and OVHcloud (infrastructure hosting), Vercel
           (application hosting), Cloudflare (network services and email routing), Google (Gemini AI models,
           including real-time voice processing, and the Places directory used for optional prospect discovery),
-          and Nango (Microsoft integration authentication; Google connects directly to us). We may update this list as the product architecture evolves,
+          and Nango (Microsoft integration authentication; Google connects directly to us). If you turn on
+          push notifications, the browser or operating system you use determines the push delivery service
+          that relays them (for example Apple, Google, or Mozilla); the alert contents are encrypted so that
+          only your own device can read them, and the relay sees only the delivery address and the encrypted
+          payload. We may update this list as the product architecture evolves,
           and we keep the current version on this page.
         </p>
         <p>
           In addition, businesses can connect third-party services to their account, and data is shared with
           those services as directed by the business. Examples include Zoom; Meta platforms (Lead Ads,
-          Messenger, Instagram, and WhatsApp); Google Workspace and Microsoft 365; Calendly, Acuity Scheduling,
+          Messenger, Instagram, and WhatsApp); team chat services the business connects for alerts and
+          conversations with its coworker (Slack, Telegram, Microsoft Teams, and Google Chat); Google
+          Workspace and Microsoft 365; Calendly, Acuity Scheduling,
           Vagaro, and CalDAV calendars; Zapier; and AI assistants the business links to its account (for
           example Anthropic&apos;s Claude through our connector). If a business connects Meta lead features,
           conversion events (such as a lead being contacted or booked) may be reported back to Meta together

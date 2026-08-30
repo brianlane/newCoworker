@@ -42,7 +42,9 @@ export default function TermsPage() {
           communications. Depending on your plan and configuration, the service includes inbound and outbound
           voice calls (including call transfer and live translation assistance), text messaging (SMS, MMS, and
           RCS), website chat, connected messaging channels (such as WhatsApp, Facebook Messenger, and
-          Instagram), email handling and hosted mailboxes, scheduling and public booking pages, documents and
+          Instagram), connected team chat services (such as Slack, Telegram, Microsoft Teams, and Google
+          Chat), push notifications to devices you enable them on, email handling and hosted mailboxes,
+          scheduling and public booking pages, documents and
           electronic signatures, calendar and other third-party integrations, APIs and webhooks, onboarding
           automation, memory management, dashboards, and related infrastructure or support services. Features
           vary by subscription tier and may change over time.

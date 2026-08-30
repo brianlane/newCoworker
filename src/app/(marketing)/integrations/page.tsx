@@ -8,9 +8,12 @@ import {
   FileSpreadsheet,
   KeyRound,
   Mail,
+  MessageCircle,
   MessageSquareText,
   MessagesSquare,
   PhoneCall,
+  Send,
+  Users,
   Video,
   Webhook,
   Zap
@@ -56,6 +59,13 @@ const NATIVE_DEFS = [
   { key: "google", Icon: CalendarCheck },
   { key: "microsoft", Icon: CalendarCheck },
   { key: "slack", Icon: MessagesSquare, href: "/integrations/slack" },
+  // Telegram, Teams and Google Chat run on the same coworker-channel pipeline
+  // as Slack and carry the same Standard+ gate, so they belong beside it. Only
+  // Slack has a detail page, because only Slack has a marketplace listing to
+  // point reviewers at.
+  { key: "telegram", Icon: Send },
+  { key: "teams", Icon: Users },
+  { key: "googleChat", Icon: MessageCircle },
   { key: "zoom", Icon: Video, href: "/integrations/zoom" },
   { key: "zapier", Icon: Zap },
   { key: "api", Icon: Code2, href: "/docs/api" },
