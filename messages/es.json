@@ -1172,6 +1172,10 @@
         "title": "Google Chat",
         "description": "Tu coworker en Google Chat: las alertas llegan al espacio que ya usa tu equipo, y cualquiera de tu roster puede escribirle con su cuenta de Google Workspace. Plan Standard en adelante."
       },
+      "push": {
+        "title": "App para el teléfono (notificaciones push)",
+        "description": "Instala tu panel en el teléfono o la computadora y las alertas urgentes llegan al instante, incluso con la app cerrada. Sin tienda de apps ni descarga. Plan Standard en adelante."
+      },
       "zoom": {
         "title": "Zoom",
         "description": "Las videollamadas agendadas crean una reunión de Zoom automáticamente, y las grabaciones en la nube regresan como minutas de reunión en tu biblioteca de documentos."
