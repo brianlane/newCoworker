@@ -184,7 +184,7 @@ describe("both dispatchers actually have a leg for every channel", () => {
     const denoLegs = new Set(
       [
         ...DENO_DISPATCH.matchAll(
-          /recordRow\(\s*supa,\s*record\.business_id,\s*"([a-z_]+)"/g
+          /recordRow\(\s*ctx,\s*record\.business_id,\s*"([a-z_]+)"/g
         )
       ].map((m) => m[1])
     );
@@ -284,5 +284,56 @@ describe("a push carries the id of the row it is about, on both sides", () => {
       sentPushRecordRowArgs(source, label),
       `${label} sends ${idVar} to the push but does not write the notifications row under it, so the receipt names a row that does not exist`
     ).toContain(idVar);
+  });
+});
+
+describe("both dispatchers raise the admin alarm when a channel fails", () => {
+  const NODE_DISPATCH = read("src/lib/notifications/dispatch.ts");
+
+  /**
+   * `alert_delivery_failed` is the row that says "a customer may not have
+   * heard us", and it is the only thing that turns a failed send into
+   * something a human is told about.
+   *
+   * The edge pipeline had no such alarm at all. It accumulated an `errors`
+   * array, returned it in the HTTP response, and dropped it: the caller is
+   * pg_net or a VPS script, and nothing reads what it answers. An alert
+   * raised through the edge function that failed on EVERY channel told
+   * nobody, while its `notifications` rows sat there honestly recording
+   * `failed` on a page no one had a reason to open. Every signal available
+   * said the alert had been handled.
+   */
+  it.each([
+    ["the Node dispatcher", NODE_DISPATCH],
+    ["the Deno mirror", DENO_DISPATCH]
+  ])("%s raises alert_delivery_failed from its recorded outcomes", (label, source) => {
+    expect(source, `${label} never raises alert_delivery_failed`).toContain(
+      'event: "alert_delivery_failed"'
+    );
+
+    // Derived from what each leg RECORDED, never from a side list of error
+    // strings: those are pushed on transport failures only, so a leg that
+    // records a failed row through a structured-outcome branch would be
+    // missing from the alarm while present on the card.
+    expect(
+      source,
+      `${label} does not decide the alarm by filtering recorded outcomes on "failed"`
+    ).toMatch(/filter\(\([\w.]+\) => [\w.]+\.status === "failed"\)/);
+
+    // Both write the same payload shape, because both land on the same card.
+    expect(source).toContain("failedChannels");
+    expect(source).toContain("deliveredChannels");
+
+    // Declared AND CALLED. A reporter nothing invokes is the same silence it
+    // was written to end.
+    //
+    // Matched as a call, not as a mention: counting occurrences of the bare
+    // name passed even with the call deleted, because the doc comment above
+    // it names the function too. A guard that a comment can satisfy is not a
+    // guard.
+    expect(
+      source,
+      `${label} declares reportFailedChannels but never calls it`
+    ).toMatch(/await reportFailedChannels\(/);
   });
 });
