@@ -142,3 +142,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Zero snapshot coverage is not zero activity](project_snapshot_zero_coverage_is_not_zero_activity.md) - the sweep writes a row per business per day; no rows means UNMEASURED, drop the month
 - [Texting coworker can schedule a later text](project_schedule_text_tool.md) - ONE pending row per contact; created_by keeps it off the owner's rows; pinned note is how a reschedule finds it, and the owner's cancel must retract it
 - [Hostinger drops public_key_ids on purchase too](project_hostinger_drops_public_key_ids_on_purchase_too.md) - PIS-embedded key is the ONLY deterministic attach; purchase path also lacked the quiescence wait; auth rejection during it means the key is ARRIVING
+- [Admin MFA factor load](project_admin_mfa_factor_load.md) - auth-js data.totp is VERIFIED-only; "no factor available" is a symptom; auth.audit_log_entries is empty, use mfa_challenges
