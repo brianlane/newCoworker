@@ -29,7 +29,12 @@
  * never fires and the click row lands with a null notification_id, so the
  * read receipt this channel exists for is silently missing.
  *
+ * --verify=<notificationId> checks the receipt on an alert that already went
+ * out, without sending anything. Every ordinary run pages a real person on
+ * every channel they have on, so re-checking must not cost another alert.
+ *
  * Usage: tsx debug/push-edge-alert.ts <businessId> [taskType] [--watch]
+ *        tsx debug/push-edge-alert.ts <businessId> --verify=<notificationId>
  */
 import { loadEnv } from "./_shared.ts";
 
@@ -37,6 +42,13 @@ loadEnv();
 
 const args = process.argv.slice(2);
 const watch = args.includes("--watch");
+/**
+ * Check the receipt on a push that was ALREADY sent, instead of sending a new
+ * one. Every run of this script pages a real person on every channel they have
+ * on, so re-checking a receipt must not cost another alert. It is also the
+ * only way to test a change to the watcher itself against a known-good tap.
+ */
+const verifyId = (args.find((a) => a.startsWith("--verify="))?.split("=")[1] ?? "").trim();
 const positional = args.filter((a) => !a.startsWith("--"));
 const businessId = positional[0];
 // Defaults to a task_type with no special summary template and no contact
@@ -44,7 +56,9 @@ const businessId = positional[0];
 const taskType = positional[1] ?? "voice_capture";
 
 if (!businessId) {
-  console.error("Usage: tsx debug/push-edge-alert.ts <businessId> [taskType] [--watch]");
+  console.error(
+    "Usage: tsx debug/push-edge-alert.ts <businessId> [taskType] [--watch] [--verify=<notificationId>]"
+  );
   process.exit(1);
 }
 
@@ -71,6 +85,27 @@ const edgeBearer = webhookToken || serviceKey;
 
 const { createClient } = await import("@supabase/supabase-js");
 const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+
+if (verifyId) {
+  // Receipt-only: check an alert that already went out. No send, so no second
+  // real text and email at whoever is on the other end.
+  const { data: existing, error } = await db
+    .from("notifications")
+    .select("id, delivery_channel, status")
+    .eq("id", verifyId)
+    .maybeSingle();
+  if (error || !existing) {
+    console.error(`no notifications row with id ${verifyId}${error ? `: ${error.message}` : ""}`);
+    process.exit(1);
+  }
+  if (existing.delivery_channel !== "push") {
+    console.error(`${verifyId} is a ${existing.delivery_channel} row, not a push row`);
+    process.exit(1);
+  }
+  console.log(`verifying the receipt on push row ${verifyId} (no alert sent)`);
+  await watchForReceipt(verifyId);
+  process.exit(0);
+}
 
 /** Deliverable devices BEFORE the send, so `devices_sent` has something to be right about. */
 const { data: subsBefore, error: subsErr } = await db
@@ -195,50 +230,70 @@ if (!watch) {
   process.exit(0);
 }
 
+await watchForReceipt(push.id);
+
 /**
  * The receipt half. A push whose payload carries no notification id still
- * delivers and is still tappable, and the click is still recorded, so the
- * ONLY way to tell the two apart from outside is to tap it and ask whether
- * anything bound to the row.
+ * delivers and is still tappable, and the click is still recorded, so the ONLY
+ * way to tell the two apart from outside is to tap it and ask whether anything
+ * bound to the row.
+ *
+ * A declared function rather than an inline loop so --verify can reach it
+ * without sending a second alert.
  */
-console.log("");
-console.log(`Waiting for a tap on that notification (id ${push.id})...`);
-console.log("Tap the banner on the device. Ctrl-C to give up.");
+async function watchForReceipt(notificationId: string): Promise<void> {
+  console.log("");
+  console.log(`Waiting for a tap on that notification (id ${notificationId})...`);
+  console.log("Tap the banner on the device. Ctrl-C to give up.");
 
-const deadline = Date.now() + 180_000;
-for (;;) {
-  if (Date.now() > deadline) {
-    console.error("");
-    console.error("TIMED OUT with no bound receipt after 3 minutes.");
-    console.error("If you DID tap it, check notification_link_clicks for a push row with a");
-    console.error("null notification_id: that is the edge leg delivering without an id.");
-    process.exit(1);
-  }
-
-  const { data: clicks } = await db
-    .from("notification_link_clicks")
-    .select("id, channel, notification_id, likely_prefetch, created_at")
-    .eq("channel", "push")
-    .eq("notification_id", push.id);
-
-  if ((clicks ?? []).length > 0) {
-    const { data: after } = await db
-      .from("notifications")
-      .select("read_at, read_by_actor")
-      .eq("id", push.id)
-      .maybeSingle();
-    console.log("");
-    console.log(`click row  : ${JSON.stringify(clicks?.[0])}`);
-    console.log(`row read_at: ${after?.read_at ?? "NOT SET"} by ${after?.read_by_actor ?? "-"}`);
-    if (!after?.read_at) {
-      console.error("FAIL: the click bound to the row but read_at never got stamped.");
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    if (Date.now() > deadline) {
+      console.error("");
+      console.error("TIMED OUT with no bound receipt after 3 minutes.");
+      console.error("If you DID tap it, check notification_link_clicks for a push row with a");
+      console.error("null notification_id: that is the edge leg delivering without an id.");
       process.exit(1);
     }
-    console.log("");
-    console.log("PASS: the tap on an EDGE-dispatched push bound to its notifications row");
-    console.log("      and marked it read. The receipt closes on the Deno pipeline.");
-    process.exit(0);
-  }
 
-  await new Promise((r) => setTimeout(r, 3000));
+    // clicked_at, NOT created_at: this table names its timestamp differently to
+    // the others here, and asking for a column that does not exist is not a
+    // warning. PostgREST fails the whole select, so `data` comes back null, and
+    // an ignored error then reads as "nobody has tapped it yet" for the full
+    // three minutes. This watcher reported exactly that false negative against
+    // a tap that HAD bound correctly, which is the worst way for a tool whose
+    // only job is proving something to be wrong. Hence: right column, and the
+    // error is fatal rather than swallowed.
+    const { data: clicks, error: clickErr } = await db
+      .from("notification_link_clicks")
+      .select("id, channel, notification_id, likely_prefetch, clicked_at")
+      .eq("channel", "push")
+      .eq("notification_id", notificationId);
+
+    if (clickErr) {
+      console.error(`FAIL: could not read the click receipts: ${clickErr.message}`);
+      process.exit(1);
+    }
+
+    if ((clicks ?? []).length > 0) {
+      const { data: after } = await db
+        .from("notifications")
+        .select("read_at, read_by_actor")
+        .eq("id", notificationId)
+        .maybeSingle();
+      console.log("");
+      console.log(`click row  : ${JSON.stringify(clicks?.[0])}`);
+      console.log(`row read_at: ${after?.read_at ?? "NOT SET"} by ${after?.read_by_actor ?? "-"}`);
+      if (!after?.read_at) {
+        console.error("FAIL: the click bound to the row but read_at never got stamped.");
+        process.exit(1);
+      }
+      console.log("");
+      console.log("PASS: the tap on an EDGE-dispatched push bound to its notifications row");
+      console.log("      and marked it read. The receipt closes on the Deno pipeline.");
+      process.exit(0);
+    }
+
+    await new Promise((r) => setTimeout(r, 3000));
+  }
 }
