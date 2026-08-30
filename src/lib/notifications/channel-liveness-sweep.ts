@@ -21,7 +21,6 @@ import {
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 import { livenessFinding } from "./channel-liveness";
-import { pushPlatformAlert } from "@/lib/push/platform-alert";
 import type { AudienceJudgement } from "./channel-liveness";
 import { reportChannelLiveness } from "./channel-liveness-read";
 
@@ -143,16 +142,6 @@ export async function sweepChannelLiveness(
       },
       db
     );
-    // Dark only. `degraded` is a WARN that belongs in the weekly digest and
-    // must not page, which is the same line livenessFinding already draws
-    // between the two: they are still reachable on some channel.
-    if (finding.event === "alert_audience_dark") {
-      await pushPlatformAlert({
-        event: "alert_audience_dark",
-        businessId: row.business.id,
-        silentChannels: row.judgement.silent
-      });
-    }
   }
   return result;
 }

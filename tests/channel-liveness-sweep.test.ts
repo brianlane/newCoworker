@@ -15,14 +15,9 @@ vi.mock("@/lib/db/contact-names", () => ({
   businessOwnerNumbers: vi.fn().mockResolvedValue([])
 }));
 
-vi.mock("@/lib/push/platform-alert", () => ({
-  pushPlatformAlert: vi.fn().mockResolvedValue(undefined)
-}));
-
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { businessOwnerNumbers } from "@/lib/db/contact-names";
-import { pushPlatformAlert } from "@/lib/push/platform-alert";
 import {
   getNotificationPreferences,
   updateNotificationPreferences
@@ -736,10 +731,6 @@ describe("sweepChannelLiveness", () => {
     expect(call.event).toBe("alert_audience_degraded");
     expect(call.payload?.silentChannels).toEqual(["sms", "whatsapp"]);
     expect(call.payload?.liveChannels).toEqual(["email", "dashboard"]);
-    // DEGRADED MUST NOT PAGE. They are still reachable on email and the
-    // dashboard, so this belongs in the weekly digest. Pushing it would be
-    // the fastest way to teach an admin to swipe these away.
-    expect(pushPlatformAlert).not.toHaveBeenCalled();
   });
 
   it("writes nothing for a healthy fleet", async () => {
@@ -766,16 +757,6 @@ describe("sweepChannelLiveness", () => {
     // dashboard's source:"aiflow" filter never returns.
     expect(call.source).toBe("notifications");
     expect(call.message).toContain("call them");
-  });
-
-  it("pushes a dark tenant to HQ admin devices, not only to the card", async () => {
-    const db = fleetDb([{ id: "dark", name: "Dark Co", data_residency_mode: "supabase" }], (q) =>
-      answer(q, { email: { data: [{ delivery_status: "bounced" }] } })
-    );
-    await sweepChannelLiveness({ now: NOW, client: db });
-    expect(pushPlatformAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "alert_audience_dark", businessId: "dark" })
-    );
   });
 
   it("carries the residency skip through to the result", async () => {

@@ -6,7 +6,6 @@ import { adminMfaRedirectPath, isAal2, safeAdminNextPath } from "@/lib/auth/admi
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
 import { SectionMessages } from "@/components/i18n/SectionMessages";
-import { PushRegistrar } from "@/components/push/PushRegistrar";
 
 // See dashboard layout: scope `cover` to the h-dvh shell segments only so the
 // safe-area padding can keep the nav + content clear of the notch.
@@ -37,23 +36,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
           {children}
         </main>
-        {/*
-          Platform scope: businessId NULL, the device set that belongs to no
-          tenant. This is what makes an HQ admin reachable for the alerts
-          addressed to US (a customer unreachable, an alert that reached
-          nobody) rather than to a customer.
-
-          Safe to mount unconditionally here. The registrar never prompts: it
-          only re-creates a subscription where permission is ALREADY granted,
-          and it honours the per-device opt-out. Everything above has already
-          gated this layout on isAdmin plus AAL2, which is the same bar
-          /api/push/subscribe enforces for the null scope.
-
-          An admin who also owns a business ends up with two rows for one
-          browser, one per scope. That is deliberate, and it is why the unique
-          index is NULLS NOT DISTINCT.
-        */}
-        <PushRegistrar businessId={null} />
       </div>
     </SectionMessages>
   );
