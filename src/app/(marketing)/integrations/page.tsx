@@ -13,6 +13,7 @@ import {
   MessagesSquare,
   PhoneCall,
   Send,
+  Smartphone,
   Users,
   Video,
   Webhook,
@@ -66,6 +67,11 @@ const NATIVE_DEFS = [
   { key: "telegram", Icon: Send },
   { key: "teams", Icon: Users },
   { key: "googleChat", Icon: MessageCircle },
+  // Not a third-party connection at all: it is our own dashboard installed as
+  // an app. It sits with the chat channels because a visitor reading this grid
+  // is asking "where can my coworker reach me", and this is one of the
+  // answers. The href is the install guide, since there is nothing to connect.
+  { key: "push", Icon: Smartphone, href: "/docs/push-notifications" },
   { key: "zoom", Icon: Video, href: "/integrations/zoom" },
   { key: "zapier", Icon: Zap },
   { key: "api", Icon: Code2, href: "/docs/api" },

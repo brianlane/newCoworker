@@ -1172,6 +1172,10 @@
         "title": "Google Chat",
         "description": "Your coworker in Google Chat: alerts land in the space your team already uses, and anyone on your roster can message it back with their Google Workspace account. Standard plan and up."
       },
+      "push": {
+        "title": "Phone app (push notifications)",
+        "description": "Install your dashboard on your phone or computer and urgent alerts arrive the moment they happen, even when the app is closed. No app store, no download. Standard plan and up."
+      },
       "zoom": {
         "title": "Zoom",
         "description": "Booked video calls get a scheduled Zoom meeting automatically, and cloud recordings come back as meeting minutes in your document library."
