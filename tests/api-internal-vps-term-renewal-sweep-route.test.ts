@@ -73,7 +73,7 @@ describe("api/internal/vps-term-renewal-sweep route", () => {
       checked: 3,
       skippedEconomics: 2,
       migrated: 0,
-      findings: []
+      findings: [], failures: []
     });
   });
 
@@ -88,7 +88,7 @@ describe("api/internal/vps-term-renewal-sweep route", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data).toEqual({ checked: 3, skippedEconomics: 2, migrated: 0, findings: [] });
+    expect(json.data).toEqual({ checked: 3, skippedEconomics: 2, migrated: 0, findings: [], failures: [] });
     expect(runTermRenewalSweep).toHaveBeenCalledOnce();
   });
 

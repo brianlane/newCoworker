@@ -80,7 +80,7 @@ describe("api/internal/vps-contract-upgrade-sweep route", () => {
       checked: 4,
       alreadyCovered: 3,
       migrated: 1,
-      findings: []
+      findings: [], failures: []
     });
   });
 
@@ -95,7 +95,7 @@ describe("api/internal/vps-contract-upgrade-sweep route", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data).toEqual({ checked: 4, alreadyCovered: 3, migrated: 1, findings: [] });
+    expect(json.data).toEqual({ checked: 4, alreadyCovered: 3, migrated: 1, findings: [], failures: [] });
     expect(runContractUpgradeSweep).toHaveBeenCalledOnce();
   });
 

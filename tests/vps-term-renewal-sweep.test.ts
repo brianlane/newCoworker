@@ -294,7 +294,7 @@ describe("runTermRenewalSweep", () => {
       ])
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
-    expect(result).toEqual({ checked: 0, skippedEconomics: 0, migrated: 0, findings: [] });
+    expect(result).toEqual({ checked: 0, skippedEconomics: 0, migrated: 0, findings: [], failures: [] });
     expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
   });
 
@@ -317,7 +317,7 @@ describe("runTermRenewalSweep", () => {
       ])
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
-    expect(result).toEqual({ checked: 0, skippedEconomics: 0, migrated: 0, findings: [] });
+    expect(result).toEqual({ checked: 0, skippedEconomics: 0, migrated: 0, findings: [], failures: [] });
     expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
   });
 
@@ -1547,5 +1547,37 @@ describe("runTermRenewalSweep", () => {
     expect((await runTermRenewalSweep(noNewBillingDeps, { now: NOW })).findings[0]?.kind).toBe(
       "migration_failed"
     );
+  });
+});
+
+/**
+ * The 2026-08-28/29 incident: two consecutive migration_failed findings
+ * recorded ok=true, error_count=0, because the recorder counts only the
+ * errors/failures keys and these sweeps reported failures under findings.
+ * Day one paged nothing; day two paged only because a retry budget tripped
+ * the slow threshold. failures[] is the channel the recorder counts, so a
+ * failed migration pages as a partial failure the same night.
+ */
+describe("failures mirror migration_failed findings for the run recorder", () => {
+  it("is empty when nothing failed", async () => {
+    const result = await runTermRenewalSweep(makeDeps(), { now: NOW });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("carries one line per migration_failed, naming tenant, vm, and detail", async () => {
+    const deps = makeDeps({
+      backupBusinessData: vi.fn(async () => {
+        throw new Error("ssh down");
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    const failed = result.findings.filter((f) => f.kind === "migration_failed");
+    expect(failed.length).toBeGreaterThan(0);
+    expect(result.failures).toHaveLength(failed.length);
+    for (const f of failed) {
+      expect(result.failures.join(" ")).toContain(f.businessName);
+      expect(result.failures.join(" ")).toContain(String(f.vmId));
+      expect(result.failures.join(" ")).toContain(f.detail);
+    }
   });
 });

@@ -68,6 +68,7 @@ import {
   tenantVmId,
   type TermRenewalSweepDeps
 } from "@/lib/vps/term-renewal-sweep";
+import { sweepFailureLines } from "@/lib/vps/term-renewal-sweep";
 
 const SWEEP_REQUESTED_BY = "contract-upgrade-sweep";
 
@@ -101,6 +102,8 @@ export type ContractUpgradeSweepResult = {
   alreadyCovered: number;
   migrated: number;
   findings: ContractUpgradeSweepFinding[];
+  /** migration_failed lines for the run recorder; see TermRenewalSweepResult.failures. */
+  failures: string[];
 };
 
 export type ContractUpgradeSweepOptions = {
@@ -514,5 +517,11 @@ export async function runContractUpgradeSweep(
     break;
   }
 
-  return { checked: contractTenants.length, alreadyCovered, migrated, findings };
+  return {
+    checked: contractTenants.length,
+    alreadyCovered,
+    migrated,
+    findings,
+    failures: sweepFailureLines(findings)
+  };
 }
