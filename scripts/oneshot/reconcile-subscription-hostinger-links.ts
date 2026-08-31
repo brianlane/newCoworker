@@ -22,6 +22,9 @@
  *
  * Stamp is fill-only (`onlyIfMissing`): a live row that already has a
  * different Hostinger id is a partial cutover and is skipped, not overwritten.
+ * The planner stamps at most once per business, from `businesses.hostinger_vps_id`
+ * when that VM is assigned, and refuses when leftover `assigned` inventory
+ * rows disagree (a stale_assigned_row must not supply the id).
  * Cancel uses `cancelSubscriptionIfStripeless` so a checkout that attaches a
  * Stripe id between the plan and the write cannot be cancelled.
  *
@@ -73,6 +76,17 @@ const { data: inventory, error: invErr } = await db
   .select("vm_id, state, assigned_business_id, hostinger_billing_subscription_id");
 if (invErr) throw new Error(`read vps_inventory: ${invErr.message}`);
 
+const { data: businesses, error: bizErr } = await db
+  .from("businesses")
+  .select("id, hostinger_vps_id");
+if (bizErr) throw new Error(`read businesses: ${bizErr.message}`);
+
+const currentVmByBusiness = new Map<string, number>();
+for (const row of (businesses ?? []) as Array<{ id: string; hostinger_vps_id: string | null }>) {
+  const vmId = Number.parseInt(row.hostinger_vps_id ?? "", 10);
+  if (Number.isFinite(vmId) && vmId > 0) currentVmByBusiness.set(row.id, vmId);
+}
+
 const { plans, skips } = planSubscriptionHostingerReconcile({
   subscriptions: (subs ?? []) as Array<{
     id: string;
@@ -88,7 +102,8 @@ const { plans, skips } = planSubscriptionHostingerReconcile({
     assigned_business_id: string | null;
     hostinger_billing_subscription_id: string | null;
   }>,
-  businessIds: BUSINESS_ID ? new Set([BUSINESS_ID]) : null
+  businessIds: BUSINESS_ID ? new Set([BUSINESS_ID]) : null,
+  currentVmByBusiness
 });
 
 console.log(`plans=${plans.length} skips=${skips.length}`);
@@ -118,8 +133,10 @@ if (plans.length === 0) {
 
 const stamped: string[] = [];
 const canceled: string[] = [];
+const stampErrors: string[] = [];
 for (const plan of plans) {
-  if (plan.kind === "stamp") {
+  if (plan.kind !== "stamp") continue;
+  try {
     const wrote = await persistHostingerBillingIdOnLiveSubscription(
       plan.businessId,
       plan.hostingerBillingSubscriptionId,
@@ -138,8 +155,12 @@ for (const plan of plans) {
       );
     }
     stamped.push(plan.subscriptionId);
-    continue;
+  } catch (err) {
+    stampErrors.push(err instanceof Error ? err.message : String(err));
   }
+}
+for (const plan of plans) {
+  if (plan.kind !== "cancel_pending") continue;
   const flipped = await cancelSubscriptionIfStripeless(plan.subscriptionId);
   const { data: readback, error } = await db
     .from("subscriptions")
@@ -157,6 +178,9 @@ for (const plan of plans) {
         `(status=${readback?.status} stripe=${readback?.stripe_subscription_id ?? "null"})`
     );
   }
+}
+if (stampErrors.length > 0) {
+  throw new Error(`stamp failed after pending cancels ran: ${stampErrors.join("; ")}`);
 }
 
 await recordOneshotApplied(db, {

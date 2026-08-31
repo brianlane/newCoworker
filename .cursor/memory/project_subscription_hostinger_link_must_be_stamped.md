@@ -16,6 +16,6 @@ Going forward:
 - `orchestrateProvisioning` stamps the live row after every successful provision (skip-payment and HQ onboard included). Never write null (that wipes a known link).
 - Checkout activation and skip-payment call `cancelUnpaidPendingSiblings`, which uses `cancelSubscriptionIfStripeless` so a mid-flight Stripe attach cannot be cancelled.
 - The audit joins via inventory as a fallback and lists unpaid pending carts in their own section, not as a missing box.
-- Backfill: `scripts/oneshot/reconcile-subscription-hostinger-links.ts` (fill-only stamp, CAS cancel).
+- Backfill: `scripts/oneshot/reconcile-subscription-hostinger-links.ts` (fill-only stamp, CAS cancel). Stamp source is `businesses.hostinger_vps_id` when that VM is assigned. Leftover `stale_assigned_row` inventory must not supply the id; if assigned rows disagree and there is no current VM, skip the stamp and still cancel unpaid pending carts.
 
 Do not infer the owner of a Hostinger sub from the VM list alone when inventory already names the business. Do not cancel a `pending` row that has a `stripe_subscription_id`.

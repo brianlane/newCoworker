@@ -122,17 +122,109 @@ export function liveSubscriptionForBusiness(
   return newest;
 }
 
+function assignedInventoryForBusiness(
+  businessId: string,
+  inventory: ReadonlyArray<HostingerLinkInventory>
+): HostingerLinkInventory[] {
+  const out: HostingerLinkInventory[] = [];
+  for (const row of inventory) {
+    if (row.state === "assigned" && row.assigned_business_id === businessId) {
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+function highestVm(rows: ReadonlyArray<HostingerLinkInventory>): HostingerLinkInventory {
+  let picked = rows[0]!;
+  for (const row of rows) {
+    if (row.vm_id > picked.vm_id) picked = row;
+  }
+  return picked;
+}
+
+/**
+ * One assigned inventory row to copy a Hostinger billing id from, or a skip.
+ *
+ * A leftover `stale_assigned_row` (old box still `assigned` after
+ * `businesses.hostinger_vps_id` moved) must not supply the id. Prefer the
+ * current VM when the caller knows it. With no current VM, stamp only when
+ * every assigned row agrees on the same non-null id.
+ *
+ * `null` means this business has no assigned inventory, so there is nothing
+ * to stamp and nothing to skip.
+ */
+export function pickAssignedStampSource(
+  businessId: string,
+  inventory: ReadonlyArray<HostingerLinkInventory>,
+  currentVmByBusiness?: ReadonlyMap<string, number> | null
+):
+  | { row: HostingerLinkInventory & { hostinger_billing_subscription_id: string } }
+  | { skip: string }
+  | null {
+  const assigned = assignedInventoryForBusiness(businessId, inventory);
+  const currentVmId = currentVmByBusiness?.get(businessId);
+
+  if (currentVmId != null) {
+    const current = assigned.find((row) => row.vm_id === currentVmId) ?? null;
+    if (!current) {
+      if (assigned.length === 0) return null;
+      return {
+        skip:
+          `business points at srv${currentVmId} but no assigned inventory row for that VM ` +
+          `(leftover assigned: ${assigned.map((row) => row.vm_id).join(", ")}); ` +
+          "refusing to stamp from a stale_assigned_row"
+      };
+    }
+    const id = current.hostinger_billing_subscription_id;
+    if (!id) {
+      return {
+        skip: `vm ${current.vm_id} is assigned but inventory has no Hostinger billing id`
+      };
+    }
+    return { row: { ...current, hostinger_billing_subscription_id: id } };
+  }
+
+  const distinct = new Set(
+    assigned.map((row) => row.hostinger_billing_subscription_id ?? "")
+  );
+  if (distinct.size > 1) {
+    const detail = assigned
+      .map((row) => `vm ${row.vm_id}=${row.hostinger_billing_subscription_id ?? "null"}`)
+      .join(", ");
+    return {
+      skip:
+        `assigned inventory rows disagree on Hostinger billing id (${detail}): ` +
+        "refusing to stamp a live subscription from a leftover assigned row"
+    };
+  }
+  const first = assigned[0];
+  if (!first) return null;
+  const id = first.hostinger_billing_subscription_id;
+  if (!id) {
+    return {
+      skip: `vm ${first.vm_id} is assigned but inventory has no Hostinger billing id`
+    };
+  }
+  return { row: { ...highestVm(assigned), hostinger_billing_subscription_id: id } };
+}
+
 /**
  * What to write so subscription rows and inventory agree, and leftover
  * unpaid pending carts next to a live sibling are closed.
  *
  * Stamp is fill-only: a live row that already has a *different* Hostinger
- * id is a partial cutover and is skipped, not overwritten.
+ * id is a partial cutover and is skipped, not overwritten. At most one
+ * stamp per business, from {@link pickAssignedStampSource}, so a leftover
+ * assigned inventory row cannot race a later stamp and abort pending
+ * cancels.
  */
 export function planSubscriptionHostingerReconcile(args: {
   subscriptions: ReadonlyArray<HostingerLinkSubscription>;
   inventory: ReadonlyArray<HostingerLinkInventory>;
   businessIds?: ReadonlySet<string> | null;
+  /** `businesses.hostinger_vps_id` parsed to a number. Prefer this VM. */
+  currentVmByBusiness?: ReadonlyMap<string, number> | null;
 }): { plans: ReconcilePlan[]; skips: ReconcileSkip[] } {
   const plans: ReconcilePlan[] = [];
   const skips: ReconcileSkip[] = [];
@@ -146,51 +238,46 @@ export function planSubscriptionHostingerReconcile(args: {
     if (row.assigned_business_id) businesses.add(row.assigned_business_id);
   }
 
-  for (const row of args.inventory) {
-    if (row.state !== "assigned" || !row.assigned_business_id) continue;
-    if (!inScope(row.assigned_business_id)) continue;
-    if (!row.hostinger_billing_subscription_id) {
-      skips.push({
-        kind: "skip",
-        businessId: row.assigned_business_id,
-        reason: `vm ${row.vm_id} is assigned but inventory has no Hostinger billing id`
-      });
-      continue;
-    }
-    const live = liveSubscriptionForBusiness(row.assigned_business_id, args.subscriptions);
-    if (!live) {
-      skips.push({
-        kind: "skip",
-        businessId: row.assigned_business_id,
-        reason: `vm ${row.vm_id} is assigned but this business has no live subscription row`
-      });
-      continue;
-    }
-    if (live.hostinger_billing_subscription_id === row.hostinger_billing_subscription_id) {
-      continue;
-    }
-    if (live.hostinger_billing_subscription_id) {
-      skips.push({
-        kind: "skip",
-        businessId: row.assigned_business_id,
-        reason:
-          `vm ${row.vm_id} inventory id ${row.hostinger_billing_subscription_id} disagrees with ` +
-          `live subscription ${live.id} id ${live.hostinger_billing_subscription_id} (partial cutover)`
-      });
-      continue;
-    }
-    plans.push({
-      kind: "stamp",
-      businessId: row.assigned_business_id,
-      subscriptionId: live.id,
-      hostingerBillingSubscriptionId: row.hostinger_billing_subscription_id,
-      vmId: row.vm_id
-    });
-  }
-
   for (const businessId of businesses) {
     if (!inScope(businessId)) continue;
+    const source = pickAssignedStampSource(
+      businessId,
+      args.inventory,
+      args.currentVmByBusiness
+    );
     const live = liveSubscriptionForBusiness(businessId, args.subscriptions);
+    if (source && "skip" in source) {
+      skips.push({ kind: "skip", businessId, reason: source.skip });
+    } else if (source) {
+      if (!live) {
+        skips.push({
+          kind: "skip",
+          businessId,
+          reason: `vm ${source.row.vm_id} is assigned but this business has no live subscription row`
+        });
+      } else if (
+        live.hostinger_billing_subscription_id !== source.row.hostinger_billing_subscription_id
+      ) {
+        if (live.hostinger_billing_subscription_id) {
+          skips.push({
+            kind: "skip",
+            businessId,
+            reason:
+              `vm ${source.row.vm_id} inventory id ${source.row.hostinger_billing_subscription_id} disagrees with ` +
+              `live subscription ${live.id} id ${live.hostinger_billing_subscription_id} (partial cutover)`
+          });
+        } else {
+          plans.push({
+            kind: "stamp",
+            businessId,
+            subscriptionId: live.id,
+            hostingerBillingSubscriptionId: source.row.hostinger_billing_subscription_id,
+            vmId: source.row.vm_id
+          });
+        }
+      }
+    }
+
     if (!live) continue;
     for (const row of args.subscriptions) {
       if (row.business_id !== businessId) continue;
