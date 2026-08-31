@@ -155,8 +155,13 @@ export const EDGE_REQUEST_CEILING_MS = 150_000;
  * For those sweeps the real cliff is their own `maxDuration`: past it Vercel
  * truncates the run, and a migration cut off mid-cutover is the exact failure
  * the whole path is built to avoid.
+ *
+ * Deliberately NOT exported: `evaluateSweepHealth` below is the only caller,
+ * and the dead-export ratchet is right that an export only tests reach is
+ * dead code wearing coverage. The tests read `SWEEP_EXPECTATIONS[...].slowMs`
+ * directly, which is the same data this reads.
  */
-export function sweepSlowMs(sweep: string): number {
+function sweepSlowMs(sweep: string): number {
   return SWEEP_EXPECTATIONS[sweep]?.slowMs ?? SWEEP_SLOW_MS;
 }
 

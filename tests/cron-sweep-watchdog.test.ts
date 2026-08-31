@@ -8,7 +8,6 @@ import {
   WATCHDOG_SWEEP,
   evaluateSweepHealth,
   latestRuns,
-  sweepSlowMs,
   type HttpFailureRow,
   type SweepRunRow
 } from "@/lib/cron/sweep-watchdog";
@@ -19,6 +18,15 @@ import {
 } from "@/lib/cron/owner-operator-fallback";
 
 const NOW = Date.parse("2026-08-08T03:30:00.000Z");
+
+/**
+ * The line a sweep is actually judged against. Reads the registry directly
+ * rather than importing the module's own helper, which is deliberately
+ * unexported (an export only tests call is dead code wearing coverage).
+ */
+function slowLineFor(sweep: string): number {
+  return SWEEP_EXPECTATIONS[sweep]?.slowMs ?? SWEEP_SLOW_MS;
+}
 
 function minutesBefore(minutes: number): string {
   return new Date(NOW - minutes * 60_000).toISOString();
@@ -221,7 +229,7 @@ describe("evaluateSweepHealth", () => {
   it("still reports a migration sweep closing on its OWN maxDuration", () => {
     // Raised, not removed. Past this line Vercel truncates the run, and a
     // migration cut off mid-cutover is the failure the path exists to avoid.
-    const slowMs = sweepSlowMs("vps-term-renewal-sweep");
+    const slowMs = slowLineFor("vps-term-renewal-sweep");
     const runs = healthyFleet().map((r) =>
       r.sweep === "vps-term-renewal-sweep" ? { ...r, duration_ms: slowMs + 1 } : r
     );
@@ -435,7 +443,7 @@ describe("SWEEP_EXPECTATIONS covers exactly the scheduled pass-through fleet", (
     for (const sweep of Object.keys(SWEEP_EXPECTATIONS)) {
       const maxDuration = routeMaxDurationSeconds(sweep);
       if (maxDuration === null || maxDuration * 1000 <= EDGE_REQUEST_CEILING_MS) continue;
-      expect(sweepSlowMs(sweep), `${sweep} is judged on the default line`).toBeGreaterThan(
+      expect(slowLineFor(sweep), `${sweep} is judged on the default line`).toBeGreaterThan(
         SWEEP_SLOW_MS
       );
     }
