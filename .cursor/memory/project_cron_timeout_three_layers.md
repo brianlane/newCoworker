@@ -90,3 +90,33 @@ per-minute job with a deliberately sub-cadence timeout (edge-residency-replay
 was 50s) may need `maxDuration` lowered instead of the timeout raised, because
 the sweep's lib may take no claim or advisory lock and overlapping runs would
 double-apply. See [[project-main-run-watch-trap]].
+
+**The SLOW finding is per-sweep since PR #1759, and the old global line was
+crying wolf.** `SWEEP_SLOW_MS` (120s) exists to warn that a run is about to
+lose its Edge result at the 150s 504. That warning is EMPTY for the seven
+sweeps whose route deliberately declares more than the chain can hand it (the
+`KNOWN_ABOVE_EDGE_CEILING` list in `tests/cron-timeout-parity.test.ts`): they
+lose the Edge result on every run that does real work, knowingly, and Vercel
+finishes the job in the background regardless.
+
+`vps-term-renewal-sweep` proved it on 2026-08-30. It paged SLOW for a 552s
+run that had SUCCEEDED, having bought a term-priced box and migrated KYP onto
+it, which takes 10 to 30 minutes by nature. The finding's own advice, "shrink
+the per-run batch", was unfollowable: that sweep migrates AT MOST ONE tenant
+per run, which is a hard safety property, not a tunable.
+
+So `SWEEP_EXPECTATIONS` entries now carry an optional `slowMs`, set to 80% of
+the route's own `maxDuration` (240s for the four 300s routes, 1,440s for the
+three 1800s ones), and the finding's action text changes with it: for those
+sweeps the real cliff is Vercel truncating the run mid-flight, not the 504.
+`tests/cron-sweep-watchdog.test.ts` ties every override to the `maxDuration`
+its route actually declares, in BOTH directions, so lowering a route's budget
+without revisiting the threshold cannot silently mute the sweep, and a new
+long-budget route cannot be left on the default line.
+
+Two things this episode also settled, both non-bugs: the Aug 28/29 term
+migrations that failed with `error_count = 0` predate PR #1755 (merged
+2026-08-30 06:03 UTC), so the failures[] mirroring is fine; and the long runs
+do NOT feed the HTTP burst pager, since the route records its own
+`cron_sweep_runs` row and the 504 lands as an isolated anomaly well under the
+3-per-hour / 5-per-window bar.
