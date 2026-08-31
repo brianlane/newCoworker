@@ -7,6 +7,10 @@
  * Usage: npx tsx debug/audit-fleet-terms.ts
  */
 import { loadEnv, makeHostingerClient } from "./_shared.ts";
+import {
+  businessIdForHostingerBillingSub,
+  isLiveRowMissingHostingerBillingId
+} from "../src/lib/vps/hostinger-tenant-link.ts";
 
 loadEnv();
 const hostinger = makeHostingerClient();
@@ -20,8 +24,8 @@ const [billingSubs, vms] = await Promise.all([
 
 const { data: subs, error: subErr } = await db
   .from("subscriptions")
-  .select("business_id, tier, status, billing_period, commitment_months, hostinger_billing_subscription_id, renewal_at")
-  .in("status", ["active", "pending"]);
+  .select("id, business_id, tier, status, billing_period, commitment_months, hostinger_billing_subscription_id, renewal_at, stripe_subscription_id")
+  .in("status", ["active", "pending", "past_due"]);
 if (subErr) throw new Error(subErr.message);
 
 const { data: bizRows, error: bizErr } = await db
@@ -34,15 +38,35 @@ const { data: pool, error: poolErr } = await db.from("vps_inventory").select("*"
 if (poolErr) throw new Error(poolErr.message);
 
 const vmById = new Map(vms.map((v) => [String(v.id), v]));
-const subByHostingerId = new Map(
-  (subs ?? []).map((s) => [s.hostinger_billing_subscription_id as string | null, s])
-);
+const subRows = subs ?? [];
+const inventoryRows = (pool ?? []).map((row) => ({
+  state: String(row.state ?? ""),
+  assigned_business_id: (row.assigned_business_id as string | null) ?? null,
+  hostinger_billing_subscription_id:
+    (row.hostinger_billing_subscription_id as string | null) ?? null
+}));
+
+type SubRow = (typeof subRows)[number];
+const liveSubByBusiness = new Map<string, SubRow>();
+for (const s of subRows) {
+  if (s.status === "active" || s.status === "past_due") {
+    liveSubByBusiness.set(s.business_id as string, s);
+  }
+}
 
 console.log("=== Hostinger billing subscriptions ===");
 for (const bs of billingSubs) {
   const vm = bs.resource_id ? vmById.get(String(bs.resource_id)) : undefined;
-  const sub = subByHostingerId.get(bs.id);
-  const biz = sub ? bizById.get(sub.business_id as string) : undefined;
+  const businessId = businessIdForHostingerBillingSub(bs.id, {
+    subscriptions: subRows.map((s) => ({
+      business_id: s.business_id as string,
+      hostinger_billing_subscription_id:
+        (s.hostinger_billing_subscription_id as string | null) ?? null
+    })),
+    inventory: inventoryRows
+  });
+  const live = businessId ? liveSubByBusiness.get(businessId) : undefined;
+  const biz = businessId ? bizById.get(businessId) : undefined;
   console.log(
     [
       `sub=${bs.id}`,
@@ -51,9 +75,11 @@ for (const bs of billingSubs) {
       `item=${bs.item_id ?? "?"}`,
       `next_billing=${bs.next_billing_at ?? "?"}`,
       `vm=${bs.resource_id ?? "?"}${vm ? ` (${vm.plan ?? "?"}, ${vm.hostname ?? "?"}, ${vm.state})` : ""}`,
-      sub
-        ? `tenant=${biz?.name ?? sub.business_id} tier=${sub.tier} contract=${sub.billing_period} (${sub.commitment_months}mo, renews ${String(sub.renewal_at ?? "?").slice(0, 10)})`
-        : "tenant=UNLINKED"
+      live
+        ? `tenant=${biz?.name ?? businessId} tier=${live.tier} contract=${live.billing_period} (${live.commitment_months}mo, renews ${String(live.renewal_at ?? "?").slice(0, 10)})`
+        : businessId
+          ? `tenant=${biz?.name ?? businessId} (inventory-linked, no live subscription row)`
+          : "tenant=UNLINKED"
     ].join("  ")
   );
 }
@@ -66,12 +92,32 @@ for (const vm of vms) {
   }
 }
 
-console.log("\n=== Active subscriptions with no Hostinger billing id ===");
-for (const s of subs ?? []) {
-  if (!s.hostinger_billing_subscription_id) {
-    const biz = bizById.get(s.business_id as string);
-    console.log(`tenant=${biz?.name ?? s.business_id} tier=${s.tier} contract=${s.billing_period} status=${s.status}`);
+console.log("\n=== Live subscriptions with no Hostinger billing id ===");
+for (const s of subRows) {
+  if (
+    !isLiveRowMissingHostingerBillingId({
+      status: String(s.status),
+      hostinger_billing_subscription_id:
+        (s.hostinger_billing_subscription_id as string | null) ?? null
+    })
+  ) {
+    continue;
   }
+  const biz = bizById.get(s.business_id as string);
+  console.log(
+    `tenant=${biz?.name ?? s.business_id} tier=${s.tier} contract=${s.billing_period} status=${s.status}`
+  );
+}
+
+console.log("\n=== Unpaid pending checkouts (abandoned carts, not a missing box) ===");
+for (const s of subRows) {
+  if (s.status !== "pending") continue;
+  if (s.stripe_subscription_id) continue;
+  const biz = bizById.get(s.business_id as string);
+  const hasLive = liveSubByBusiness.has(s.business_id as string);
+  console.log(
+    `tenant=${biz?.name ?? s.business_id} status=pending stripe=none siblingLive=${hasLive}`
+  );
 }
 
 console.log("\n=== vps_inventory pool ===");

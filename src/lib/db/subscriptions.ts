@@ -219,6 +219,94 @@ export async function getSubscription(
   return data as SubscriptionRow;
 }
 
+/**
+ * Live (active / past_due) subscription for a business, newest first.
+ *
+ * Distinct from {@link getSubscription}, which is newest-row-wins across
+ * every status: an abandoned `pending` checkout created after the paid
+ * row would shadow it there. Callers that stamp Hostinger billing or
+ * cancel leftover carts must look at the live row.
+ */
+export async function getLiveSubscription(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<SubscriptionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select()
+    .eq("business_id", businessId)
+    .in("status", ["active", "past_due"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return null;
+  return (data as SubscriptionRow | null) ?? null;
+}
+
+/**
+ * Write `hostingerBillingSubscriptionId` onto the live subscription row.
+ *
+ * Returns false when there is nothing to write: a null id (never wipe a
+ * known link), no live row, the live row already matches, or `onlyIfMissing`
+ * and the live row already has a different id (partial cutover: do not
+ * clobber). Throws on a write error.
+ */
+export async function persistHostingerBillingIdOnLiveSubscription(
+  businessId: string,
+  hostingerBillingSubscriptionId: string | null | undefined,
+  options?: { onlyIfMissing?: boolean; client?: SupabaseClient }
+): Promise<boolean> {
+  if (!hostingerBillingSubscriptionId) return false;
+  const client = options?.client;
+  const live = await getLiveSubscription(businessId, client);
+  if (!live) return false;
+  if (live.hostinger_billing_subscription_id === hostingerBillingSubscriptionId) {
+    return false;
+  }
+  if (options?.onlyIfMissing && live.hostinger_billing_subscription_id) {
+    return false;
+  }
+  await updateSubscription(
+    live.id,
+    { hostinger_billing_subscription_id: hostingerBillingSubscriptionId },
+    client
+  );
+  return true;
+}
+
+/**
+ * Close unpaid `pending` carts on a business that already has a live
+ * subscription. KIN's Aug 21 abandoned checkout sat next to the Aug 24
+ * paid row and made fleet audits print the tenant twice.
+ *
+ * Uses {@link cancelSubscriptionIfStripeless} so a checkout webhook that
+ * attaches a Stripe id between our read and write cannot be cancelled.
+ * Returns how many rows flipped.
+ */
+export async function cancelUnpaidPendingSiblings(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const live = await getLiveSubscription(businessId, client);
+  if (!live) return 0;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("status", "pending")
+    .is("stripe_subscription_id", null);
+  if (error) throw new Error(`cancelUnpaidPendingSiblings: ${error.message}`);
+  let canceled = 0;
+  for (const row of (data ?? []) as Array<{ id: string }>) {
+    if (row.id === live.id) continue;
+    if (await cancelSubscriptionIfStripeless(row.id, client)) canceled += 1;
+  }
+  return canceled;
+}
+
 export async function getSubscriptionByStripeSubscriptionId(
   stripeSubscriptionId: string,
   client?: SupabaseClient

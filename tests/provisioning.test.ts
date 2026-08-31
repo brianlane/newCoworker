@@ -106,8 +106,11 @@ vi.mock("@/lib/email/ops-notify", () => ({
 }));
 
 vi.mock("@/lib/db/subscriptions", () => ({
-  getSubscription: vi.fn().mockResolvedValue(null)
+  getSubscription: vi.fn().mockResolvedValue(null),
+  persistHostingerBillingIdOnLiveSubscription: vi.fn().mockResolvedValue(false)
 }));
+
+import { persistHostingerBillingIdOnLiveSubscription } from "@/lib/db/subscriptions";
 
 vi.mock("@/lib/email/tenant-mailbox", () => ({
   ensureTenantMailbox: vi.fn().mockResolvedValue({
@@ -334,6 +337,44 @@ describe("provisioning/orchestrate", () => {
       billingPeriod: null,
    hostingerTerm: null
     });
+  });
+
+  it("stamps the Hostinger billing id on the live subscription after provision", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue({
+      ...makeVpsStub("123"),
+      hostingerBillingSubscriptionId: "hsub-1"
+    });
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    expect(persistHostingerBillingIdOnLiveSubscription).toHaveBeenCalledWith("biz-uuid-1", "hsub-1");
+  });
+
+  it("logs and still returns success when the Hostinger billing-id stamp fails", async () => {
+    vi.mocked(persistHostingerBillingIdOnLiveSubscription).mockRejectedValueOnce(new Error("db down"));
+    const vpsProvisioner = vi.fn().mockResolvedValue({
+      ...makeVpsStub("123"),
+      hostingerBillingSubscriptionId: "hsub-1"
+    });
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    expect(result.vpsId).toBe("123");
+
+    vi.mocked(persistHostingerBillingIdOnLiveSubscription).mockRejectedValueOnce("db down");
+    const result2 = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(result2.vpsId).toBe("123");
   });
 
   // Migrations pass the moment their route budget started, not a precomputed

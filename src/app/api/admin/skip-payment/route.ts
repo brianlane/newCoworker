@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
-import { getSubscription, createSubscription, updateSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, createSubscription, updateSubscription, cancelUnpaidPendingSiblings } from "@/lib/db/subscriptions";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { logAdminAction } from "@/lib/admin/audit";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -31,6 +31,14 @@ export async function POST(request: Request) {
         stripe_customer_id: null,
         stripe_subscription_id: null
       });
+    }
+
+    try {
+      await cancelUnpaidPendingSiblings(body.businessId);
+    } catch (err) {
+      // Activation already landed. Leftover pending carts are cleaned by
+      // the reconcile one-shot if this path is hit.
+      void err;
     }
 
     const result = await orchestrateProvisioning({
