@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c9de52df-55f3-4de1-8e50-2ff568cd40eb
-  modified: 2026-08-07T16:50:29.084Z
+  modified: 2026-08-27T00:00:00.000Z
 ---
 
 `db.glwmorjxzkzpcfffwvkk.supabase.co` publishes **only an AAAA record**, no A
@@ -27,12 +27,23 @@ made the debug readers refuse a transaction-pooler fallback outright.
 
 **The pooler region is us-east-2, verified, not assumed.**
 `aws-1-us-east-1.pooler.supabase.com` answers `tenant/user
-postgres.glwmorjxzkzpcfffwvkk not found`; `aws-1-us-east-2` serves it. Several
-entries in the local `.env` (`DATABASE_URL`, `POSTGRES_URL`,
-`POSTGRES_PRISMA_URL`, `POSTGRES_URL_NON_POOLING`) point at us-east-1 and are
-wrong. `DIRECT_DATABASE_URL` is correct. This matters because
-`debug/cron-http-stats.ts` falls back from `DIRECT_DATABASE_URL` to
-`DATABASE_URL`, and that fallback is broken.
+postgres.glwmorjxzkzpcfffwvkk not found`; `aws-1-us-east-2` serves it.
+**Re-checked 2026-08-27: every local `.env` entry now points at us-east-2**
+(`DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`,
+`POSTGRES_URL_NON_POOLING`, `DIRECT_DATABASE_URL`), so the old warning that
+several were on us-east-1 no longer holds and the
+`debug/cron-http-stats.ts` fallback from `DIRECT_DATABASE_URL` to
+`DATABASE_URL` is no longer broken.
+
+**`SUPABASE_DB_URL` is not in `.env` at all.** Scripts that need raw SQL
+(PostgREST cannot read `information_schema` or `pg_catalog`) ask for that
+name specifically, `debug/generate-residency-ddl.ts` among them. Export it
+yourself from `DIRECT_DATABASE_URL` (identical to `POSTGRES_URL_NON_POOLING`:
+session pooler, 5432, us-east-2) before the run:
+`export SUPABASE_DB_URL="$DIRECT_DATABASE_URL"`. Verified working
+2026-08-27: the generator read the catalog and its 189 columns matched the
+live PostgREST OpenAPI exactly, which is also how you confirm you read the
+right database.
 
 **Port 5432, never 6543.** 5432 is the session pooler; the transaction pooler
 on 6543 cannot run migrations.

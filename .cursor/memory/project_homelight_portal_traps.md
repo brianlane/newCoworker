@@ -191,3 +191,42 @@ the click races the SPA re-render onto the wrong referral (observed live).
 
 See [[project_homelight_claim_click_silent_noop]] for the never-guess-selectors
 rule this account keeps re-learning.
+
+## homelight-three-price-channels
+
+HomeLight states a referral's price on THREE channels and they are not one
+number. Measured 2026-08-28 over every live transfer on Amy's account:
+
+| channel | figure | where it lands |
+| --- | --- | --- |
+| SMS alert | rounded to the nearest $1K ("$379K") | `{{vars.price}}`, `price_digits`, `price_band` |
+| details email | exact ("$379,000") | `{{vars.email_price}}` |
+| IVR announcement | exact, read aloud on the transfer | transcript only, nothing parses it |
+
+SMS = round(email) held on all five pairs where both existed ($468K/$468,000,
+$507K/$507,000, $515K/$514,600, $644K/$643,800, $379K/$379,000), which is the
+same relationship [[project_homelight_portal_traps]] already records for
+matchTemplates.
+
+**The new fact: the IVR can disagree with both.** Six transfers had both an
+SMS and a spoken figure. Five matched ($800K/$800,000, $464K/$463,559,
+$560K/$560,000, $515K/$514,600, $420K/$419,500). One did not: Rhonda J.,
+85205, 2026-08-28, where the text and the email both said $379,000 and the
+robot said **$437,900**. So when they differ, the WRITTEN pair is corroborated
+twice and the announcement is the lone outlier. Do not assume the text is the
+stale one.
+
+**How to apply:**
+- `price_band` (the $1M owner-direct gate in the `route` step) is computed from
+  the ROUNDED SMS figure. If HomeLight under-reports, a genuine $1M+ lead gets
+  offered to the team instead of held for Amy. Closest observed: $976K and
+  $910K, no miss yet.
+- The live-transfer flow sets `briefFromSmsContaining: "New HomeLight"`, so the
+  AI is handed the raw alert text with the rounded figure and NOTHING labelling
+  it as HomeLight's record rather than our valuation. See
+  [[project_ai_invents_callback_numbers_on_voicemail]] for why an unlabelled
+  figure in a brief is dangerous, and `invented_amount` in
+  `supabase/functions/_shared/call_integrity.ts` for the detector.
+- Three different 85205 sellers (Kim Aug 5, Nancy Aug 24, Rhonda Aug 28) all
+  came through at $379K. Only Rhonda's email was captured, so whether that is a
+  zip-level default is UNPROVEN; do not repeat it as fact.
