@@ -71,3 +71,49 @@ block them. PR #1632 makes that reach his OWNER coworker; before it, an
 inbound message always ran the CUSTOMER engine, which would have pitched him
 and filed him as a lead. See [[owner-surface-registry]].
 
+
+**Update 2026-08-31 (PR #1759). Two things closed, and they are separate.**
+
+*The record now corrects itself.* A `sent` notification row meant Meta
+ACCEPTED the message, and nothing ever went back when the verdict arrived
+~15s later, so KYP held twenty WhatsApp alert rows marked `sent` that Meta
+had dropped. Both dispatchers (`src/lib/notifications/dispatch.ts` and its
+Deno mirror `supabase/functions/notifications/index.ts`) now stamp the wamid
+into `notifications.payload.wamid`, and a `failed` receipt calls
+`markWhatsAppAlertUndelivered` to find that row and flip it to `failed`. The
+dashboard, the unread badge and the liveness sweep stop counting delivery
+that did not happen.
+
+Three traps that shaped it, all worth keeping:
+
+- **Do not gate the correction on the transcript's outcome.** The first draft
+  ran it only when `applyMessengerDeliveryStatus` returned `applied`, which
+  blocks the exact two cases it exists for: `deliverWhatsApp`'s transcript
+  append is best-effort and only LOGS on failure (so a wamid can be on the
+  alert row and absent from `messenger_messages`, giving `not_found`), and a
+  redelivered receipt gives `stale` while the alert row may still need its
+  first correction. Bugbot caught it. The alert row and the transcript are
+  independent records; neither implies the other.
+- **A corrected row is itself the proof the message was ours**, so it earns
+  the `whatsapp_message_failed` log even when the transcript could not place
+  it. A receipt that neither applies nor corrects stays silent, which is what
+  keeps a human's Meta-inbox reply from raising an alarm.
+- **`notifications` is a PURGED residency table, and this read stays central
+  anyway.** It is the read half of a read-modify-write whose write is
+  central, on a row seconds old (far inside the 72h purge floor). Routing the
+  read box-ward would find a copy whose central twin the UPDATE then misses,
+  losing the correction while reporting success. Recorded in
+  `PURGED_READ_CENTRAL_BY_DESIGN`.
+
+*KYP's owner-alert leg is switched OFF.* James confirmed he is not fixing the
+billing, so `notification_preferences.whatsapp_urgent = false` here
+(`scripts/oneshot/disable-undeliverable-whatsapp-alerts.ts`, ledger id 259,
+applied 2026-08-31). This gives up nothing: 19 of 19 receipted sends failed,
+and with `last_user_message_at` at epoch zero the free window has never once
+been open, so no alert has ever reached him on this channel. The integration
+stays connected and inbound customer threads are untouched, since those are
+customer-initiated and unbilled. The script is generic and evidence-gated
+with four refusals and no override flag (never-any-inbound, >= 5 receipts,
+all failed, every code in a permanent set that holds only 131042), because
+muting a channel that could work is the worse error. Re-enable from the
+dashboard if he ever fixes billing or messages the business number.
