@@ -2,7 +2,7 @@
 name: meta-app-review
 description: Meta app review state, permission scope audit, and Testing-page sweep rules
 metadata:
- type: project
+  type: project
 ---
 
 ## meta-app-review-state
@@ -39,47 +39,47 @@ Use-case Testing rows (Review > Testing) decay: each test call counts for only
 30 days, with up to 24h reporting lag. Keep-warm mechanics, proven Aug 10:
 
 - The Meta Review Sandbox tenant (e2b7a1c4-0000-4000-8000-000000000002) holds a
- never-expiring PAGE token (page 1202310049632520, IG 17841425768135944,
- test form "NCW smoke test form" 1046869914952916) and a WABA token
- (waba 946708858446787, phone 1267081729812869, 60-day expiry from Jul 20,
- so ~Sep 18). Read-only GETs exercise 10 perms: leadgen_forms + /leads
- (leads_retrieval AND pages_manage_ads), page fan_count
- (pages_read_engagement), subscribed_apps (pages_manage_metadata),
- conversations (pages_messaging), conversations?platform=instagram
- (instagram_manage_messages), IG username (instagram_basic),
- content_publishing_limit (instagram_content_publish), WABA phone_numbers/name
- (whatsapp_business_management), phone quality + business_profile
- (whatsapp_business_messaging). /{page}/ads_posts 403s on a page token; skip.
+  never-expiring PAGE token (page 1202310049632520, IG 17841425768135944,
+  test form "NCW smoke test form" 1046869914952916) and a WABA token
+  (waba 946708858446787, phone 1267081729812869, 60-day expiry from Jul 20,
+  so ~Sep 18). Read-only GETs exercise 10 perms: leadgen_forms + /leads
+  (leads_retrieval AND pages_manage_ads), page fan_count
+  (pages_read_engagement), subscribed_apps (pages_manage_metadata),
+  conversations (pages_messaging), conversations?platform=instagram
+  (instagram_manage_messages), IG username (instagram_basic),
+  content_publishing_limit (instagram_content_publish), WABA phone_numbers/name
+  (whatsapp_business_management), phone quality + business_profile
+  (whatsapp_business_messaging). /{page}/ads_posts 403s on a page token; skip.
 - pages_show_list, public_profile, business_management, ads_read,
- ads_management need a USER token (Graph API Explorer): /me, /me/accounts,
- /me/businesses, /me/adaccounts, /act_992080513587562 reads. No user token is
- stored (meta_connections rows have user_token_encrypted NULL); the working
- pattern is Brian generates one in Explorer and drops it in .env as
- META_USER_TEST_TOKEN (short-lived, ~2h).
+  ads_management need a USER token (Graph API Explorer): /me, /me/accounts,
+  /me/businesses, /me/adaccounts, /act_992080513587562 reads. No user token is
+  stored (meta_connections rows have user_token_encrypted NULL); the working
+  pattern is Brian generates one in Explorer and drops it in .env as
+  META_USER_TEST_TOKEN (short-lived, ~2h).
 - Full refresh ran Aug 10 2026 (both halves, ~370 successful calls, zero Graph
- failures), so every submitted permission's 30-day test window runs to ~Sep 9.
- Runner scripts (gitignored): debug/.tmp-meta-keepwarm.ts (page+WABA tokens)
- and debug/.tmp-meta-user-keepwarm.ts (user token). Dashboard counters lag up
- to 24h.
+  failures), so every submitted permission's 30-day test window runs to ~Sep 9.
+  Runner scripts (gitignored): debug/.tmp-meta-keepwarm.ts (page+WABA tokens)
+  and debug/.tmp-meta-user-keepwarm.ts (user token). Dashboard counters lag up
+  to 24h.
 - The Marketing API Access Tier "500 calls / 85% success" counter counts ONLY
- ads (act_*) endpoints; leadgen/pages/IG/WhatsApp calls never move it (July's
- 92 such calls left it at 0). Cleared Aug 10: debug/.tmp-meta-tier-grinder.ts
- made 520/520 act_992080513587562 reads at 100% success in 100m, ~600 ads
- calls total that day. App is development_access tier; the binding budget is
- 300 ads-management calls per ROLLING hour per ad account (continuous decay,
- not a scheduled reset; CPU/time budgets are irrelevant at our volume). The
- grinder self-paces off x-app-usage / x-business-use-case-usage headers,
- whose percentages match the dashboard's rate-limit page exactly.
+  ads (act_*) endpoints; leadgen/pages/IG/WhatsApp calls never move it (July's
+  92 such calls left it at 0). Cleared Aug 10: debug/.tmp-meta-tier-grinder.ts
+  made 520/520 act_992080513587562 reads at 100% success in 100m, ~600 ads
+  calls total that day. App is development_access tier; the binding budget is
+  300 ads-management calls per ROLLING hour per ad account (continuous decay,
+  not a scheduled reset; CPU/time budgets are irrelevant at our volume). The
+  grinder self-paces off x-app-usage / x-business-use-case-usage headers,
+  whose percentages match the dashboard's rate-limit page exactly.
 - META_USER_LONG_TOKEN in .env: exchanged long-lived user token, NO expiry
- (data access to Nov 8 2026), all 15 scopes; reruns need no new Explorer
- token. Meta Developer Tools MCP (mcp.facebook.com/devtools) is registered at
- user scope and authenticated; next sessions get devtools_app_review /
- devtools_api_usage / devtools_compliance for dashboard-free status checks.
+  (data access to Nov 8 2026), all 15 scopes; reruns need no new Explorer
+  token. Meta Developer Tools MCP (mcp.facebook.com/devtools) is registered at
+  user scope and authenticated; next sessions get devtools_app_review /
+  devtools_api_usage / devtools_compliance for dashboard-free status checks.
 - NEVER run `debug/meta-reviewer-setup.ts --apply` while a review is pending:
- every apply ROTATES meta.reviewer@newcoworker.com's password and would break
- the credentials Meta already holds. Reviewer last_sign_in_at 2026-07-20.
+  every apply ROTATES meta.reviewer@newcoworker.com's password and would break
+  the credentials Meta already holds. Reviewer last_sign_in_at 2026-07-20.
 - Sandbox WABA stock templates sit FAILED/PENDING (pre-PR-#1137 es_US bug);
- out-of-window template sends on the sandbox will skip until re-registered.
+  out-of-window template sends on the sandbox will skip until re-registered.
 
 CAPI dataset auto-discovery is built on an endpoint that does not exist in
 Meta's public API. `POST /{page_id}/dataset` (src/lib/meta/client.ts
@@ -172,18 +172,18 @@ granted via Embedded Signup config_id, deliberately NOT in META_LOGIN_SCOPES).
 
 STILL NEEDED, not granted:
 - instagram_content_publish (REJECTED): the only blocker for IG publishing
- (src/lib/social/publish.ts; 4 social_posts rows, 1 published via app-role).
+  (src/lib/social/publish.ts; 4 social_posts rows, 1 published via app-role).
 - instagram_manage_comments (NEVER REQUESTED : real gap): we subscribe the
- `comments` field on the instagram object in the App Dashboard and turn
- each into an `instagram_comment` AiFlow trigger
- (src/lib/meta/webhook.ts processMetaCommentEvent). Either request it or
- delete the feature.
+  `comments` field on the instagram object in the App Dashboard and turn
+  each into an `instagram_comment` AiFlow trigger
+  (src/lib/meta/webhook.ts processMetaCommentEvent). Either request it or
+  delete the feature.
 - ads_management / ads_read / business_management / Marketing API Access
- Tier: required by Meta's "Conversions API for CRM for Platforms" doc, and
- only for the Conversion Leads loop. Production makes ZERO Marketing API
- ads calls otherwise. Tier read 602 calls but still "Limited access" on
- Aug 12: the tier must be SUBMITTED for review to actually upgrade
- (threshold is 500 calls in 15 days).
+  Tier: required by Meta's "Conversions API for CRM for Platforms" doc, and
+  only for the Conversion Leads loop. Production makes ZERO Marketing API
+  ads calls otherwise. Tier read 602 calls but still "Limited access" on
+  Aug 12: the tier must be SUBMITTED for review to actually upgrade
+  (threshold is 500 calls in 15 days).
 
 Aug 15 2026 submission prep: cart trimmed to the 6 keepers, and all six now
 show `use_case` and `data_use_checkup` COMPLETE. Only `api_precheck` (lags,
@@ -296,3 +296,45 @@ timezone): assert on the field, not the status. WATCH: Marketing API Access Tier
 review still PENDING), so the window is safe to ~Sep 8 2026; if the
 submission is STILL pending near then, run
 debug/.tmp-meta-tier-grinder.ts again (self-paces, ~90m).
+
+REVIEW DECIDED ~Aug 25 2026 (submission 1578655697247455, submitted Aug 17):
+APPROVED at advanced access: Marketing API Access Tier,
+instagram_manage_comments, instagram_content_publish (the July rejection is
+cleared; IG publishing now open to arbitrary customers), business_management,
+ads_management. REJECTED: ads_read only, same "Screencast Not Aligned"
+Policy 1.6 reason; Meta's guidance point 5 says to state in the resubmission
+that the app is server-to-server / uses stored tokens so the missing
+frontend login flow is expected, which is exactly our ads_read usage
+(Conversion Leads reads). ads_management supersedes ads_read for every Graph
+read in practice, so nothing is functionally blocked; resubmitting ads_read
+is optional polish and its Testing row stays warm to ~Sep 23 from the
+Aug 24 calls. 17 privileges now live at advanced. The tier is GRANTED:
+retire the grinder and the Sep 8 window watch permanently. Review freeze
+lifted: reviewer-setup --apply and use-case config edits are safe again.
+Post-decision sweep: README's "app-role-only until a resubmission" passage
+was the stale copy to fix (PR opened same day).
+
+ads_read PROVEN unnecessary Aug 28 2026 (debug/.tmp-ads-read-proof.ts,
+gitignored): DELETE /me/permissions/ads_read succeeded and BOTH sandbox
+tokens immediately read ads_read:false (scopes are evaluated live per
+user+app grant, the page token follows the user grant), yet /{act}/insights,
+/{act}/campaigns, and /me/adaccounts all still 200 via ads_management, and
+owned_pixels discovery still 200 via business_management. The sandbox grant
+NOW LACKS ads_read (35 scopes): its Testing row cannot be kept warm unless
+Brian re-runs debug/meta-sandbox-regrant-url.ts, which only matters if
+ads_read is ever resubmitted. Decision stance: never resubmit unless a
+future feature needs read-only ads tokens. Note the sandbox business owned
+NO pixel on Aug 28 (owned_pixels empty; the Aug 13 one is gone), so dataset
+node/write probes need a pixel recreated in Events Manager first.
+
+CONNECTION TOPOLOGY CHANGED Aug 28 2026: HQ (8f3a5c21) connected the New
+Coworker Page via the dashboard and now holds the ACTIVE meta_connections
+row (page 1202310049632520, IG @newcoworker, 35-scope token: the wide grant
+minus revoked ads_read). The Meta Review Sandbox tenant (e2b7a1c4-...0002)
+LOST its row when the Page claim moved: anything defaulting to the sandbox
+id finds nothing. debug/meta-app-review-testcalls.ts re-defaulted to HQ in
+PR #1705. HQ blog cross-posting to IG now runs on a customer-grade token,
+no app role involved. ALSO: KIN Integrated Child Health (a912aff5) started
+a Meta connect Aug 25 02:26 UTC and sits PENDING with no page picked, a
+real customer stalled at the page-pick step on /dashboard/integrations/meta
+since the day approval landed; Brian may want to nudge them.

@@ -66,6 +66,14 @@ sweeps count as missing so a pruned ledger cannot grant grace). An email
 arriving therefore deserves REAL investigation, not the it-is-probably-noise
 triage that was correct before.
 
+The pager only counts what the recorder counts: a sweep reporting failures in
+a `findings` array records error_count=0 and pages NOTHING (the Aug 28-29
+failed VPS term migrations rode through as clean runs; day two paged SLOW by
+luck). Since PR #1755 both VPS sweeps mirror migration_failed findings into
+failures[]; any NEW sweep with an internal findings/report array must expose
+its failure class through errors[] or failures[] or the watchdog is blind to
+it.
+
 **How to apply:** when touching any sweep's timeout, grep all three layers for
 that name before deciding the numbers, and trace every fallback path. After a
 cron migration merges, verify the LIVE rows with

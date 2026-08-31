@@ -75,34 +75,42 @@ Two consequences:
   falls back to `HOSTING_MONTHLY_CENTS_BY_SIZE`, LABELED "estimate". For HQ
   that is $11.99 against $12.99, so error $6.50 -> $1.00.
 
-**The real price is UNOBTAINABLE from the Hostinger API.** Established by
-probe on Aug 26 2026, so do not go looking again:
-- The amount paid ($155.88) appears in NO field. `renewal_price` and
-  `total_price` both still read 1949.
-- There is no orders/invoices read endpoint: `/api/billing/v1/orders` is 405
-  (POST-only), and `invoices`, `payments`, `transactions` and
-  `subscriptions/<id>` all 404.
-- The real cycle cannot be measured either, because there is no period-start
-  field. `created_at` is the ORIGINAL purchase, so `next_billing_at -
-  created_at` spans the whole subscription life: 427 days (14 months) for HQ,
-  which bought 12, and 91 days for the retired KVM8 that declared 1 month.
-  Only a sub still inside its FIRST cycle measures correctly.
-So date-derivation is a trap that looks clever and yields $1.39/mo for HQ,
-worse than the bug and in the dangerous direction (understating cost inflates
-margin). Detection is reliable; correction is not.
+**The real price IS obtainable, from the CATALOG, not the subscription.**
+I first concluded the opposite; that was wrong, because I had only probed
+`/api/billing/v1/subscriptions`, which is the stale side. `listCatalog("VPS")`
+carries per-term prices: KVM 1 is 1949 (1m), **15588 (1y)**, 28776 (2y). The
+1y figure is exactly what was paid. What genuinely does NOT exist is an
+orders/invoices read endpoint (`/orders` is 405 POST-only; invoices, payments,
+transactions, and `subscriptions/<id>` all 404), so the amount PAID is
+unreachable, but the PRICE is not.
 
-**Consumers must not read that `null` as zero.** It means "unknown", and the
-fleet KPI on /admin/costs summed it with `?? 0`, silently dropping the box
-from total spend (Bugbot caught it on #1636). `fleetMonthlyTotal` in
-`src/lib/admin/costs-view.ts` is now the one place that sums it, substituting
-the SKU estimate and reporting how many rows needed one. `buildPoolBoxBurn`
-already did this correctly; `hostingCentsByBusiness` skips nulls, which
-correctly routes to the labeled estimate.
+**Read the term from the JUMP in the billing date, never the span since
+purchase.** `created_at` is the ORIGINAL purchase, so `next_billing -
+created` covers the whole subscription life: 427 days (14 months) for HQ,
+which bought 12, and 91 days for the retired KVM8 that declared 1 month. Only
+a sub still inside its FIRST cycle measures right that way. Span-derivation
+yields $1.39/mo for HQ, worse than the bug and in the dangerous direction.
 
-**Still open:** recording HQ's TRUE cost. Whether that is the amortized
-$12.99 or the $19.49 Hostinger says it will charge at renewal is a policy
-call about what margin should model, and needs Brian. Until then a
-`billing_cycle_price_stale` finding nags in the daily billing-posture email.
+**SHIPPED in PR #1669.** `hostinger_billing_terms` (one row per subscription)
+stores the last billing date seen plus the inferred term, written on EVERY
+sync so a future jump is detectable. `planTermInference` in
+`src/lib/vps/term-inference.ts` is pure and holds the precedence: a measured
+jump wins; an existing inference is HELD while the date has not moved; a
+runway match (within 8% of a catalog term) bootstraps a subscription never
+recorded; otherwise #1636's withholding stands. HQ now reads $12.99/mo, and
+the `billing_cycle_price_stale` nag is suppressed once a price is recovered.
+
+**Compare billing dates as INSTANTS, never as strings.** Bugbot High on
+#1669. Hostinger returns `...T04:23:54Z`; the same instant stored in a
+`timestamptz` column comes back from PostgREST as `...T04:23:54+00:00`.
+String comparison made every sync look like a move, clearing the term; and
+since the bootstrap only runs when no row exists, the recovered price would
+have been lost from the SECOND sync onward, permanently. Use `sameInstant`.
+Verified in production by running the sync twice: HQ held at $12.99.
+
+**Still open:** nothing on the cost side. If Hostinger ever reverts HQ to
+monthly at renewal, the jump detector sees the date move by one cycle and
+clears the term, which is the correct behavior.
 
 **Which date field is meaningful depends on the renew state.** `next_billing_at`
 is populated while a sub auto-renews; `expires_at` only once it is cancelled or

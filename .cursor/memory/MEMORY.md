@@ -16,7 +16,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5; trust zapier-platform history over CLI
 - [Self-reply loop: the send-as alias trap](project_self_reply_loop_alias_trap.md) - own mail arrives inbound; sources return the account, not the alias
 - [Email catch-all IS the product](project_email_routing_catchall_is_the_product.md) - never repoint Cloudflare's catch-all; plus-aliases vanish
-- [Fleet redeploy check](project_fleet_redeploy_check.md) - vps/ change isn't live until redeploy; read /opt/newcoworker-repo HEAD on the box
+- [Fleet redeploy check](project_fleet_redeploy_check.md) - vps/ change isn't live until redeploy; boxes DRIFT apart; redeploy script needs pre-sourced .env; read /opt/newcoworker-repo HEAD on the box
 - [Telnyx sends no call_duration](project_telnyx_no_call_duration.md) - hangup carries start/end only; telnyx_call_duration helper
 - [Tool toggles are per channel](project_agent_tool_toggles_are_per_channel.md) - keys on agent_key; missing row = ENABLED; set every channel
 - [Cron timeout has three layers](project_cron_timeout_three_layers.md) - pg_cron, Edge REQUEST_TIMEOUT_MS, route maxDuration
@@ -30,7 +30,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Check for a shared mechanism first](feedback_check_for_a_shared_mechanism_first.md) - grep scripts/oneshot for the task's noun
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
 - [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units since #1189; seed both usage columns in tests
-- [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432
+- [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432; SUPABASE_DB_URL is not in .env, export it from DIRECT_DATABASE_URL
 - [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented
 - [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
@@ -39,7 +39,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Cloudflare scraper rules 403 Googlebot](project_cloudflare_scraper_rules_block_googlebot.md) - probe with Accept-Language
 - [PostgREST 1000-row cap](project_postgrest_1000_row_cap.md) - un-limited selects silently truncate; .limit() or server-side RPC
 - [Ownership never binds to the sender](project_ownership_never_binds_to_sender.md) - empty lead_phone means UNKNOWN, not trigger.from
-- [Meta app review](project_meta_app_review.md) - approved exc instagram_content_publish; a call counts only if the TOKEN carries the scope
+- [Meta app review](project_meta_app_review.md) - DECIDED ~Aug 25: 17 privileges advanced, only ads_read rejected and PROVEN unnecessary; retire the grinder; a call counts only if the TOKEN carries the scope
 - [Claim by replying "1"](project_claim_by_reply_one.md) - claims offers + alerts + invites, LIFO by row TOUCH; "1, name" ignores the name
 - [Edge functions auto-deploy on main](project_edge_functions_deploy_on_main.md) - inside the Vercel Deploy job; vps/ stays manual
 - [Stash is repo-global in worktrees](project_stash_is_repo_global_in_worktrees.md) - a no-op stash + pop grabs another session's entry
@@ -51,7 +51,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [callWindow skip resolves to not_placed](project_call_window_skip_not_placed_trap.md) - use defer, stop ladders on REACHED
 - [Roster member tags](project_roster_member_tags.md) - tags say what a teammate handles; fails safe to everyone
 - [Main checkout is stale, never copy files](project_main_checkout_is_stale_never_copy_files.md) - a whole-file copy silently deletes newer keys
-- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); hapi cookie; templated click_text
+- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); hapi cookie; templated click_text; THREE price channels, IVR can disagree with the written pair
 - [PostgREST writes matching zero rows](project_postgrest_write_matching_zero_rows.md) - no-match write returns no error; .select() and check
 - [Fixed future date is a time bomb](project_fixed_future_date_is_a_time_bomb.md) - a hardcoded booking instant took main red; anchor to now
 - [Run itest and live e2e locally](project_live_e2e_cannot_run_locally.md) - exact recipes; admin toggle nightly-only
@@ -59,12 +59,13 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Removing a gate means auditing identities](feedback_removing_a_gate_means_auditing_identities.md) - classify each identity: subject, actor, session
 - [E2E judge question polarity](project_e2e_judge_question_polarity.md) - phrase judge questions TRUE=violation; lexical facts belong in a regex
 - [Pipe exit code masks failures](feedback_pipe_exit_code_masks_failures.md) - vitest | tail reports tail's exit 0; gate on PIPESTATUS[0]
+- [A swallowed read error reads as "not yet"](feedback_a_swallowed_read_error_reads_as_not_yet.md) - a poll loop that ignores its query error can only ever report failure; make it fatal
 - [Sidecar containers cannot use loopback](project_sidecar_containers_cannot_use_loopback.md) - 127.0.0.1 is the container; Docker DNS on rowboat_default
 - [VPS sidecars had no no-undef check](project_vps_sidecars_had_no_undef_check.md) - node --check and 100% tests miss a deleted function
 - [Residency read rules](project_residency_read_rules.md) - 8 of 15 moved tables purge: route via residency/read; 72h floor
 - [Ask AI companion architecture](project_ask_ai_companion_architecture.md) - MCP-to-Gemini bridge seams, partitions, gate groups
 - [route_to_team rotation vs broadcast](project_route_to_team_rotation_vs_broadcast.md) - rotation = whole roster; lead_auto_assign hardens it
-- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - term waits out refund window; Hostinger real price UNOBTAINABLE
+- [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - term waits out refund window; the real price IS in the CATALOG, term inferred from the billing-date jump since #1669; compare dates as instants
 - [Provisioning input is rebuilt field by field](project_orchestrate_input_rebuilt_field_by_field.md) - 5 wrappers drop new fields; grep all
 - [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - team rung before owner; root tsc misses supabase/functions
 - [Reachability-gated vars are not lead types](project_reachability_gated_vars_are_not_lead_type.md) - they answer "none" by contact channel
@@ -143,3 +144,9 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Texting coworker can schedule a later text](project_schedule_text_tool.md) - ONE pending row per contact; created_by keeps it off the owner's rows; pinned note is how a reschedule finds it, and the owner's cancel must retract it
 - [Hostinger drops public_key_ids on purchase too](project_hostinger_drops_public_key_ids_on_purchase_too.md) - PIS-embedded key is the ONLY deterministic attach; purchase path also lacked the quiescence wait; auth rejection during it means the key is ARRIVING
 - [Admin MFA factor load](project_admin_mfa_factor_load.md) - auth-js data.totp is VERIFIED-only; "no factor available" is a symptom; auth.audit_log_entries is empty, use mfa_challenges
+- [Inquiry spelling ban](project_inquiry_spelling_ban.md) - two sources: stored flow copy AND model drift; nine surfaces; audit equality checks after a respell
+- [Telnyx voice rate deck zones](project_telnyx_voice_rate_deck_zones.md) - zoned per NPA-NXX; US Zone 5 is 14x; MEASURED Aug 28: 100% of our history is Zone 1, blended forward 1.24x, flat 0.9c/min holds
+- [Channel liveness detection](project_channel_liveness_detection.md) - daily "is a HUMAN still there" check; reply not receipt; owner WhatsApp thread by psid; neq drops NULLs
+- [Extraction prompt style lines](project_extraction_prompt_style_lines.md) - a global style rule broke person-role extraction; extraction takes its own scoped spelling line
+- [Translator interpret flake](project_translator_interpret_flake.md) - the cue scores 79/80; the nightly went red because this file had no retry
+- [Aug 28-29 nightly reds: three causes, kyp owner-choice drift](project_nightly_red_aug29_kyp_owner_choice_drift.md) - Aug 29 kyp failure is model drift ~40% local, prompt-only contract; NOT #1728
