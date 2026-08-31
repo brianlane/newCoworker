@@ -19,6 +19,15 @@ import {
 
 const NOW = Date.parse("2026-08-08T03:30:00.000Z");
 
+/**
+ * The line a sweep is actually judged against. Reads the registry directly
+ * rather than importing the module's own helper, which is deliberately
+ * unexported (an export only tests call is dead code wearing coverage).
+ */
+function slowLineFor(sweep: string): number {
+  return SWEEP_EXPECTATIONS[sweep]?.slowMs ?? SWEEP_SLOW_MS;
+}
+
 function minutesBefore(minutes: number): string {
   return new Date(NOW - minutes * 60_000).toISOString();
 }
@@ -206,6 +215,40 @@ describe("evaluateSweepHealth", () => {
     expect(evaluate(runs).findings).toEqual([]);
   });
 
+  it("stays quiet when a migration sweep runs long, which is what a migration DOES", () => {
+    // 2026-08-30, verbatim: vps-term-renewal-sweep ran 552.3s and paged SLOW,
+    // and the run had SUCCEEDED (it bought a term box and moved a tenant onto
+    // it). Its own advice, "shrink the per-run batch", is unfollowable: the
+    // sweep migrates at most one tenant per run.
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-term-renewal-sweep" ? { ...r, duration_ms: 552_304 } : r
+    );
+    expect(evaluate(runs).findings).toEqual([]);
+  });
+
+  it("still reports a migration sweep closing on its OWN maxDuration", () => {
+    // Raised, not removed. Past this line Vercel truncates the run, and a
+    // migration cut off mid-cutover is the failure the path exists to avoid.
+    const slowMs = slowLineFor("vps-term-renewal-sweep");
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-term-renewal-sweep" ? { ...r, duration_ms: slowMs + 1 } : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.kind === "slow");
+    expect(finding?.sweep).toBe("vps-term-renewal-sweep");
+    expect(finding?.detail).toContain(`${slowMs / 1000}s warning line`);
+    // The Edge-ceiling remediation is wrong for this sweep and must not appear.
+    expect(finding?.action).toContain("its OWN");
+    expect(finding?.action).not.toContain("shrink the per-run batch");
+  });
+
+  it("keeps the Edge-ceiling advice for a sweep judged on the default line", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "outreach-sweep" ? { ...r, duration_ms: SWEEP_SLOW_MS + 1 } : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.kind === "slow");
+    expect(finding?.action).toContain("shrink the per-run batch");
+  });
+
   it("reports a sweep that is both failing and slow, once for each", () => {
     const runs = healthyFleet().map((r) =>
       r.sweep === "outreach-sweep"
@@ -354,6 +397,55 @@ describe("SWEEP_EXPECTATIONS covers exactly the scheduled pass-through fleet", (
   it("gives every sweep a gap longer than a single period, so one hiccup is not an alert", () => {
     for (const [sweep, { maxGapMinutes }] of Object.entries(SWEEP_EXPECTATIONS)) {
       expect(maxGapMinutes, `${sweep} has an unusable max gap`).toBeGreaterThanOrEqual(15);
+    }
+  });
+
+  /**
+   * A raised slow line is a promise about a specific budget, so it has to
+   * track the budget. Read the route's own `maxDuration` rather than
+   * restating it: lowering a route to 300s while its threshold still says
+   * 1,440s would mute the sweep entirely, silently, and this is the check
+   * that refuses to let that merge.
+   */
+  function routeMaxDurationSeconds(sweep: string): number | null {
+    const path = join(ROOT, "src", "app", "api", "internal", sweep, "route.ts");
+    if (!existsSync(path)) return null;
+    const m = readFileSync(path, "utf8").match(/export const maxDuration\s*=\s*(\d+)/);
+    return m ? Number(m[1]) : null;
+  }
+
+  it("sets every raised slow line to 80% of the budget its route actually declares", () => {
+    for (const [sweep, { slowMs }] of Object.entries(SWEEP_EXPECTATIONS)) {
+      if (slowMs === undefined) continue;
+      const maxDuration = routeMaxDurationSeconds(sweep);
+      expect(maxDuration, `${sweep} has a slowMs but no readable maxDuration`).not.toBeNull();
+      expect(slowMs, `${sweep} slowMs drifted from its route budget`).toBe(
+        Math.round((maxDuration as number) * 1000 * 0.8)
+      );
+    }
+  });
+
+  it("only raises the line for a route that declares more than the Edge ceiling", () => {
+    // Below the ceiling the default 120s warning is real: the run genuinely
+    // is approaching the 504. Raising the line there would hide it.
+    for (const [sweep, { slowMs }] of Object.entries(SWEEP_EXPECTATIONS)) {
+      if (slowMs === undefined) continue;
+      const maxDurationMs = (routeMaxDurationSeconds(sweep) as number) * 1000;
+      expect(maxDurationMs, `${sweep} does not need a raised line`).toBeGreaterThan(
+        EDGE_REQUEST_CEILING_MS
+      );
+    }
+  });
+
+  it("gives a raised line to every sweep whose route outruns the Edge ceiling", () => {
+    // The other direction: a long-budget sweep left on the default line pages
+    // every time it does real work, which is the bug this pair exists to stop.
+    for (const sweep of Object.keys(SWEEP_EXPECTATIONS)) {
+      const maxDuration = routeMaxDurationSeconds(sweep);
+      if (maxDuration === null || maxDuration * 1000 <= EDGE_REQUEST_CEILING_MS) continue;
+      expect(slowLineFor(sweep), `${sweep} is judged on the default line`).toBeGreaterThan(
+        SWEEP_SLOW_MS
+      );
     }
   });
 });

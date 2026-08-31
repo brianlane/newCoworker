@@ -110,6 +110,49 @@ export async function telnyxAnswerWithStream(
   });
 }
 
+/**
+ * Telnyx's code for "you issued a command against a call that is already
+ * gone" (HTTP 422, title "Call has already ended").
+ */
+export const TELNYX_CALL_ALREADY_ENDED_CODE = "90018";
+
+/**
+ * True when an answer (or any call command) was refused because the caller
+ * had already hung up.
+ *
+ * This is a RACE, not a fault. Telnyx delivers `call.initiated` while the
+ * phone is still ringing, and a caller who changes their mind mid-ring ends
+ * the call before our answer lands. Amy Laidlaw's line saw it on 2026-08-30:
+ * the reservation row was written at 08:23:50.432Z and Telnyx refused the
+ * answer 335ms later, so nobody was ever on the line to be let down.
+ *
+ * Worth its own branch because the generic answer-failure path treats every
+ * refusal as an outage: it logs at `level: "error"`, which puts an abandoned
+ * ring on the admin System Errors card beside expired API keys and dead SIP
+ * credentials, and it answers the webhook 500, which invites Telnyx to retry
+ * delivery for a call that cannot exist any more.
+ *
+ * Keyed on the CODE, not the status: 422 alone also covers real rejections
+ * (bad stream URL, malformed body) that must keep failing loudly. A 5xx is
+ * never treated as benign, whatever body it carries, since an upstream
+ * failure telling us the call ended is not evidence that it did.
+ */
+export function isCallAlreadyEndedResponse(status: number, body: string): boolean {
+  if (status < 400 || status >= 500) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    // An unparseable body is not proof of anything; fail toward the loud path.
+    return false;
+  }
+  const errors = (parsed as { errors?: unknown })?.errors;
+  if (!Array.isArray(errors)) return false;
+  return errors.some(
+    (e) => String((e as { code?: unknown })?.code ?? "") === TELNYX_CALL_ALREADY_ENDED_CODE
+  );
+}
+
 export async function telnyxSpeak(
   apiKey: string,
   callControlId: string,

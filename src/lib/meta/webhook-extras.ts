@@ -33,6 +33,7 @@ import {
 } from "@/lib/db/whatsapp-connections";
 import { getMetaAppId, whatsappTemplateStateKey } from "@/lib/meta/client";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { markWhatsAppAlertUndelivered } from "@/lib/db/notifications";
 import { logger } from "@/lib/logger";
 import type {
   MetaEchoEvent,
@@ -346,10 +347,41 @@ export async function processMetaMessageStatusEvent(
     return false;
   }
 
+  // A `failed` receipt has TWO independent records to correct: the messenger
+  // transcript above, and the alert row the dispatcher wrote. Neither implies
+  // the other, so the alert correction must not sit behind the transcript's
+  // outcome. Two live cases reach here with a non-`applied` outcome and a
+  // notification row still wrongly claiming delivery: the transcript append
+  // inside deliverWhatsApp is best-effort and merely logs on failure (so the
+  // wamid can be on the alert row and absent from messenger_messages, giving
+  // `not_found`), and a redelivered receipt against an already-`failed`
+  // transcript row gives `stale` while the alert row may still need its first
+  // correction. Matching a stamped wamid IS the ownership proof, so this is
+  // also safe for a message this system never wrote: it simply finds nothing.
+  let reconciled = false;
+  if (status === "failed") {
+    const reason =
+      "whatsapp_" +
+      (event.errorCode ? `${event.errorCode}` : "delivery_failed") +
+      (event.errorTitle ? `:${event.errorTitle}` : "");
+    // Non-fatal: the system log below is the louder signal, and losing the
+    // correction must not also lose the alarm.
+    try {
+      reconciled = await markWhatsAppAlertUndelivered(connection.business_id, event.mid, reason);
+    } catch (err) {
+      logger.warn("meta message status: alert row reconcile failed", {
+        businessId: connection.business_id,
+        mid: event.mid,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   // Receipts also arrive for messages this system never wrote (a human
-  // replying from the Meta inbox), and for anything sent before the wamid
-  // was stored. Neither is a problem worth reporting.
-  if (outcome !== "applied") return false;
+  // replying from the Meta inbox), and for anything sent before the wamid was
+  // stored. Neither is a problem worth reporting. Correcting an alert row is
+  // proof this one WAS ours, so it earns the report on its own.
+  if (outcome !== "applied" && !reconciled) return false;
 
   if (status === "failed") {
     await recordSystemLog({
@@ -364,7 +396,10 @@ export async function processMetaMessageStatusEvent(
       payload: {
         mid: event.mid,
         errorCode: event.errorCode,
-        errorTitle: event.errorTitle
+        errorTitle: event.errorTitle,
+        // Whether this dropped message was an owner ALERT whose row we just
+        // corrected, or ordinary conversation traffic with no row to correct.
+        alertRowReconciled: reconciled
       }
     });
   }

@@ -1225,6 +1225,46 @@ describe("notifications/dispatch", () => {
       });
     });
 
+    it("stamps the wamid so a later failure receipt can correct this row", async () => {
+      // `sent` here records Meta's ACCEPTANCE. The verdict arrives ~15s later
+      // on a statuses[] webhook, and the wamid is the only handle it has on
+      // this row. KYP Ads collected twenty rows marked sent that Meta had
+      // dropped on billing error 131042, with nothing able to find them.
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: true,
+        via: "template",
+        messageId: "wamid.HBgLMTUxNDUxODgxOTIVAgAR"
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Lead needs a callback",
+        kind: "urgent_alert"
+      });
+      const wa = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .find((r) => r.delivery_channel === "whatsapp");
+      expect((wa?.payload as Record<string, unknown>).wamid).toBe(
+        "wamid.HBgLMTUxNDUxODgxOTIVAgAR"
+      );
+    });
+
+    it("omits the wamid rather than storing a null Meta never returned", async () => {
+      // A null messageId would match every other null on a `payload->>wamid`
+      // lookup, so the absent key is the safe shape.
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: true,
+        via: "text",
+        messageId: null
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      const wa = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .find((r) => r.delivery_channel === "whatsapp");
+      expect(wa?.payload as Record<string, unknown>).not.toHaveProperty("wamid");
+    });
+
     it("honors the smsBody override for the whatsapp copy", async () => {
       await dispatchUrgentNotification({
         businessId: BIZ,

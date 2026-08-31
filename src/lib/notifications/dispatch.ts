@@ -1157,7 +1157,13 @@ export async function dispatchUrgentNotification(
           await recordRow(input.businessId, "whatsapp", "sent", summary, kind, {
             ...payload,
             recipient: targets.phone,
-            via: delivered.via
+            via: delivered.via,
+            // `sent` here means Meta ACCEPTED it, which is not delivery. The
+            // wamid is the only handle the failure receipt has on this row,
+            // and markWhatsAppAlertUndelivered uses it to come back and
+            // correct the status when Meta drops the message. Without it a
+            // dropped alert stays recorded as delivered forever.
+            ...(delivered.messageId ? { wamid: delivered.messageId } : {})
           })
         );
       } else if (delivered.reason === "not_connected") {

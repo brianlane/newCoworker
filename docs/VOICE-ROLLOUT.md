@@ -157,7 +157,7 @@ Typical green output:
 | `voice_rollout_stream_disabled > 0`       | `VOICE_AI_STREAM_ENABLED=false` on Edge                                       | See §2                                                                          |
 | `voice_call_settlement_finalized == 0`    | Bridge crashed OR hangup webhook didn't fire                                  | `docker logs voice-bridge`; check `voice_settlements` directly                   |
 | `voice_bridge_health_check` missing/red   | Cron not scheduled OR bridge heartbeat broken                                 | See §0; `select * from cron.job where jobname like 'edge-voice-%'`               |
-| `voice_answer_fail > 0`                   | Telnyx call-actions API rejected our answer (auth, sim expired, etc.)         | `supabase functions logs telnyx-voice-inbound`                                  |
+| `voice_answer_fail > 0`                   | Telnyx call-actions API rejected our answer (auth, sim expired, etc.). A caller who hung up mid-ring is NOT counted here: that lands as `voice_answer_caller_gone` | `supabase functions logs telnyx-voice-inbound`                                  |
 | `edge_webhook_rejected` elevated          | Bad signature, replayed event, or spoofed origin                              | `select payload from telemetry_events where event_type='edge_webhook_rejected' order by created_at desc limit 20;` |
 
 ---

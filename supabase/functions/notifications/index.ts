@@ -1180,7 +1180,7 @@ serve(async (req: Request) => {
       });
       const waJson = waRes.ok
         ? ((await waRes.json().catch(() => null)) as {
-            data?: { ok?: boolean; via?: string; reason?: string };
+            data?: { ok?: boolean; via?: string; reason?: string; messageId?: string | null };
           } | null)
         : null;
       if (waJson?.data?.ok) {
@@ -1191,7 +1191,16 @@ serve(async (req: Request) => {
           "sent",
           summary,
           kind,
-          { ...basePayload, recipient: targets.phone, via: waJson.data.via ?? "text" }
+          {
+            ...basePayload,
+            recipient: targets.phone,
+            via: waJson.data.via ?? "text",
+            // `sent` means Meta ACCEPTED it, not that it arrived. The wamid is
+            // the only handle the failure receipt has on this row; without it
+            // an alert Meta drops stays recorded as delivered. Mirrors
+            // src/lib/notifications/dispatch.ts.
+            ...(waJson.data.messageId ? { wamid: waJson.data.messageId } : {})
+          }
         );
       } else if (waRes.ok) {
         // Structured policy skip (inactive connection / template in review).
