@@ -230,6 +230,68 @@ export async function listRecentAlertsAbout(
 }
 
 /**
+ * Correct a WhatsApp alert row that Meta accepted and then dropped.
+ *
+ * `deliverWhatsApp` returning ok means Meta ACCEPTED the message, and the
+ * dispatcher records `sent` on the strength of that. The verdict arrives
+ * about fifteen seconds later on a `statuses[]` webhook, and until now
+ * nothing went back to correct the row: KYP Ads accumulated twenty WhatsApp
+ * alerts marked `sent`, every one of which Meta dropped on billing error
+ * 131042, so the dashboard, the unread badge and the liveness sweep all
+ * counted delivery that never happened.
+ *
+ * Matched on the wamid the dispatcher stamps into the payload, and narrowed
+ * to `status = 'sent'` so this is idempotent: a redelivered receipt for a
+ * row already corrected matches nothing and returns 0.
+ *
+ * Returns whether a row was actually corrected. A receipt with no matching
+ * row is the COMMON case, not an error (conversational replies from the
+ * messenger worker, anything a human sent from the Meta inbox, and every
+ * alert sent before the wamid was stamped), so the caller reports 0 without
+ * treating it as a fault.
+ *
+ * A read-then-write rather than one statement because PostgREST cannot merge
+ * jsonb in an update, and the reason belongs beside the row it explains.
+ * Note this is a WRITE, so it needs no residency routing: the journal
+ * triggers mirror it to the box. The central row is still present either way
+ * at receipt time, `residency_purge_business` having a 72h floor.
+ */
+export async function markWhatsAppAlertUndelivered(
+  businessId: string,
+  wamid: string,
+  reason: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data: existing, error: readError } = await db
+    .from("notifications")
+    .select("id, payload")
+    .eq("business_id", businessId)
+    .eq("delivery_channel", "whatsapp")
+    .eq("status", "sent")
+    .eq("payload->>wamid", wamid)
+    .maybeSingle();
+  if (readError) throw new Error(`markWhatsAppAlertUndelivered: ${readError.message}`);
+  const row = existing as { id?: string; payload?: Record<string, unknown> } | null;
+  if (!row?.id) return false;
+
+  const { data: updated, error: writeError } = await db
+    .from("notifications")
+    .update({
+      status: "failed",
+      payload: { ...(row.payload ?? {}), reason, delivery_reconciled_at: new Date().toISOString() }
+    })
+    .eq("id", row.id)
+    // Re-asserted so two receipts racing cannot both claim the correction.
+    .eq("status", "sent")
+    .select("id");
+  if (writeError) throw new Error(`markWhatsAppAlertUndelivered: ${writeError.message}`);
+  // A write matching zero rows is not an error in PostgREST, so the count is
+  // the only proof the correction landed.
+  return (updated ?? []).length > 0;
+}
+
+/**
  * Who stamped `read_at`, per `notifications.read_by_actor`.
  *
  * This is an ATTRIBUTION, not an audit trail. The only question it answers

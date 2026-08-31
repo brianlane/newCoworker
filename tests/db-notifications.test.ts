@@ -8,6 +8,7 @@ import {
   markNotificationRead,
   notificationBusinessId,
   markAllNotificationsRead,
+  markWhatsAppAlertUndelivered,
   softDeleteNotification
 } from "@/lib/db/notifications";
 
@@ -524,5 +525,143 @@ describe("db/notifications", () => {
     await expect(listRecentAlertsAbout("b", "k", "+1", 1000)).rejects.toThrow(
       "listRecentAlertsAbout: boom"
     );
+  });
+});
+
+/**
+ * Correcting a WhatsApp alert row that Meta accepted and then dropped.
+ *
+ * The dispatcher writes `sent` on Meta's acceptance, which is not delivery.
+ * KYP Ads carried twenty such rows, every one dropped ~15s later on billing
+ * error 131042, and the dashboard, the unread badge and the liveness sweep
+ * all read them as delivered.
+ */
+describe("markWhatsAppAlertUndelivered", () => {
+  const BIZ = "biz-uuid-1";
+  const WAMID = "wamid.HBgLMTUxNDUxODgxOTIVAgAR";
+  const REASON = "whatsapp_131042:Business eligibility payment issue";
+
+  type Result = { data: unknown; error: { message: string } | null };
+
+  /**
+   * Two chains, handed out in call order: the lookup (ends in maybeSingle)
+   * then the correcting update (ends in an awaited select).
+   */
+  function reconcileDb(read: Result, write: Result = { data: [{ id: "n1" }], error: null }) {
+    const readChain: Record<string, unknown> = {
+      maybeSingle: vi.fn().mockResolvedValue(read)
+    };
+    readChain.select = vi.fn(() => readChain);
+    readChain.eq = vi.fn(() => readChain);
+
+    const writeChain: Record<string, unknown> = {
+      select: vi.fn().mockResolvedValue(write)
+    };
+    writeChain.update = vi.fn(() => writeChain);
+    writeChain.eq = vi.fn(() => writeChain);
+
+    let call = 0;
+    return {
+      db: { from: vi.fn(() => (call++ === 0 ? readChain : writeChain)) },
+      readChain,
+      writeChain
+    };
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("flips the accepted row to failed and records why", async () => {
+    const { db, readChain, writeChain } = reconcileDb({
+      data: { id: "n1", payload: { summary: "New lead", wamid: WAMID } },
+      error: null
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(true);
+    // Matched on the wamid the dispatcher stamped, scoped to this tenant's
+    // WhatsApp leg, and only against a row still claiming delivery.
+    expect(readChain.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(readChain.eq).toHaveBeenCalledWith("delivery_channel", "whatsapp");
+    expect(readChain.eq).toHaveBeenCalledWith("status", "sent");
+    expect(readChain.eq).toHaveBeenCalledWith("payload->>wamid", WAMID);
+
+    const update = vi.mocked(writeChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(update.status).toBe("failed");
+    expect(update.payload.reason).toBe(REASON);
+    // The rest of the payload survives: the summary and the routing stamps
+    // are what the dashboard row is made of.
+    expect(update.payload.summary).toBe("New lead");
+    expect(typeof update.payload.delivery_reconciled_at).toBe("string");
+  });
+
+  it("reports no correction for a receipt with no alert row behind it", async () => {
+    // The common case by volume: a dropped reply to a lead, or any message a
+    // human sent from the Meta inbox. Not a fault.
+    const { db, writeChain } = reconcileDb({ data: null, error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(false);
+    expect(writeChain.update).not.toHaveBeenCalled();
+  });
+
+  it("treats a row without an id as no row, rather than updating by undefined", async () => {
+    const { db, writeChain } = reconcileDb({ data: { payload: {} }, error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(false);
+    expect(writeChain.update).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a row whose payload is null", async () => {
+    const { db, writeChain } = reconcileDb({ data: { id: "n1", payload: null }, error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(true);
+    const update = vi.mocked(writeChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(update.payload.reason).toBe(REASON);
+  });
+
+  it("is idempotent: a redelivered receipt corrects nothing twice", async () => {
+    // The update re-asserts status='sent', so the second receipt matches zero
+    // rows. PostgREST returns no error for that, so the returned rows are the
+    // only proof the correction landed.
+    const { db } = reconcileDb(
+      { data: { id: "n1", payload: {} }, error: null },
+      { data: [], error: null }
+    );
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(false);
+  });
+
+  it("treats a null update result as no correction", async () => {
+    const { db } = reconcileDb(
+      { data: { id: "n1", payload: {} }, error: null },
+      { data: null, error: null }
+    );
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).toBe(false);
+  });
+
+  it("throws on a failed lookup rather than reporting a clean miss", async () => {
+    const { db } = reconcileDb({ data: null, error: { message: "boom" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).rejects.toThrow(
+      "markWhatsAppAlertUndelivered: boom"
+    );
+  });
+
+  it("throws on a failed update", async () => {
+    const { db } = reconcileDb(
+      { data: { id: "n1", payload: {} }, error: null },
+      { data: null, error: { message: "write denied" } }
+    );
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(markWhatsAppAlertUndelivered(BIZ, WAMID, REASON)).rejects.toThrow(
+      "markWhatsAppAlertUndelivered: write denied"
+    );
+  });
+
+  it("uses an injected client instead of building one", async () => {
+    const { db } = reconcileDb({ data: { id: "n1", payload: {} }, error: null });
+    vi.mocked(createSupabaseServiceClient).mockReset();
+    expect(await markWhatsAppAlertUndelivered(BIZ, WAMID, REASON, db as never)).toBe(true);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 });

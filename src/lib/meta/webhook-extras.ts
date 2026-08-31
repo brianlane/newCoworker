@@ -33,6 +33,7 @@ import {
 } from "@/lib/db/whatsapp-connections";
 import { getMetaAppId, whatsappTemplateStateKey } from "@/lib/meta/client";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { markWhatsAppAlertUndelivered } from "@/lib/db/notifications";
 import { logger } from "@/lib/logger";
 import type {
   MetaEchoEvent,
@@ -352,6 +353,25 @@ export async function processMetaMessageStatusEvent(
   if (outcome !== "applied") return false;
 
   if (status === "failed") {
+    const reason =
+      "whatsapp_" +
+      (event.errorCode ? `${event.errorCode}` : "delivery_failed") +
+      (event.errorTitle ? `:${event.errorTitle}` : "");
+    // Go back and correct the alert row. The dispatcher wrote `sent` on
+    // Meta's acceptance, which this receipt has just disproved, and the row
+    // is what the dashboard, the unread badge and the liveness sweep read.
+    // Non-fatal: the system log below is the louder signal, and losing the
+    // correction must not also lose the alarm.
+    let reconciled = false;
+    try {
+      reconciled = await markWhatsAppAlertUndelivered(connection.business_id, event.mid, reason);
+    } catch (err) {
+      logger.warn("meta message status: alert row reconcile failed", {
+        businessId: connection.business_id,
+        mid: event.mid,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
     await recordSystemLog({
       businessId: connection.business_id,
       level: "error",
@@ -364,7 +384,10 @@ export async function processMetaMessageStatusEvent(
       payload: {
         mid: event.mid,
         errorCode: event.errorCode,
-        errorTitle: event.errorTitle
+        errorTitle: event.errorTitle,
+        // Whether this dropped message was an owner ALERT whose row we just
+        // corrected, or ordinary conversation traffic with no row to correct.
+        alertRowReconciled: reconciled
       }
     });
   }

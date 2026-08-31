@@ -29,6 +29,7 @@ vi.mock("@/lib/db/whatsapp-connections", () => ({
   updateWhatsAppTemplates: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/notifications", () => ({ markWhatsAppAlertUndelivered: vi.fn() }));
 
 import {
   processMetaEchoEvent,
@@ -52,6 +53,7 @@ import {
   updateWhatsAppTemplates
 } from "@/lib/db/whatsapp-connections";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { markWhatsAppAlertUndelivered } from "@/lib/db/notifications";
 import { META_PAGE_INBOX_APP_ID } from "@/lib/meta/client";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -455,12 +457,16 @@ describe("processMetaMessageStatusEvent", () => {
     ...over
   });
 
+  const reconcile = vi.mocked(markWhatsAppAlertUndelivered);
+
   beforeEach(() => {
     byNumber.mockReset();
     apply.mockReset();
+    reconcile.mockReset();
     vi.mocked(recordSystemLog).mockReset();
     byNumber.mockResolvedValue({ business_id: BIZ } as never);
     apply.mockResolvedValue("applied");
+    reconcile.mockResolvedValue(false);
   });
 
   it("records a receipt against the message the wamid names", async () => {
@@ -536,6 +542,67 @@ describe("processMetaMessageStatusEvent", () => {
     expect(ok).toBe(true);
     const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
     expect(logged.message).toBe("WhatsApp did not deliver a message");
+  });
+
+  /**
+   * The dispatcher records `sent` on Meta's ACCEPTANCE, and this receipt is
+   * what disproves it. KYP Ads accumulated twenty WhatsApp alert rows marked
+   * `sent` that Meta had dropped on billing error 131042, because nothing
+   * ever came back to correct them.
+   */
+  it("corrects the alert row the dropped message belonged to", async () => {
+    reconcile.mockResolvedValue(true);
+    await processMetaMessageStatusEvent(
+      event({
+        status: "failed",
+        errorCode: "131042",
+        errorTitle: "Business eligibility payment issue"
+      })
+    );
+    expect(reconcile).toHaveBeenCalledWith(
+      BIZ,
+      "wamid.ABC",
+      "whatsapp_131042:Business eligibility payment issue"
+    );
+    // Said out loud on the log row: an operator reading it needs to know
+    // whether an owner ALERT was lost or ordinary conversation traffic.
+    expect(vi.mocked(recordSystemLog).mock.calls[0][0].payload?.alertRowReconciled).toBe(true);
+  });
+
+  it("names the failure even when Meta sends no code or title", async () => {
+    await processMetaMessageStatusEvent(
+      event({ status: "failed", errorCode: null, errorTitle: null })
+    );
+    expect(reconcile).toHaveBeenCalledWith(BIZ, "wamid.ABC", "whatsapp_delivery_failed");
+  });
+
+  it("reports no correction for conversation traffic, which has no alert row", async () => {
+    // The common case by volume: a dropped reply to a lead. Not a fault, and
+    // the log must not imply an alert was lost.
+    reconcile.mockResolvedValue(false);
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(true);
+    expect(vi.mocked(recordSystemLog).mock.calls[0][0].payload?.alertRowReconciled).toBe(false);
+  });
+
+  it("still raises the alarm when the correction itself fails", async () => {
+    // The system log is the louder signal. Losing the bookkeeping must never
+    // also lose the alert, which is the whole failure this receipt reports.
+    reconcile.mockRejectedValue(new Error("db down"));
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(true);
+    const logged = vi.mocked(recordSystemLog).mock.calls[0][0];
+    expect(logged.event).toBe("whatsapp_message_failed");
+    expect(logged.payload?.alertRowReconciled).toBe(false);
+
+    // A non-Error rejection must not itself throw while being logged.
+    vi.mocked(recordSystemLog).mockClear();
+    reconcile.mockRejectedValue("plain string");
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(true);
+    expect(vi.mocked(recordSystemLog).mock.calls[0][0].event).toBe("whatsapp_message_failed");
+  });
+
+  it("does not touch alert rows for a receipt that is not a failure", async () => {
+    await processMetaMessageStatusEvent(event({ status: "delivered" }));
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("never masks a failure with a receipt that was already in flight", async () => {

@@ -26,6 +26,21 @@ import {
  */
 
 /**
+ * Slow thresholds for the sweeps that are ALLOWED to outrun the Edge ceiling.
+ *
+ * Keyed by the route's declared `maxDuration` in seconds, and set to 80% of
+ * it, so the warning still arrives with a fifth of the budget left.
+ *
+ * tests/cron-sweep-watchdog.test.ts checks every override against the
+ * `maxDuration` its route actually declares, so lowering a route's budget
+ * without revisiting the threshold fails the build rather than muting it.
+ */
+const LONG_RUN_SLOW_MS: Record<300 | 1800, number> = {
+  300: 240_000,
+  1800: 1_440_000
+};
+
+/**
  * How long each sweep may go without finishing before absence means outage.
  *
  * Derived from the live cron schedules with deliberate slack (roughly 3x an
@@ -38,12 +53,15 @@ import {
  * tests/cron-sweep-watchdog.test.ts, so a new cron job cannot land without
  * someone stating its cadence here.
  */
-export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedule: string }> = {
+export const SWEEP_EXPECTATIONS: Record<
+  string,
+  { maxGapMinutes: number; schedule: string; slowMs?: number }
+> = {
   // Every minute.
   "email-campaign-sweep": { maxGapMinutes: 15, schedule: "* * * * *" },
-  "messenger-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
+  "messenger-worker": { maxGapMinutes: 15, schedule: "* * * * *", slowMs: LONG_RUN_SLOW_MS[300] },
   "meta-capi-drain": { maxGapMinutes: 15, schedule: "* * * * *" },
-  "coworker-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
+  "coworker-worker": { maxGapMinutes: 15, schedule: "* * * * *", slowMs: LONG_RUN_SLOW_MS[300] },
   // residency-replay is deliberately absent: 20260812000200 unscheduled the
   // job while zero tenants use residency, so "no run recorded" is its
   // designed state, not an outage. The migration that re-schedules it will
@@ -53,7 +71,11 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   // Every five minutes.
   "blog-publish-sweep": { maxGapMinutes: 60, schedule: "*/5 * * * *" },
   "outreach-sweep": { maxGapMinutes: 60, schedule: "*/5 * * * *" },
-  "provisioning-retry": { maxGapMinutes: 60, schedule: "*/5 * * * *" },
+  "provisioning-retry": {
+    maxGapMinutes: 60,
+    schedule: "*/5 * * * *",
+    slowMs: LONG_RUN_SLOW_MS[1800]
+  },
   "tendlc-attach-retry": { maxGapMinutes: 60, schedule: "*/5 * * * *" },
   // Hourly.
   "aiflow-library-refresh": { maxGapMinutes: 150, schedule: "7 * * * *" },
@@ -69,13 +91,29 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "monthly-growth-sweep": { maxGapMinutes: 1500, schedule: "20 16 * * *" },
   "monthly-intro-nudge-sweep": { maxGapMinutes: 1500, schedule: "15 15 * * *" },
   "priority-support-nudge-sweep": { maxGapMinutes: 1500, schedule: "35 15 * * *" },
-  "platform-cost-sync": { maxGapMinutes: 1500, schedule: "10 11 * * *" },
+  "platform-cost-sync": {
+    maxGapMinutes: 1500,
+    schedule: "10 11 * * *",
+    slowMs: LONG_RUN_SLOW_MS[300]
+  },
   "segment-action-sweep": { maxGapMinutes: 1500, schedule: "10 9 * * *" },
   "subscription-grace-sweep": { maxGapMinutes: 1500, schedule: "15 0 * * *" },
-  "vps-billing-posture": { maxGapMinutes: 1500, schedule: "0 13 * * *" },
-  "vps-contract-upgrade-sweep": { maxGapMinutes: 1500, schedule: "30 10 * * *" },
+  "vps-billing-posture": {
+    maxGapMinutes: 1500,
+    schedule: "0 13 * * *",
+    slowMs: LONG_RUN_SLOW_MS[300]
+  },
+  "vps-contract-upgrade-sweep": {
+    maxGapMinutes: 1500,
+    schedule: "30 10 * * *",
+    slowMs: LONG_RUN_SLOW_MS[1800]
+  },
   "vps-orphan-sweep": { maxGapMinutes: 1500, schedule: "0 12 * * *" },
-  "vps-term-renewal-sweep": { maxGapMinutes: 1500, schedule: "0 11 * * *" },
+  "vps-term-renewal-sweep": {
+    maxGapMinutes: 1500,
+    schedule: "0 11 * * *",
+    slowMs: LONG_RUN_SLOW_MS[1800]
+  },
   // Weekly (Mondays).
   "blog-weekly-digest": { maxGapMinutes: 10_200, schedule: "0 15 * * 1" }
 };
@@ -90,9 +128,37 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
  * the overnight four whose cost scales with tenant count, took 2,853ms for 8
  * businesses (~356ms each). Linear scaling puts it at this threshold around
  * 335 businesses and at the hard ceiling around 420.
+ *
+ * This is the DEFAULT, not the universal rule: a sweep carrying its own
+ * `slowMs` is judged against that instead. See {@link sweepSlowMs}.
  */
 export const SWEEP_SLOW_MS = 120_000;
 export const EDGE_REQUEST_CEILING_MS = 150_000;
+
+/**
+ * The duration past which a sweep's run is worth a sentence.
+ *
+ * The default 120s line means "you are about to lose the Edge result". That
+ * warning is empty for the seven sweeps whose route deliberately declares
+ * more time than the chain can hand it (see KNOWN_ABOVE_EDGE_CEILING in
+ * tests/cron-timeout-parity.test.ts): they lose the Edge result on every run
+ * that does real work, knowingly, and Vercel finishes the job in the
+ * background regardless.
+ *
+ * vps-term-renewal-sweep is the case that proved it. On 2026-08-30 it ran for
+ * 552s and paged SLOW, and the run had SUCCEEDED: it bought a term-priced box
+ * and migrated a tenant onto it, which takes 10 to 30 minutes by nature. The
+ * finding's own advice ("shrink the per-run batch") was unfollowable, because
+ * that sweep already migrates at most one tenant per run. A nightly page
+ * nobody can act on is how an alert channel dies.
+ *
+ * For those sweeps the real cliff is their own `maxDuration`: past it Vercel
+ * truncates the run, and a migration cut off mid-cutover is the exact failure
+ * the whole path is built to avoid.
+ */
+export function sweepSlowMs(sweep: string): number {
+  return SWEEP_EXPECTATIONS[sweep]?.slowMs ?? SWEEP_SLOW_MS;
+}
 
 /**
  * The watchdog does not report ITSELF as missing. It obviously ran: it is the
@@ -333,16 +399,27 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
       });
     }
 
-    if (run.duration_ms > SWEEP_SLOW_MS) {
+    const slowMs = sweepSlowMs(sweep);
+    if (run.duration_ms > slowMs) {
       flagged = true;
+      // Two different alarms wearing one name. The default line means the
+      // Edge result is about to be lost; the raised line means Vercel is
+      // about to truncate the run itself. Only the second is worth quoting
+      // the Edge ceiling at, and only the first can be fixed by batching.
+      const overDefault = slowMs === SWEEP_SLOW_MS;
       slow.push({
         kind: "slow",
         sweep,
-        detail: `last run took ${(run.duration_ms / 1000).toFixed(1)}s, past the ${SWEEP_SLOW_MS / 1000}s warning line`,
-        action:
-          `Supabase 504s the Edge bridge at ${EDGE_REQUEST_CEILING_MS / 1000}s and the result is ` +
-          `lost (the work still finishes on Vercel). Either shrink the per-run batch or move the ` +
-          `sweep to a dispatcher that claims rows, as the ai-flow and sms-inbound workers do.`
+        detail: `last run took ${(run.duration_ms / 1000).toFixed(1)}s, past the ${slowMs / 1000}s warning line`,
+        action: overDefault
+          ? `Supabase 504s the Edge bridge at ${EDGE_REQUEST_CEILING_MS / 1000}s and the result is ` +
+            `lost (the work still finishes on Vercel). Either shrink the per-run batch or move the ` +
+            `sweep to a dispatcher that claims rows, as the ai-flow and sms-inbound workers do.`
+          : `This sweep is allowed to outrun the Edge ceiling, so the 504 is expected and the work ` +
+            `still finishes on Vercel. What this line means is that it is closing on its OWN ` +
+            `maxDuration, past which Vercel truncates the run mid-flight. Read the Vercel logs for ` +
+            `/api/internal/${sweep} around ${run.finished_at} for what took the time, then either ` +
+            `raise maxDuration or split the work.`
       });
     }
 

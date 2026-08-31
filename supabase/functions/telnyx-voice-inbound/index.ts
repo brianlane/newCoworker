@@ -34,6 +34,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   answerThenSpeak,
+  isCallAlreadyEndedResponse,
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
@@ -1852,18 +1853,35 @@ serve(async (req: Request) => {
   });
   if (!answerRes.ok) {
     const errText = await answerRes.text();
-    console.error("answer failed", answerRes.status, errText.slice(0, 500));
-    await telemetryRecord(supabase, "voice_answer_fail", {
-      call_control_id: callControlId,
-      business_id: businessId,
-      http_status: answerRes.status
-    });
+    // The caller hanging up mid-ring is ordinary telephony, not a fault, and
+    // the two differ in every way that matters downstream: what the operator
+    // is told, and whether Telnyx should try again. See
+    // isCallAlreadyEndedResponse for why it keys on the code.
+    const callerGone = isCallAlreadyEndedResponse(answerRes.status, errText);
+    if (callerGone) {
+      console.log("answer skipped, caller already hung up", callControlId);
+    } else {
+      console.error("answer failed", answerRes.status, errText.slice(0, 500));
+    }
+    // Counted separately so `voice_answer_fail == 0` in scripts/rollout-verify.ts
+    // keeps meaning "no answer is broken" rather than "nobody hung up early".
+    await telemetryRecord(
+      supabase,
+      callerGone ? "voice_answer_caller_gone" : "voice_answer_fail",
+      {
+        call_control_id: callControlId,
+        business_id: businessId,
+        http_status: answerRes.status
+      }
+    );
     await systemLog(supabase, {
       businessId,
       source: "voice",
-      level: "error",
-      event: "voice_answer_failed",
-      message: `Telnyx answer failed (HTTP ${answerRes.status}): ${errText.slice(0, 300)}`,
+      level: callerGone ? "info" : "error",
+      event: callerGone ? "voice_caller_hung_up_before_answer" : "voice_answer_failed",
+      message: callerGone
+        ? "Caller hung up before the call could be answered; nothing was missed."
+        : `Telnyx answer failed (HTTP ${answerRes.status}): ${errText.slice(0, 300)}`,
       payload: { call_control_id: callControlId, http_status: answerRes.status }
     });
     const { error: relAnsErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
@@ -1878,7 +1896,15 @@ serve(async (req: Request) => {
     if (Date.now() > deadline) {
       return new Response("Timeout", { status: 500 });
     }
-    return new Response("Answer failed", { status: 500 });
+    // 200 for the hangup race: the reservation and the budget hold are already
+    // released above, so there is no work left to retry, and a 500 asks Telnyx
+    // to redeliver a webhook for a call that no longer exists.
+    return callerGone
+      ? new Response(JSON.stringify({ ok: true, path: "caller_hung_up_before_answer" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+      : new Response("Answer failed", { status: 500 });
   }
 
   const { error: markErr, data: markData } = await supabase.rpc("voice_mark_answer_issued", {

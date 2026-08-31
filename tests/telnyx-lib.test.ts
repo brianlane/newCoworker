@@ -4,7 +4,9 @@ import { verifyTelnyxWebhookSignature } from "@/lib/telnyx/webhook-verify";
 import { signStreamUrlPayload, verifyStreamUrlPayload, newStreamNonce } from "@/lib/telnyx/stream-url";
 import {
   answerThenSpeak,
+  isCallAlreadyEndedResponse,
   rejectIncomingCall,
+  TELNYX_CALL_ALREADY_ENDED_CODE,
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
@@ -15,6 +17,89 @@ import {
   telnyxTransferCall,
   telnyxDialCall
 } from "../supabase/functions/_shared/telnyx_call_actions";
+
+/**
+ * Telling "the caller hung up mid-ring" apart from "our answer is broken".
+ *
+ * Amy Laidlaw's line produced the first one on 2026-08-30 and it was recorded
+ * as the second: an `error` row on the admin System Errors card, and a 500
+ * back to Telnyx asking it to redeliver a webhook for a dead call.
+ */
+describe("isCallAlreadyEndedResponse", () => {
+  const alreadyEnded = JSON.stringify({
+    errors: [
+      {
+        code: TELNYX_CALL_ALREADY_ENDED_CODE,
+        title: "Call has already ended",
+        detail: "This call is no longer active and can't receive commands."
+      }
+    ]
+  });
+
+  it("recognises the body Telnyx actually returned for Amy's abandoned ring", () => {
+    expect(isCallAlreadyEndedResponse(422, alreadyEnded)).toBe(true);
+  });
+
+  it("accepts a numeric code, since JSON gives no guarantee it is a string", () => {
+    const numeric = JSON.stringify({ errors: [{ code: 90018, title: "Call has already ended" }] });
+    expect(isCallAlreadyEndedResponse(422, numeric)).toBe(true);
+  });
+
+  it("finds the code beside another error rather than only in first position", () => {
+    const mixed = JSON.stringify({
+      errors: [{ code: "10015", title: "Something else" }, { code: "90018" }]
+    });
+    expect(isCallAlreadyEndedResponse(422, mixed)).toBe(true);
+  });
+
+  it("does NOT swallow a different 422: a bad stream URL must still page", () => {
+    const other = JSON.stringify({
+      errors: [{ code: "10015", title: "Invalid stream_url", detail: "must be wss" }]
+    });
+    expect(isCallAlreadyEndedResponse(422, other)).toBe(false);
+  });
+
+  it("does NOT swallow an auth failure", () => {
+    expect(
+      isCallAlreadyEndedResponse(401, JSON.stringify({ errors: [{ code: "10009" }] }))
+    ).toBe(false);
+  });
+
+  it("never treats a 5xx as benign, whatever body it carries", () => {
+    // An upstream failure that happens to mention the code is not evidence
+    // the call ended, and quietly 200-ing it would hide a Telnyx outage.
+    expect(isCallAlreadyEndedResponse(500, alreadyEnded)).toBe(false);
+    expect(isCallAlreadyEndedResponse(503, alreadyEnded)).toBe(false);
+  });
+
+  it("fails toward the loud path on a body it cannot read", () => {
+    expect(isCallAlreadyEndedResponse(422, "<html>gateway</html>")).toBe(false);
+    expect(isCallAlreadyEndedResponse(422, "")).toBe(false);
+  });
+
+  it("fails toward the loud path when the shape is not the documented one", () => {
+    expect(isCallAlreadyEndedResponse(422, JSON.stringify({ errors: "90018" }))).toBe(false);
+    expect(isCallAlreadyEndedResponse(422, JSON.stringify({ code: "90018" }))).toBe(false);
+    expect(isCallAlreadyEndedResponse(422, JSON.stringify(null))).toBe(false);
+  });
+
+  it("steps over a null or code-less entry instead of throwing on it", () => {
+    // Telnyx has not sent this shape, and a classifier that throws while
+    // classifying a failure turns a hung-up caller into a 500 with a stack.
+    const ragged = JSON.stringify({ errors: [null, {}, { code: "90018" }] });
+    expect(isCallAlreadyEndedResponse(422, ragged)).toBe(true);
+    expect(isCallAlreadyEndedResponse(422, JSON.stringify({ errors: [null, {}] }))).toBe(false);
+  });
+
+  it("is not fooled by a code that merely contains the digits", () => {
+    const near = JSON.stringify({ errors: [{ code: "900181" }] });
+    expect(isCallAlreadyEndedResponse(422, near)).toBe(false);
+  });
+
+  it("treats a 2xx as no failure at all, since the caller only asks on !ok", () => {
+    expect(isCallAlreadyEndedResponse(200, alreadyEnded)).toBe(false);
+  });
+});
 
 describe("telnyx webhook-verify", () => {
   it("rejects missing signature", () => {

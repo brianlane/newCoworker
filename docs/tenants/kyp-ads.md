@@ -278,6 +278,20 @@ How the pieces fit:
   filed him as a lead. He has not tried it yet (the WhatsApp conversation row
   for his Canadian mobile is outbound-only, `last_user_message_at` is still
   epoch zero), so this was latent rather than experienced.
+  **Resolved as far as it can be, 2026-08-31.** James has confirmed he is not
+  fixing the billing, so the owner-alert WhatsApp leg is switched off here
+  (`disable-undeliverable-whatsapp-alerts.ts`, in the One-shots section
+  below) and the daily `whatsapp_message_failed` error stops. Two things to
+  hold on to. First, this is muting a channel that was already delivering
+  nothing, not giving anything up: 19 of 19 receipted sends failed, and with
+  `last_user_message_at` at epoch zero the free window has never been open,
+  so no alert has ever reached him here. Second, the platform no longer LIES
+  about the ones that did go out: a `failed` receipt now walks back to the
+  `notifications` row it belongs to and flips the `sent` status the
+  dispatcher wrote on Meta's acceptance, so the dashboard, the unread badge
+  and the liveness sweep stop counting delivery that did not happen. The
+  channel map for James is unchanged by any of this: email and dashboard,
+  nothing else.
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free
@@ -359,6 +373,19 @@ re-run the lead flow for H Eve after the Canada-whitelist outage killed run
 (generic; applied here Aug 28 2026 to move James's roster row off the
 untextable +852 number onto his +1514 mobile and set his email, ledger id
 244, details in the +852 sharp edge above).
+
+Owner-alert WhatsApp switched OFF 2026-08-31:
+`disable-undeliverable-whatsapp-alerts.ts` (generic, evidence-gated) sets
+`notification_preferences.whatsapp_urgent = false` here. James has told us he
+is not fixing the 131042 billing block, and this tenant meets every bar the
+script refuses without: 19 of 19 receipted sends on his own thread failed,
+all on 131042, and `last_user_message_at` on that thread is still epoch zero,
+so the free 24-hour window has never once been open and no alert could ever
+have landed. Nothing else changes: the integration stays connected, inbound
+customer threads (which are customer-initiated and therefore unbilled) keep
+working, and his alerts continue by email and dashboard. Re-enable from
+Dashboard > Settings > Notifications if he ever fixes billing or messages the
+business number, and confirm with `npx tsx debug/whatsapp-delivery-report.ts`.
 
 Vantage Flow Media rollout: `apply-vfm-brand.ts` (vault sections + sync),
 `apply-vfm-team.ts` (Liz on the roster + `lead_auto_assign`),
