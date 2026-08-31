@@ -227,7 +227,7 @@ export async function getSubscription(
  * row would shadow it there. Callers that stamp Hostinger billing or
  * cancel leftover carts must look at the live row.
  */
-export async function getLiveSubscription(
+async function getLiveSubscription(
   businessId: string,
   client?: SupabaseClient
 ): Promise<SubscriptionRow | null> {

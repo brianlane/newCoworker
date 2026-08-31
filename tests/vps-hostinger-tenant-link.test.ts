@@ -3,7 +3,6 @@ import {
   businessIdForHostingerBillingSub,
   isLiveRowMissingHostingerBillingId,
   liveSubscriptionForBusiness,
-  pickAssignedStampSource,
   planSubscriptionHostingerReconcile,
   type HostingerLinkInventory,
   type HostingerLinkSubscription
@@ -372,8 +371,53 @@ describe("planSubscriptionHostingerReconcile", () => {
     ]);
   });
 
-  it("does not stamp when the live row has no assigned inventory", () => {
+  it("refuses leftover assigned rows when the current VM is not among them", () => {
     const { plans, skips } = planSubscriptionHostingerReconcile({
+      subscriptions: [sub({ id: "kin-live", business_id: KIN })],
+      inventory: [
+        inv({
+          vm_id: 1864812,
+          assigned_business_id: KIN,
+          hostinger_billing_subscription_id: "old-retired-box"
+        })
+      ],
+      currentVmByBusiness: new Map([[KIN, 1936826]])
+    });
+    expect(skips[0]?.reason).toContain("stale_assigned_row");
+    expect(plans.filter((p) => p.kind === "stamp")).toEqual([]);
+  });
+
+  it("skips the current VM when that inventory row has no Hostinger id", () => {
+    const { skips } = planSubscriptionHostingerReconcile({
+      subscriptions: [sub({ id: "hq-sub", business_id: HQ, stripe_subscription_id: null })],
+      inventory: [inv({ vm_id: 1806097, hostinger_billing_subscription_id: null })],
+      currentVmByBusiness: new Map([[HQ, 1806097]])
+    });
+    expect(skips[0]?.reason).toContain("no Hostinger billing id");
+  });
+
+  it("treats a mix of null and set Hostinger ids as a disagreement", () => {
+    const { plans, skips } = planSubscriptionHostingerReconcile({
+      subscriptions: [sub({ id: "kin-live", business_id: KIN })],
+      inventory: [
+        inv({
+          vm_id: 1864812,
+          assigned_business_id: KIN,
+          hostinger_billing_subscription_id: null
+        }),
+        inv({
+          vm_id: 1936826,
+          assigned_business_id: KIN,
+          hostinger_billing_subscription_id: "Azyp34VTaWZDIBG8"
+        })
+      ]
+    });
+    expect(skips[0]?.reason).toContain("leftover assigned row");
+    expect(plans.filter((p) => p.kind === "stamp")).toEqual([]);
+  });
+
+  it("does not stamp when the live row has no assigned inventory", () => {
+    const empty = planSubscriptionHostingerReconcile({
       subscriptions: [
         sub({
           id: "kin-live",
@@ -384,8 +428,16 @@ describe("planSubscriptionHostingerReconcile", () => {
       inventory: [],
       currentVmByBusiness: null
     });
-    expect(skips).toEqual([]);
-    expect(plans).toEqual([]);
+    expect(empty.skips).toEqual([]);
+    expect(empty.plans).toEqual([]);
+
+    const retiredOnly = planSubscriptionHostingerReconcile({
+      subscriptions: [sub({ id: "hq-sub", business_id: HQ, stripe_subscription_id: null })],
+      inventory: [inv({ vm_id: 1, state: "retired" })],
+      currentVmByBusiness: new Map([[HQ, 1806097]])
+    });
+    expect(retiredOnly.skips).toEqual([]);
+    expect(retiredOnly.plans).toEqual([]);
   });
 
   it("honours an optional business-id filter", () => {
@@ -423,54 +475,5 @@ describe("planSubscriptionHostingerReconcile", () => {
         vmId: 1806097
       }
     ]);
-  });
-});
-
-describe("pickAssignedStampSource", () => {
-  it("returns null when there is no assigned inventory", () => {
-    expect(pickAssignedStampSource(HQ, [inv({ vm_id: 1, state: "retired" })])).toBeNull();
-    expect(
-      pickAssignedStampSource(HQ, [inv({ vm_id: 1, state: "retired" })], new Map([[HQ, 1806097]]))
-    ).toBeNull();
-  });
-
-  it("refuses leftover assigned rows when the current VM is not among them", () => {
-    const source = pickAssignedStampSource(
-      KIN,
-      [
-        inv({
-          vm_id: 1864812,
-          assigned_business_id: KIN,
-          hostinger_billing_subscription_id: "old-retired-box"
-        })
-      ],
-      new Map([[KIN, 1936826]])
-    );
-    expect(source && "skip" in source && source.skip).toContain("stale_assigned_row");
-  });
-
-  it("skips the current VM when that inventory row has no Hostinger id", () => {
-    const source = pickAssignedStampSource(
-      HQ,
-      [inv({ vm_id: 1806097, hostinger_billing_subscription_id: null })],
-      new Map([[HQ, 1806097]])
-    );
-    expect(source && "skip" in source && source.skip).toContain("no Hostinger billing id");
-  });
-
-  it("treats a mix of null and set Hostinger ids as a disagreement", () => {
-    const source = pickAssignedStampSource(KIN, [
-      inv({
-        vm_id: 1864812,
-        assigned_business_id: KIN,
-        hostinger_billing_subscription_id: null
-      }),
-      inv({
-        vm_id: 1936826,
-        assigned_business_id: KIN,
-        hostinger_billing_subscription_id: "Azyp34VTaWZDIBG8"
-      })
-    ]);
-    expect(source && "skip" in source && source.skip).toContain("leftover assigned row");
   });
 });

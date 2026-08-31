@@ -154,7 +154,7 @@ function highestVm(rows: ReadonlyArray<HostingerLinkInventory>): HostingerLinkIn
  * `null` means this business has no assigned inventory, so there is nothing
  * to stamp and nothing to skip.
  */
-export function pickAssignedStampSource(
+function pickAssignedStampSource(
   businessId: string,
   inventory: ReadonlyArray<HostingerLinkInventory>,
   currentVmByBusiness?: ReadonlyMap<string, number> | null
