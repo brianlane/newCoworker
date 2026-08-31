@@ -121,6 +121,15 @@ visitor actually books.
 
 ## Sharp edges
 
+- **The Hostinger billing id lives on both inventory and the subscription
+  row.** vm `1806097` is prepaid through 2027-09-05 on Hostinger sub
+  `16BcBrVOTACBI8WdU` (one-year term bought Aug 2026). Inventory always had
+  that id. The synthetic Stripe-less `subscriptions` row did not, so
+  `debug/audit-fleet-terms.ts` printed tenant=UNLINKED. Stamped by
+  `reconcile-subscription-hostinger-links.ts`. Provision now writes the id
+  onto the live subscription after every successful adopt/purchase. Term
+  renewal still skips HQ (`stripeless` + null `billing_period`), which is
+  the right call for a co-tenanted box.
 - **The box is shared hardware.** `srv1806097` also hosts **JobArms**, our
   second product, namespaced end to end. It is the only co-tenanted box in the
   fleet and no customer box may ever join it. Anything that re-images it
@@ -149,6 +158,11 @@ visitor actually books.
   next divergence shows up before `--apply` rather than after.
 
 ## One-shots
+
+**Hostinger billing id stamped on the synthetic subscription (2026-08-31):**
+`reconcile-subscription-hostinger-links.ts --apply` copied
+`16BcBrVOTACBI8WdU` from inventory onto HQ's live `subscriptions` row so
+fleet-term joins stop calling the 2027 prepaid box UNLINKED.
 
 **Bounced-pitch prospects retired (2026-08-28):**
 `retire-bounced-outreach-prospects.ts --apply` moved five prospects whose

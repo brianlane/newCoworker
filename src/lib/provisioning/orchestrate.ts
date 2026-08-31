@@ -60,7 +60,7 @@ import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOpsDeployFailedEmail, sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
-import { getSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, persistHostingerBillingIdOnLiveSubscription } from "@/lib/db/subscriptions";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerNotifyEmail } from "@/lib/provisioning/notify-recipient";
 import { resolveBusinessCountry } from "@/lib/plans/business-country";
@@ -3047,6 +3047,20 @@ async function runOrchestrator(
           }
         }
       }
+    }
+  }
+
+  if (provisioned.hostingerBillingSubscriptionId) {
+    try {
+      await persistHostingerBillingIdOnLiveSubscription(
+        businessId,
+        provisioned.hostingerBillingSubscriptionId
+      );
+    } catch (err) {
+      logger.warn("Failed to persist hostinger_billing_subscription_id", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
     }
   }
 

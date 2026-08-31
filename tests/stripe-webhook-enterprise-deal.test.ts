@@ -32,7 +32,8 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
     createSubscription: vi.fn(),
     getSubscription: vi.fn(),
     getSubscriptionByStripeSubscriptionId: vi.fn(),
-    updateSubscription: vi.fn()
+    updateSubscription: vi.fn(),
+    cancelUnpaidPendingSiblings: vi.fn().mockResolvedValue(0)
   };
 });
 

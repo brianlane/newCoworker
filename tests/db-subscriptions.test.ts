@@ -830,4 +830,235 @@ describe("db/subscriptions", () => {
       );
     });
   });
+
+  describe("persistHostingerBillingIdOnLiveSubscription", () => {
+    const live = {
+      ...MOCK_SUB,
+      hostinger_billing_subscription_id: null
+    };
+
+    function liveDb(result: { data: unknown; error: unknown }) {
+      return {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue(result)
+      };
+    }
+
+    it("returns false without touching the client when the id is empty", async () => {
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", null)).toBe(false);
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", "")).toBe(false);
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    });
+
+    it("returns false when there is no live row", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        liveDb({ data: null, error: null }) as never
+      );
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1")).toBe(false);
+    });
+
+    it("returns false when the live lookup errors", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        liveDb({ data: null, error: { message: "replica down" } }) as never
+      );
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1")).toBe(false);
+    });
+
+    it("returns false when the live row already has this id", async () => {
+      const db = liveDb({
+        data: { ...live, hostinger_billing_subscription_id: "hsub-1" },
+        error: null
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1")).toBe(false);
+      expect(db.update).not.toHaveBeenCalled();
+    });
+
+    it("stamps the live row", async () => {
+      const db = liveDb({ data: live, error: null });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1")).toBe(true);
+      expect(db.update).toHaveBeenCalledWith({ hostinger_billing_subscription_id: "hsub-1" });
+    });
+
+    it("onlyIfMissing still stamps when the live row has no id yet", async () => {
+      const db = liveDb({ data: live, error: null });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(
+        await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1", {
+          onlyIfMissing: true
+        })
+      ).toBe(true);
+      expect(db.update).toHaveBeenCalledWith({ hostinger_billing_subscription_id: "hsub-1" });
+    });
+
+    it("onlyIfMissing refuses to overwrite a different existing id", async () => {
+      const db = liveDb({
+        data: { ...live, hostinger_billing_subscription_id: "other" },
+        error: null
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { persistHostingerBillingIdOnLiveSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      expect(
+        await persistHostingerBillingIdOnLiveSubscription("biz-1", "hsub-1", {
+          onlyIfMissing: true
+        })
+      ).toBe(false);
+      expect(db.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("cancelUnpaidPendingSiblings", () => {
+    it("returns 0 when there is no live subscription", async () => {
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { cancelUnpaidPendingSiblings } = await import("@/lib/db/subscriptions");
+      expect(await cancelUnpaidPendingSiblings("biz-1")).toBe(0);
+    });
+
+    it("cancels unpaid pending rows and skips the live id", async () => {
+      let fromCount = 0;
+      const db = {
+        from: vi.fn(() => {
+          fromCount += 1;
+          if (fromCount === 1) {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              order: vi.fn().mockReturnThis(),
+              limit: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { ...MOCK_SUB, id: "live" },
+                error: null
+              })
+            };
+          }
+          if (fromCount === 2) {
+            const chain = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              is: vi.fn()
+            };
+            chain.is.mockResolvedValue({
+              data: [{ id: "pending-1" }, { id: "live" }, { id: "pending-2" }],
+              error: null
+            });
+            return chain;
+          }
+          return {
+            update: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            neq: vi.fn().mockReturnThis(),
+            select: vi.fn().mockResolvedValue({ data: [{ id: "x" }], error: null })
+          };
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { cancelUnpaidPendingSiblings } = await import("@/lib/db/subscriptions");
+      expect(await cancelUnpaidPendingSiblings("biz-1")).toBe(2);
+    });
+
+    it("counts only CAS wins when a pending row becomes Stripe-linked mid-flight", async () => {
+      let fromCount = 0;
+      const db = {
+        from: vi.fn(() => {
+          fromCount += 1;
+          if (fromCount === 1) {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              order: vi.fn().mockReturnThis(),
+              limit: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { ...MOCK_SUB, id: "live" },
+                error: null
+              })
+            };
+          }
+          if (fromCount === 2) {
+            const chain = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              is: vi.fn()
+            };
+            chain.is.mockResolvedValue({
+              data: [{ id: "pending-1" }],
+              error: null
+            });
+            return chain;
+          }
+          return {
+            update: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            neq: vi.fn().mockReturnThis(),
+            select: vi.fn().mockResolvedValue({ data: [], error: null })
+          };
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const { cancelUnpaidPendingSiblings } = await import("@/lib/db/subscriptions");
+      expect(await cancelUnpaidPendingSiblings("biz-1")).toBe(0);
+    });
+
+    it("treats a null pending list as empty and throws on a query error", async () => {
+      const { cancelUnpaidPendingSiblings } = await import("@/lib/db/subscriptions");
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: MOCK_SUB, error: null }),
+          is: vi.fn().mockResolvedValue({ data: null, error: null })
+        }))
+      } as never);
+      expect(await cancelUnpaidPendingSiblings("biz-1")).toBe(0);
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: MOCK_SUB, error: null }),
+          is: vi.fn().mockResolvedValue({ data: null, error: { message: "replica down" } })
+        }))
+      } as never);
+      await expect(cancelUnpaidPendingSiblings("biz-1")).rejects.toThrow(
+        "cancelUnpaidPendingSiblings: replica down"
+      );
+    });
+  });
 });

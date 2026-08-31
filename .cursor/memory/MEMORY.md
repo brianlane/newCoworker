@@ -151,3 +151,4 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Translator interpret flake](project_translator_interpret_flake.md) - the cue scores 79/80; the nightly went red because this file had no retry
 - [Aug 28-29 nightly reds: three causes, kyp owner-choice drift](project_nightly_red_aug29_kyp_owner_choice_drift.md) - Aug 29 kyp failure is model drift ~40% local, prompt-only contract; NOT #1728
 - [Page only on what is actionable](feedback_page_only_on_what_is_actionable.md) - three false alarms in a week; error level is for what a human here can act on; the tension with "delivered is not received" resolved
+- [Hostinger billing id must be on the live subscription row](project_subscription_hostinger_link_must_be_stamped.md) - inventory is not the join the audit/sweeps use; leftover unpaid pending carts next to a live sibling make a tenant appear twice

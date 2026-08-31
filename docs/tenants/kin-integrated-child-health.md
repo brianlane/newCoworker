@@ -3,7 +3,8 @@
 Business id: `a912aff5-dd87-49fb-ad6a-477acefb66c0`. Standard tier, monthly,
 signed up self-serve 2026-08-24 after a re-issued payment link (the first
 checkout was abandoned Aug 21; the payment-link tooling in PR #1591 exists
-because of this account). Box `srv1864812` (the pool KVM 2). Timezone
+because of this account). Box `srv1936826` (KVM 2; adopted after the Aug 28
+term-renewal purchase, old pool box `srv1864812` retired). Timezone
 America/Edmonton. Priority support until ~2026-09-23 (James-referral deal:
 white-glove and build fees waived, 30 days priority support).
 
@@ -193,10 +194,11 @@ they are a distinct human.
 
 ## Sharp edges
 
-- **Two pending subscription rows** predate activation (Aug 21 abandoned
-  checkout, Aug 24 re-issued link). The newest row is the active one; the
-  Aug 21 `pending` orphan is harmless and expected (see PR #1591's row-reuse
-  fix, which prevents new ones).
+- **The Aug 21 pending checkout is closed.** It sat next to the Aug 24 paid
+  row and made fleet-term audits print KIN twice. PR #1591's row-reuse fix
+  prevents new orphans; `reconcile-subscription-hostinger-links.ts` canceled
+  the leftover unpaid cart. Checkout activation now cancels unpaid pending
+  siblings so this shape cannot come back.
 - **The flow being OFF is on purpose** until wording approval + real link.
   Do not "fix" it by enabling.
 - **Speed-to-lead vs quiet hours:** an evening Meta lead gets the owner
@@ -206,6 +208,9 @@ they are a distinct human.
 
 ## One-shots
 
+- `reconcile-subscription-hostinger-links.ts`: generic fleet backfill that
+  canceled the Aug 21 unpaid pending checkout (and stamps a missing Hostinger
+  billing id on a live row from inventory). Dry-run by default.
 - `kin-booking-links.ts`: the four JaneApp links and `resolveKinService`,
   the single source of truth both routing halves import.
 - `kin-lead-definition.ts` (pure builder, pinned by

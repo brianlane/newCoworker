@@ -105,7 +105,8 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
     ...actual,
     getSubscription: vi.fn(),
     getSubscriptionByStripeSubscriptionId: vi.fn(),
-    updateSubscription: vi.fn()
+    updateSubscription: vi.fn(),
+    cancelUnpaidPendingSiblings: vi.fn().mockResolvedValue(0)
   };
 });
 
@@ -241,7 +242,8 @@ import { ensureCommitmentSchedule, verifyWebhook } from "@/lib/stripe/client";
 import {
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
-  updateSubscription
+  updateSubscription,
+  cancelUnpaidPendingSiblings
 } from "@/lib/db/subscriptions";
 import { getBusiness, recordWhiteGlovePurchase, updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import { recordPromotionRedemption } from "@/lib/db/promotions";
@@ -356,6 +358,7 @@ describe("stripe webhook route", () => {
         stripe_subscription_cached_at: expect.any(String)
       })
     );
+    expect(cancelUnpaidPendingSiblings).toHaveBeenCalledWith("biz_1");
     expect(ensureCommitmentSchedule).toHaveBeenCalledWith({
       subscriptionId: "sub_1",
       tier: "starter",

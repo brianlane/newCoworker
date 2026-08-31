@@ -6,6 +6,7 @@ import {
   getSubscriptionByStripeSubscriptionId,
   stripeSubscriptionPeriodCache,
   updateSubscription,
+  cancelUnpaidPendingSiblings,
   type SubscriptionPeriodStripeCache
 } from "@/lib/db/subscriptions";
 import { recordPromotionRedemption } from "@/lib/db/promotions";
@@ -1520,6 +1521,15 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     customer_profile_id: customerProfileId ?? existing.customer_profile_id,
     ...stripeMirror
   });
+
+  try {
+    await cancelUnpaidPendingSiblings(businessId);
+  } catch (err) {
+    logger.warn("cancel unpaid pending siblings failed after checkout activation", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 
   // Membership Checkout may include discounted one-time usage packs. Grant
   // only after the local sub is active so the RPCs pass entitlement checks.

@@ -11,7 +11,8 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/subscriptions", () => ({
   getSubscription: vi.fn(),
   createSubscription: vi.fn(),
-  updateSubscription: vi.fn()
+  updateSubscription: vi.fn(),
+  cancelUnpaidPendingSiblings: vi.fn().mockResolvedValue(0)
 }));
 
 vi.mock("@/lib/provisioning/orchestrate", () => ({
@@ -21,11 +22,7 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
 import { POST } from "@/app/api/admin/skip-payment/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
-import {
-  getSubscription,
-  createSubscription,
-  updateSubscription
-} from "@/lib/db/subscriptions";
+import { getSubscription, createSubscription, updateSubscription, cancelUnpaidPendingSiblings } from "@/lib/db/subscriptions";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
@@ -77,6 +74,7 @@ describe("api/admin/skip-payment route", () => {
     expect(res.status).toBe(200);
     expect(updateSubscription).toHaveBeenCalledWith("sub-1", { status: "active" });
     expect(createSubscription).not.toHaveBeenCalled();
+    expect(cancelUnpaidPendingSiblings).toHaveBeenCalledWith(BIZ_ID);
     // The committed term flows through so the Hostinger box is bought at the
     // matching term SKU, not expensive monthly renewal.
     expect(orchestrateProvisioning).toHaveBeenCalledWith(
@@ -106,6 +104,7 @@ describe("api/admin/skip-payment route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith(
       expect.objectContaining({ billingPeriod: null })
     );
+    expect(cancelUnpaidPendingSiblings).toHaveBeenCalledWith(BIZ_ID);
   });
 
   it("404s when the business does not exist", async () => {
