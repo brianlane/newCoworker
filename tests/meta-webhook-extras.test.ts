@@ -600,6 +600,41 @@ describe("processMetaMessageStatusEvent", () => {
     expect(vi.mocked(recordSystemLog).mock.calls[0][0].event).toBe("whatsapp_message_failed");
   });
 
+  /**
+   * The alert row and the messenger transcript are independent records, and
+   * the transcript's outcome must not gate the alert correction (Bugbot,
+   * PR #1759). Both cases below reach here with a non-`applied` outcome and a
+   * notification row still wrongly claiming delivery.
+   */
+  it("corrects the alert row even when the transcript never got the message", async () => {
+    // deliverWhatsApp's transcript append is best-effort and only logs on
+    // failure, so the wamid can be on the alert row and absent from
+    // messenger_messages. That reads as `not_found` here.
+    apply.mockResolvedValue("not_found");
+    reconcile.mockResolvedValue(true);
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(true);
+    expect(reconcile).toHaveBeenCalled();
+    // Correcting a row IS the proof this message was ours, so it earns the
+    // owner-visible alarm even though the transcript could not place it.
+    expect(vi.mocked(recordSystemLog).mock.calls[0][0].event).toBe("whatsapp_message_failed");
+  });
+
+  it("still corrects on a redelivered receipt the transcript calls stale", async () => {
+    apply.mockResolvedValue("stale");
+    reconcile.mockResolvedValue(true);
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(true);
+    expect(reconcile).toHaveBeenCalled();
+  });
+
+  it("stays silent for a foreign message: nothing applied, nothing corrected", async () => {
+    // A human replying from the Meta inbox. No transcript row and no alert
+    // row, so there is nothing to say and nothing to fix.
+    apply.mockResolvedValue("not_found");
+    reconcile.mockResolvedValue(false);
+    expect(await processMetaMessageStatusEvent(event({ status: "failed" }))).toBe(false);
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
   it("does not touch alert rows for a receipt that is not a failure", async () => {
     await processMetaMessageStatusEvent(event({ status: "delivered" }));
     expect(reconcile).not.toHaveBeenCalled();
