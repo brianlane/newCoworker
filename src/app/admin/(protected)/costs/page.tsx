@@ -21,7 +21,11 @@ import {
   telnyxUsageWindow,
   type TelnyxUsageWindowKey
 } from "@/lib/admin/costs-view";
-import { fetchTelnyxBalance } from "@/lib/telnyx/balance";
+import {
+  fetchTelnyxAutoRechargePrefs,
+  fetchTelnyxBalance,
+  formatAutoRechargeLine
+} from "@/lib/telnyx/balance";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import {
   MARGIN_ALERT_SETTINGS_KEY,
@@ -85,10 +89,12 @@ export default async function AdminCostsPage({
   // fetch also covers every selectable per-tenant usage window, since
   // trendWindowStartYmd (instant now minus 90d) always starts at or before
   // the widest window's UTC-floor(now) minus 89 days.
-  const [fleetCost, syncStatusRaw, balance] = await Promise.all([
+  const telnyxKey = process.env.TELNYX_API_KEY?.trim() || null;
+  const [fleetCost, syncStatusRaw, balance, autoRecharge] = await Promise.all([
     loadFleetCostBreakdown(now),
     getAdminPlatformSetting(PLATFORM_COST_SYNC_STATUS_KEY).catch(() => null),
-    fetchTelnyxBalance(process.env.TELNYX_API_KEY?.trim() || null)
+    fetchTelnyxBalance(telnyxKey),
+    fetchTelnyxAutoRechargePrefs(telnyxKey)
   ]);
   const { margins, hostingerRows, telnyxTrendRows, inventory, breakdown } = fleetCost;
 
@@ -248,6 +254,7 @@ export default async function AdminCostsPage({
             {balance
               ? `${balance.currency}${balance.pendingUsd !== null ? ` · $${balance.pendingUsd.toFixed(2)} pending` : ""}`
               : "live read unavailable"}
+            {autoRecharge ? ` · ${formatAutoRechargeLine(autoRecharge)}` : ""}
           </p>
         </Card>
         <Card>
@@ -386,6 +393,11 @@ export default async function AdminCostsPage({
             <p className="text-xs text-parchment/30 mt-1">
               {usageWindow.startYmd} → {usageWindow.endYmdExclusive} (UTC days) ·{" "}
               {microsToMoney(usageBreakdown.totalMicros)} total
+            </p>
+            <p className="text-xs text-parchment/30 mt-1">
+              Usage only (detail records). Number rental posts on the 1st and the 10DLC
+              campaign fee posts on the 6th; those still drain the prepaid balance and
+              can fire auto-recharge even when this chart is quiet.
             </p>
           </div>
           <div className="flex items-center gap-1">
