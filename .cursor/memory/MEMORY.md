@@ -11,7 +11,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Heredoc bodies via files](feedback_heredoc_file_flag.md) - inline heredocs mangle; git commit -F and gh --body-file
 - [Signed-in smoke recipe](project_signed_in_smoke_recipe.md) - TEST_USERNAME/PASSWORD stale; service-role throwaway user + authenticated curl
 - [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp; cost includes carrier fee; auto-recharge is a $2/$28 prepaid floor, not a weekly bill
-- [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC on a drained $28 bucket; Amy offer fan-out
+- [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC on a drained $28 bucket; Amy offer fan-out; do not cut Standard SMS 5000→3000 (5000 already IS the old 3000-message cap in units; Amy is on pace for 5000)
 - [Intl SMS state](project_intl_sms_state.md) - MX SMS never delivered; long codes can't originate non-NANP; non-US/CA skips
 - [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2; counsel items still open
 - [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5; trust zapier-platform history over CLI

@@ -54,4 +54,18 @@ RCS agent `new_coworker_jut3q1af_agent` is still LIVE in the testing phase (`NON
 - Amy send mix: `sms_outbound_log` AND `sms_inbound_jobs.assistant_reply_text` (see [[project_sms_send_logging_split]]).
 - Invoice PDFs via `GET /v2/invoices/{id}?action=link` once Telnyx issues August.
 
-Related: [[project_telnyx_billing_model_traps]], [[project_sms_segment_cliff_invisible_chars]], [[project_weighted_sms_metering]], [[project_amy_policies]].
+## Membership revenue vs costs, and the 3,000-unit idea (Sep 1 2026)
+
+Follow-up to the auto-recharge question: should Standard's SMS cap move from 5,000 to 3,000?
+
+**No.** 5,000 is already the unit form of the old 3,000-message cap. The Aug 5 weighted-metering migration (PR #1189) says so in the SQL header: `standard 3,000 messages -> 5,000 units`, holding the canvas worst-case dollars ($43.94 vs planned $47.70 at $0.008787/part). Cutting to 3,000 units would be a 40% cut in the priced allowance, not a return to the old 3,000 messages. Constants: `SMS_MONTHLY_CAP_STANDARD = 5000` in `sms_monthly_limits.ts`, lockstep `nonenterprise_monthly_sms_cap`.
+
+**Fleet membership still prints money.** Four paying Standard tenants, day-current MRR **$852**: Scar Fairy $279, KYP Ads $279, KIN $195 (monthly intro), Amy $99 (biennial intro; renewal is $189). September 1 Costs-page margin of $693.80 / 81.4% is an artifact: revenue and hosting are the full month, Telnyx usage that morning was $0.48. A like-for-like August month is about **$852 revenue vs ~$220 cost (~74% margin)**: hosting $101.45, Telnyx usage $58.89, DID $7.70, 10DLC $10, Stripe fees $32.73, Gemini a few dollars, tax/adjuncts a few more.
+
+Amy is the tight row, not the fleet. August: revenue $99, Telnyx $44.28, hosting $14.99, DID $1.10, Stripe $2.88, Gemini $0.39 → about **+$35**. At her $189 renewal the same usage is about **+$125**. The other three paying tenants barely use SMS (KYP August 1,212 units / 24% of cap, KIN 15, Scar Fairy 3) and print $160–$245/mo each.
+
+**A 3,000-unit cap would only bind Amy, and it would stop her product.** Calendar August she used **3,997 units** (1,498 outbound messages, 2.67 units/msg after weighted metering went live), 80% of 5,000 and 133% of 3,000. Her live billing window started Aug 28 and already has 831 units in five days (~166/day), on pace for ~5,000 by period end (~Sep 27). 3,000 would hard-stop lead-facing texts around Sep 14 (`try_reserve_sms_outbound_slot` is a customer-facing stop; operational owner alerts still send). SMS packs exist at $0.02/text (consumed in units after the cap), which is the right overage path: ~2x our $0.0088/part cost, and self-healing per [[feedback_measure_the_machine_not_the_plan]].
+
+Truly's canceled DID still rents $1.10. HQ has $0 membership revenue and still costs hosting. Neither is an SMS-cap problem.
+
+Related: [[project_weighted_sms_metering]], [[project_sms_window_anchored_to_billing_period]].
