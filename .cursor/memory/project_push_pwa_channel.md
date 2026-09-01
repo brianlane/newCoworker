@@ -51,8 +51,11 @@ the DASHBOARD as live, which is the WhatsApp-lead bug one channel over.
   lock screen. Tenant enroll requires a REAL roster role; the registrar is
   not mounted during non-selfOwned view-as; `deliverPush` membership-revokes
   leftover non-member rows. Never revoke by endpoint alone: the same
-  endpoint is shared with the admin's HQ/platform row. See
-  `src/lib/push/eligibility.ts`.
+  endpoint is shared with the admin's HQ/platform row. Deno cannot import
+  that helper, so it asks `/api/internal/push-target-state` before it
+  decides `push_replaces_sms`. An unfiltered live-row check there would
+  skip SMS, then the send would drop the leaked device, and the owner
+  would get neither. See `src/lib/push/eligibility.ts`.
 
 **The widening ripples further than the compiler sees.** Only
 `CHANNEL_MAX_SILENCE_DAYS` is a `Record` over the union. By hand: both

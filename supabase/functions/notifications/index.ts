@@ -534,6 +534,7 @@ serve(async (req: Request) => {
     ""
   );
   const dashboardUrl = `${appUrl}/dashboard`;
+  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -733,23 +734,40 @@ serve(async (req: Request) => {
    * `pushDeliverable` gates SUPPRESSING the owner's text and fails toward
    * FALSE, because treating a blip as "yes" would silence the SMS on the
    * strength of a push nobody confirmed could land.
+   *
+   * Eligibility (roster role, not a leftover HQ view-as row) lives in
+   * src/lib/push, which this file cannot import. An unfiltered live-row
+   * check here used to treat a leaked admin device as deliverable, skip
+   * the owner's text, then `/api/internal/push-send` would drop that row
+   * and the owner would get neither channel. Ask the Node helper instead.
    */
   let pushConnected = true;
   let pushDeliverable = false;
-  {
-    // limit(1), NOT maybeSingle: push_subscriptions is one row per DEVICE and
-    // maybeSingle errors on the second, which the fail-open guard would then
-    // swallow forever.
-    const { data: pushSubs, error: pushErr } = await supa
-      .from("push_subscriptions")
-      .select("id")
-      .eq("business_id", record.business_id)
-      .is("revoked_at", null)
-      .limit(1);
-    if (!pushErr) {
-      const live = (pushSubs?.length ?? 0) > 0;
-      pushConnected = live;
-      pushDeliverable = live;
+  if (cronSecret && appUrl) {
+    try {
+      const stateRes = await fetch(`${appUrl}/api/internal/push-target-state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          Origin: appUrl
+        },
+        body: JSON.stringify({ businessId: record.business_id })
+      });
+      const stateJson = stateRes.ok
+        ? ((await stateRes.json().catch(() => null)) as {
+            data?: { connected?: boolean; deliverable?: boolean };
+          } | null)
+        : null;
+      if (
+        typeof stateJson?.data?.connected === "boolean" &&
+        typeof stateJson?.data?.deliverable === "boolean"
+      ) {
+        pushConnected = stateJson.data.connected;
+        pushDeliverable = stateJson.data.deliverable;
+      }
+    } catch {
+      // Leave the fail-open / fail-closed defaults.
     }
   }
 
@@ -1122,7 +1140,6 @@ serve(async (req: Request) => {
   // below kept writing whatsapp rows for tenants with no WhatsApp at all.
   // whatsappConnected itself is resolved above the SMS branch, which also
   // needs it for the whatsapp_replaces_sms preference.
-  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
   if (!whatsappConnected) {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.phone) {

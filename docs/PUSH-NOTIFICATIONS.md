@@ -99,6 +99,13 @@ non-member row. Revoke with `revokePushSubscriptionsForUser`, never by
 endpoint alone: the same endpoint is shared with the admin's HQ/platform
 row.
 
+**Deno must not re-derive deliverable.** The edge dispatcher used to treat
+any live `push_subscriptions` row as proof it could suppress SMS. A leaked
+HQ device then tripped `push_replaces_sms`, after which `push-send` dropped
+the row and the owner got neither channel. Eligibility lives in `src/lib`
+and cannot be imported there, so Deno asks `/api/internal/push-target-state`
+(the same `pushTargetState` helper) before the SMS leg.
+
 ## Adding another channel later
 
 The union in `src/lib/db/notifications.ts` is the source of truth, but the
