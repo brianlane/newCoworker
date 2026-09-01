@@ -7,6 +7,7 @@ import {
 import { parseAiFlowDefinition } from "../src/lib/ai-flows/schema";
 import {
   looksLikeTimeframe,
+  normalizeOfferReply,
   parseClaimWithTimeframe,
   parseEtaMinutes,
   MAX_CLAIM_TIMEFRAME_LEN,
@@ -36,6 +37,54 @@ describe("parseClaimWithTimeframe", () => {
     const long = `5, ${"x".repeat(500)}`;
     const parsed = parseClaimWithTimeframe(long);
     expect(parsed?.timeframe.length).toBe(MAX_CLAIM_TIMEFRAME_LEN);
+  });
+  it("strips copy wrapping so starred and quoted replies still parse", () => {
+    // Jason Lane, 2026-08-31: reminder said Reply *1, Kimberly*, he sent
+    // *1, Kimberly (unclosed) and *1, Kimberly* (closed). Same miss twice
+    // for Logan on 2026-08-29. The ask-back uses quotes.
+    expect(parseClaimWithTimeframe("*1, Kimberly*")).toEqual({
+      digit: "1",
+      timeframe: "Kimberly"
+    });
+    expect(parseClaimWithTimeframe("*1, Kimberly")).toEqual({
+      digit: "1",
+      timeframe: "Kimberly"
+    });
+    expect(parseClaimWithTimeframe('"1, Kimberly"')).toEqual({
+      digit: "1",
+      timeframe: "Kimberly"
+    });
+    expect(parseClaimWithTimeframe("\u201c1, Kimberly\u201d")).toEqual({
+      digit: "1",
+      timeframe: "Kimberly"
+    });
+    expect(parseClaimWithTimeframe("1, Kimberly")).toEqual({
+      digit: "1",
+      timeframe: "Kimberly"
+    });
+  });
+});
+
+describe("normalizeOfferReply", () => {
+  it("is a no-op on a plain digit or comma'd reply", () => {
+    expect(normalizeOfferReply("1")).toBe("1");
+    expect(normalizeOfferReply("1, Kimberly")).toBe("1, Kimberly");
+    expect(normalizeOfferReply("86")).toBe("86");
+  });
+  it("strips matched asterisk pairs, leftover leading/trailing stars, and wrapping quotes", () => {
+    expect(normalizeOfferReply("*1*")).toBe("1");
+    expect(normalizeOfferReply("*1")).toBe("1");
+    expect(normalizeOfferReply("**1**")).toBe("1");
+    expect(normalizeOfferReply('"1"')).toBe("1");
+    expect(normalizeOfferReply("'1'")).toBe("1");
+    expect(normalizeOfferReply("\u20181\u2019")).toBe("1");
+    expect(normalizeOfferReply("*86*")).toBe("86");
+    expect(normalizeOfferReply("  *2*  ")).toBe("2");
+  });
+  it("does not invent a claim from ordinary text", () => {
+    expect(normalizeOfferReply("STOP")).toBe("STOP");
+    expect(normalizeOfferReply("call me, please")).toBe("call me, please");
+    expect(normalizeOfferReply("*still unclaimed*")).toBe("still unclaimed");
   });
 });
 

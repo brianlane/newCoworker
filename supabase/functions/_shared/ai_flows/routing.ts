@@ -341,7 +341,7 @@ export function routingOfContext(context: Record<string, unknown> | null): Offer
 export function multiOfferHeadsUpLine(totalPending: number, leadShortName: string): string {
   const count = `*You have ${totalPending} unclaimed leads.*`;
   if (!leadShortName.trim()) {
-    return `${count} Reply *1, <name>* to say which one you are claiming.`;
+    return `${count} Reply "1, <name>" to say which one you are claiming.`;
   }
-  return `${count} Reply *1, ${leadShortName.trim()}* for this one.`;
+  return `${count} Reply "1, ${leadShortName.trim()}" for this one.`;
 }

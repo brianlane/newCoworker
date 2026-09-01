@@ -162,3 +162,37 @@ every path that consumes that input, not just the one you were looking at.
 The live path and the late path are two consumers of the same reply. Related:
 [[project_bare_digit_claim_is_lifo]], [[project_claim_by_reply_one_two_paths]],
 [[feedback_check_for_a_shared_mechanism_first]].
+
+## project_starred_claim_reply_falls_to_coworker
+
+Observed live on Amy Laidlaw's account, 2026-08-29 (Logan, twice) and
+2026-08-31 (Kimberly Morgan-Hutcherson). Jason Lane replied `*1, Kimberly`
+(leading asterisk, no close) after a reminder that said `Reply *1, Kimberly*
+to claim this one.` The claim parser required the body to start with a
+digit, so the reply skipped every claim path and landed in the staff
+coworker. The coworker has no claim tool. It said "You can definitely take
+that one" and wrote nothing. Reminder 1 of 3 then told him the lead was
+still unclaimed.
+
+**Why:** offer and reminder copy stars the typed reply so it stands out.
+Asterisks render as bold only on RCS; on plain SMS they are literal
+characters, and teammates copy them. The ask-back that already worked used
+quotes (`Reply "1, <name>"`), so the two instructions disagreed.
+
+**How it works now:**
+
+- `normalizeOfferReply` strips matched `*emphasis*` pairs, wrapping quotes
+  (straight and curly), and leftover leading/trailing stars before a digit.
+  `parseClaimWithTimeframe` and the inbound bare `1`-`9` / `86` gates all
+  run on that form.
+- Engine claim *hints* (reminderClaimHint, multiOfferHeadsUpLine) quote the
+  typed reply like the ask-back, and leave stars on the count line only.
+  Amy's Follow Up Requested template still stars `*1*` per her Aug 10 ask;
+  the parser now accepts that too.
+- Staff SMS preamble (`SMS_STAFF_CLAIM_LINE`) forbids promising a claim.
+  Team SMS is Rowboat, not the owner-operator engine, so "Can I take it?"
+  must be answered with "reply 1, the name", never "it's yours".
+
+Related: [[project_claim_by_reply_one_two_paths]],
+[[project_informational_team_alert_gets_replied_1]],
+[[project_owner_ask_reaches_the_flows]].

@@ -117,7 +117,7 @@ describe("multiOfferHeadsUpLine", () => {
   it("names the lead so the reply is unambiguous", () => {
     const line = multiOfferHeadsUpLine(2, "Daniel");
     expect(line).toContain("*You have 2 unclaimed leads.*");
-    expect(line).toContain("*1, Daniel*");
+    expect(line).toContain('"1, Daniel"');
   });
 
   it("counts correctly past two", () => {
@@ -126,9 +126,9 @@ describe("multiOfferHeadsUpLine", () => {
 
   it("falls back to a name placeholder when the flow captured no lead name", () => {
     const line = multiOfferHeadsUpLine(2, "   ");
-    expect(line).toContain("*1, <name>*");
+    expect(line).toContain('Reply "1, <name>"');
     // Never promise a reply shape naming a lead we cannot match on.
-    expect(line).not.toContain("*1, *");
+    expect(line).not.toMatch(/Reply "1,\s*"/);
   });
 
   it("no longer tells the team to reply 1 twice, which was never reliable", () => {

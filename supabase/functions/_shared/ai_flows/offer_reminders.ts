@@ -113,17 +113,18 @@ export function reminderText(args: ReminderTextArgs): string {
 /**
  * How to claim, given how many leads this teammate is holding. With one lead
  * a bare digit is unambiguous; with more, the name is what makes the reply
- * mean something, so it is starred (except on the final round, which strips
- * emphasis on its way out).
+ * mean something. The typed reply is quoted, not starred: asterisks around
+ * the digit are what teammates copy back, and those used to miss the parser
+ * (Jason Lane, 2026-08-31). Count emphasis on "N unclaimed leads" stays.
  */
 export function reminderClaimHint(pendingForAgent: number, leadShortName: string): string {
   if (pendingForAgent > 1 && leadShortName) {
     return (
       `You have *${pendingForAgent} unclaimed leads*. ` +
-      `Reply *1, ${leadShortName}* to claim this one.`
+      `Reply "1, ${leadShortName}" to claim this one.`
     );
   }
-  return "Reply *1* to claim it.";
+  return "Reply 1 to claim it.";
 }
 
 /**
