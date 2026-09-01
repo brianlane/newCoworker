@@ -164,6 +164,14 @@ visitor actually books.
 `16BcBrVOTACBI8WdU` from inventory onto HQ's live `subscriptions` row so
 fleet-term joins stop calling the 2027 prepaid box UNLINKED.
 
+**Bounced-pitch prospects retired (2026-09-01 re-run):**
+`retire-bounced-outreach-prospects.ts --apply` retired two more `sent`
+pitches that bounced after the Aug 28 pass: ASAP Plumbing
+(asapplumbingaz.com, hard bounce) and The Sorenson Law Firm
+(sorensonlaw.net, transient bounce). `sent_at` kept. A second dry-run the
+same day was a no-op. Live webhook retirement shipped in #1764, so new
+bounces should not need this script.
+
 **Bounced-pitch prospects retired (2026-08-28):**
 `retire-bounced-outreach-prospects.ts --apply` moved five prospects whose
 pitch provably bounced from `sent` to `failed`, which is what removes them
