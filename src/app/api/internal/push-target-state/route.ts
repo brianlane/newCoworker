@@ -4,8 +4,10 @@
  *
  * Eligibility (a real roster role, not a leftover HQ view-as row) lives in
  * `src/lib/push`, which an edge function cannot import. Asking here keeps
- * one implementation. An unfiltered live-row check on the Deno side would
- * treat a leaked admin device as deliverable, skip the owner's text, then
+ * one implementation for deliverable. Deno still answers connected from a
+ * local existence check so a never-subscribed tenant stays silent when
+ * this route is unreachable. An unfiltered live-row check for deliverable
+ * would treat a leaked admin device as able to suppress SMS, then
  * `deliverPush` would drop that row and the owner would get neither channel.
  *
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>` (assertCronAuth).

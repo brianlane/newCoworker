@@ -735,14 +735,34 @@ serve(async (req: Request) => {
    * FALSE, because treating a blip as "yes" would silence the SMS on the
    * strength of a push nobody confirmed could land.
    *
-   * Eligibility (roster role, not a leftover HQ view-as row) lives in
-   * src/lib/push, which this file cannot import. An unfiltered live-row
-   * check here used to treat a leaked admin device as deliverable, skip
-   * the owner's text, then `/api/internal/push-send` would drop that row
-   * and the owner would get neither channel. Ask the Node helper instead.
+   * Connected is "any live row?" and can be answered here. Deliverable is
+   * "a roster device, not a leftover HQ view-as row?" and cannot: that
+   * filter lives in src/lib/push, which this file cannot import. Setting
+   * BOTH from the unfiltered live row used to trip push_replaces_sms, then
+   * `/api/internal/push-send` dropped the leaked row and the owner got
+   * neither channel.
+   *
+   * Ask Node for both when reachable. If Node is down (worker-integration
+   * has no Next app), keep the local connected verdict so a tenant who
+   * never subscribed does not collect a phantom skip row, and leave
+   * deliverable false so SMS is not suppressed.
    */
   let pushConnected = true;
   let pushDeliverable = false;
+  {
+    // limit(1), NOT maybeSingle: push_subscriptions is one row per DEVICE and
+    // maybeSingle errors on the second, which the fail-open guard would then
+    // swallow forever.
+    const { data: pushSubs, error: pushErr } = await supa
+      .from("push_subscriptions")
+      .select("id")
+      .eq("business_id", record.business_id)
+      .is("revoked_at", null)
+      .limit(1);
+    if (!pushErr) {
+      pushConnected = (pushSubs?.length ?? 0) > 0;
+    }
+  }
   if (cronSecret && appUrl) {
     try {
       const stateRes = await fetch(`${appUrl}/api/internal/push-target-state`, {
@@ -767,7 +787,7 @@ serve(async (req: Request) => {
         pushDeliverable = stateJson.data.deliverable;
       }
     } catch {
-      // Leave the fail-open / fail-closed defaults.
+      // Keep local connected (or fail-open true) and deliverable false.
     }
   }
 

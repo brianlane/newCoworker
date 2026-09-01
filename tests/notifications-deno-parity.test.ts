@@ -218,10 +218,17 @@ describe("both dispatchers actually have a leg for every channel", () => {
    * device then tripped push_replaces_sms, after which push-send dropped that
    * row and the owner got neither push nor SMS. Eligibility lives in src/lib
    * and cannot be imported here, so the mirror must ask the Node helper.
+   *
+   * Connected is still derived from a local existence check: a tenant who
+   * never subscribed must not collect a phantom skip row when Node is
+   * unreachable (worker-integration has no Next app). Deliverable must not
+   * follow that same live flag.
    */
   it("does not treat an unfiltered live push row as deliverable", () => {
     expect(DENO_DISPATCH).toContain("/api/internal/push-target-state");
     expect(DENO_DISPATCH).not.toMatch(/pushDeliverable\s*=\s*live/);
+    expect(DENO_DISPATCH).not.toMatch(/pushDeliverable\s*=\s*\(pushSubs/);
+    expect(DENO_DISPATCH).toMatch(/pushConnected\s*=\s*\(pushSubs/);
   });
 });
 

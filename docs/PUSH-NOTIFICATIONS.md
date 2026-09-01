@@ -104,7 +104,9 @@ any live `push_subscriptions` row as proof it could suppress SMS. A leaked
 HQ device then tripped `push_replaces_sms`, after which `push-send` dropped
 the row and the owner got neither channel. Eligibility lives in `src/lib`
 and cannot be imported there, so Deno asks `/api/internal/push-target-state`
-(the same `pushTargetState` helper) before the SMS leg.
+(the same `pushTargetState` helper) before the SMS leg. Connected still
+uses a local existence check so a never-subscribed tenant does not collect
+a phantom skip row when Node is unreachable. Deliverable does not.
 
 ## Adding another channel later
 
