@@ -57,6 +57,7 @@ import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE,
+  SMS_STAFF_CLAIM_LINE,
   SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
   SMS_TIME_HONESTY_LINE,
   SMS_TIMEZONE_LINE
@@ -1695,6 +1696,7 @@ serve(async (req: Request) => {
         // "Let me know when clients text back" flips the toggle instead of
         // becoming an empty promise (KYP, Jul 20 2026).
         SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
+        SMS_STAFF_CLAIM_LINE,
         emojiIntensityLine,
         NO_EM_DASH_PROMPT_LINE,
         US_SPELLING_PROMPT_LINE,

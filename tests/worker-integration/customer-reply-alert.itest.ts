@@ -9,7 +9,7 @@ import {
   tickSmsWorker
 } from "./harness";
 import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
-import { SMS_STAFF_NOTIFICATION_SETTINGS_LINE } from "../../supabase/functions/_shared/sms_prompt_lines";
+import { SMS_STAFF_CLAIM_LINE, SMS_STAFF_NOTIFICATION_SETTINGS_LINE } from "../../supabase/functions/_shared/sms_prompt_lines";
 
 /**
  * Opt-in "client replied" owner alerts, end to end against the REAL
@@ -177,6 +177,7 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     expect(rowboat.calls.length).toBe(callsBefore + 1);
     const system = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "system");
     expect(system?.content).toContain(SMS_STAFF_NOTIFICATION_SETTINGS_LINE);
+    expect(system?.content).toContain(SMS_STAFF_CLAIM_LINE);
 
     // This turn IS a fallback: the local stack sets no ROWBOAT_GATEWAY_TOKEN,
     // so the platform operator engine is skipped and Rowboat answers instead

@@ -22,7 +22,7 @@ const BASE = {
   intervalMinutes: 20,
   ownerLabel: "Amy",
   details: "Lead type: seller\nWhat they asked for: comparables by email, then a call Monday",
-  claimHint: "You have *2 unclaimed leads*. Reply *1, Daniel* to claim this one."
+  claimHint: 'You have *2 unclaimed leads*. Reply "1, Daniel" to claim this one.'
 };
 
 describe("defaults", () => {
@@ -61,7 +61,7 @@ describe("reminderText: rounds before the last", () => {
 
   it("carries the flow's compact details and the claim hint", () => {
     expect(text).toContain("Lead type: seller");
-    expect(text).toContain("Reply *1, Daniel* to claim this one.");
+    expect(text).toContain('Reply "1, Daniel" to claim this one.');
   });
 
   it("promises the next round rather than the handover", () => {
@@ -81,7 +81,7 @@ describe("reminderText: the final round", () => {
 
   it("carries no asterisk emphasis at all, including from the claim hint", () => {
     expect(text).not.toContain("*");
-    expect(text).toContain("You have 2 unclaimed leads. Reply 1, Daniel to claim this one.");
+    expect(text).toContain('You have 2 unclaimed leads. Reply "1, Daniel" to claim this one.');
   });
 
   it("names who inherits the lead and when", () => {
@@ -120,17 +120,17 @@ describe("reminderText: degraded lead facts", () => {
 describe("reminderClaimHint", () => {
   it("names the lead when the teammate holds more than one", () => {
     expect(reminderClaimHint(2, "Daniel")).toBe(
-      "You have *2 unclaimed leads*. Reply *1, Daniel* to claim this one."
+      'You have *2 unclaimed leads*. Reply "1, Daniel" to claim this one.'
     );
   });
 
   it("keeps the bare digit when there is only one lead to claim", () => {
-    expect(reminderClaimHint(1, "Daniel")).toBe("Reply *1* to claim it.");
-    expect(reminderClaimHint(0, "Daniel")).toBe("Reply *1* to claim it.");
+    expect(reminderClaimHint(1, "Daniel")).toBe("Reply 1 to claim it.");
+    expect(reminderClaimHint(0, "Daniel")).toBe("Reply 1 to claim it.");
   });
 
   it("does not promise a name reply when no name was captured", () => {
-    expect(reminderClaimHint(2, "")).toBe("Reply *1* to claim it.");
+    expect(reminderClaimHint(2, "")).toBe("Reply 1 to claim it.");
   });
 });
 

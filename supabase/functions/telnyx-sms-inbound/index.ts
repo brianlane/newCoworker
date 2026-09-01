@@ -56,6 +56,7 @@ import {
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import {
   looksLikeTimeframe,
+  normalizeOfferReply,
   parseClaimWithTimeframe
 } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
@@ -3070,6 +3071,11 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
+      // Stars and quotes around the digit are copy we put in the offer, not
+      // part of the reply grammar. Bare "1" / "86" checks use the stripped
+      // form; parseClaimWithTimeframe strips internally too. The raw body
+      // stays on follow-up matching, which is not a digit reply.
+      const offerReplyBody = normalizeOfferReply(replyBody);
       // Comma'd offer reply: "<n>, <text>", "1, <eta>" (claim + when they'll
       // reach out), "2, <reason>" (pass + why), "86, <note>". The comma is the
       // signal that free text annotates the digit.
@@ -3098,7 +3104,7 @@ serve(async (req: Request) => {
       // they had claimed; the worker hands it back to the owner.
       // Matched BEFORE the 1-9 owner/agent block so a multi-digit "86" is never
       // misread as an approval digit; we accept a bare "86" or "86, <note>".
-      if (replyBody === "86" || (claimTf && claimTf.digit === "86")) {
+      if (offerReplyBody === "86" || (claimTf && claimTf.digit === "86")) {
         const handled = await tryUnclaim({
           supabase,
           businessId,
@@ -3343,7 +3349,7 @@ serve(async (req: Request) => {
       // the digit against the option list stored on the pending run (gates
       // offer up to 4 options today, approve / skip / bypass quiet hours /
       // cancel-last). Anything unmatched falls through to the customer path.
-      if (/^[1-9]$/.test(replyBody)) {
+      if (/^[1-9]$/.test(offerReplyBody)) {
         // AiFlow agent/owner acks must reply from the business's OWN number (the
         // per-tenant DID the worker also sends prompts from), NOT the global
         // TELNYX_SMS_FROM_E164, otherwise the ack lands in a separate thread
@@ -3381,8 +3387,8 @@ serve(async (req: Request) => {
         // Agent offers: "1" claims, "2" passes, universal on every flow. Any
         // other digit falls through to the owner-approval check and then the
         // normal customer path.
-        const bareClaim = replyBody === "1";
-        const barePass = replyBody === "2";
+        const bareClaim = offerReplyBody === "1";
+        const barePass = offerReplyBody === "2";
         // Unowned-lead ALERTS are claimable too: teammates reply "1" to them
         // out of habit, and without a record that digit lands on an unrelated
         // older offer. Claims only. A "2" retires the sender from an offer,
@@ -3479,7 +3485,7 @@ serve(async (req: Request) => {
                 telnyxApiKey,
                 messagingProfileId,
                 smsFromE164,
-                digit: replyBody,
+                digit: offerReplyBody,
                 timeframe: "",
                 runId: offer.id,
                 ...blocked
@@ -3501,7 +3507,7 @@ serve(async (req: Request) => {
               telnyxApiKey,
               messagingProfileId,
               smsFromE164,
-              digit: replyBody,
+              digit: offerReplyBody,
               timeframe: "",
               telemetryDecision: claimed
                 ? OFFER_REPLY_DECISION.claim_raced
@@ -3574,7 +3580,7 @@ serve(async (req: Request) => {
               telnyxApiKey,
               messagingProfileId,
               smsFromE164,
-              digit: replyBody,
+              digit: offerReplyBody,
               timeframe: "",
               telemetryDecision: claimed
                 ? OFFER_REPLY_DECISION.claim_raced
@@ -3673,7 +3679,7 @@ serve(async (req: Request) => {
                 ? (appr.context.approval as Record<string, unknown>)
                 : null;
             const offered = parseStoredApprovalOptions(approvalCtx?.options);
-            const option = appr ? approvalOptionForReply(offered, replyBody) : null;
+            const option = appr ? approvalOptionForReply(offered, offerReplyBody) : null;
             if (appr && option) {
               const decision = APPROVAL_OPTION_DECISIONS[option];
               // Replace context.approval wholesale (dropping any stale `consumed`
@@ -3768,7 +3774,7 @@ serve(async (req: Request) => {
             const modify = appr
               ? approvalModifyForReply(
                   parseStoredRedraftStepIndex(approvalCtx?.redraft_step_index),
-                  replyBody
+                  offerReplyBody
                 )
               : null;
             if (appr && modify && !(await ownerReplyPromptIsNewer(supabase, businessId, appr))) {
@@ -3875,7 +3881,7 @@ serve(async (req: Request) => {
             telnyxApiKey,
             messagingProfileId,
             smsFromE164,
-            digit: replyBody,
+            digit: offerReplyBody,
             timeframe: ""
           });
           if (lateHandled) return lateHandled;
@@ -3894,7 +3900,7 @@ serve(async (req: Request) => {
           telnyxApiKey,
           messagingProfileId,
           smsFromE164,
-          digit: replyBody
+          digit: offerReplyBody
         });
         if (staleHandled) return staleHandled;
       }

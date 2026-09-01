@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
-  SMS_IDENTITY_LINE
+  SMS_IDENTITY_LINE,
+  SMS_STAFF_CLAIM_LINE
 } from "../supabase/functions/_shared/sms_prompt_lines";
 
 /**
@@ -67,5 +68,12 @@ describe("SMS prompt lines", () => {
       "rather than restating your previous message"
     );
     expect(SMS_CONVERSATION_QUALITY_LINE).toContain("never ask for information you already have");
+  });
+
+  it("staff claims: never promise a lead is theirs (Jason Lane, 2026-08-31)", () => {
+    expect(SMS_STAFF_CLAIM_LINE).toContain("you cannot assign a lead");
+    expect(SMS_STAFF_CLAIM_LINE).toContain("Never say a lead is theirs");
+    expect(SMS_STAFF_CLAIM_LINE).toContain("reply 1");
+    expect(SMS_STAFF_CLAIM_LINE).toContain("1, the lead's first name");
   });
 });

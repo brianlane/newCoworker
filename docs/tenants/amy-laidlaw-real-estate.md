@@ -96,6 +96,15 @@ These are mistakes already made on this account. Do not remake them.
   the roster that routinely holds several simultaneous offers per teammate, so
   every reply-disambiguation bug lands here first.
 
+- **A starred "1" is still a "1".** Aug 29 and Aug 31 2026: Jason replied
+  `*1, Logan` twice and `*1, Kimberly` once, copying the reminder's
+  `Reply *1, Kimberly*` wrapping. The parser required a leading digit, so
+  those landed in the staff coworker, which agreed he could take the lead
+  and assigned nobody. Kimberly was assigned by hand (run `003b3a20`,
+  2026-09-01). The parser now strips that wrapping; reminder/offer hints
+  quote the typed reply like the ask-back that already worked. The staff
+  coworker is also forbidden from promising a claim.
+
 - **A claim stamps the CONTACT, so clearing a run does not undo it.** Repairing
   the four runs above meant clearing `routing.claimed_by` and requeuing them,
   which is only half the artifact: the claim had also written

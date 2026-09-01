@@ -156,6 +156,22 @@ export const SMS_STAFF_NOTIFICATION_SETTINGS_LINE =
   "dashboard under Settings, then Notifications.";
 
 /**
+ * Staff-turn honesty about lead claims (Amy Laidlaw / Jason Lane, 2026-08-31
+ * and 2026-08-29): Jason replied "*1, Kimberly" copying the reminder's
+ * asterisks, the claim parser missed it, and the staff coworker said he
+ * could take the lead without assigning anyone. Team SMS has no claim tool
+ * (owner SMS is the platform engine; team SMS is Rowboat with this
+ * preamble). Never promise a claim. Point them at the digit reply.
+ */
+export const SMS_STAFF_CLAIM_LINE =
+  "Lead claims: you cannot assign a lead to this teammate. Never say a " +
+  "lead is theirs, that they can take it, or that you updated anything on " +
+  "it. Claims happen only when they reply 1 (or 1, the lead's first name) " +
+  "to the offer text. If they ask to take a lead, tell them that exact " +
+  "reply. If they already sent 1 and it did not take, tell them to send " +
+  "1 or 1, the name again, with nothing else around the digit.";
+
+/**
  * Conversation quality (from tenant feedback: repeated acknowledgements
  * and re-asking for a name the lead already gave; Derek's thread also hit
  * the verbatim-repetition failure this guards): reuse what is known, vary

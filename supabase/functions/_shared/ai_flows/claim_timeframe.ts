@@ -13,6 +13,42 @@ import { normalizeLeadName } from "./offer_identity.ts";
 export const MAX_CLAIM_TIMEFRAME_LEN = 120;
 
 /**
+ * Strip the wrapping our own offer/reminder copy puts around the reply it
+ * asks for, so the digit parser sees `1, Kimberly` when the teammate typed
+ * `*1, Kimberly*` or `"1, Kimberly"`.
+ *
+ * Offer and reminder SMS star the instruction so it stands out (`Reply *1,
+ * Kimberly* to claim this one`). Asterisks render as bold only on RCS; on
+ * plain SMS they are literal characters, and teammates copy them back
+ * (Jason Lane, Amy Laidlaw, 2026-08-29 Logan twice, 2026-08-31 Kimberly).
+ * The ask-back that works already uses quotes (`Reply "1, <name>"`). Both
+ * wrappers have to come off before the digit regex, or the reply falls
+ * through to the staff coworker, which has no claim tool and agrees
+ * conversationally without assigning anyone.
+ *
+ * Idempotent. Applied only to offer-reply parsing, never to the body that
+ * is queued as a customer or staff chat turn.
+ */
+export function normalizeOfferReply(body: string): string {
+  let t = body.trim();
+  // Matched *emphasis* pairs on one line (same rule as stripEmphasis).
+  t = t.replace(/\*([^*\n]+)\*/g, "$1").trim();
+  const open = t.charAt(0);
+  const close = t.charAt(t.length - 1);
+  const quoted =
+    t.length >= 2 &&
+    ((open === '"' && close === '"') ||
+      (open === "'" && close === "'") ||
+      (open === "\u201c" && close === "\u201d") ||
+      (open === "\u2018" && close === "\u2019"));
+  if (quoted) t = t.slice(1, -1).trim();
+  // Leftover unpaired stars: "*1, Kimberly" (no closing star) and "1*".
+  t = t.replace(/^\*+(?=\d)/, "");
+  t = t.replace(/\*+$/, "");
+  return t.trim();
+}
+
+/**
  * Parse the comma'd reply shape, "<n>, <text>" (e.g. "1, 20 min" claim+ETA,
  * "2, out of town" pass+reason, "86, a few days"). The comma + free text is
  * the affordance for "accept and say when you'll reach out" / "pass and say
@@ -27,7 +63,7 @@ export function parseClaimWithTimeframe(
   // The ETA group requires a leading non-space (`\S`), so a bare "4," or "4,   "
   // (only whitespace after the comma) fails to match and returns null here, and
   // a match's trimmed ETA is always non-empty (its first char is that `\S`).
-  const m = /^(\d{1,2})\s*,\s*(\S.*)$/.exec(body.trim());
+  const m = /^(\d{1,2})\s*,\s*(\S.*)$/.exec(normalizeOfferReply(body));
   if (!m) return null;
   return { digit: m[1], timeframe: m[2].trim().slice(0, MAX_CLAIM_TIMEFRAME_LEN) };
 }
