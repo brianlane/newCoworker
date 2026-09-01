@@ -112,7 +112,7 @@ describe("formatCapacityMonitorEmail", () => {
     expect(email.text).toContain("Sum of per-tenant carrier caps: 30");
     expect(email.text).toContain("support@telnyx.com");
     expect(email.text).toContain("outbound concurrent call limit to 60");
-    expect(email.text).toContain("TELNYX_ACCOUNT_CHANNEL_LIMIT");
+    expect(email.text).toContain("telnyx_capacity");
     expect(email.text).toContain("AI coworker");
   });
 });

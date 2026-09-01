@@ -10,10 +10,11 @@
  * update applies everywhere at once, with no secret rotation across
  * environments and no redeploy.
  *
- *   { "account_channel_limit": 100, "platform_outbound_headroom": 3 }
+ *   { "account_channel_limit": 500, "platform_outbound_headroom": 3 }
  *
- * account_channel_limit    the pool Telnyx granted (support ticket #582143
- *                          raised it to 100 on 2026-08-16).
+ * account_channel_limit    the pool Telnyx granted (ticket #582143 raised
+ *                          it to 100 on 2026-08-16; ticket #624702 raised
+ *                          it to 500 on 2026-08-31).
  * platform_outbound_headroom  channels held back from flow-placed dials
  *                          fleet-wide, insurance against config drift. The
  *                          protection that matters per tenant is

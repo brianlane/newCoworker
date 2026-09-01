@@ -98,9 +98,9 @@ export function formatCapacityMonitorEmail(args: {
     "Thank you!",
     "--- end draft ---",
     "",
-    "After Telnyx confirms, update the TELNYX_ACCOUNT_CHANNEL_LIMIT secret;",
-    "the platform's pre-dial gate derives from it. This review emails at",
-    "most once a week."
+    "After Telnyx confirms, update admin_platform_settings key telnyx_capacity",
+    "(jsonb_set on account_channel_limit). The pre-dial gate derives from",
+    "that row. This review emails at most once a week."
   ];
   return {
     subject: "Telnyx capacity review: raise the account pool",
