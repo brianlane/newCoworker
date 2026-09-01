@@ -23,6 +23,17 @@ receipt, and a failure raises `system_logs` (`source: email`, event
 `email_delivery_failed`). Read it with
 `npx tsx debug/email-delivery-report.ts`.
 
+A bounced **outreach pitch** is a second gap on the same receipts. The
+prospect ledger stayed at `sent`, which is exactly what the day-5 nudge
+selects, so a hard bounce (ASAP Plumbing, 2026-08-31) was queued to be
+re-mailed. The Aug 28 one-shot
+(`scripts/oneshot/retire-bounced-outreach-prospects.ts`) repaired rows after
+the fact. The live path is `retireProspectsOnBounce` in
+`src/lib/outreach/bounce.ts`, called from the Resend webhook: `sent` ->
+`failed` with `sent_at` kept, bounced/failed only (a complaint received the
+mail), skip a row that already replied or already got its nudge. The one-shot
+stays as backfill for receipts that landed before that shipped.
+
 **`provider_message_id` is NOT unique.** A live scan on 2026-08-26 found 7
 duplicated ids in a 1000-row sample, all Gmail-style hex ids from the
 owner-mailbox paths. A unique index would fail to apply, and `maybeSingle()`

@@ -513,6 +513,58 @@ export async function findProspectByEmail(
   return (data as OutreachProspectRow | null) ?? null;
 }
 
+/** Bound on a bounce-receipt lookup: one address, newest sends first. */
+const OUTREACH_BOUNCE_LOOKUP_LIMIT = 10;
+
+/**
+ * Ledger rows of this business that currently front this address. Used when
+ * a bounce receipt is already attributed to a tenant.
+ *
+ * Equality, not ILIKE, for the same underscore-wildcard reason as
+ * `findProspectByEmail`. Newest `sent_at` first so a later pitch to the same
+ * address is considered before an older one.
+ */
+export async function listProspectsByEmail(
+  businessId: string,
+  email: string,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow[]> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return [];
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .eq("email", normalized)
+    .order("sent_at", { ascending: false })
+    .limit(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+  if (error) throw new Error(`listProspectsByEmail: ${error.message}`);
+  return (data ?? []) as OutreachProspectRow[];
+}
+
+/**
+ * Same lookup with no tenant, for an unattributed bounce that only named
+ * the recipient. The address unique index is per-business, so the same
+ * mailbox can exist on more than one ledger.
+ */
+export async function listProspectsByEmailAnyTenant(
+  email: string,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow[]> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return [];
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("email", normalized)
+    .order("sent_at", { ascending: false })
+    .limit(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+  if (error) throw new Error(`listProspectsByEmailAnyTenant: ${error.message}`);
+  return (data ?? []) as OutreachProspectRow[];
+}
+
 /**
  * Prospects sent to a while ago with no reply and no nudge yet: the one
  * follow-up each, oldest first. `sentBefore` is the patience window and

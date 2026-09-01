@@ -29,6 +29,10 @@
  * with either set is skipped, since a reply proves delivery and a sent nudge
  * means the follow-up already happened.
  *
+ * The LIVE path is `retireProspectsOnBounce` in src/lib/outreach/bounce.ts,
+ * called from the Resend delivery webhook as the receipt arrives. This
+ * script remains the backfill for receipts that landed before that shipped.
+ *
  * Idempotent: the update is guarded on `status = sent`, so a retired row is
  * skipped on re-run (reported as already retired).
  *

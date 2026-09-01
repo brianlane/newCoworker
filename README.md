@@ -2571,7 +2571,10 @@ carries no send step at all, and a test pins that.
   is suppressed like anyone else. Only an already-suppressed row short-circuits.
 - Weekdays only, inside a per-tenant window in the tenant's timezone, under a
   per-tenant daily cap (12 by default) that counts follow-ups too.
-- One follow-up per prospect, ever, and any reply cancels it. Opt-out
+- One follow-up per prospect, ever, and any reply cancels it. A hard bounce
+  (or a failed send) marks the row `failed` the moment the receipt lands, so
+  the follow-up never goes to a mailbox that already refused us; `sent_at` is
+  kept so the daily cap still counts the pitch. Opt-out
   detection reads only the text ABOVE the quoted history, because our own
   footer says "unsubscribe" and a quoted reply would otherwise suppress a warm
   lead.
