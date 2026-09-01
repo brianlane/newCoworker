@@ -120,7 +120,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - SOLVED #1742: the script NEVER reached the model (dropped tool-response field); deterministic TTS delivery + spoken-number firewall; prompt fixes #1612 had failed
 - [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25 platform-side; #1674 sweep forces resolution at 25s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
 - [Edge admin-alert email was stale](project_edge_admin_alert_email_stale.md) - FIXED Aug 27; Edge secrets held the personal gmail; recipient-only, digests verify by sha256
-- [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; provider_message_id NOT unique
+- [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; bounce of a sent pitch retires the prospect; provider_message_id NOT unique
 - [Delivered is not received](feedback_delivered_is_not_received.md) - a carrier receipt proves a device ACKed, never that the person reads it; a loud broken channel beats a silent one
 - [HQ Gmail send-as relays via Resend SMTP](project_hq_gmail_sendas_resend_relay.md) - default alias team@ delivers through our Resend; bounces = unattributed; Sentry DSN scraped as email
 - [A truncated page is not uniqueness](feedback_truncated_page_is_not_uniqueness.md) - a post-query filter hides a real second match; test in SQL

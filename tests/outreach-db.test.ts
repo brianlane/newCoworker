@@ -30,12 +30,15 @@ import {
   insertProspects,
   listActiveOutreachSettings,
   listProspectOutcomes,
+  listProspectsByEmail,
+  listProspectsByEmailAnyTenant,
   listProspectsByStatus,
   listProspectsDueForNudge,
   listProspectsContactedSince,
   listProspectsToProbe,
   listProspectsToRewrite,
   OUTREACH_ACTIVE_PAGE_SIZE,
+  OUTREACH_BOUNCE_LOOKUP_LIMIT,
   patchProspect,
   skipProspectsInVertical,
   transitionProspect,
@@ -332,6 +335,50 @@ describe("findProspectByEmail", () => {
     await expect(
       findProspectByEmail(BIZ, "a@b.com", makeDb(singleChain({ data: null, error: { message: "fe" } })))
     ).rejects.toThrow(/fe/);
+  });
+});
+
+describe("listProspectsByEmail", () => {
+  it("normalizes, scopes to the tenant, equality not ILIKE", async () => {
+    const db = makeDb(chain());
+    expect(await listProspectsByEmail(BIZ, "   ", db)).toEqual([]);
+    expect((db as unknown as { from: ReturnType<typeof vi.fn> }).from).not.toHaveBeenCalled();
+
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await listProspectsByEmail(BIZ, "  Owner@ACME.com ", makeDb(c))).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
+    expect(c.ilike).not.toHaveBeenCalled();
+    expect(c.limit).toHaveBeenCalledWith(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
+    expect(await listProspectsByEmail(BIZ, "nobody@acme.com")).toEqual([]);
+
+    await expect(
+      listProspectsByEmail(BIZ, "a@b.com", makeDb(chain({ data: null, error: { message: "le" } })))
+    ).rejects.toThrow(/le/);
+  });
+});
+
+describe("listProspectsByEmailAnyTenant", () => {
+  it("looks up by address alone, equality not ILIKE", async () => {
+    const db = makeDb(chain());
+    expect(await listProspectsByEmailAnyTenant("   ", db)).toEqual([]);
+    expect((db as unknown as { from: ReturnType<typeof vi.fn> }).from).not.toHaveBeenCalled();
+
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await listProspectsByEmailAnyTenant("  Owner@ACME.com ", makeDb(c))).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
+    expect(c.eq).not.toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.ilike).not.toHaveBeenCalled();
+    expect(c.limit).toHaveBeenCalledWith(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
+    expect(await listProspectsByEmailAnyTenant("nobody@acme.com")).toEqual([]);
+
+    await expect(
+      listProspectsByEmailAnyTenant("a@b.com", makeDb(chain({ data: null, error: { message: "at" } })))
+    ).rejects.toThrow(/at/);
   });
 });
 

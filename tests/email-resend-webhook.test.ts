@@ -23,6 +23,11 @@ vi.mock("@/lib/email/delivery", async (importOriginal) => ({
     applyEmailDeliveryStatusByRecipient(input)
 }));
 
+const retireProspectsOnBounce = vi.fn(async (_input: unknown) => 0);
+vi.mock("@/lib/outreach/bounce", () => ({
+  retireProspectsOnBounce: (input: unknown) => retireProspectsOnBounce(input)
+}));
+
 const recordSystemLog = vi.fn(async (_input: unknown) => {});
 vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (input: unknown) => recordSystemLog(input)
@@ -290,6 +295,8 @@ describe("processResendDeliveryEvent", () => {
       outcome: "not_found",
       businessId: null
     });
+    retireProspectsOnBounce.mockReset();
+    retireProspectsOnBounce.mockResolvedValue(0);
     recordSystemLog.mockClear();
     warn.mockClear();
   });
@@ -444,5 +451,53 @@ describe("processResendDeliveryEvent", () => {
 
     applyEmailDeliveryStatusByRecipient.mockRejectedValue("not an error");
     expect(await processResendDeliveryEvent(event)).toBe(false);
+  });
+
+  it("retires a bounced outreach pitch so the day-5 nudge never fires", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ });
+    await processResendDeliveryEvent(event);
+    expect(retireProspectsOnBounce).toHaveBeenCalledWith({
+      to: "owner@example.com",
+      subject: "Urgent: new lead",
+      status: "bounced",
+      errorCode: "Permanent",
+      errorMessage: "Mailbox does not exist",
+      occurredAt: "2026-08-26T06:00:00.000Z",
+      businessId: BIZ
+    });
+  });
+
+  it("still tries to retire when the bounce could not be attributed", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null });
+    await processResendDeliveryEvent(event);
+    expect(retireProspectsOnBounce).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "owner@example.com", businessId: null })
+    );
+  });
+
+  it("still tries to retire when email_log itself is down", async () => {
+    applyEmailDeliveryStatus.mockRejectedValue(new Error("db down"));
+    await processResendDeliveryEvent(event);
+    expect(retireProspectsOnBounce).toHaveBeenCalled();
+  });
+
+  it("does not retire a complaint or a delivered receipt", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ });
+    await processResendDeliveryEvent({ ...event, status: "complained" });
+    await processResendDeliveryEvent({ ...event, status: "delivered" });
+    expect(retireProspectsOnBounce).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the webhook when bounce retirement throws", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ });
+    retireProspectsOnBounce.mockRejectedValue(new Error("ledger down"));
+    expect(await processResendDeliveryEvent(event)).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "outreach bounce retire failed",
+      expect.objectContaining({ to: "owner@example.com", error: "ledger down" })
+    );
+
+    retireProspectsOnBounce.mockRejectedValue("not an error");
+    expect(await processResendDeliveryEvent(event)).toBe(true);
   });
 });

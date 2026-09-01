@@ -15,6 +15,7 @@ import {
   resendEventToStatus,
   type EmailDeliveryStatus
 } from "@/lib/email/delivery";
+import { retireProspectsOnBounce } from "@/lib/outreach/bounce";
 
 /**
  * Reject anything larger before parsing. Resend payloads are a few KB; this
@@ -171,6 +172,9 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
       providerMessageId: event.providerMessageId,
       error: err instanceof Error ? err.message : String(err)
     });
+    // The bounce still happened. Taking the prospect off the nudge queue
+    // must not depend on email_log being writable in the same moment.
+    await maybeRetireOutreachPitch(event, null);
     return false;
   }
 
@@ -227,6 +231,7 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
         }
       });
     }
+    await maybeRetireOutreachPitch(event, result.businessId);
     return false;
   }
 
@@ -254,7 +259,39 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
       }
     });
   }
+  await maybeRetireOutreachPitch(event, result.businessId);
   return true;
+}
+
+/**
+ * A bounced cold-outreach pitch must leave the day-5 nudge queue the moment
+ * the receipt lands. The Aug 28 one-shot did this after the fact; doing it
+ * here means we do not wait for an operator to re-run the script. Best-effort:
+ * a fault here must not make Resend retry (and eventually disable) the
+ * delivery endpoint.
+ */
+async function maybeRetireOutreachPitch(
+  event: ResendDeliveryEvent,
+  businessId: string | null
+): Promise<void> {
+  if (event.status !== "bounced" && event.status !== "failed") return;
+  if (!event.to) return;
+  try {
+    await retireProspectsOnBounce({
+      to: event.to,
+      subject: event.subject,
+      status: event.status,
+      errorCode: event.errorCode,
+      errorMessage: event.errorMessage,
+      occurredAt: event.occurredAt,
+      businessId
+    });
+  } catch (err) {
+    logger.warn("outreach bounce retire failed", {
+      to: event.to,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }
 
 /**

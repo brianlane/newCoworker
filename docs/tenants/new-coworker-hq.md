@@ -175,6 +175,10 @@ re-run whenever new bounces land and converges to a no-op. `sent_at` is
 kept so the daily cap still counts the sends. Root cause of why these
 surfaced unattributed is recorded in
 `.cursor/memory/project_hq_gmail_sendas_resend_relay.md`.
+The live path is now the Resend delivery webhook
+(`retireProspectsOnBounce` in `src/lib/outreach/bounce.ts`): a bounce of a
+`sent` pitch retires the row as the receipt arrives, so the one-shot is
+only a backfill for receipts that landed before that shipped.
 
 **Discovery-call doc pricing corrected (2026-08-24):**
 `fix-hq-discovery-doc-pricing.ts --apply` replaced the garbled pricing bullet
