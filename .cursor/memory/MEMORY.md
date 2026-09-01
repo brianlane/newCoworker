@@ -70,7 +70,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - team rung before owner; root tsc misses supabase/functions
 - [Reachability-gated vars are not lead types](project_reachability_gated_vars_are_not_lead_type.md) - they answer "none" by contact channel
 - [Voice flows leave no run rows](project_voice_flows_leave_no_run_rows.md) - voice AiFlows compile inline; check system_logs, never ai_flow_runs
-- [Telnyx capacity architecture](project_telnyx_capacity_architecture.md) - three stacked limits min-wins; carrier 403 defers, never burns rungs
+- [Telnyx capacity architecture](project_telnyx_capacity_architecture.md) - three stacked limits min-wins; account pool 500 (ticket #624702); carrier 403 defers, never burns rungs
 - [Booking ledger row can postdate the contact](project_booking_ledger_row_can_postdate_contact.md) - not reliably first
 - [Copy sweeps must scan rendered source](feedback_copy_sweeps_must_scan_rendered_source.md) - i18n catalogs miss hardcoded components
 - [Never squash via reset --soft main](feedback_never_squash_via_reset_soft_main.md) - reverts everything merged since branch; rebase --onto

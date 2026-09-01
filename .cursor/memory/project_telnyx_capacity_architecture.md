@@ -5,14 +5,14 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 5dc6ee4d-f476-4bac-b65a-b95c717c4ecd
-  modified: 2026-08-17T01:44:43.800Z
+  modified: 2026-09-01T04:30:00.000Z
 ---
 
-Telnyx caps concurrent OUTBOUND calls at three layers; the MINIMUM wins: each Call Control app's `outbound.channel_limit`, each outbound voice profile's `concurrent_call_limit`, and the ACCOUNT pool (support-ticket-only, invisible to the API; the granted number lives in admin_platform_settings key `telnyx_capacity`, currently 100 from ticket #582143; env is fallback). The 2026-08-16 incident: the connection sat at 2 while the profile said 10, and the 08:30 Phoenix burst 403'd a lead call.
+Telnyx caps concurrent OUTBOUND calls at three layers; the MINIMUM wins: each Call Control app's `outbound.channel_limit`, each outbound voice profile's `concurrent_call_limit`, and the ACCOUNT pool (support-ticket-only, invisible to the API; the granted number lives in admin_platform_settings key `telnyx_capacity`, currently 500 from ticket #624702, was 100 from ticket #582143; env is fallback). The 2026-08-16 incident: the connection sat at 2 while the profile said 10, and the 08:30 Phoenix burst 403'd a lead call.
 
 Since Aug 16 2026 (PRs #1403/#1405/#1406/#1407): every DID tenant has a DEDICATED app + profile named `<name> [nc:<businessId>]` (adopt-by-marker, names clamped to Telnyx's 64-char cap), channel limits = plan `maxConcurrentCalls`, $25/day per-tenant fuse, full whitelist. Provisioning creates them (`ensureTenantVoiceInfra`, injectable like didProvisioner, degrades to the shared platform app on failure); `scripts/oneshot/migrate-tenants-to-dedicated-telnyx-apps.ts` converges existing tenants and re-syncs caps after tier changes. The legacy platform app (2937312861107521228, env `TELNYX_CONNECTION_ID`) holds zero DIDs, kept as HQ/demo/failback default. One webhook URL serves all apps: dispatch routes by dialed number.
 
-Defenses in order: per-tenant carrier caps -> pre-dial fleet gate (`voice_check_availability` p_platform_max_outbound = `TELNYX_ACCOUNT_CHANNEL_LIMIT` - `PLATFORM_OUTBOUND_HEADROOM`(3), counts `voice_reservations.direction='outbound'`) -> capacity-classified 403s defer with jittered backoff ([[telnyx-carrier-capacity-defer]]) -> hourly-deduped admin email + weekly `voice-capacity-monitor` cron that mails a ready-to-send raise ticket.
+Defenses in order: per-tenant carrier caps -> pre-dial fleet gate (`voice_check_availability` p_platform_max_outbound from the `telnyx_capacity` row: account_channel_limit minus platform_outbound_headroom 3, counts `voice_reservations.direction='outbound'`) -> capacity-classified 403s defer with jittered backoff ([[telnyx-carrier-capacity-defer]]) -> hourly-deduped admin email + weekly `voice-capacity-monitor` cron that mails a ready-to-send raise ticket. The weekly email used to say "update the TELNYX_ACCOUNT_CHANNEL_LIMIT secret"; that is the fallback only. After a raise, jsonb_set the `telnyx_capacity` row.
 
 **Why:** isolation without pool growth adds zero capacity (min rule), so the account raise ticket matters; and per-tenant caps make the "up to 10 concurrent calls" marketing promise carrier-enforced per tenant instead of a shared fiction.
 

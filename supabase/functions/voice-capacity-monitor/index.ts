@@ -5,15 +5,16 @@
  * Counts the last 14 days of REAL capacity refusals (carrier channel-limit
  * 403s + the platform gate's pre-dial blocks) and the fleet's committed
  * per-tenant carrier caps vs the granted account pool
- * (TELNYX_ACCOUNT_CHANNEL_LIMIT), then emails the platform admin a
- * ready-to-send Telnyx raise request when either signal trips. Dedupe rides
- * voice_capacity_alerts with kind=capacity_monitor on a week-long bucket,
- * claim-before-send, so a cron double-fire cannot double-email and a send
- * failure retries next run.
+ * (admin_platform_settings key telnyx_capacity), then emails the platform
+ * admin a ready-to-send Telnyx raise request when either signal trips.
+ * Dedupe rides voice_capacity_alerts with kind=capacity_monitor on a
+ * week-long bucket, claim-before-send, so a cron double-fire cannot
+ * double-email and a send failure retries next run.
  *
  * Secrets: SUPABASE_*, INTERNAL_CRON_SECRET, RESEND_API_KEY, MAILER_EMAIL,
- * ADMIN_ALERT_EMAIL (fallbacks ADMIN_EMAIL / CONTACT_EMAIL),
- * TELNYX_ACCOUNT_CHANNEL_LIMIT.
+ * ADMIN_ALERT_EMAIL (fallbacks ADMIN_EMAIL / CONTACT_EMAIL).
+ * TELNYX_ACCOUNT_CHANNEL_LIMIT is only the fallback if the settings row
+ * is missing.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
