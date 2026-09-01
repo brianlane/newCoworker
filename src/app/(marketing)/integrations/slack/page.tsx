@@ -58,6 +58,14 @@ export default async function SlackIntegrationPage() {
 
       <PageHero eyebrow={t("heroEyebrow")} title={t("heroTitle")} subtitle={t("heroSubtitle")} />
 
+      <section className="mx-auto max-w-3xl px-6 pb-16">
+        <SectionHeading eyebrow={t("notesEyebrow")} title={t("notesTitle")} />
+        <ul className="mt-2 space-y-3 text-sm leading-relaxed text-parchment/60">
+          <li className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-5">{t("noteInaccurate")}</li>
+          <li className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-5">{t("notePaidPlan")}</li>
+        </ul>
+      </section>
+
       <section className="mx-auto max-w-5xl px-6 pb-16">
         <div className="grid gap-6 md:grid-cols-3">
           {features.map(({ icon: Icon, title, body }) => (
