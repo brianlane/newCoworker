@@ -4949,7 +4949,7 @@ promote it; the third is overdue.
 
 ## All work and code modifications must follow this flow
 
-For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below).
+For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below) and **leave the main checkout clean** (mandatory when the session ends, see below).
 
 **Label every PR for the weekly blog digest** while babysitting it:
 `blog: feature` if customers should read about it in the weekly "what
@@ -5331,11 +5331,11 @@ Never leave a worktree behind once its PR is merged. Orphaned worktrees have
 previously left `next-server` dev processes running for days, pinning ~3.5 CPU
 cores and draining the laptop battery. After returning to main:
 
-1. **Kill anything still running out of the worktree** — dev servers
+1. **Kill anything still running out of the worktree**: dev servers
    especially. Check with `ps aux | grep newCoworker-wt-` (or
    `lsof +D /Users/brianlane/newCoworker-wt-<name>`) and kill any PIDs found
    (`kill`, then `kill -9` if they don't die).
-2. **Re-anchor every shell OUT of the worktree BEFORE removing it** —
+2. **Re-anchor every shell OUT of the worktree BEFORE removing it.**
    `cd /Users/brianlane/newCoworker` in the session shell (agents: run the
    next command with an explicit `working_directory` on the main checkout).
    A persistent shell left cd'd inside a deleted worktree fails every
@@ -5349,3 +5349,29 @@ cores and draining the laptop battery. After returning to main:
 4. **Delete the merged local branch**: `git branch -d <branch>`.
 5. **Verify**: `git worktree list` shows only the main checkout, and
    `ps aux | grep newCoworker-wt-` finds nothing.
+6. **Leave the main checkout clean** (next section). That step is not
+   optional, and it applies even when this session never opened a PR.
+
+### Leave main clean (mandatory when the session ends)
+
+The job is not done while `/Users/brianlane/newCoworker` still has leftover
+files. `git status` there must show a clean working tree: no modified
+files, no untracked files, no session debris.
+
+This is how it gets dirty. Cursor's workspace is the main checkout, so
+memories under `.cursor/memory/`, notes, and scratch files land there even
+when the code change lived in a worktree. Those files belong in the
+worktree so they ship with the PR. Copy them there before you open the PR,
+or before you remove the worktree. They are not a dump onto main.
+
+If the session did not produce a PR, either discard the leftovers
+(`git checkout -- <path>` for tracked files you did not mean to edit;
+`git clean` only for files you created this session) or put them in a PR
+from a worktree. Never commit leftovers directly on main. Never walk away
+with a dirty main.
+
+A dirty main also blocks `git pull --ff-only`, which is how the checkout
+goes stale and dirty at the same time.
+
+**Verify:** `cd /Users/brianlane/newCoworker && git status` prints
+`nothing to commit, working tree clean`.
