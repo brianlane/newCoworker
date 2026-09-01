@@ -514,7 +514,7 @@ export async function findProspectByEmail(
 }
 
 /** Bound on a bounce-receipt lookup: one address, newest sends first. */
-export const OUTREACH_BOUNCE_LOOKUP_LIMIT = 10;
+const OUTREACH_BOUNCE_LOOKUP_LIMIT = 10;
 
 /**
  * Ledger rows of this business that currently front this address. Used when

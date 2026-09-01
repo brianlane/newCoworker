@@ -50,7 +50,7 @@ function bounceDetail(input: OutreachBounceReceipt): string {
  * still matches: Resend sometimes omits it, and the address plus send-time
  * check below is the other half of the match.
  */
-export function bounceSubjectMatchesPitch(
+function bounceSubjectMatchesPitch(
   pitchSubject: string | null,
   receiptSubject: string | null
 ): boolean {

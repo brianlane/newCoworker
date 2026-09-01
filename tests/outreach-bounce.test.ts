@@ -20,10 +20,7 @@ vi.mock("@/lib/outreach/db", () => ({
   transitionProspect: (...args: unknown[]) => transitionProspectSpy(...args)
 }));
 
-import {
-  bounceSubjectMatchesPitch,
-  retireProspectsOnBounce
-} from "@/lib/outreach/bounce";
+import { retireProspectsOnBounce } from "@/lib/outreach/bounce";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const PROSPECT = "22222222-2222-4222-8222-222222222222";
@@ -60,15 +57,6 @@ beforeEach(() => {
   listProspectsByEmailAnyTenantSpy.mockResolvedValue([]);
   transitionProspectSpy.mockResolvedValue(false);
   defaultClientSpy.mockReturnValue({});
-});
-
-describe("bounceSubjectMatchesPitch", () => {
-  it("matches when either side omitted a subject, and requires equality when both named one", () => {
-    expect(bounceSubjectMatchesPitch(null, "A")).toBe(true);
-    expect(bounceSubjectMatchesPitch("A", null)).toBe(true);
-    expect(bounceSubjectMatchesPitch("A", "A")).toBe(true);
-    expect(bounceSubjectMatchesPitch("A", "B")).toBe(false);
-  });
 });
 
 describe("retireProspectsOnBounce", () => {
@@ -146,6 +134,12 @@ describe("retireProspectsOnBounce", () => {
     listProspectsByEmailSpy.mockResolvedValue([prospect()]);
     transitionProspectSpy.mockResolvedValue(true);
     expect(await retireProspectsOnBounce({ ...receipt, subject: null })).toBe(1);
+  });
+
+  it("still matches when the pitch itself has no stored subject", async () => {
+    listProspectsByEmailSpy.mockResolvedValue([prospect({ pitch_subject: null })]);
+    transitionProspectSpy.mockResolvedValue(true);
+    expect(await retireProspectsOnBounce(receipt)).toBe(1);
   });
 
   it("retires a failed send the same way as a bounce, even with no extra detail", async () => {

@@ -38,7 +38,6 @@ import {
   listProspectsToProbe,
   listProspectsToRewrite,
   OUTREACH_ACTIVE_PAGE_SIZE,
-  OUTREACH_BOUNCE_LOOKUP_LIMIT,
   patchProspect,
   skipProspectsInVertical,
   transitionProspect,
@@ -349,7 +348,7 @@ describe("listProspectsByEmail", () => {
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
     expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
     expect(c.ilike).not.toHaveBeenCalled();
-    expect(c.limit).toHaveBeenCalledWith(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+    expect(c.limit).toHaveBeenCalledWith(10);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
     expect(await listProspectsByEmail(BIZ, "nobody@acme.com")).toEqual([]);
@@ -371,7 +370,7 @@ describe("listProspectsByEmailAnyTenant", () => {
     expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
     expect(c.eq).not.toHaveBeenCalledWith("business_id", BIZ);
     expect(c.ilike).not.toHaveBeenCalled();
-    expect(c.limit).toHaveBeenCalledWith(OUTREACH_BOUNCE_LOOKUP_LIMIT);
+    expect(c.limit).toHaveBeenCalledWith(10);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
     expect(await listProspectsByEmailAnyTenant("nobody@acme.com")).toEqual([]);
