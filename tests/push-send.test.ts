@@ -18,6 +18,7 @@ vi.mock("web-push", () => {
 vi.mock("@/lib/push/db", () => ({
   listDeliverablePushSubscriptions: vi.fn(),
   revokePushSubscription: vi.fn(),
+  revokePushSubscriptionsForUser: vi.fn(),
   stampPushSent: vi.fn()
 }));
 
@@ -25,13 +26,22 @@ vi.mock("@/lib/push/tier-gate", () => ({
   pushAllowedForBusiness: vi.fn()
 }));
 
+vi.mock("@/lib/push/eligibility", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/push/eligibility")>(
+    "@/lib/push/eligibility"
+  );
+  return { ...actual, listEligiblePushUserIds: vi.fn() };
+});
+
 import webpush, { WebPushError } from "web-push";
 import { deliverPush } from "@/lib/push/send";
 import {
   listDeliverablePushSubscriptions,
   revokePushSubscription,
+  revokePushSubscriptionsForUser,
   stampPushSent
 } from "@/lib/push/db";
+import { listEligiblePushUserIds } from "@/lib/push/eligibility";
 import { pushAllowedForBusiness } from "@/lib/push/tier-gate";
 
 const BIZ = "11111111-1111-1111-1111-111111111111";
@@ -52,11 +62,11 @@ function pushError(statusCode: number): WebPushError {
 }
 
 
-function row(over: Partial<{ id: string; endpoint: string }> = {}) {
+function row(over: Partial<{ id: string; endpoint: string; user_id: string }> = {}) {
   return {
     id: over.id ?? "sub-1",
     business_id: BIZ,
-    user_id: "user-1",
+    user_id: over.user_id ?? "user-1",
     endpoint: over.endpoint ?? "https://fcm.googleapis.com/fcm/send/one",
     p256dh: "key",
     auth: "auth",
@@ -79,6 +89,7 @@ beforeEach(() => {
   process.env.VAPID_SUBJECT = "mailto:a@b.com";
   vi.mocked(pushAllowedForBusiness).mockResolvedValue(true);
   vi.mocked(listDeliverablePushSubscriptions).mockResolvedValue([row()]);
+  vi.mocked(listEligiblePushUserIds).mockResolvedValue(new Set(["user-1"]));
   vi.mocked(webpush.sendNotification).mockResolvedValue({} as never);
 });
 
@@ -131,6 +142,8 @@ describe("push/send: deliverPush", () => {
     const result = await deliverPush({ ...INPUT, scope: { businessId: null } });
     expect(result).toEqual({ ok: true, sent: 1, revoked: 0 });
     expect(pushAllowedForBusiness).not.toHaveBeenCalled();
+    // Platform scope is admin-only by construction; do not roster-filter it.
+    expect(listEligiblePushUserIds).not.toHaveBeenCalled();
   });
 
   it.each([404, 410])("revokes a subscription the push service reports gone (%i)", async (code) => {
@@ -273,5 +286,63 @@ describe("push/send: deliverPush", () => {
     vi.mocked(webpush.sendNotification).mockRejectedValue(pushError(500));
     const result = await deliverPush(INPUT);
     expect(result).toEqual({ ok: false, reason: "send_failed", detail: "http_500" });
+  });
+
+  it("sends only to roster devices and membership-revokes a leaked admin row", async () => {
+    vi.mocked(listDeliverablePushSubscriptions).mockResolvedValue([
+      row({ id: "owner", endpoint: "https://fcm.googleapis.com/fcm/send/owner" }),
+      row({
+        id: "admin",
+        user_id: "admin-1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/admin"
+      })
+    ]);
+    const result = await deliverPush(INPUT);
+    expect(result).toEqual({ ok: true, sent: 1, revoked: 0 });
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(webpush.sendNotification).mock.calls[0][0]).toEqual({
+      endpoint: "https://fcm.googleapis.com/fcm/send/owner",
+      keys: { p256dh: "key", auth: "auth" }
+    });
+    expect(revokePushSubscriptionsForUser).toHaveBeenCalledWith(BIZ, "admin-1");
+    expect(stampPushSent).toHaveBeenCalledWith(["owner"]);
+  });
+
+  it("reports not_connected when every live row belongs to a non-member", async () => {
+    vi.mocked(listDeliverablePushSubscriptions).mockResolvedValue([
+      row({ id: "admin-a", user_id: "admin-1", endpoint: "https://fcm.googleapis.com/fcm/send/admin-a" }),
+      row({ id: "admin-b", user_id: "admin-1", endpoint: "https://fcm.googleapis.com/fcm/send/admin-b" })
+    ]);
+    expect(await deliverPush(INPUT)).toEqual({ ok: false, reason: "not_connected" });
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+    // Two devices, one user: revoke once, scoped to the business, not the endpoint.
+    expect(revokePushSubscriptionsForUser).toHaveBeenCalledTimes(1);
+    expect(revokePushSubscriptionsForUser).toHaveBeenCalledWith(BIZ, "admin-1");
+  });
+
+  it("still sends to the owner when revoking the leaked row fails", async () => {
+    vi.mocked(listDeliverablePushSubscriptions).mockResolvedValue([
+      row({ id: "owner", endpoint: "https://fcm.googleapis.com/fcm/send/owner" }),
+      row({
+        id: "admin",
+        user_id: "admin-1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/admin"
+      })
+    ]);
+    vi.mocked(revokePushSubscriptionsForUser).mockRejectedValue(new Error("write failed"));
+    expect(await deliverPush(INPUT)).toEqual({ ok: true, sent: 1, revoked: 0 });
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails open and sends to every row when eligibility cannot be resolved", async () => {
+    // Without the owner's id we cannot tell their phone from the operator's.
+    // Filtering strictly would revoke the owner. A blip must be noisy, not silent.
+    vi.mocked(listEligiblePushUserIds).mockResolvedValue(null);
+    vi.mocked(listDeliverablePushSubscriptions).mockResolvedValue([
+      row({ id: "owner" }),
+      row({ id: "admin", user_id: "admin-1", endpoint: "https://fcm.googleapis.com/fcm/send/admin" })
+    ]);
+    expect(await deliverPush(INPUT)).toEqual({ ok: true, sent: 2, revoked: 0 });
+    expect(revokePushSubscriptionsForUser).not.toHaveBeenCalled();
   });
 });

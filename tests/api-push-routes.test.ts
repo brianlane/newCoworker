@@ -5,6 +5,10 @@ vi.mock("@/lib/auth", () => ({
   requireBusinessRole: vi.fn()
 }));
 
+vi.mock("@/lib/push/eligibility", () => ({
+  callerCanEnrollTenantPush: vi.fn()
+}));
+
 vi.mock("@/lib/push/db", () => ({
   upsertPushSubscription: vi.fn(),
   revokePushSubscription: vi.fn(),
@@ -30,6 +34,7 @@ import { POST as unsubscribe } from "@/app/api/push/unsubscribe/route";
 import { POST as receipt } from "@/app/api/push/receipt/route";
 import { GET as vapidKey } from "@/app/api/push/vapid-key/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { callerCanEnrollTenantPush } from "@/lib/push/eligibility";
 import {
   listLivePushSubscriptions,
   repointPushSubscription,
@@ -71,6 +76,7 @@ beforeEach(() => {
   process.env.VAPID_SUBJECT = "mailto:a@b.com";
   vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
   vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
+  vi.mocked(callerCanEnrollTenantPush).mockResolvedValue(true);
   vi.mocked(pushAllowedForBusiness).mockResolvedValue(true);
 });
 
@@ -108,7 +114,11 @@ describe("api/push/subscribe", () => {
       post({ businessId: BIZ, subscription: SUBSCRIPTION }, { "user-agent": "UA/1.0" })
     );
     expect(res.status).toBe(200);
-    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "view_dashboard");
+    expect(callerCanEnrollTenantPush).toHaveBeenCalledWith({
+      email: "owner@example.com",
+      businessId: BIZ
+    });
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(upsertPushSubscription).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: { businessId: BIZ },
@@ -134,13 +144,20 @@ describe("api/push/subscribe", () => {
     expect(upsertPushSubscription).not.toHaveBeenCalled();
   });
 
-  it("propagates a role refusal", async () => {
-    vi.mocked(requireBusinessRole).mockRejectedValue(
-      Object.assign(new Error("no"), { status: 403 })
-    );
-    expect((await subscribe(post({ businessId: BIZ, subscription: SUBSCRIPTION }))).status).toBe(
-      403
-    );
+  it("refuses a caller who is not on the roster, including an HQ admin in view-as", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
+    vi.mocked(callerCanEnrollTenantPush).mockResolvedValue(false);
+    const res = await subscribe(post({ businessId: BIZ, subscription: SUBSCRIPTION }));
+    expect(res.status).toBe(403);
+    expect(upsertPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it("lets the admin enroll on a tenant they actually own", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
+    vi.mocked(callerCanEnrollTenantPush).mockResolvedValue(true);
+    const res = await subscribe(post({ businessId: BIZ, subscription: SUBSCRIPTION }));
+    expect(res.status).toBe(200);
+    expect(upsertPushSubscription).toHaveBeenCalled();
   });
 
   /**
@@ -181,6 +198,7 @@ describe("api/push/subscribe", () => {
       // A rotation never CREATES a registration, so no scope check applies.
       expect(upsertPushSubscription).not.toHaveBeenCalled();
       expect(requireBusinessRole).not.toHaveBeenCalled();
+      expect(callerCanEnrollTenantPush).not.toHaveBeenCalled();
     });
 
     it("still requires a session, so an endpoint alone rotates nothing", async () => {
@@ -217,8 +235,9 @@ describe("api/push/subscribe", () => {
       expect(upsertPushSubscription).toHaveBeenCalledWith(
         expect.objectContaining({ scope: { businessId: null } })
       );
-      // No tenant, so no tier and no role to check.
+      // No tenant, so no tier and no roster to check.
       expect(requireBusinessRole).not.toHaveBeenCalled();
+      expect(callerCanEnrollTenantPush).not.toHaveBeenCalled();
       expect(pushAllowedForBusiness).not.toHaveBeenCalled();
     });
 

@@ -87,6 +87,18 @@ address and read the result back through the delivery outcome.
 thing comparing it to the Node dispatcher; if you add a channel, that test is
 what stops the edge path from silently ignoring its preference column.
 
+**View-as must not enroll the operator's phone.** `requireBusinessRole` lets
+the platform admin past every tenant gate, and `PushRegistrar` silently
+re-POSTs an already-granted subscription on every dashboard load. One "View
+as tenant" visit in the installed PWA therefore used to attach HQ to that
+tenant's alerts, which is how a Kin JaneApp tap landed on the admin lock
+screen. Tenant enroll now requires a real roster role (owner_email or
+`business_members`), the registrar is not mounted during non-selfOwned
+view-as, and `deliverPush` drops (and membership-revokes) any leftover
+non-member row. Revoke with `revokePushSubscriptionsForUser`, never by
+endpoint alone: the same endpoint is shared with the admin's HQ/platform
+row.
+
 ## Adding another channel later
 
 The union in `src/lib/db/notifications.ts` is the source of truth, but the

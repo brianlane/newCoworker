@@ -4,9 +4,12 @@
  * POST { businessId: uuid | null, subscription: PushSubscriptionJSON }
  *
  * `businessId: null` is the platform/HQ-admin scope and requires an admin.
- * A tenant scope requires `view_dashboard`, which is the staff bar: teammates
- * receive alerts today on SMS and email, so gating push higher would silently
- * make it the one channel they cannot have.
+ * A tenant scope requires a REAL roster role with `view_dashboard` (owner or
+ * teammate), not the admin bypass `requireBusinessRole` would grant. View-as
+ * must not enroll the operator's phone as a tenant device: the silent
+ * registrar re-POST would otherwise attach HQ to every tenant they inspect.
+ * Teammates still qualify at the staff bar, so push is not the one channel
+ * they cannot have.
  *
  * The endpoint is host-allowlisted by `pushSubscriptionSchema` before it is
  * stored. That is an SSRF guard, not validation hygiene: the server later
@@ -15,8 +18,9 @@
 
 import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { getAuthUser } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
+import { callerCanEnrollTenantPush } from "@/lib/push/eligibility";
 import { repointPushSubscription, upsertPushSubscription } from "@/lib/push/db";
 import { pushSubscriptionSchema } from "@/lib/push/subscription";
 import { pushAllowedForBusiness, PUSH_UPGRADE_MESSAGE } from "@/lib/push/tier-gate";
@@ -76,7 +80,20 @@ export async function POST(request: Request): Promise<Response> {
       // and the liveness sweep's own findings rather than a tenant's alerts.
       if (!user.isAdmin) return errorResponse("FORBIDDEN", "Admin required", 403);
     } else {
-      await requireBusinessRole(body.businessId, "view_dashboard");
+      // Real membership, not the admin bypass. An HQ operator viewing-as
+      // this tenant is not on its roster and must not receive its lock-screen
+      // alerts. The HQ tenant itself still passes: owner_email IS the admin.
+      const allowed = await callerCanEnrollTenantPush({
+        email: user.email,
+        businessId: body.businessId
+      });
+      if (!allowed) {
+        return errorResponse(
+          "FORBIDDEN",
+          "Push alerts are only for this business's owner and team",
+          403
+        );
+      }
       if (!(await pushAllowedForBusiness(body.businessId))) {
         return errorResponse("FORBIDDEN", PUSH_UPGRADE_MESSAGE, 403);
       }

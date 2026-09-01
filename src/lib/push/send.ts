@@ -23,10 +23,15 @@ import { pushAllowedForBusiness } from "@/lib/push/tier-gate";
 import {
   listDeliverablePushSubscriptions,
   revokePushSubscription,
+  revokePushSubscriptionsForUser,
   stampPushSent,
   type PushScope,
   type PushSubscriptionRow
 } from "@/lib/push/db";
+import {
+  listEligiblePushUserIds,
+  partitionEligiblePushRows
+} from "@/lib/push/eligibility";
 
 export type PushDeliveryResult =
   | { ok: true; sent: number; revoked: number }
@@ -164,6 +169,34 @@ export async function deliverPush(input: PushDeliveryInput): Promise<PushDeliver
     };
   }
   if (rows.length === 0) return { ok: false, reason: "not_connected" };
+
+  // Drop devices that do not belong on this tenant: an HQ admin who viewed-as
+  // the business gets a live row (PushRegistrar re-POSTs an already-granted
+  // subscription, and requireBusinessRole lets the admin through). Sending to
+  // them is how "Katie Turner tapped your janeapp link" landed on the
+  // operator's lock screen. Platform scope is admin-only by construction, so
+  // it is left alone.
+  //
+  // Revoke with revokePushSubscriptionsForUser (business + user), NEVER
+  // revokePushSubscription(endpoint): the same endpoint is shared with the
+  // admin's HQ/platform row, and an unscoped revoke would kill that too.
+  if (input.scope.businessId !== null) {
+    const eligible = await listEligiblePushUserIds(input.scope.businessId);
+    const partitioned = partitionEligiblePushRows(rows, eligible);
+    const leakedUsers = [...new Set(partitioned.leaked.map((row) => row.user_id))];
+    for (const userId of leakedUsers) {
+      try {
+        await revokePushSubscriptionsForUser(input.scope.businessId, userId);
+      } catch (err) {
+        logger.warn("push.send: revoke of a non-member subscription failed", {
+          businessId: input.scope.businessId,
+          error: errText(err)
+        });
+      }
+    }
+    rows = partitioned.keep;
+    if (rows.length === 0) return { ok: false, reason: "not_connected" };
+  }
 
   webpush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
   const payload = buildPushPayload({

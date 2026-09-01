@@ -182,6 +182,21 @@ describe("notifyLinkClick", () => {
     );
   });
 
+  it("labels janeapp destinations as booking links", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(
+      rpcResult({
+        original_url: "https://kinintegrated.janeapp.com/",
+        url: "https://kinintegrated.janeapp.com/"
+      })
+    );
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary: "Muhammad al tapped your booking link: kinintegrated.janeapp.com"
+      })
+    );
+  });
+
   it("falls back to the raw number and hostname when the contact is unnamed", async () => {
     resolveContactNames.mockResolvedValue(new Map());
     businessLookup.mockResolvedValue({ data: null, error: null });

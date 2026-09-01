@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
+vi.mock("@/lib/push/eligibility", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/push/eligibility")>(
+    "@/lib/push/eligibility"
+  );
+  return { ...actual, listEligiblePushUserIds: vi.fn() };
+});
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { listEligiblePushUserIds } from "@/lib/push/eligibility";
 import {
   listLivePushSubscriptions,
   repointPushSubscription,
@@ -251,8 +258,12 @@ describe("push/db: revokePushSubscriptionsForAccount", () => {
 });
 
 describe("push/db: pushTargetState", () => {
-  it("reports connected when the business has a live device", async () => {
-    const { db } = makeDb({ data: [{ id: "sub-1" }] });
+  beforeEach(() => {
+    vi.mocked(listEligiblePushUserIds).mockResolvedValue(new Set(["user-1"]));
+  });
+
+  it("reports connected when the business has a live roster device", async () => {
+    const { db } = makeDb({ data: [{ id: "sub-1", user_id: "user-1" }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: true });
   });
@@ -261,6 +272,7 @@ describe("push/db: pushTargetState", () => {
     const { db } = makeDb({ data: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await pushTargetState(BIZ)).toEqual({ connected: false, deliverable: false });
+    expect(listEligiblePushUserIds).not.toHaveBeenCalled();
   });
 
   it("ignores revoked devices", async () => {
@@ -271,28 +283,43 @@ describe("push/db: pushTargetState", () => {
   });
 
   /**
-   * limit(1), not maybeSingle. The Slack leg this mirrors reads a
-   * one-row-per-business table, but push_subscriptions is one row per DEVICE
-   * and maybeSingle ERRORS on a second row. Copying that shape would make the
-   * check throw for every business with two phones, the throw would be
-   * swallowed by the fail-open catch, and this would sit at "connected: true"
-   * forever with nothing to notice it by.
+   * maybeSingle is still forbidden: this table is one row per DEVICE and
+   * maybeSingle ERRORS on a second row. Copying the Slack leg's shape would
+   * make the check throw for every business with two phones, the throw would
+   * be swallowed by the fail-open catch, and this would sit at
+   * "connected: true" forever with nothing to notice it by.
+   *
+   * We read the live LIST rather than sampling limit(1) because a leaked
+   * HQ-admin row sitting next to the owner's phone must not be the one
+   * sample that decides deliverable.
    */
-  it("uses limit(1), so a business with two devices does not error", async () => {
-    const { db, calls, builder } = makeDb({ data: [{ id: "a" }, { id: "b" }] });
+  it("does not use maybeSingle, so a business with two devices does not error", async () => {
+    const { db, builder } = makeDb({
+      data: [
+        { id: "a", user_id: "user-1" },
+        { id: "b", user_id: "user-1" }
+      ]
+    });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: true });
-    expect(calls).toContainEqual(["limit", 1]);
     expect(builder.maybeSingle).toBeUndefined();
   });
 
-  /**
-   * FAILS TOWARD CONNECTED, matching slackAlertTargetState. This value decides
-   * whether the dispatcher writes NO push row at all versus an honest skip, so
-   * a read blip must degrade to the noisy-but-honest side. Reporting "not
-   * applicable" on a hiccup would erase the channel from a tenant who really
-   * does have devices, and leave nothing behind to notice it by.
-   */
+  it("treats a live non-member device as connected but not deliverable", async () => {
+    // The HQ-admin view-as leak: a row exists, but the user is not on the
+    // roster, so we must not suppress SMS on the strength of that push.
+    const { db } = makeDb({ data: [{ id: "admin-phone", user_id: "admin-1" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: false });
+  });
+
+  it("fails CLOSED on deliverable when eligibility itself cannot be resolved", async () => {
+    const { db } = makeDb({ data: [{ id: "sub-1", user_id: "user-1" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(listEligiblePushUserIds).mockResolvedValue(null);
+    expect(await pushTargetState(BIZ)).toEqual({ connected: true, deliverable: false });
+  });
+
   /**
    * The two flags fail in OPPOSITE directions, and that is the whole point.
    *
