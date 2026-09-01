@@ -10,15 +10,15 @@ metadata:
 
 Never ask whether to babysit a PR. Always carry it: CI and Bugbot to green,
 every review thread resolved, squash merge, watch the push-to-main run, remove
-the worktree.
+the worktree, and leave the main checkout a clean working tree.
 
 This includes PRs that correct my own earlier mistakes. I asked whether Brian
 wanted to review a correction-to-my-own-claims PR himself instead of me merging
 it, and the answer was "Always babysit".
 
 **Why:** the repo's flow already says a change is not shipped until main is
-green and the worktree is gone. Asking mid-flow stalls the work and pushes a
-decision that was already made onto Brian.
+green, the worktree is gone, and the main checkout is clean. Asking mid-flow
+stalls the work and pushes a decision that was already made onto Brian.
 
 **How to apply:** finish the whole flow silently and report the outcome. The
 only reasons to stop are the ones that genuinely block: a required check that
@@ -26,4 +26,5 @@ cannot pass, an unresolved Bugbot finding I disagree with, Bugbot down
 ([[never-merge-while-bugbot-is-down]]), or a change that needs a decision only
 Brian can make.
 
-Related: [[pr-checks-appear-in-waves]], [[main-run-watch-trap]].
+Related: [[pr-checks-appear-in-waves]], [[main-run-watch-trap]],
+[[leave-main-checkout-clean]].

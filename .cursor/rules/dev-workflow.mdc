@@ -1,5 +1,5 @@
 ---
-description: Every code change goes worktree -> branch -> PR -> babysit CI and Bugbot to green -> merge -> post-merge -> remove the worktree. Never commit to main, never stop at "tests pass".
+description: Every code change goes worktree -> branch -> PR -> babysit CI and Bugbot to green -> merge -> post-merge -> remove the worktree -> leave main clean. Never commit to main, never stop at "tests pass".
 alwaysApply: true
 ---
 
@@ -66,14 +66,24 @@ The full flow, for every code change, however small:
    `git worktree remove`, `git worktree prune`, and delete the branch. A shell
    left inside a deleted worktree fails every later command and looks like a
    dead terminal backend.
+8. **Leave the main checkout clean. Mandatory when the session ends.**
+   `git status` in `/Users/brianlane/newCoworker` must show a clean working
+   tree: no modified files, no untracked files, no session debris. Cursor's
+   workspace is the main checkout, so memories under `.cursor/memory/` and
+   other session files land there even when the code lived in a worktree.
+   Those files belong in the worktree so they ship with the PR. Copy them
+   there before you open the PR, or before you remove the worktree. Never
+   commit them on main. If the session did not produce a PR, discard the
+   leftovers or put them in one.
 
 Continue through all of it without stopping to ask permission between steps.
 
 ## Do not stop early
 
 A plan or a summary that ends at "run the tests" is incomplete. The change is
-not shipped until the PR is merged, main is green, and the worktree is gone.
-If you are in plan mode, the plan should say so.
+not shipped until the PR is merged, main is green, the worktree is gone, and
+the main checkout is a clean working tree. If you are in plan mode, the plan
+should say so.
 
 ## Repo-specific traps worth knowing before you start
 
