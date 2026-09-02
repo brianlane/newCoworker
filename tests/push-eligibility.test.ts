@@ -11,7 +11,6 @@ import {
   callerCanEnrollTenantPush,
   listEligiblePushUserIds,
   newestOwnedBusinessId,
-  ownerEmailIlikePattern,
   partitionEligiblePushRows,
   pushRegistrarBusinessId,
   tenantPushEnrollmentAllowed
@@ -105,12 +104,6 @@ describe("pushRegistrarBusinessId", () => {
   });
 });
 
-describe("ownerEmailIlikePattern", () => {
-  it("lowercases and escapes LIKE metacharacters", () => {
-    expect(ownerEmailIlikePattern("  A_b%x\\z@Ex.COM  ")).toBe("a\\_b\\%x\\\\z@ex.com");
-  });
-});
-
 describe("newestOwnedBusinessId", () => {
   it("returns null without querying when the email is empty", async () => {
     expect(await newestOwnedBusinessId(null)).toBeNull();
@@ -122,8 +115,8 @@ describe("newestOwnedBusinessId", () => {
     const { db, calls } = makeDb({
       businesses: { data: { id: BIZ } }
     });
-    expect(await newestOwnedBusinessId("A_b@x.com", db as never)).toBe(BIZ);
-    expect(calls).toContainEqual(["businesses", "ilike", "owner_email", "a\\_b@x.com"]);
+    expect(await newestOwnedBusinessId("  A_b%x\\z@Ex.COM  ", db as never)).toBe(BIZ);
+    expect(calls).toContainEqual(["businesses", "ilike", "owner_email", "a\\_b\\%x\\\\z@ex.com"]);
     expect(calls).toContainEqual(["businesses", "order", "created_at", { ascending: false }]);
     expect(calls).toContainEqual(["businesses", "limit", 1]);
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();

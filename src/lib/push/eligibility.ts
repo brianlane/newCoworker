@@ -62,7 +62,7 @@ export function pushRegistrarBusinessId(input: {
  * registrar is optional on a page render; failing closed (no enroll) is
  * safer than 500ing the dashboard because the lookup blipped.
  */
-export function ownerEmailIlikePattern(email: string): string {
+function ownerEmailIlikePattern(email: string): string {
   return email
     .trim()
     .toLowerCase()
