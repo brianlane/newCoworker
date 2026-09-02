@@ -950,7 +950,7 @@ contact up with it; `from_matches` lines up from the other side instead, with
 
 ## One-shots
 
-**`amy-shorten-offer-templates.ts` (Aug 29 2026, NOT YET APPLIED):** shortens
+**`amy-shorten-offer-templates.ts` (applied Aug 29 2026):** shortens
 every `route_to_team` offer template on the eight enabled flows so an unclaimed
 lead costs fewer billed SMS segments, without dropping a fact. Written while
 tracing the Telnyx jump from $30.78 (July) to $50.95 (Aug 1-28): the per-segment

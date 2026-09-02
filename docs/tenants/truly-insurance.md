@@ -10,26 +10,28 @@ reading Truly's transcripts.
 | --- | --- |
 | Business id | `690f85c0-ee16-4ee5-bde5-5829df2e5410` |
 | Tier / box | standard, **boxless** (`hostinger_vps_id` null). Former VPS `1815606` was detached 2026-07-29 and adopted by Scar Fairy |
-| DID | `+15198006401` (reserved until the ~Sep 7 grace wipe) |
+| DID | `+15198006401` (still `active` at Telnyx; reserved until the 2026-09-07T22:27:42Z grace wipe) |
 | Owner | Muhammad Fahad |
 | Onboarded | 2026-07-08 |
 | Roster | Muhammad Fahad, Dania Shaikh, Awais Chauhan |
-| Billing | `cancel_at_period_end=true`, period ends **2026-08-08**. **Not paused** (`is_paused=false`): we are letting Stripe cancel-at-period-end run, then the automated grace wipe ~**2026-09-07** |
+| Billing | `status=canceled`, `canceled_at` **2026-08-08T22:27:42Z**, `cancel_reason=user_period_end`. `grace_ends_at` **2026-09-07T22:27:42Z**, `wiped_at` null. Not paused (`billing_paused` is the live column; do not set it). The DID stays rented through grace on purpose; `release_did` fires at wipe. |
 
 ## Lifecycle (lapsing, not paused)
 
 Truly canceled at period end. On 2026-07-29 we backed up their vault/memory,
 nulled `businesses.hostinger_vps_id` and
 `subscriptions.hostinger_billing_subscription_id`, and pooled vm `1815606` so
-Scar Fairy could adopt it. Do **not** set `is_paused` for this account; product
-fixes (hardware-escalation advisor skips boxless tenants, PR #1016) already
-stop the boxless alert email without a pause.
+Scar Fairy could adopt it. Do **not** set `billing_paused` for this account;
+product fixes (hardware-escalation advisor skips boxless tenants, PR #1016)
+already stop the boxless alert email without a pause. `billing_paused` is a
+Stripe pause-collection comp, not cancellation.
 
 Verification dates:
 
-- **2026-08-08**: Stripe period end stamps `grace_ends_at` (~Sep 7). Must have
-  no VM side effects (pointers already null).
-- **~2026-09-07**: grace wipe releases the DID and wipes data/backups.
+- **2026-08-08**: Stripe period end stamped `canceled_at` and
+  `grace_ends_at=2026-09-07T22:27:42Z`. No VM side effects (pointers already
+  null). Re-checked 2026-09-02: Telnyx still holds `+15198006401` as `active`.
+- **2026-09-07 22:27 UTC**: grace wipe releases the DID and wipes data/backups.
 
 Backup artifact: Supabase Storage bucket `business-backups`, path
 `backups/690f85c0-ee16-4ee5-bde5-5829df2e5410/latest.tar.gz` (taken before the
