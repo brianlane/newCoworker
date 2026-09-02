@@ -23,9 +23,16 @@ import {
   retireLapsedPoolVps
 } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
-import { checkVpsBillingPosture, warrantsOpsEmail } from "@/lib/vps/billing-posture";
+import {
+  checkVpsBillingPosture,
+  selectEmailWorthyFindings,
+  TRANSIENT_FINDING_LOG_EVENT,
+  TRANSIENT_FINDING_LOG_SOURCE,
+  TRANSIENT_FINDING_WINDOW_MINUTES
+} from "@/lib/vps/billing-posture";
 import { listHostingerBillingTerms } from "@/lib/db/hostinger-billing-terms";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
+import { recordFailure } from "@/lib/db/system-logs";
 
 // Vercel Pro ceiling (mirrors delete-client / migrate-size). The check does
 // one VM detail call per live tenant SEQUENTIALLY, and the HostingerClient's
@@ -77,17 +84,45 @@ async function runSweep(request: Request): Promise<Response> {
       listBillingTerms: () => listHostingerBillingTerms()
     });
 
-    // Send on anything that is not routine-once-healed, but send the WHOLE
-    // finding list when we do: the reaped pool boxes are useful context next
-    // to a real finding, they just are not a reason to write on their own.
+    // Send on anything that is not routine-once-healed. The mailed body is
+    // every finding except held first-day Hostinger flakes: reaped pool
+    // boxes ride along as context, they just are not a reason to write on
+    // their own. A first-day timeout does not ride along, because the
+    // template treats tenant_vm_unreachable as lapse risk and would turn
+    // an otherwise advisory digest into ACTION REQUIRED.
     // A run whose only finding is "the pool reaper did its job" is a
     // non-problem, and an ops email that reports non-problems is one nobody
     // reads on the day it is right. Suppressed runs still log below and still
     // come back in this route's JSON, so nothing is lost, it is just not mail.
-    const emailWorthy = result.findings.filter(warrantsOpsEmail);
+    //
+    // Hostinger lookup flakes (timeout / network error) are held until they
+    // repeat, same rule as the fleet System Errors card: first failure is a
+    // warn, the next day's failure is an error and an email. A 404 still
+    // pages immediately. The recorder is recordFailure, so the warn/error
+    // also lands in system_logs for the dashboard.
+    const { emailWorthy, heldTransient, mailed } = await selectEmailWorthyFindings(
+      result.findings,
+      (finding) =>
+        recordFailure(
+          {
+            businessId: finding.businessId,
+            source: TRANSIENT_FINDING_LOG_SOURCE,
+            event: TRANSIENT_FINDING_LOG_EVENT,
+            message: finding.detail,
+            payload: { vmId: finding.vmId, kind: finding.kind }
+          },
+          { windowMinutes: TRANSIENT_FINDING_WINDOW_MINUTES }
+        )
+    );
+    if (heldTransient.length > 0) {
+      logger.info("vps billing posture: Hostinger lookup flake held until it repeats", {
+        count: heldTransient.length,
+        vmIds: heldTransient.map((f) => f.vmId)
+      });
+    }
     if (emailWorthy.length > 0) {
       await sendOpsBillingPostureEmail({
-        findings: result.findings,
+        findings: mailed,
         checkedTenantVms: result.checkedTenantVms,
         checkedPoolBoxes: result.checkedPoolBoxes
       });
@@ -98,6 +133,7 @@ async function runSweep(request: Request): Promise<Response> {
       checkedPoolBoxes: result.checkedPoolBoxes,
       findings: result.findings.length,
       autoHealed: result.findings.filter((f) => f.autoHealed).length,
+      heldTransient: heldTransient.length,
       emailed: emailWorthy.length > 0,
       expiresRefreshed
     });

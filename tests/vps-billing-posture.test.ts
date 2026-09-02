@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkVpsBillingPosture, isLapseRiskFinding } from "@/lib/vps/billing-posture";
+import {
+  checkVpsBillingPosture,
+  isLapseRiskFinding,
+  selectEmailWorthyFindings,
+  TRANSIENT_FINDING_WINDOW_MINUTES
+} from "@/lib/vps/billing-posture";
+import type { BillingPostureFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 
@@ -1659,5 +1665,151 @@ describe("stale assigned rows (fleet consistency)", () => {
     });
     const report = await checkVpsBillingPosture(deps as never);
     expect(report.findings.filter((f) => f.kind === "stale_assigned_row")).toHaveLength(0);
+  });
+});
+
+function finding(
+  overrides: Partial<BillingPostureFinding> = {}
+): BillingPostureFinding {
+  return {
+    kind: "tenant_vm_unreachable",
+    vmId: 1936826,
+    businessId: "a912aff5-dd87-49fb-ad6a-477acefb66c0",
+    businessName: "KIN Integrated Child Health",
+    hostingerBillingSubscriptionId: null,
+    expiresAt: null,
+    autoHealed: false,
+    detail:
+      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 timed out after 30000ms",
+    ...overrides
+  };
+}
+
+describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () => {
+  it("holds a first-time Hostinger timeout (the Sep 1 KIN email)", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [timeout], mailed: [] });
+    expect(recorder).toHaveBeenCalledWith(timeout);
+  });
+
+  it("holds a Hostinger network error the same way", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const network = finding({
+      detail:
+        "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 network error: fetch failed"
+    });
+    const selected = await selectEmailWorthyFindings([network], recorder);
+    expect(selected.heldTransient).toEqual([network]);
+    expect(selected.emailWorthy).toEqual([]);
+    expect(selected.mailed).toEqual([]);
+    expect(recorder).toHaveBeenCalledWith(network);
+  });
+
+  it("emails once the same flake has already been recorded (error)", async () => {
+    const recorder = vi.fn().mockResolvedValue("error");
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected).toEqual({ emailWorthy: [timeout], heldTransient: [], mailed: [timeout] });
+  });
+
+  it("emails immediately when the recorder throws, matching recordFailure's fail-loud rule", async () => {
+    const recorder = vi.fn().mockRejectedValue(new Error("system_logs down"));
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected.emailWorthy).toEqual([timeout]);
+    expect(selected.heldTransient).toEqual([]);
+    expect(selected.mailed).toEqual([timeout]);
+  });
+
+  it("emails a 404 unreachable on the first run, and never calls the recorder", async () => {
+    const recorder = vi.fn();
+    const gone = finding({ detail: "VM lookup failed: HTTP 404" });
+    const empty = finding({ vmId: 1, detail: "" });
+    const selected = await selectEmailWorthyFindings([gone, empty], recorder);
+    expect(selected).toEqual({
+      emailWorthy: [gone, empty],
+      heldTransient: [],
+      mailed: [gone, empty]
+    });
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a timeout-shaped detail on a different kind as a flake", async () => {
+    const recorder = vi.fn();
+    const renewOff = finding({
+      kind: "tenant_auto_renew_off",
+      detail: "Hostinger API /api/vps/v1/virtual-machines/1 timed out after 30000ms"
+    });
+    const selected = await selectEmailWorthyFindings([renewOff], recorder);
+    expect(selected.emailWorthy).toEqual([renewOff]);
+    expect(selected.mailed).toEqual([renewOff]);
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("emails a real auto-renew finding immediately, even next to a held timeout", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const renewOff = finding({
+      kind: "tenant_auto_renew_off",
+      autoHealed: false,
+      detail: "subscription x is non_renewing with auto-renew off"
+    });
+    const selected = await selectEmailWorthyFindings([timeout, renewOff], recorder);
+    expect(selected.emailWorthy).toEqual([renewOff]);
+    expect(selected.heldTransient).toEqual([timeout]);
+    expect(selected.mailed).toEqual([renewOff]);
+  });
+
+  it("strips a first-day timeout from mailed when a reaped box also rides along", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const untracked = finding({
+      kind: "untracked_vm",
+      vmId: 99,
+      detail: "absent from vps_inventory and no business points at it"
+    });
+    const reaped = finding({
+      kind: "pool_box_lapsed_retired",
+      autoHealed: true,
+      detail: "pooled box lapsed; its vps_inventory row was retired"
+    });
+    const selected = await selectEmailWorthyFindings(
+      [timeout, untracked, reaped],
+      recorder
+    );
+    expect(selected.emailWorthy).toEqual([untracked]);
+    expect(selected.heldTransient).toEqual([timeout]);
+    expect(selected.mailed).toEqual([untracked, reaped]);
+  });
+
+  it("drops a healed pool-reaper finding, same gate as warrantsOpsEmail", async () => {
+    const recorder = vi.fn();
+    const reaped = finding({
+      kind: "pool_box_lapsed_retired",
+      autoHealed: true,
+      detail: "pooled box lapsed; its vps_inventory row was retired"
+    });
+    const selected = await selectEmailWorthyFindings([reaped], recorder);
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [], mailed: [reaped] });
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("emails a healed auto-renew flip immediately: that spent money on the account's behalf", async () => {
+    const recorder = vi.fn();
+    const healed = finding({
+      kind: "tenant_auto_renew_off",
+      autoHealed: true,
+      detail: "auto-renew re-enabled by posture check"
+    });
+    const selected = await selectEmailWorthyFindings([healed], recorder);
+    expect(selected.emailWorthy).toEqual([healed]);
+    expect(selected.mailed).toEqual([healed]);
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("uses a 48-hour window so two consecutive daily runs can see each other", () => {
+    expect(TRANSIENT_FINDING_WINDOW_MINUTES).toBe(48 * 60);
   });
 });
