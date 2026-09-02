@@ -33,9 +33,22 @@ The full flow, for every code change, however small:
 4. **Babysit CI and Bugbot to green.** Do not walk away at "pushed". Bugbot
    reliably finds real bugs here and re-reviews every push, so expect more
    than one round. See the PR merge policy rule for what counts as green.
-5. **Merge** (squash), then **watch the push-to-main run to green**: it
-   applies migrations and deploys, and a failure there means production did
-   not update.
+5. **Merge, then watch the push-to-main run to green.** That run applies
+   migrations and deploys. A failure there means production did not update.
+
+   Cloud Agent PRs (branch starts with `cursor/`, not a draft) are
+   squash-merged by `.github/workflows/cursor-automerge.yml` once the merge
+   policy is satisfied: Cursor Bugbot SUCCESS, `mergeStateStatus` CLEAN on
+   two reads, every other check green, zero unresolved threads.
+   You do not `gh pr merge`. Mark the PR ready and keep working. Draft is
+   the hold: convert back to draft to stop a merge. Do not stop the
+   session at "the PR is open, waiting for a human to merge." The Action
+   is the merge. Continue: fix Bugbot findings, then watch main, then the
+   post-merge steps below.
+
+   Human-authored PRs that are not on a `cursor/` branch still squash-merge
+   by hand, same policy. Dependabot PRs go through
+   `dependabot-automerge.yml`.
 6. **Post-merge, still manual when the change calls for it:** a VPS redeploy
    if `vps/` changed, and running any new `scripts/oneshot/` script. The
    redeploy scripts are **not interchangeable**: each one ships a single
@@ -80,10 +93,12 @@ Continue through all of it without stopping to ask permission between steps.
 
 ## Do not stop early
 
-A plan or a summary that ends at "run the tests" is incomplete. The change is
-not shipped until the PR is merged, main is green, the worktree is gone, and
-the main checkout is a clean working tree. If you are in plan mode, the plan
-should say so.
+A plan or a summary that ends at "run the tests" is incomplete. So is one
+that ends at "the PR is open, waiting for merge." For a Cloud Agent PR,
+mark it ready; `.github/workflows/cursor-automerge.yml` squash-merges
+when the policy is clear. Keep going. The change is not shipped until the
+PR is merged, main is green, the worktree is gone, and the main checkout
+is a clean working tree. If you are in plan mode, the plan should say so.
 
 ## Repo-specific traps worth knowing before you start
 

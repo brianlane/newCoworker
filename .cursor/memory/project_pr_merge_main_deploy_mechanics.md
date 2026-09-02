@@ -138,6 +138,10 @@ back to draft to stop a merge. The workflow file always loads from the
 default branch; do not add a `pull_request` trigger that would run the
 copy from the PR under evaluation.
 
+Cloud Agents must not stop the task at "PR opened, waiting for merge."
+Mark the PR ready and keep going: fix Bugbot, watch main, post-merge,
+worktree cleanup. The Action is the merge. You do not `gh pr merge`.
+
 **Gate on the check COUNT, not just zero-pending** (2026-08-11, PRs #1287 and
 #1294). `GitGuardian Security Checks` posts a commit status rather than a check
 run and arrives minutes after everything else. Both times the list read **21

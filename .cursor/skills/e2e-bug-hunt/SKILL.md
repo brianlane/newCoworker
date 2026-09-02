@@ -98,5 +98,6 @@ Worth checking first, because these have all yielded real defects:
 ## Finish
 
 Per the repo flow: worktree, branch, PR, babysit CI and Bugbot to green,
-merge, post-merge steps, remove the worktree. Label the PR `blog: skip`
-(bug fixes are internal work).
+mark ready (`.github/workflows/cursor-automerge.yml` squash-merges),
+post-merge steps, remove the worktree. Label the PR `blog: skip`
+(bug fixes are internal work). Do not stop at "waiting for merge."

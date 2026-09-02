@@ -12,6 +12,11 @@ Never ask whether to babysit a PR. Always carry it: CI and Bugbot to green,
 every review thread resolved, squash merge, watch the push-to-main run, remove
 the worktree, and leave the main checkout a clean working tree.
 
+For Cloud Agent PRs the squash merge is `.github/workflows/cursor-automerge.yml`,
+not `gh pr merge`. Mark the PR ready and keep working. Do not stop to ask
+whether to merge, and do not end the session at "the PR is open." Convert
+back to draft to hold.
+
 This includes PRs that correct my own earlier mistakes. I asked whether Brian
 wanted to review a correction-to-my-own-claims PR himself instead of me merging
 it, and the answer was "Always babysit".

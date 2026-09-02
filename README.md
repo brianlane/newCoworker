@@ -4954,6 +4954,8 @@ promote it; the third is overdue.
 
 For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below) and **leave the main checkout clean** (mandatory when the session ends, see below).
 
+Cloud Agent PRs (branch starts with `cursor/`) squash-merge themselves via `.github/workflows/cursor-automerge.yml` once the merge policy is clear (Bugbot SUCCESS, `mergeStateStatus` CLEAN, threads resolved). Mark the PR ready and keep working. Do not stop at "waiting for a human to merge." Draft is the hold. Human-authored non-`cursor/` PRs still squash-merge by hand. Dependabot uses `dependabot-automerge.yml`.
+
 **Label every PR for the weekly blog digest** while babysitting it:
 `blog: feature` if customers should read about it in the weekly "what
 shipped" post, `blog: skip` for bug fixes / internal / ops work (see

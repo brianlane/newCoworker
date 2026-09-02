@@ -62,3 +62,14 @@ The `Cursor Bugbot` check's GitHub conclusion is meaningful. Do not read it as
 So a `NEUTRAL`/"skipping" Bugbot means "go resolve my comments", not
 "re-trigger me". Re-triggering an unaddressed Bugbot just returns `NEUTRAL`
 again.
+
+## Cloud Agent PRs merge themselves
+
+`.github/workflows/cursor-automerge.yml` squash-merges a ready (non-draft)
+`cursor/` PR when this policy is satisfied, including Bugbot SUCCESS
+(which the GitHub ruleset omits so Dependabot is not deadlocked). Cloud
+Agents must not stop to ask for a merge, and must not stop the task at
+"PR opened." Mark the PR ready and keep working: fix Bugbot findings,
+watch the push-to-main run, do post-merge steps. The Action is the merge.
+Convert back to draft to hold. Forks are skipped. Human-authored PRs
+that are not on a `cursor/` branch still squash-merge by hand.
