@@ -86,6 +86,11 @@ apply_jq() {
   fi
 }
 
+if [ "\${1:-}" = "workflow" ] && [ "\${2:-}" = "run" ]; then
+  printf '%s\\n' "$*" >> "$STUB_DIR/workflow-runs.txt"
+  exit 0
+fi
+
 if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "merge" ]; then
   n=\$(cat "$STUB_DIR/merge-attempts" 2>/dev/null || echo 0)
   n=\$((n + 1))
@@ -201,7 +206,7 @@ function seedGreenPr(sb: Sandbox, pr = 1768, view: PrView = {}) {
 function run(
   sb: Sandbox,
   env: Record<string, string> = {}
-): { status: number | null; out: string; merges: string; log: string } {
+): { status: number | null; out: string; merges: string; log: string; workflows: string } {
   const res = spawnSync("bash", [SCRIPT], {
     cwd: sb.dir,
     encoding: "utf8",
@@ -221,11 +226,13 @@ function run(
   });
   const mergesPath = join(sb.dir, "merges.txt");
   const logPath = join(sb.dir, "gh.log");
+  const workflowsPath = join(sb.dir, "workflow-runs.txt");
   return {
     status: res.status,
     out: `${res.stdout}${res.stderr}`,
     merges: readFileSyncExists(mergesPath),
-    log: readFileSyncExists(logPath)
+    log: readFileSyncExists(logPath),
+    workflows: readFileSyncExists(workflowsPath)
   };
 }
 
@@ -361,6 +368,8 @@ describe("cursor-automerge.sh", () => {
     expect(res.merges).toMatch(/pr merge 18 /);
     expect(res.merges).toMatch(/--squash/);
     expect(res.merges).toMatch(/--delete-branch/);
+    expect(res.workflows).toMatch(/workflow run CI /);
+    expect(res.workflows).toMatch(/--ref main/);
   });
 
   it("skips a stale HEAD_SHA on an event-driven run", () => {
@@ -398,6 +407,7 @@ describe("cursor-automerge.sh", () => {
     expect(res.status).toBe(0);
     expect(res.out).toMatch(/Squash-merging PR #22/);
     expect(res.merges).toMatch(/pr merge 22 .*--squash.*--delete-branch/);
+    expect(res.workflows).toMatch(/workflow run CI /);
     const views = readFileSync(join(sb.dir, "view-count"), "utf8").trim();
     expect(Number(views)).toBeGreaterThanOrEqual(2);
   });
@@ -412,6 +422,7 @@ describe("cursor-automerge.sh", () => {
     expect(res.out).toMatch(/Second read failed/);
     expect(res.out).toMatch(/UNSTABLE/);
     expect(res.merges).toBe("");
+    expect(res.workflows).toBe("");
   });
 
   it("retries a base-branch race and then squash-merges", () => {
@@ -423,6 +434,7 @@ describe("cursor-automerge.sh", () => {
     expect(res.out).toMatch(/Merge attempt 1\/5/);
     expect(res.out).toMatch(/Merged PR #24 \(attempt 2\/5\)/);
     expect(res.merges).toMatch(/pr merge 24 /);
+    expect(res.workflows).toMatch(/workflow run CI /);
   });
 
   it("does not retry a non-retryable merge error", () => {
@@ -433,6 +445,7 @@ describe("cursor-automerge.sh", () => {
     expect(res.status).toBe(1);
     expect(res.out).toMatch(/Non-retryable merge error/);
     expect(res.merges).toBe("");
+    expect(res.workflows).toBe("");
   });
 
   it("resolves the PR from the commit when HEAD_BRANCH is empty", () => {
@@ -441,6 +454,7 @@ describe("cursor-automerge.sh", () => {
     const res = run(sb, { EVENT_NAME: "status", HEAD_BRANCH: "" });
     expect(res.status).toBe(0);
     expect(res.merges).toMatch(/pr merge 26 /);
+    expect(res.workflows).toMatch(/workflow run CI /);
   });
 });
 
@@ -459,8 +473,22 @@ describe("cursor auto-merge wiring", () => {
   it("loads the merger script from the default branch, not the PR head", () => {
     const src = readFileSync(WORKFLOW, "utf8");
     expect(src).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(src).toContain("actions: write");
     expect(src).toContain("name: cursor-auto-merge");
     expect(src).toContain('github.event.check_run.name == \'Cursor Bugbot\'');
+  });
+
+  it("CI on main accepts workflow_dispatch so a GITHUB_TOKEN merge can still deploy", () => {
+    const src = readFileSync(join(__dirname, "..", ".github/workflows/ci.yml"), "utf8");
+    expect(src).toContain("workflow_dispatch:");
+    expect(src).toContain("MAIN_DEPLOY:");
+    expect(src).toContain("github.event_name == 'workflow_dispatch'");
+    expect(src).toContain(".parents[0].sha");
+  });
+
+  it("main-failure-watch retries dispatched CI on main, not only push runs", () => {
+    const src = readFileSync(join(__dirname, "..", ".github/workflows/main-failure-watch.yml"), "utf8");
+    expect(src).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
   });
 
   it("working agreement tells Cloud Agents the Action is the merge and not to stop", () => {

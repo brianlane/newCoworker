@@ -70,6 +70,13 @@ merge_with_retry() {
   return 1
 }
 
+# GITHUB_TOKEN squash-merges do not emit a push event, so CI on main never
+# starts on its own. workflow_dispatch is the documented exception.
+dispatch_main_ci() {
+  echo "Dispatching CI on main (GITHUB_TOKEN merge created no push run)."
+  gh workflow run CI --repo "$REPO" --ref main
+}
+
 # Print why this PR is not mergeable, or nothing if the gate is clear.
 # Reads live API state; the caller re-invokes after POLL_SECONDS.
 gate_reasons() {
@@ -192,7 +199,8 @@ evaluate_pr() {
   fi
 
   echo "All checks green, Bugbot SUCCESS, mergeStateStatus CLEAN, no unresolved threads. Squash-merging PR #$pr."
-  merge_with_retry "$pr"
+  merge_with_retry "$pr" || return 1
+  dispatch_main_ci
 }
 
 PR_NUMBERS=""
