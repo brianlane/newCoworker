@@ -37,6 +37,7 @@ permissions:
   pull-requests: write
   checks: read
   statuses: read
+  actions: write
 
 jobs:
   cursor-auto-merge:

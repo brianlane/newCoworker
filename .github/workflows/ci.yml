@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # cursor-automerge.yml squash-merges with GITHUB_TOKEN, which does not
+  # emit a push event. After a successful merge it dispatches this
+  # workflow on main so migrations and production Vercel still run.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,6 +20,10 @@ env:
   NODE_VERSION: "24"
   NEXT_TELEMETRY_DISABLED: "1"
   CI: "true"
+  # Production deploy (migrations + Vercel --prod + IndexNow). push to
+  # main is the normal path. workflow_dispatch on main is the Cloud Agent
+  # automerge path: GITHUB_TOKEN squash-merges do not create a push run.
+  MAIN_DEPLOY: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
 jobs:
   quality:
@@ -415,7 +423,7 @@ jobs:
         run: bash .github/scripts/e2e-gate.sh
 
       - name: Setup Supabase CLI
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         uses: supabase/setup-cli@v3
         with:
           version: 2.78.1
@@ -427,7 +435,7 @@ jobs:
       # post-approval merge window), committing the rename to main; that is
       # what the job's contents: write is for.
       - name: Apply migrations + deploy edge functions
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -449,7 +457,7 @@ jobs:
             echo "::error::VERCEL_TOKEN secret is not available to this run: cannot deploy."
             exit 1
           fi
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ env.MAIN_DEPLOY }}" = "true" ]; then
             TARGET_FLAG="--prod"
             echo "target=production" >> "$GITHUB_OUTPUT"
           else
@@ -560,9 +568,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ env.MAIN_DEPLOY }}" = "true" ]; then
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || printf '%s' "$BEFORE" | grep -q '^0*$'; then
+              BEFORE=$(git rev-parse --verify "${{ github.sha }}^" 2>/dev/null || true)
+            fi
             bash .github/scripts/e2e-scope.sh push "${{ github.repository }}" \
-              "${{ github.sha }}" "${{ github.event.before }}"
+              "${{ github.sha }}" "${BEFORE:-0000000000000000000000000000000000000000}"
           else
             bash .github/scripts/e2e-scope.sh pr "${{ github.repository }}" \
               "${{ github.event.pull_request.number }}"
@@ -661,18 +673,18 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         uses: actions/checkout@v7
 
       - name: Setup Node
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         run: npm ci
 
       # The compare API rather than a git diff: the checkout is shallow, and
@@ -688,7 +700,7 @@ jobs:
       # cap below, where a false gate reading is likelier than a true one.
       - name: Announce changed public pages
         # Push only: a preview deployment must never announce production URLs.
-        if: github.event_name == 'push'
+        if: env.MAIN_DEPLOY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

@@ -71,5 +71,8 @@ again.
 Agents must not stop to ask for a merge, and must not stop the task at
 "PR opened." Mark the PR ready and keep working: fix Bugbot findings,
 watch the push-to-main run, do post-merge steps. The Action is the merge.
-Convert back to draft to hold. Forks are skipped. Human-authored PRs
-that are not on a `cursor/` branch still squash-merge by hand.
+A GITHUB_TOKEN merge does not emit a push event, so the Action then
+dispatches CI on main (`workflow_dispatch`) which is what applies
+migrations and deploys production. Convert back to draft to hold. Forks
+are skipped. Human-authored PRs that are not on a `cursor/` branch still
+squash-merge by hand.

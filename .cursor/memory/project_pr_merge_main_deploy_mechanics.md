@@ -141,6 +141,9 @@ copy from the PR under evaluation.
 Cloud Agents must not stop the task at "PR opened, waiting for merge."
 Mark the PR ready and keep going: fix Bugbot, watch main, post-merge,
 worktree cleanup. The Action is the merge. You do not `gh pr merge`.
+After it squash-merges, it dispatches CI on main because a GITHUB_TOKEN
+merge does not emit a push event. That dispatched run is the production
+deploy (migrations + Vercel).
 
 **Gate on the check COUNT, not just zero-pending** (2026-08-11, PRs #1287 and
 #1294). `GitGuardian Security Checks` posts a commit status rather than a check
