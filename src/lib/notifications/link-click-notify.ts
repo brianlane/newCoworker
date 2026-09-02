@@ -102,7 +102,12 @@ export function describeLinkDestination(url: string): { label: string; display: 
   if (/(^|\.)stripe\.com$/i.test(host) || path.startsWith("/pay/")) {
     return { label: "payment link", display };
   }
-  if (/calendly/i.test(host) || /(^|\.)cal\.com$/i.test(host) || path.startsWith("/book/")) {
+  if (
+    /calendly/i.test(host) ||
+    /(^|\.)cal\.com$/i.test(host) ||
+    /(^|\.)janeapp\.com$/i.test(host) ||
+    path.startsWith("/book/")
+  ) {
     return { label: "booking link", display };
   }
   if (path.startsWith("/onboard")) {

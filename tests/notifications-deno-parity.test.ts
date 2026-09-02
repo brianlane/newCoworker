@@ -204,13 +204,32 @@ describe("both dispatchers actually have a leg for every channel", () => {
    * through an /api/internal route. A renamed or moved route is a 404 that
    * shows up as a bridge failure on every single alert.
    */
-  it.each(["slack-send", "whatsapp-send", "push-send"])(
+  it.each(["slack-send", "whatsapp-send", "push-send", "push-target-state"])(
     "calls /api/internal/%s, and that route exists",
     (bridge) => {
       expect(DENO_DISPATCH).toContain(`/api/internal/${bridge}`);
       expect(() => read(`src/app/api/internal/${bridge}/route.ts`)).not.toThrow();
     }
   );
+
+  /**
+   * THE SMS-SUPPRESSION HOLE. Deno used to set pushDeliverable from any live
+   * push_subscriptions row (limit 1, no roster check). A leftover HQ view-as
+   * device then tripped push_replaces_sms, after which push-send dropped that
+   * row and the owner got neither push nor SMS. Eligibility lives in src/lib
+   * and cannot be imported here, so the mirror must ask the Node helper.
+   *
+   * Connected is still derived from a local existence check: a tenant who
+   * never subscribed must not collect a phantom skip row when Node is
+   * unreachable (worker-integration has no Next app). Deliverable must not
+   * follow that same live flag.
+   */
+  it("does not treat an unfiltered live push row as deliverable", () => {
+    expect(DENO_DISPATCH).toContain("/api/internal/push-target-state");
+    expect(DENO_DISPATCH).not.toMatch(/pushDeliverable\s*=\s*live/);
+    expect(DENO_DISPATCH).not.toMatch(/pushDeliverable\s*=\s*\(pushSubs/);
+    expect(DENO_DISPATCH).toMatch(/pushConnected\s*=\s*\(pushSubs/);
+  });
 });
 
 describe("a push carries the id of the row it is about, on both sides", () => {

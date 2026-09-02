@@ -29,6 +29,7 @@ import { SectionMessages } from "@/components/i18n/SectionMessages";
 import { HipaaIdleLogout } from "@/components/dashboard/HipaaIdleLogout";
 import { PushRegistrar } from "@/components/push/PushRegistrar";
 import { PushOptInBanner } from "@/components/push/PushOptInBanner";
+import { tenantPushEnrollmentAllowed } from "@/lib/push/eligibility";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -199,6 +200,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
   });
 
   const requireAcceptance = await acceptancePromise;
+  // View-as of someone else's tenant must not enroll the operator's phone.
+  // PushRegistrar silently re-POSTs an already-granted subscription, so a
+  // single inspect visit would otherwise attach HQ to that tenant's alerts.
+  const enrollPush = tenantPushEnrollmentAllowed(viewAs);
 
   return (
     // SectionMessages ships the dashboard's client translation subset;
@@ -236,7 +241,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {/* Asks once per device, then never again: any decision ends it. The
             permanent opt-in stays on the notifications settings page. Not
             shown while the terms gate is up, which owns the screen. */}
-        {businessId && !requireAcceptance && <PushOptInBanner businessId={businessId} />}
+        {businessId && !requireAcceptance && enrollPush && (
+          <PushOptInBanner businessId={businessId} />
+        )}
         {hipaaMode && <HipaaIdleLogout />}
         {requireAcceptance && <TermsAcceptanceGate />}
         {children}
@@ -255,7 +262,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
           subscription registered and fresh, and re-subscribes it if the VAPID
           key rotated. It never prompts for permission: that needs a user
           gesture and lives behind the button in PushSetupCard. */}
-      {businessId && !requireAcceptance && <PushRegistrar businessId={businessId} />}
+      {businessId && !requireAcceptance && enrollPush && (
+        <PushRegistrar businessId={businessId} />
+      )}
     </div>
     </SectionMessages>
   );

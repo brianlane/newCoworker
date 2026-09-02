@@ -87,6 +87,27 @@ address and read the result back through the delivery outcome.
 thing comparing it to the Node dispatcher; if you add a channel, that test is
 what stops the edge path from silently ignoring its preference column.
 
+**View-as must not enroll the operator's phone.** `requireBusinessRole` lets
+the platform admin past every tenant gate, and `PushRegistrar` silently
+re-POSTs an already-granted subscription on every dashboard load. One "View
+as tenant" visit in the installed PWA therefore used to attach HQ to that
+tenant's alerts, which is how a Kin JaneApp tap landed on the admin lock
+screen. Tenant enroll now requires a real roster role (owner_email or
+`business_members`), the registrar is not mounted during non-selfOwned
+view-as, and `deliverPush` drops (and membership-revokes) any leftover
+non-member row. Revoke with `revokePushSubscriptionsForUser`, never by
+endpoint alone: the same endpoint is shared with the admin's HQ/platform
+row.
+
+**Deno must not re-derive deliverable.** The edge dispatcher used to treat
+any live `push_subscriptions` row as proof it could suppress SMS. A leaked
+HQ device then tripped `push_replaces_sms`, after which `push-send` dropped
+the row and the owner got neither channel. Eligibility lives in `src/lib`
+and cannot be imported there, so Deno asks `/api/internal/push-target-state`
+(the same `pushTargetState` helper) before the SMS leg. Connected still
+uses a local existence check so a never-subscribed tenant does not collect
+a phantom skip row when Node is unreachable. Deliverable does not.
+
 ## Adding another channel later
 
 The union in `src/lib/db/notifications.ts` is the source of truth, but the

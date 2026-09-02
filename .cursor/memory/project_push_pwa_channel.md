@@ -1,6 +1,6 @@
 ---
 name: project-push-pwa-channel
-description: Web Push is the sixth alert channel and the only true read receipt; the traps are iOS ordering, 403-never-revokes, the SSRF allowlist, and the invisible Deno mirror
+description: Web Push is the sixth alert channel and the only true read receipt; the traps are iOS ordering, 403-never-revokes, the SSRF allowlist, the invisible Deno mirror, and view-as must not enroll the operator's phone
 metadata:
   type: project
 ---
@@ -39,9 +39,25 @@ the DASHBOARD as live, which is the WhatsApp-lead bug one channel over.
   for the HQ-admin `business_id IS NULL` scope. Production is PG 17.6.
   PostgREST needs `.is("business_id", null)`; `.eq(...,null)` matches zero rows
   silently. See [[project_postgrest_write_matching_zero_rows]].
-- **`limit(1)`, never `maybeSingle`,** on `push_subscriptions`: it is one row
+- **`maybeSingle` is still forbidden** on `push_subscriptions`: it is one row
   per DEVICE, and copying the Slack leg's `maybeSingle` errors for anyone with
-  two phones, swallowed by the fail-open guard.
+  two phones, swallowed by the fail-open guard. `pushTargetState` now reads
+  the live list (not a single sampled row) so a leaked HQ-admin device sitting
+  next to the owner's phone cannot decide deliverable for the wrong user.
+- **View-as must not enroll the operator's phone.** `requireBusinessRole`
+  lets the admin past every tenant gate, and `PushRegistrar` silently re-POSTs
+  an already-granted subscription. One inspect visit in the installed PWA
+  attached HQ to Kin and every later lead-tap alert landed on the operator
+  lock screen. Tenant enroll requires a REAL roster role; the registrar is
+  not mounted during non-selfOwned view-as; `deliverPush` membership-revokes
+  leftover non-member rows. Never revoke by endpoint alone: the same
+  endpoint is shared with the admin's HQ/platform row. Deno cannot import
+  that helper, so it asks `/api/internal/push-target-state` before it
+  decides `push_replaces_sms`. Connected still uses a local existence
+  check (never-subscribed stays silent when Node is down). Deliverable
+  must not: an unfiltered live-row check would skip SMS, then the send
+  would drop the leaked device, and the owner would get neither. See
+  `src/lib/push/eligibility.ts`.
 
 **The widening ripples further than the compiler sees.** Only
 `CHANNEL_MAX_SILENCE_DAYS` is a `Record` over the union. By hand: both

@@ -534,6 +534,7 @@ serve(async (req: Request) => {
     ""
   );
   const dashboardUrl = `${appUrl}/dashboard`;
+  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -733,6 +734,18 @@ serve(async (req: Request) => {
    * `pushDeliverable` gates SUPPRESSING the owner's text and fails toward
    * FALSE, because treating a blip as "yes" would silence the SMS on the
    * strength of a push nobody confirmed could land.
+   *
+   * Connected is "any live row?" and can be answered here. Deliverable is
+   * "a roster device, not a leftover HQ view-as row?" and cannot: that
+   * filter lives in src/lib/push, which this file cannot import. Setting
+   * BOTH from the unfiltered live row used to trip push_replaces_sms, then
+   * `/api/internal/push-send` dropped the leaked row and the owner got
+   * neither channel.
+   *
+   * Ask Node for both when reachable. If Node is down (worker-integration
+   * has no Next app), keep the local connected verdict so a tenant who
+   * never subscribed does not collect a phantom skip row, and leave
+   * deliverable false so SMS is not suppressed.
    */
   let pushConnected = true;
   let pushDeliverable = false;
@@ -747,9 +760,34 @@ serve(async (req: Request) => {
       .is("revoked_at", null)
       .limit(1);
     if (!pushErr) {
-      const live = (pushSubs?.length ?? 0) > 0;
-      pushConnected = live;
-      pushDeliverable = live;
+      pushConnected = (pushSubs?.length ?? 0) > 0;
+    }
+  }
+  if (cronSecret && appUrl) {
+    try {
+      const stateRes = await fetch(`${appUrl}/api/internal/push-target-state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          Origin: appUrl
+        },
+        body: JSON.stringify({ businessId: record.business_id })
+      });
+      const stateJson = stateRes.ok
+        ? ((await stateRes.json().catch(() => null)) as {
+            data?: { connected?: boolean; deliverable?: boolean };
+          } | null)
+        : null;
+      if (
+        typeof stateJson?.data?.connected === "boolean" &&
+        typeof stateJson?.data?.deliverable === "boolean"
+      ) {
+        pushConnected = stateJson.data.connected;
+        pushDeliverable = stateJson.data.deliverable;
+      }
+    } catch {
+      // Keep local connected (or fail-open true) and deliverable false.
     }
   }
 
@@ -1122,7 +1160,6 @@ serve(async (req: Request) => {
   // below kept writing whatsapp rows for tenants with no WhatsApp at all.
   // whatsappConnected itself is resolved above the SMS branch, which also
   // needs it for the whatsapp_replaces_sms preference.
-  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
   if (!whatsappConnected) {
     // Not applicable to this business: no row, no delivery attempt.
   } else if (!targets.phone) {

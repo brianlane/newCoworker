@@ -13,6 +13,10 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { deviceLabelFromUserAgent, type ParsedPushSubscription } from "@/lib/push/subscription";
+import {
+  listEligiblePushUserIds,
+  partitionEligiblePushRows
+} from "@/lib/push/eligibility";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -280,19 +284,21 @@ export async function pushTargetState(
 ): Promise<{ connected: boolean; deliverable: boolean }> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
-    const { data, error } = await db
-      .from("push_subscriptions")
-      .select("id")
-      .eq("business_id", businessId)
-      .is("revoked_at", null)
-      // limit(1), NOT maybeSingle: this table is one row per DEVICE, and
-      // maybeSingle throws on a second row. Copying the Slack leg's
-      // maybeSingle here would make the check error for every business with
-      // two phones, and the fail-open default would hide it forever.
-      .limit(1);
-    if (error) return { connected: true, deliverable: false };
-    const live = (data as unknown[] | null)?.length ? true : false;
-    return { connected: live, deliverable: live };
+    // Full live list, not limit(1). A leaked HQ-admin row sitting next to
+    // the owner's phone would otherwise be the one we sampled, and we would
+    // report deliverable:false (or true, if we sampled the admin) for the
+    // wrong reason. maybeSingle is still forbidden: two phones must not
+    // error.
+    const rows = await listDeliverablePushSubscriptions({ businessId }, db);
+    if (rows.length === 0) return { connected: false, deliverable: false };
+
+    const eligible = await listEligiblePushUserIds(businessId, db);
+    // Lookup failed: connected stays true (the channel applies, write an
+    // honest skip rather than silence) but deliverable is false so we do
+    // not suppress SMS on the strength of a push we could not attribute.
+    if (eligible === null) return { connected: true, deliverable: false };
+    const { keep } = partitionEligiblePushRows(rows, eligible);
+    return { connected: true, deliverable: keep.length > 0 };
   } catch {
     return { connected: true, deliverable: false };
   }
