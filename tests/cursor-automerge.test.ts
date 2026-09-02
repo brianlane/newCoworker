@@ -20,6 +20,8 @@ const SCRIPT = join(__dirname, "..", ".github", "scripts", "cursor-automerge.sh"
 const E2E_GATE = join(__dirname, "..", ".github", "scripts", "e2e-gate.sh");
 const WORKFLOW = join(__dirname, "..", ".github", "workflows", "cursor-automerge.yml");
 const DEPENDABOT_WORKFLOW = join(__dirname, "..", ".github", "workflows", "dependabot-automerge.yml");
+const DEV_WORKFLOW = join(__dirname, "..", ".cursor/rules/dev-workflow.mdc");
+const MERGE_POLICY = join(__dirname, "..", ".cursor/rules/pr-merge-policy.mdc");
 
 const SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REPO = "owner/repo";
@@ -459,5 +461,15 @@ describe("cursor auto-merge wiring", () => {
     expect(src).toContain("ref: ${{ github.event.repository.default_branch }}");
     expect(src).toContain("name: cursor-auto-merge");
     expect(src).toContain('github.event.check_run.name == \'Cursor Bugbot\'');
+  });
+
+  it("working agreement tells Cloud Agents the Action is the merge and not to stop", () => {
+    const flow = readFileSync(DEV_WORKFLOW, "utf8");
+    const policy = readFileSync(MERGE_POLICY, "utf8");
+    expect(flow).toContain("cursor-automerge.yml");
+    expect(flow).toContain("You do not `gh pr merge`");
+    expect(flow).toContain("waiting for a human to merge");
+    expect(policy).toContain("cursor-automerge.yml");
+    expect(policy).toContain("must not stop to ask for a merge");
   });
 });
