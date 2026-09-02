@@ -1,0 +1,73 @@
+name: Cursor auto-merge
+
+# Squash-merges a Cloud Agent PR once the repo merge policy is satisfied.
+# Companion to dependabot-automerge.yml. Cloud Agent PRs are opened as the
+# human who started the run, on a `cursor/` branch, so the Dependabot author
+# + label gate cannot see them.
+#
+# Extra gates Dependabot does not use:
+#   - Cursor Bugbot must conclude SUCCESS (the ruleset omits it so Dependabot
+#     is not deadlocked).
+#   - mergeStateStatus CLEAN on two reads 30s apart (required checks appear
+#     in waves; a one-shot all-success list is a false green).
+#
+# Drafts are the hold: convert back to draft to stop a merge. The hourly
+# sweep catches a PR that was marked ready after CI had already finished.
+# Do not add a pull_request trigger: that would run the workflow file from
+# the PR itself. workflow_run / check_run / status / schedule always load
+# this file from the default branch.
+#
+# Same trigger shape as Dependabot: workflow_run after CI/CodeQL/audit,
+# status (Vercel), schedule, plus check_run so a Bugbot SUCCESS that lands
+# after the last Actions job still re-evaluates.
+
+on:
+  workflow_run:
+    workflows: ["CI", "CodeQL", "Dependency Audit"]
+    types: [completed]
+  check_run:
+    types: [completed]
+  status:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+jobs:
+  cursor-auto-merge:
+    name: cursor-auto-merge
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       startsWith(github.event.workflow_run.head_branch, 'cursor/')) ||
+      (github.event_name == 'check_run' &&
+       github.event.check_run.conclusion == 'success' &&
+       github.event.check_run.name == 'Cursor Bugbot') ||
+      (github.event_name == 'status' &&
+       github.event.state == 'success') ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout automerge script from the default branch
+        uses: actions/checkout@v7
+        with:
+          # check_run and status events set GITHUB_SHA to the PR head. Never
+          # run a merger script from the PR under evaluation.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Evaluate checks and merge if the policy gate is clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.check_run.head_sha || github.event.sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.check_run.check_suite.head_branch }}
+          EXCLUDE_CHECKS: '["label-dependabot","auto-merge","cursor-auto-merge"]'
+        run: bash .github/scripts/cursor-automerge.sh

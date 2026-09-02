@@ -32,13 +32,13 @@ set -euo pipefail
 # The gate must never wait on any job that is ITSELF behind this gate:
 # "Vercel Deploy" runs the gate before deploying and "E2E (live AI +
 # AiFlows)" `needs` the deploy, so including either would deadlock the
-# deploy's gate against the queued e2e check. The dependabot automation jobs
-# (labeler + auto-merge evaluator) skip BY DESIGN on non-dependabot PRs,
-# their "skipped" check runs are plumbing, not merge signals. auto-merge in
-# particular lands mid-run (workflow_run after CI/CodeQL/Dependency Audit
-# complete), so without the exclusion it would hard-fail every human PR's
-# gate and every re-run.
-EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "Vercel Deploy", "label-dependabot", "auto-merge"]'
+# deploy's gate against the queued e2e check. The dependabot / Cloud Agent
+# automation jobs (labeler + auto-merge evaluators) skip BY DESIGN on PRs
+# they do not own. Their "skipped" check runs are plumbing, not merge
+# signals. auto-merge and cursor-auto-merge land mid-run (workflow_run after
+# CI/CodeQL/Dependency Audit complete), so without the exclusion they would
+# hard-fail every other PR's gate and every re-run.
+EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "Vercel Deploy", "label-dependabot", "auto-merge", "cursor-auto-merge"]'
 
 GATE_TIMEOUT_MINS="${GATE_TIMEOUT_MINS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-30}"

@@ -3,7 +3,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Full test coverage requirement](feedback_testing.md) - npx vitest run --coverage must pass at 100%
 - [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - env overrides deploy defaults; 3.7-flash 400s on minimal thinking; ~4x metered
 - [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers
-- [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha
+- [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha; Cloud Agent PRs squash-merge via cursor-automerge.yml, not Dependabot
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
 - [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD
 - [Migration heal traps](project_migration_heal_traps.md) - restamps ship zero-byte files or rename APPLIED DDL; wc -c first

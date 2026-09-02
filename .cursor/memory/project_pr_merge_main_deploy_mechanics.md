@@ -120,8 +120,23 @@ enough to look settled.
 checks are pending on at least two consecutive polls spaced ~30s apart, and
 confirm `mergeStateStatus` is `CLEAN`. `label-dependabot` always shows
 `skipping` on human PRs and is not a blocker, see
-[[project_label_dependabot_check_skips]]. For the separate trap on the
+[[project_label_dependabot_check_skips]]. `cursor-auto-merge` is the same
+kind of plumbing skip on non-`cursor/` PRs (and `auto-merge` on
+non-Dependabot PRs); neither is a blocker. For the separate trap on the
 post-merge side, see [[project_main_run_watch_trap]].
+
+## cursor-cloud-agent-automerge
+
+Cloud Agent PRs are authored as the human who started the run, on a
+`cursor/` branch. Dependabot auto-merge cannot see them (it keys on the
+bot author and the `dependabot-automerge` label).
+`.github/workflows/cursor-automerge.yml` squash-merges those PRs when the
+repo merge policy is satisfied, including the two extras the GitHub
+ruleset does not require: Cursor Bugbot SUCCESS, and `mergeStateStatus`
+CLEAN on two consecutive reads. Forks and drafts are skipped. Convert
+back to draft to stop a merge. The workflow file always loads from the
+default branch; do not add a `pull_request` trigger that would run the
+copy from the PR under evaluation.
 
 **Gate on the check COUNT, not just zero-pending** (2026-08-11, PRs #1287 and
 #1294). `GitGuardian Security Checks` posts a commit status rather than a check

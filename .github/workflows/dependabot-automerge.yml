@@ -74,7 +74,8 @@ jobs:
           REQUIRED_LABEL: dependabot-automerge
           # Checks to ignore in the strict evaluation:
           #   label-dependabot -> this repo's own automerge labeler job
-          EXCLUDE_CHECKS: '["label-dependabot"]'
+          #   cursor-auto-merge -> Cloud Agent merger, skipped on Dependabot PRs
+          EXCLUDE_CHECKS: '["label-dependabot", "cursor-auto-merge"]'
         run: |
           set -euo pipefail
 
