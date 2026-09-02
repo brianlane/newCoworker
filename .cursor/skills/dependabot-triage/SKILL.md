@@ -25,7 +25,9 @@ PR can sit green-looking and unmerged:
 4. Every check run for the head SHA has `status=completed` **and**
    `conclusion=success`. Not "not failed": success. A `neutral`, `skipped`,
    `cancelled`, or `action_required` conclusion blocks the merge, by design.
-   Only `label-dependabot` is excluded.
+   Only `label-dependabot` and `cursor-auto-merge` are excluded. The Cloud
+   Agent merger job skips on Dependabot PRs, and a skipped check is not a
+   pass.
 5. Legacy commit statuses (Vercel reports one) are all green.
 6. **Zero unresolved review threads.** A Bugbot comment nobody resolved keeps
    the PR unmerged forever.
@@ -34,6 +36,15 @@ PR can sit green-looking and unmerged:
 The workflow triggers on `workflow_run` completion for CI / CodeQL /
 Dependency Audit, and on `status` events, because Vercel's deployment status
 often flips to success minutes after the last workflow finishes.
+
+## Cloud Agent auto-merge (sibling)
+
+Cloud Agent PRs are not Dependabot PRs. They are opened as the human who
+started the run, on a `cursor/` branch, so this Dependabot author + label
+gate cannot see them. `.github/workflows/cursor-automerge.yml` is the
+sibling: same squash-merge path, plus Cursor Bugbot must conclude SUCCESS
+and `mergeStateStatus` must be CLEAN on two reads. Drafts are the hold.
+Do not diagnose a stuck Cloud Agent PR with the Dependabot label check.
 
 ## Diagnose in this order
 
