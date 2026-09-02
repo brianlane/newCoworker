@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: bc-fb877b95-cf86-454c-96b1-689f8bfc5886
-  modified: 2026-09-01T18:30:00.000Z
+  modified: 2026-09-02T03:20:00.000Z
 ---
 
 Investigated 2026-09-01 after receipts for Auto Recharge $28.03 (Aug 26 04:38 UTC) and $28.63 (Sep 1 07:08 UTC), six days apart. Live Telnyx read the same day: balance $28.01 (just after the morning top-up), auto-recharge still enabled at threshold $2.00 / recharge $28.00 / PayPal. There is still no payments API (404). Card receipts can be a few cents above $28 (PayPal fee on the charge); the prepaid credit is $28.
@@ -45,7 +45,7 @@ Two cost-side fixes already shipped and do not explain this recharge (they reduc
 1. U+202F GSM-7 cliff, PR #1741, merged Aug 29. One invisible space in `Intl.DateTimeFormat` clock times re-encoded whole messages as UCS-2. 867 wasted segments Jun 1-Aug 29, 8.2% of outbound.
 2. `amy-shorten-offer-templates.ts`, applied Aug 29 16:25 UTC (the Amy dossier previously said NOT YET APPLIED; the `applied_oneshots` ledger is the source). Mechanical shortening, about $0.91/mo on her August offer traffic. The engine U+202F fix is worth more (~$3.99/mo for Amy).
 
-RCS agent `new_coworker_jut3q1af_agent` is still LIVE in the testing phase (`NON_CONVERSATIONAL`, one tester device). Production RCS fees ($600 + $100/mo) were deferred Jul 18 and are not in this bill. Truly Insurance's DID is still on the account; their August usage was ~$0 (churned traffic, number still rents).
+RCS agent `new_coworker_jut3q1af_agent` is still LIVE in the testing phase (`NON_CONVERSATIONAL`, one tester device). Production RCS fees ($600 + $100/mo) were deferred Jul 18 and are not in this bill. Truly Insurance's DID is still on the account on purpose: see the grace-hold note below. August usage on that number was ~$0.
 
 ## How to re-measure
 
@@ -66,6 +66,6 @@ Amy is the tight row, not the fleet. August: revenue $99, Telnyx $44.28, hosting
 
 **A 3,000-unit cap would only bind Amy, and it would stop her product.** Calendar August she used **3,997 units** (1,498 outbound messages, 2.67 units/msg after weighted metering went live), 80% of 5,000 and 133% of 3,000. Her live billing window started Aug 28 and already has 831 units in five days (~166/day), on pace for ~5,000 by period end (~Sep 27). 3,000 would hard-stop lead-facing texts around Sep 14 (`try_reserve_sms_outbound_slot` is a customer-facing stop; operational owner alerts still send). SMS packs exist at $0.02/text (consumed in units after the cap), which is the right overage path: ~2x our $0.0088/part cost, and self-healing per [[feedback_measure_the_machine_not_the_plan]].
 
-Truly's canceled DID still rents $1.10. HQ has $0 membership revenue and still costs hosting. Neither is an SMS-cap problem.
+Truly's DID still rents $1.10, but that is the 30-day grace hold, not a forgotten leak. Re-checked live 2026-09-02: Telnyx still lists `+15198006401` as `active` (`release_in_progress=false`, connection "Truly Insurance"); `business_telnyx_settings` and `telnyx_voice_routes` still point at it. Subscription `ef8f9eba-0a86-4037-8f51-024dc10be5e5` is `canceled` (`canceled_at` 2026-08-08T22:27:42Z, `cancel_reason=user_period_end`), `grace_ends_at=2026-09-07T22:27:42Z`, `wiped_at` null. Lifecycle keeps the number through grace so a reactivation gets the same line (`release_did` only fires on the terminal wipe or admin force-cancel). Sep 1 MRC billed it with the other five numbers. After the Sep 7 wipe the account should drop to five DIDs. HQ has $0 membership revenue and still costs hosting. Neither is an SMS-cap problem.
 
 Related: [[project_weighted_sms_metering]], [[project_sms_window_anchored_to_billing_period]].
