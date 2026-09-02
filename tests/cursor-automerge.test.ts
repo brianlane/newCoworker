@@ -483,6 +483,12 @@ describe("cursor auto-merge wiring", () => {
     expect(src).toContain("workflow_dispatch:");
     expect(src).toContain("MAIN_DEPLOY:");
     expect(src).toContain("github.event_name == 'workflow_dispatch'");
+    expect(src).toContain(".parents[0].sha");
+  });
+
+  it("main-failure-watch retries dispatched CI on main, not only push runs", () => {
+    const src = readFileSync(join(__dirname, "..", ".github/workflows/main-failure-watch.yml"), "utf8");
+    expect(src).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
   });
 
   it("working agreement tells Cloud Agents the Action is the merge and not to stop", () => {
