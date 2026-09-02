@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   checkVpsBillingPosture,
-  isHostingerLookupFlake,
   isLapseRiskFinding,
-  isTransientFinding,
   selectEmailWorthyFindings,
-  TRANSIENT_FINDING_WINDOW_MINUTES,
-  warrantsOpsEmail
+  TRANSIENT_FINDING_WINDOW_MINUTES
 } from "@/lib/vps/billing-posture";
 import type { BillingPostureFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
@@ -1688,47 +1685,25 @@ function finding(
   };
 }
 
-describe("isHostingerLookupFlake / isTransientFinding", () => {
-  it("treats a Hostinger timeout as a flake, which is what sent the Sep 1 ops email", () => {
-    const timeout =
-      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 timed out after 30000ms";
-    expect(isHostingerLookupFlake(timeout)).toBe(true);
-    expect(isTransientFinding(finding({ detail: timeout }))).toBe(true);
-  });
-
-  it("treats a Hostinger network error as a flake too", () => {
-    const network =
-      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 network error: fetch failed";
-    expect(isHostingerLookupFlake(network)).toBe(true);
-    expect(isTransientFinding(finding({ detail: network }))).toBe(true);
-  });
-
-  it("does not treat a 404 or other hard miss as a flake", () => {
-    expect(isHostingerLookupFlake("VM lookup failed: HTTP 404")).toBe(false);
-    expect(isTransientFinding(finding({ detail: "VM lookup failed: HTTP 404" }))).toBe(false);
-    expect(isHostingerLookupFlake("")).toBe(false);
-  });
-
-  it("only the unreachable-VM kind is transient, even with a timeout detail", () => {
-    expect(
-      isTransientFinding(
-        finding({
-          kind: "tenant_auto_renew_off",
-          detail:
-            "Hostinger API /api/vps/v1/virtual-machines/1 timed out after 30000ms"
-        })
-      )
-    ).toBe(false);
-  });
-});
-
 describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () => {
-  it("holds a first-time timeout (warn) and does not treat it as email-worthy", async () => {
+  it("holds a first-time Hostinger timeout (the Sep 1 KIN email)", async () => {
     const recorder = vi.fn().mockResolvedValue("warn");
     const timeout = finding();
     const selected = await selectEmailWorthyFindings([timeout], recorder);
     expect(selected).toEqual({ emailWorthy: [], heldTransient: [timeout] });
     expect(recorder).toHaveBeenCalledWith(timeout);
+  });
+
+  it("holds a Hostinger network error the same way", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const network = finding({
+      detail:
+        "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 network error: fetch failed"
+    });
+    const selected = await selectEmailWorthyFindings([network], recorder);
+    expect(selected.heldTransient).toEqual([network]);
+    expect(selected.emailWorthy).toEqual([]);
+    expect(recorder).toHaveBeenCalledWith(network);
   });
 
   it("emails once the same flake has already been recorded (error)", async () => {
@@ -1749,8 +1724,20 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
   it("emails a 404 unreachable on the first run, and never calls the recorder", async () => {
     const recorder = vi.fn();
     const gone = finding({ detail: "VM lookup failed: HTTP 404" });
-    const selected = await selectEmailWorthyFindings([gone], recorder);
-    expect(selected).toEqual({ emailWorthy: [gone], heldTransient: [] });
+    const empty = finding({ vmId: 1, detail: "" });
+    const selected = await selectEmailWorthyFindings([gone, empty], recorder);
+    expect(selected).toEqual({ emailWorthy: [gone, empty], heldTransient: [] });
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a timeout-shaped detail on a different kind as a flake", async () => {
+    const recorder = vi.fn();
+    const renewOff = finding({
+      kind: "tenant_auto_renew_off",
+      detail: "Hostinger API /api/vps/v1/virtual-machines/1 timed out after 30000ms"
+    });
+    const selected = await selectEmailWorthyFindings([renewOff], recorder);
+    expect(selected.emailWorthy).toEqual([renewOff]);
     expect(recorder).not.toHaveBeenCalled();
   });
 
@@ -1777,7 +1764,6 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const selected = await selectEmailWorthyFindings([reaped], recorder);
     expect(selected).toEqual({ emailWorthy: [], heldTransient: [] });
     expect(recorder).not.toHaveBeenCalled();
-    expect(warrantsOpsEmail(reaped)).toBe(false);
   });
 
   it("emails a healed auto-renew flip immediately: that spent money on the account's behalf", async () => {

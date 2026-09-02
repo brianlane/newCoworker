@@ -37,7 +37,7 @@ const { listBusinesses } = await import("../src/lib/db/businesses.ts");
 const { listBusinessIdsWithLiveSubscription } = await import("../src/lib/db/subscriptions.ts");
 const { listVpsInventory } = await import("../src/lib/db/vps-inventory.ts");
 const { listHostingerBillingTerms } = await import("../src/lib/db/hostinger-billing-terms.ts");
-const { checkVpsBillingPosture, isLapseRiskFinding, isTransientFinding } = await import(
+const { checkVpsBillingPosture, isLapseRiskFinding, selectEmailWorthyFindings } = await import(
   "../src/lib/vps/billing-posture.ts"
 );
 type BillingPostureFinding = import("../src/lib/vps/billing-posture.ts").BillingPostureFinding;
@@ -70,12 +70,14 @@ const result = await checkVpsBillingPosture({
   listBillingTerms: () => listHostingerBillingTerms()
 });
 
+// First-day view of the email gate: a Hostinger timeout/network error is
+// held as warn. This rehearsal does not write system_logs, so it cannot
+// see yesterday's row. Production emails only if recordFailure already has
+// a failure in the 48h window.
+const { heldTransient } = await selectEmailWorthyFindings(result.findings, async () => "warn");
+
 const label = (finding: BillingPostureFinding): string => {
-  if (isTransientFinding(finding)) {
-    // First Hostinger timeout/network error is a warn, not an email, same
-    // as the fleet System Errors card. This rehearsal is read-only so it
-    // cannot see yesterday's system_logs row; production emails only if
-    // recordFailure already has a failure in the 48h window.
+  if (heldTransient.includes(finding)) {
     return "LAPSE RISK, emailed only if this lookup already failed in the last 48h";
   }
   return isLapseRiskFinding(finding) ? "LAPSE RISK" : "advisory";

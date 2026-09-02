@@ -182,7 +182,7 @@ const ROUTINE_WHEN_HEALED_KINDS: ReadonlySet<BillingPostureFinding["kind"]> = ne
  * {@link selectEmailWorthyFindings}. A 404 or other hard lookup failure
  * emails on the first run, because the VM is actually gone.
  */
-export function warrantsOpsEmail(
+function warrantsOpsEmail(
   finding: Pick<BillingPostureFinding, "kind" | "autoHealed">
 ): boolean {
   if (!finding.autoHealed) return true;
@@ -214,7 +214,7 @@ export const TRANSIENT_FINDING_LOG_EVENT = "vps_billing_posture_vm_unreachable";
  * `Hostinger API ${path} timed out after ${timeoutMs}ms` and
  * `Hostinger API ${path} network error: ...`.
  */
-export function isHostingerLookupFlake(detail: string): boolean {
+function isHostingerLookupFlake(detail: string): boolean {
   return /timed out after \d+ms/.test(detail) || /network error/.test(detail);
 }
 
@@ -222,7 +222,7 @@ export function isHostingerLookupFlake(detail: string): boolean {
  * True when this finding is the daily-cron analog of a system_logs `warn`:
  * real, recorded, and not worth paging until it repeats inside the window.
  */
-export function isTransientFinding(
+function isTransientFinding(
   finding: Pick<BillingPostureFinding, "kind" | "detail">
 ): boolean {
   return finding.kind === "tenant_vm_unreachable" && isHostingerLookupFlake(finding.detail);
