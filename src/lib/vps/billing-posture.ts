@@ -57,6 +57,11 @@
  * cost a real purchase. Hostinger SUSPENDS a lapsed box rather than deleting
  * it, so "absent from the account" alone would miss every real case.
  *
+ * Hostinger lookup flakes (timeout / network error on a live tenant VM)
+ * are recorded the same way the fleet System Errors card records a first
+ * poll failure: `warn` on the first day, `error` plus an ops email only
+ * once the next day's run has also failed. A 404 still emails immediately.
+ *
  * All dependencies are injected; the internal route wires production
  * implementations.
  */
@@ -170,12 +175,102 @@ const ROUTINE_WHEN_HEALED_KINDS: ReadonlySet<BillingPostureFinding["kind"]> = ne
  * `pool_box_lapsed_retired` whose retire FAILED arrives with
  * `autoHealed: false`, and that one does need a human (the row still reads
  * `available` and overstates the pool).
+ *
+ * A Hostinger lookup flake (`tenant_vm_unreachable` from a timeout or
+ * network error) still returns true here. The route then holds it the same
+ * way the fleet System Errors card holds a first `warn`: see
+ * {@link selectEmailWorthyFindings}. A 404 or other hard lookup failure
+ * emails on the first run, because the VM is actually gone.
  */
 export function warrantsOpsEmail(
   finding: Pick<BillingPostureFinding, "kind" | "autoHealed">
 ): boolean {
   if (!finding.autoHealed) return true;
   return !ROUTINE_WHEN_HEALED_KINDS.has(finding.kind);
+}
+
+/**
+ * Daily-cron analog of `FAILURE_ESCALATION_WINDOW_MINUTES` (15) on a ~1/min
+ * poll. Two consecutive 13:00 UTC runs are 24h apart; 48h covers a delayed
+ * run without treating a timeout from last week as a streak.
+ */
+export const TRANSIENT_FINDING_WINDOW_MINUTES = 48 * 60;
+
+/** `system_logs.source` for a held Hostinger lookup flake. */
+export const TRANSIENT_FINDING_LOG_SOURCE = "vps-billing-posture";
+
+/**
+ * `system_logs.event` for a held Hostinger lookup flake. Keyed with
+ * `business_id` by `recordFailure`, so two tenants timing out the same
+ * morning do not escalate each other.
+ */
+export const TRANSIENT_FINDING_LOG_EVENT = "vps_billing_posture_vm_unreachable";
+
+/**
+ * True when the unreachable-VM detail is a Hostinger flake (timeout or
+ * network error), not a hard miss like HTTP 404.
+ *
+ * Matches the HostingerClient error text:
+ * `Hostinger API ${path} timed out after ${timeoutMs}ms` and
+ * `Hostinger API ${path} network error: ...`.
+ */
+export function isHostingerLookupFlake(detail: string): boolean {
+  return /timed out after \d+ms/.test(detail) || /network error/.test(detail);
+}
+
+/**
+ * True when this finding is the daily-cron analog of a system_logs `warn`:
+ * real, recorded, and not worth paging until it repeats inside the window.
+ */
+export function isTransientFinding(
+  finding: Pick<BillingPostureFinding, "kind" | "detail">
+): boolean {
+  return finding.kind === "tenant_vm_unreachable" && isHostingerLookupFlake(finding.detail);
+}
+
+export type EmailWorthySelection = {
+  /** Findings that should send (or ride along in) the ops digest. */
+  emailWorthy: BillingPostureFinding[];
+  /** Lookup flakes held as warn until they repeat. */
+  heldTransient: BillingPostureFinding[];
+};
+
+/**
+ * Pick which findings earn an ops email, holding Hostinger lookup flakes
+ * until they repeat.
+ *
+ * Same judgement as `recordFailure` on the fleet System Errors card: the
+ * first failure in the window is a warn (recorded, not shown, not mailed).
+ * A second failure already in the window is an error, because the retry
+ * that would have cleared it has been and gone. The recorder is injected so
+ * this stays unit-testable; the route wires `recordFailure`.
+ *
+ * Fails loud: if the recorder throws, the finding emails, matching
+ * `recordFailure`'s own "a missed real failure costs more than one extra
+ * row" rule.
+ */
+export async function selectEmailWorthyFindings(
+  findings: BillingPostureFinding[],
+  recordTransientFailure: (finding: BillingPostureFinding) => Promise<string>
+): Promise<EmailWorthySelection> {
+  const emailWorthy: BillingPostureFinding[] = [];
+  const heldTransient: BillingPostureFinding[] = [];
+  for (const finding of findings) {
+    if (!warrantsOpsEmail(finding)) continue;
+    if (!isTransientFinding(finding)) {
+      emailWorthy.push(finding);
+      continue;
+    }
+    let level = "error";
+    try {
+      level = await recordTransientFailure(finding);
+    } catch {
+      level = "error";
+    }
+    if (level === "error") emailWorthy.push(finding);
+    else heldTransient.push(finding);
+  }
+  return { emailWorthy, heldTransient };
 }
 
 export type BillingPostureResult = {

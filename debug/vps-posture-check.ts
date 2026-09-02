@@ -37,9 +37,10 @@ const { listBusinesses } = await import("../src/lib/db/businesses.ts");
 const { listBusinessIdsWithLiveSubscription } = await import("../src/lib/db/subscriptions.ts");
 const { listVpsInventory } = await import("../src/lib/db/vps-inventory.ts");
 const { listHostingerBillingTerms } = await import("../src/lib/db/hostinger-billing-terms.ts");
-const { checkVpsBillingPosture, isLapseRiskFinding } = await import(
+const { checkVpsBillingPosture, isLapseRiskFinding, isTransientFinding } = await import(
   "../src/lib/vps/billing-posture.ts"
 );
+type BillingPostureFinding = import("../src/lib/vps/billing-posture.ts").BillingPostureFinding;
 
 const hostinger = makeHostingerClient();
 // One billing list for the whole run, exactly as the route does: the tenant
@@ -69,10 +70,16 @@ const result = await checkVpsBillingPosture({
   listBillingTerms: () => listHostingerBillingTerms()
 });
 
-const label = (kind: string): string =>
-  isLapseRiskFinding({ kind: kind as Parameters<typeof isLapseRiskFinding>[0]["kind"] })
-    ? "LAPSE RISK"
-    : "advisory";
+const label = (finding: BillingPostureFinding): string => {
+  if (isTransientFinding(finding)) {
+    // First Hostinger timeout/network error is a warn, not an email, same
+    // as the fleet System Errors card. This rehearsal is read-only so it
+    // cannot see yesterday's system_logs row; production emails only if
+    // recordFailure already has a failure in the 48h window.
+    return "LAPSE RISK, emailed only if this lookup already failed in the last 48h";
+  }
+  return isLapseRiskFinding(finding) ? "LAPSE RISK" : "advisory";
+};
 
 console.log(
   `\n== VPS billing posture (read-only) ==\n` +
@@ -91,7 +98,7 @@ if (result.findings.length === 0) {
 
   for (const f of needsHuman) {
     console.log(
-      `\n[${label(f.kind)}] ${f.kind}` +
+      `\n[${label(f)}] ${f.kind}` +
         `\n  vm       : ${f.vmId ?? "none"}` +
         `\n  business : ${f.businessName ?? f.businessId ?? "none"}` +
         `\n  sub      : ${f.hostingerBillingSubscriptionId ?? "none"}` +

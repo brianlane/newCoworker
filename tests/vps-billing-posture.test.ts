@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkVpsBillingPosture, isLapseRiskFinding } from "@/lib/vps/billing-posture";
+import {
+  checkVpsBillingPosture,
+  isHostingerLookupFlake,
+  isLapseRiskFinding,
+  isTransientFinding,
+  selectEmailWorthyFindings,
+  TRANSIENT_FINDING_WINDOW_MINUTES,
+  warrantsOpsEmail
+} from "@/lib/vps/billing-posture";
+import type { BillingPostureFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 
@@ -1659,5 +1668,131 @@ describe("stale assigned rows (fleet consistency)", () => {
     });
     const report = await checkVpsBillingPosture(deps as never);
     expect(report.findings.filter((f) => f.kind === "stale_assigned_row")).toHaveLength(0);
+  });
+});
+
+function finding(
+  overrides: Partial<BillingPostureFinding> = {}
+): BillingPostureFinding {
+  return {
+    kind: "tenant_vm_unreachable",
+    vmId: 1936826,
+    businessId: "a912aff5-dd87-49fb-ad6a-477acefb66c0",
+    businessName: "KIN Integrated Child Health",
+    hostingerBillingSubscriptionId: null,
+    expiresAt: null,
+    autoHealed: false,
+    detail:
+      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 timed out after 30000ms",
+    ...overrides
+  };
+}
+
+describe("isHostingerLookupFlake / isTransientFinding", () => {
+  it("treats a Hostinger timeout as a flake, which is what sent the Sep 1 ops email", () => {
+    const timeout =
+      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 timed out after 30000ms";
+    expect(isHostingerLookupFlake(timeout)).toBe(true);
+    expect(isTransientFinding(finding({ detail: timeout }))).toBe(true);
+  });
+
+  it("treats a Hostinger network error as a flake too", () => {
+    const network =
+      "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 network error: fetch failed";
+    expect(isHostingerLookupFlake(network)).toBe(true);
+    expect(isTransientFinding(finding({ detail: network }))).toBe(true);
+  });
+
+  it("does not treat a 404 or other hard miss as a flake", () => {
+    expect(isHostingerLookupFlake("VM lookup failed: HTTP 404")).toBe(false);
+    expect(isTransientFinding(finding({ detail: "VM lookup failed: HTTP 404" }))).toBe(false);
+    expect(isHostingerLookupFlake("")).toBe(false);
+  });
+
+  it("only the unreachable-VM kind is transient, even with a timeout detail", () => {
+    expect(
+      isTransientFinding(
+        finding({
+          kind: "tenant_auto_renew_off",
+          detail:
+            "Hostinger API /api/vps/v1/virtual-machines/1 timed out after 30000ms"
+        })
+      )
+    ).toBe(false);
+  });
+});
+
+describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () => {
+  it("holds a first-time timeout (warn) and does not treat it as email-worthy", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [timeout] });
+    expect(recorder).toHaveBeenCalledWith(timeout);
+  });
+
+  it("emails once the same flake has already been recorded (error)", async () => {
+    const recorder = vi.fn().mockResolvedValue("error");
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected).toEqual({ emailWorthy: [timeout], heldTransient: [] });
+  });
+
+  it("emails immediately when the recorder throws, matching recordFailure's fail-loud rule", async () => {
+    const recorder = vi.fn().mockRejectedValue(new Error("system_logs down"));
+    const timeout = finding();
+    const selected = await selectEmailWorthyFindings([timeout], recorder);
+    expect(selected.emailWorthy).toEqual([timeout]);
+    expect(selected.heldTransient).toEqual([]);
+  });
+
+  it("emails a 404 unreachable on the first run, and never calls the recorder", async () => {
+    const recorder = vi.fn();
+    const gone = finding({ detail: "VM lookup failed: HTTP 404" });
+    const selected = await selectEmailWorthyFindings([gone], recorder);
+    expect(selected).toEqual({ emailWorthy: [gone], heldTransient: [] });
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("emails a real auto-renew finding immediately, even next to a held timeout", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const renewOff = finding({
+      kind: "tenant_auto_renew_off",
+      autoHealed: false,
+      detail: "subscription x is non_renewing with auto-renew off"
+    });
+    const selected = await selectEmailWorthyFindings([timeout, renewOff], recorder);
+    expect(selected.emailWorthy).toEqual([renewOff]);
+    expect(selected.heldTransient).toEqual([timeout]);
+  });
+
+  it("drops a healed pool-reaper finding, same gate as warrantsOpsEmail", async () => {
+    const recorder = vi.fn();
+    const reaped = finding({
+      kind: "pool_box_lapsed_retired",
+      autoHealed: true,
+      detail: "pooled box lapsed; its vps_inventory row was retired"
+    });
+    const selected = await selectEmailWorthyFindings([reaped], recorder);
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [] });
+    expect(recorder).not.toHaveBeenCalled();
+    expect(warrantsOpsEmail(reaped)).toBe(false);
+  });
+
+  it("emails a healed auto-renew flip immediately: that spent money on the account's behalf", async () => {
+    const recorder = vi.fn();
+    const healed = finding({
+      kind: "tenant_auto_renew_off",
+      autoHealed: true,
+      detail: "auto-renew re-enabled by posture check"
+    });
+    const selected = await selectEmailWorthyFindings([healed], recorder);
+    expect(selected.emailWorthy).toEqual([healed]);
+    expect(recorder).not.toHaveBeenCalled();
+  });
+
+  it("uses a 48-hour window so two consecutive daily runs can see each other", () => {
+    expect(TRANSIENT_FINDING_WINDOW_MINUTES).toBe(48 * 60);
   });
 });
