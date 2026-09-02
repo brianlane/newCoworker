@@ -29,7 +29,11 @@ import { SectionMessages } from "@/components/i18n/SectionMessages";
 import { HipaaIdleLogout } from "@/components/dashboard/HipaaIdleLogout";
 import { PushRegistrar } from "@/components/push/PushRegistrar";
 import { PushOptInBanner } from "@/components/push/PushOptInBanner";
-import { tenantPushEnrollmentAllowed } from "@/lib/push/eligibility";
+import {
+  newestOwnedBusinessId,
+  pushRegistrarBusinessId,
+  tenantPushEnrollmentAllowed
+} from "@/lib/push/eligibility";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -200,10 +204,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
   });
 
   const requireAcceptance = await acceptancePromise;
-  // View-as of someone else's tenant must not enroll the operator's phone.
-  // PushRegistrar silently re-POSTs an already-granted subscription, so a
-  // single inspect visit would otherwise attach HQ to that tenant's alerts.
+  // View-as of someone else's tenant must not enroll the operator's phone
+  // as THAT tenant. PushRegistrar silently re-POSTs an already-granted
+  // subscription, so a single inspect visit would otherwise attach HQ to
+  // that tenant's alerts. The opt-in banner follows the pin. The silent
+  // registrar does not: it keeps the operator's own HQ tenant subscribed
+  // so HQ alerts still reach the HQ phone while they inspect someone else.
   const enrollPush = tenantPushEnrollmentAllowed(viewAs);
+  const ownBusinessId =
+    enrollPush || requireAcceptance
+      ? null
+      : await newestOwnedBusinessId(user.email);
+  const registrarBusinessId = pushRegistrarBusinessId({
+    enrollCurrentTenant: enrollPush,
+    currentBusinessId: businessId,
+    ownBusinessId
+  });
 
   return (
     // SectionMessages ships the dashboard's client translation subset;
@@ -261,9 +277,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* Renders nothing. Keeps an already-opted-in browser's push
           subscription registered and fresh, and re-subscribes it if the VAPID
           key rotated. It never prompts for permission: that needs a user
-          gesture and lives behind the button in PushSetupCard. */}
-      {businessId && !requireAcceptance && enrollPush && (
-        <PushRegistrar businessId={businessId} />
+          gesture and lives behind the button in PushSetupCard. Foreign
+          view-as passes the operator's own business id, never the pin. */}
+      {registrarBusinessId && !requireAcceptance && (
+        <PushRegistrar businessId={registrarBusinessId} />
       )}
     </div>
     </SectionMessages>
