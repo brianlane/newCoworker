@@ -229,10 +229,16 @@ function isTransientFinding(
 }
 
 export type EmailWorthySelection = {
-  /** Findings that should send (or ride along in) the ops digest. */
+  /** Findings that, on their own, earn an ops email. Empty means do not send. */
   emailWorthy: BillingPostureFinding[];
-  /** Lookup flakes held as warn until they repeat. */
+  /** First-day Hostinger lookup flakes held off the mail. */
   heldTransient: BillingPostureFinding[];
+  /**
+   * Body of the digest when `emailWorthy` is non-empty: every finding
+   * except held flakes. Healed pool-reaper rows ride along as context;
+   * a first-day timeout does not.
+   */
+  mailed: BillingPostureFinding[];
 };
 
 /**
@@ -270,7 +276,11 @@ export async function selectEmailWorthyFindings(
     if (level === "error") emailWorthy.push(finding);
     else heldTransient.push(finding);
   }
-  return { emailWorthy, heldTransient };
+  return {
+    emailWorthy,
+    heldTransient,
+    mailed: findings.filter((finding) => !heldTransient.includes(finding))
+  };
 }
 
 export type BillingPostureResult = {

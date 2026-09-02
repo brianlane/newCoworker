@@ -205,6 +205,53 @@ describe("api/internal/vps-billing-posture route", () => {
     });
   });
 
+  it("does not let a first-day timeout ride along when another finding earns the digest", async () => {
+    vi.mocked(recordFailure).mockResolvedValue("warn");
+    const timeout = {
+      kind: "tenant_vm_unreachable",
+      vmId: 1936826,
+      businessId: "a912aff5-dd87-49fb-ad6a-477acefb66c0",
+      businessName: "KIN Integrated Child Health",
+      hostingerBillingSubscriptionId: null,
+      expiresAt: null,
+      autoHealed: false,
+      detail:
+        "VM lookup failed: Hostinger API /api/vps/v1/virtual-machines/1936826 timed out after 30000ms"
+    };
+    const untracked = {
+      kind: "untracked_vm",
+      vmId: 99,
+      businessId: null,
+      businessName: null,
+      hostingerBillingSubscriptionId: null,
+      expiresAt: null,
+      autoHealed: false,
+      detail: "absent from vps_inventory and no business points at it"
+    };
+    const reaped = {
+      kind: "pool_box_lapsed_retired",
+      vmId: 1864812,
+      businessId: null,
+      businessName: null,
+      hostingerBillingSubscriptionId: "AzysZ0VQl6mkfw7i",
+      expiresAt: "2026-08-29T11:01:01Z",
+      autoHealed: true,
+      detail: "pooled box lapsed; its vps_inventory row was retired"
+    };
+    vi.mocked(checkVpsBillingPosture).mockResolvedValue({
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1,
+      findings: [timeout, untracked, reaped]
+    } as never);
+
+    await POST(makeRequest());
+    expect(sendOpsBillingPostureEmail).toHaveBeenCalledWith({
+      findings: [untracked, reaped],
+      checkedTenantVms: 5,
+      checkedPoolBoxes: 1
+    });
+  });
+
   it("continues the posture check when expires_at refresh fails", async () => {
     vi.mocked(refreshVpsInventoryExpiresAt).mockRejectedValue(new Error("db down"));
     const res = await POST(makeRequest());

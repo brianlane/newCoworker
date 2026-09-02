@@ -1690,7 +1690,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const recorder = vi.fn().mockResolvedValue("warn");
     const timeout = finding();
     const selected = await selectEmailWorthyFindings([timeout], recorder);
-    expect(selected).toEqual({ emailWorthy: [], heldTransient: [timeout] });
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [timeout], mailed: [] });
     expect(recorder).toHaveBeenCalledWith(timeout);
   });
 
@@ -1703,6 +1703,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const selected = await selectEmailWorthyFindings([network], recorder);
     expect(selected.heldTransient).toEqual([network]);
     expect(selected.emailWorthy).toEqual([]);
+    expect(selected.mailed).toEqual([]);
     expect(recorder).toHaveBeenCalledWith(network);
   });
 
@@ -1710,7 +1711,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const recorder = vi.fn().mockResolvedValue("error");
     const timeout = finding();
     const selected = await selectEmailWorthyFindings([timeout], recorder);
-    expect(selected).toEqual({ emailWorthy: [timeout], heldTransient: [] });
+    expect(selected).toEqual({ emailWorthy: [timeout], heldTransient: [], mailed: [timeout] });
   });
 
   it("emails immediately when the recorder throws, matching recordFailure's fail-loud rule", async () => {
@@ -1719,6 +1720,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const selected = await selectEmailWorthyFindings([timeout], recorder);
     expect(selected.emailWorthy).toEqual([timeout]);
     expect(selected.heldTransient).toEqual([]);
+    expect(selected.mailed).toEqual([timeout]);
   });
 
   it("emails a 404 unreachable on the first run, and never calls the recorder", async () => {
@@ -1726,7 +1728,11 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const gone = finding({ detail: "VM lookup failed: HTTP 404" });
     const empty = finding({ vmId: 1, detail: "" });
     const selected = await selectEmailWorthyFindings([gone, empty], recorder);
-    expect(selected).toEqual({ emailWorthy: [gone, empty], heldTransient: [] });
+    expect(selected).toEqual({
+      emailWorthy: [gone, empty],
+      heldTransient: [],
+      mailed: [gone, empty]
+    });
     expect(recorder).not.toHaveBeenCalled();
   });
 
@@ -1738,6 +1744,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     });
     const selected = await selectEmailWorthyFindings([renewOff], recorder);
     expect(selected.emailWorthy).toEqual([renewOff]);
+    expect(selected.mailed).toEqual([renewOff]);
     expect(recorder).not.toHaveBeenCalled();
   });
 
@@ -1752,6 +1759,29 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     const selected = await selectEmailWorthyFindings([timeout, renewOff], recorder);
     expect(selected.emailWorthy).toEqual([renewOff]);
     expect(selected.heldTransient).toEqual([timeout]);
+    expect(selected.mailed).toEqual([renewOff]);
+  });
+
+  it("strips a first-day timeout from mailed when a reaped box also rides along", async () => {
+    const recorder = vi.fn().mockResolvedValue("warn");
+    const timeout = finding();
+    const untracked = finding({
+      kind: "untracked_vm",
+      vmId: 99,
+      detail: "absent from vps_inventory and no business points at it"
+    });
+    const reaped = finding({
+      kind: "pool_box_lapsed_retired",
+      autoHealed: true,
+      detail: "pooled box lapsed; its vps_inventory row was retired"
+    });
+    const selected = await selectEmailWorthyFindings(
+      [timeout, untracked, reaped],
+      recorder
+    );
+    expect(selected.emailWorthy).toEqual([untracked]);
+    expect(selected.heldTransient).toEqual([timeout]);
+    expect(selected.mailed).toEqual([untracked, reaped]);
   });
 
   it("drops a healed pool-reaper finding, same gate as warrantsOpsEmail", async () => {
@@ -1762,7 +1792,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
       detail: "pooled box lapsed; its vps_inventory row was retired"
     });
     const selected = await selectEmailWorthyFindings([reaped], recorder);
-    expect(selected).toEqual({ emailWorthy: [], heldTransient: [] });
+    expect(selected).toEqual({ emailWorthy: [], heldTransient: [], mailed: [reaped] });
     expect(recorder).not.toHaveBeenCalled();
   });
 
@@ -1775,6 +1805,7 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
     });
     const selected = await selectEmailWorthyFindings([healed], recorder);
     expect(selected.emailWorthy).toEqual([healed]);
+    expect(selected.mailed).toEqual([healed]);
     expect(recorder).not.toHaveBeenCalled();
   });
 

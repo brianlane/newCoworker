@@ -84,9 +84,12 @@ async function runSweep(request: Request): Promise<Response> {
       listBillingTerms: () => listHostingerBillingTerms()
     });
 
-    // Send on anything that is not routine-once-healed, but send the WHOLE
-    // finding list when we do: the reaped pool boxes are useful context next
-    // to a real finding, they just are not a reason to write on their own.
+    // Send on anything that is not routine-once-healed. The mailed body is
+    // every finding except held first-day Hostinger flakes: reaped pool
+    // boxes ride along as context, they just are not a reason to write on
+    // their own. A first-day timeout does not ride along, because the
+    // template treats tenant_vm_unreachable as lapse risk and would turn
+    // an otherwise advisory digest into ACTION REQUIRED.
     // A run whose only finding is "the pool reaper did its job" is a
     // non-problem, and an ops email that reports non-problems is one nobody
     // reads on the day it is right. Suppressed runs still log below and still
@@ -97,7 +100,7 @@ async function runSweep(request: Request): Promise<Response> {
     // warn, the next day's failure is an error and an email. A 404 still
     // pages immediately. The recorder is recordFailure, so the warn/error
     // also lands in system_logs for the dashboard.
-    const { emailWorthy, heldTransient } = await selectEmailWorthyFindings(
+    const { emailWorthy, heldTransient, mailed } = await selectEmailWorthyFindings(
       result.findings,
       (finding) =>
         recordFailure(
@@ -119,7 +122,7 @@ async function runSweep(request: Request): Promise<Response> {
     }
     if (emailWorthy.length > 0) {
       await sendOpsBillingPostureEmail({
-        findings: result.findings,
+        findings: mailed,
         checkedTenantVms: result.checkedTenantVms,
         checkedPoolBoxes: result.checkedPoolBoxes
       });
