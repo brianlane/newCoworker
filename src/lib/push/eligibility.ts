@@ -37,6 +37,64 @@ export function tenantPushEnrollmentAllowed(
 }
 
 /**
+ * Which business the silent registrar should POST.
+ *
+ * The current dashboard pin is used only when this session is allowed to
+ * enroll that tenant. Foreign view-as keeps the operator's OWN tenant
+ * subscribed instead, so HQ alerts still reach the HQ phone while they
+ * inspect someone else. Never pass the impersonated tenant id here.
+ */
+export function pushRegistrarBusinessId(input: {
+  enrollCurrentTenant: boolean;
+  currentBusinessId: string | null;
+  ownBusinessId: string | null;
+}): string | null {
+  if (input.enrollCurrentTenant) return input.currentBusinessId;
+  return input.ownBusinessId;
+}
+
+/**
+ * Newest business this email owns. Same case-insensitive LIKE match as
+ * `listAccessibleBusinesses`, including the metacharacter escape, so an
+ * address with `_` cannot wildcard-match a neighbour.
+ *
+ * Returns null on an empty email, a missing row, or a lookup error. The
+ * registrar is optional on a page render; failing closed (no enroll) is
+ * safer than 500ing the dashboard because the lookup blipped.
+ */
+function ownerEmailIlikePattern(email: string): string {
+  return email
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
+}
+
+export async function newestOwnedBusinessId(
+  email: string | null | undefined,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const trimmed = email?.trim() ?? "";
+  if (!trimmed) return null;
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("businesses")
+      .select("id")
+      .ilike("owner_email", ownerEmailIlikePattern(trimmed))
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return null;
+    const id = (data as { id?: string } | null)?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Enroll-time gate. Throws on a lookup error so the route can 500 rather
  * than tell a real owner "you are not a member" because of a blip.
  */

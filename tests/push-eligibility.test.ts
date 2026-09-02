@@ -10,7 +10,9 @@ import { getBusinessRoleForEmail } from "@/lib/db/business-members";
 import {
   callerCanEnrollTenantPush,
   listEligiblePushUserIds,
+  newestOwnedBusinessId,
   partitionEligiblePushRows,
+  pushRegistrarBusinessId,
   tenantPushEnrollmentAllowed
 } from "@/lib/push/eligibility";
 
@@ -35,7 +37,7 @@ function makeDb(results: Record<string, { data?: unknown; error?: { message: str
           calls.push([table, name, ...args]);
           return builder;
         };
-      for (const method of ["select", "eq", "is", "in", "neq", "not", "order", "limit"]) {
+      for (const method of ["select", "eq", "is", "ilike", "in", "neq", "not", "order", "limit"]) {
         builder[method] = record(method);
       }
       const envelope = { data: result.data ?? null, error: result.error ?? null };
@@ -64,6 +66,89 @@ describe("tenantPushEnrollmentAllowed", () => {
 
   it("refuses view-as of someone else's business", () => {
     expect(tenantPushEnrollmentAllowed({ selfOwned: false })).toBe(false);
+  });
+});
+
+describe("pushRegistrarBusinessId", () => {
+  const HQ = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const KIN = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  it("uses the current tenant when this session may enroll it", () => {
+    expect(
+      pushRegistrarBusinessId({
+        enrollCurrentTenant: true,
+        currentBusinessId: HQ,
+        ownBusinessId: null
+      })
+    ).toBe(HQ);
+  });
+
+  it("keeps the operator's own tenant while they inspect someone else", () => {
+    expect(
+      pushRegistrarBusinessId({
+        enrollCurrentTenant: false,
+        currentBusinessId: KIN,
+        ownBusinessId: HQ
+      })
+    ).toBe(HQ);
+  });
+
+  it("enrolls nothing when foreign view-as has no owned tenant to fall back to", () => {
+    expect(
+      pushRegistrarBusinessId({
+        enrollCurrentTenant: false,
+        currentBusinessId: KIN,
+        ownBusinessId: null
+      })
+    ).toBeNull();
+  });
+});
+
+describe("newestOwnedBusinessId", () => {
+  it("returns null without querying when the email is empty", async () => {
+    expect(await newestOwnedBusinessId(null)).toBeNull();
+    expect(await newestOwnedBusinessId("   ")).toBeNull();
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("returns the newest owned id and uses the escaped ilike pattern", async () => {
+    const { db, calls } = makeDb({
+      businesses: { data: { id: BIZ } }
+    });
+    expect(await newestOwnedBusinessId("  A_b%x\\z@Ex.COM  ", db as never)).toBe(BIZ);
+    expect(calls).toContainEqual(["businesses", "ilike", "owner_email", "a\\_b\\%x\\\\z@ex.com"]);
+    expect(calls).toContainEqual(["businesses", "order", "created_at", { ascending: false }]);
+    expect(calls).toContainEqual(["businesses", "limit", 1]);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("returns null when no owned row exists", async () => {
+    const { db } = makeDb({ businesses: { data: null } });
+    expect(await newestOwnedBusinessId("owner@example.com", db as never)).toBeNull();
+  });
+
+  it("returns null when the owned row has no id", async () => {
+    const { db } = makeDb({ businesses: { data: { id: "" } } });
+    expect(await newestOwnedBusinessId("owner@example.com", db as never)).toBeNull();
+  });
+
+  it("returns null on a businesses read error", async () => {
+    const { db } = makeDb({
+      businesses: { error: { message: "pg down" } }
+    });
+    expect(await newestOwnedBusinessId("owner@example.com", db as never)).toBeNull();
+  });
+
+  it("returns null when the client itself cannot be built", async () => {
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no service key"));
+    expect(await newestOwnedBusinessId("owner@example.com")).toBeNull();
+  });
+
+  it("mints a client when none is supplied", async () => {
+    const { db } = makeDb({ businesses: { data: { id: BIZ } } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await newestOwnedBusinessId("owner@example.com")).toBe(BIZ);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });
 
