@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   speakVoicemailDeterministic,
+  VOICEMAIL_SPEAK_VOICE,
   type VoicemailSpeakDeps
 } from "../supabase/functions/_shared/voice_voicemail_speak.ts";
 
@@ -19,7 +20,7 @@ type HttpCall = { url: string; body: unknown };
 function makeDeps(opts: {
   rpcResults?: Record<string, { data?: unknown; error: { message: string } | null }[]>;
   httpFail?: (url: string) => boolean;
-}): {
+} = {}): {
   deps: VoicemailSpeakDeps;
   rpcCalls: RpcCall[];
   httpCalls: HttpCall[];
@@ -54,13 +55,22 @@ describe("speakVoicemailDeterministic", () => {
     const { deps, rpcCalls, httpCalls } = makeDeps({
       rpcResults: { voice_claim_voicemail_speak: [{ data: true, error: null }] }
     });
-    const outcome = await speakVoicemailDeterministic(deps, "v3:leg", "Call us back at 602-695-1142");
+    const outcome = await speakVoicemailDeterministic(
+      deps,
+      "v3:leg",
+      "Call us back at 602-695-1142",
+      { trigger: "beep" }
+    );
     expect(outcome).toBe("speaking");
     expect(httpCalls.map((c) => action(c.url))).toEqual(["streaming_stop", "speak"]);
+    const speakBody = JSON.parse(String(httpCalls[1]!.body));
+    expect(speakBody.voice).toBe(VOICEMAIL_SPEAK_VOICE);
+    expect(VOICEMAIL_SPEAK_VOICE).toBe("female");
     const merge = rpcCalls.find((c) => c.fn === "voice_session_context_merge");
     expect(merge?.args?.p_patch).toEqual({
       voicemail_speak_started_at: "2026-08-27T15:35:34.000Z",
-      voicemail_speak_script_chars: "Call us back at 602-695-1142".length
+      voicemail_speak_script_chars: "Call us back at 602-695-1142".length,
+      voicemail_speak_trigger: "beep"
     });
     // The honest stamp is NOT written here: acceptance is not delivery.
     expect(JSON.stringify(rpcCalls)).not.toContain("voicemail_spoken");
@@ -135,5 +145,24 @@ describe("speakVoicemailDeterministic", () => {
       "streaming_stop",
       "hangup"
     ]);
+  });
+
+  it("skips the claim and stream-stop when the caller already holds the claim", async () => {
+    // cancelled_amd retry: re-claiming would return already_claimed and the
+    // message would never go out a second time.
+    const { deps, rpcCalls, httpCalls } = makeDeps();
+    const outcome = await speakVoicemailDeterministic(deps, "v3:leg", "retry script", {
+      trigger: "cancelled_retry",
+      alreadyClaimed: true
+    });
+    expect(outcome).toBe("speaking");
+    expect(httpCalls.map((c) => action(c.url))).toEqual(["speak"]);
+    expect(rpcCalls.map((c) => c.fn)).toEqual(["voice_session_context_merge"]);
+    expect(rpcCalls[0]?.args?.p_patch).toEqual({
+      voicemail_speak_started_at: "2026-08-27T15:35:34.000Z",
+      voicemail_speak_script_chars: "retry script".length,
+      voicemail_speak_trigger: "cancelled_retry",
+      voicemail_speak_restarted: true
+    });
   });
 });

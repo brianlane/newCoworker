@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   EDGE_VOICEMAIL_MIN_DELIVERED_FRACTION,
   EDGE_VOICEMAIL_READ_CHARS_PER_SECOND,
+  classifySpeakEnded,
   edgeVoicemailFullReadMs,
   edgeVoicemailPlausiblyDelivered,
-  resolveEdgeVoicemailSpoken
+  resolveEdgeVoicemailSpoken,
+  speakEndedWasInterrupted
 } from "../supabase/functions/_shared/voice_voicemail_timing.ts";
 import {
   VOICEMAIL_MIN_DELIVERED_FRACTION,
@@ -173,5 +175,93 @@ describe("resolveEdgeVoicemailSpoken", () => {
         endedAtIso: "2026-08-27T15:36:30.000Z"
       })
     ).toBe(false);
+  });
+
+  it("refuses the wall-clock promote when the speak was cancelled or hung up", () => {
+    // Four of five cancelled_amd calls in late Aug / early Sep 2026 were
+    // stamped delivered because the leg stayed up while Telnyx kept listening
+    // for the beep. The window here is a full minute: plenty for a 150-char
+    // script, and still not a delivery.
+    const longWindow = {
+      voicemailSpoken: undefined,
+      startedAtIso,
+      storedScriptChars: 150,
+      fallbackScript: undefined,
+      endedAtIso: "2026-08-27T15:36:30.000Z"
+    };
+    expect(
+      resolveEdgeVoicemailSpoken({ ...longWindow, speakEndedStatus: "cancelled_amd" })
+    ).toBe(false);
+    expect(
+      resolveEdgeVoicemailSpoken({ ...longWindow, speakEndedStatus: "call_hangup" })
+    ).toBe(false);
+    expect(
+      resolveEdgeVoicemailSpoken({
+        ...longWindow,
+        speakEndedStatus: "cancelled_amd",
+        restarted: false
+      })
+    ).toBe(false);
+  });
+
+  it("still judges a restarted speak by the wall clock when the retry's ended event is lost", () => {
+    expect(
+      resolveEdgeVoicemailSpoken({
+        voicemailSpoken: undefined,
+        startedAtIso,
+        storedScriptChars: 150,
+        fallbackScript: undefined,
+        endedAtIso: "2026-08-27T15:35:36.000Z",
+        speakEndedStatus: "cancelled_amd",
+        restarted: true
+      })
+    ).toBe(true);
+  });
+});
+
+describe("classifySpeakEnded", () => {
+  it("stamps and hangs up only on a completed speak the wall clock agrees with", () => {
+    expect(
+      classifySpeakEnded({ status: "completed", alreadyRestarted: false, plausible: true })
+    ).toBe("stamp_and_hangup");
+    expect(
+      classifySpeakEnded({ status: "  COMPLETED ", alreadyRestarted: true, plausible: true })
+    ).toBe("stamp_and_hangup");
+  });
+
+  it("retries once on cancelled_amd or an implausibly short completed", () => {
+    expect(
+      classifySpeakEnded({ status: "cancelled_amd", alreadyRestarted: false, plausible: false })
+    ).toBe("retry_speak");
+    expect(
+      classifySpeakEnded({ status: "completed", alreadyRestarted: false, plausible: false })
+    ).toBe("retry_speak");
+  });
+
+  it("does not loop after a restart, and never hangs up on call_hangup", () => {
+    expect(
+      classifySpeakEnded({ status: "cancelled_amd", alreadyRestarted: true, plausible: false })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({ status: "completed", alreadyRestarted: true, plausible: false })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({ status: "call_hangup", alreadyRestarted: false, plausible: true })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({ status: "something_new", alreadyRestarted: false, plausible: true })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({ status: undefined, alreadyRestarted: false, plausible: true })
+    ).toBe("record_only");
+  });
+});
+
+describe("speakEndedWasInterrupted", () => {
+  it("names the statuses that mean the audio was cut", () => {
+    expect(speakEndedWasInterrupted("cancelled_amd")).toBe(true);
+    expect(speakEndedWasInterrupted("  CALL_HANGUP ")).toBe(true);
+    expect(speakEndedWasInterrupted("completed")).toBe(false);
+    expect(speakEndedWasInterrupted(null)).toBe(false);
   });
 });

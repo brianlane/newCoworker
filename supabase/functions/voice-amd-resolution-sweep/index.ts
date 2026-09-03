@@ -147,7 +147,8 @@ serve(async (req: Request) => {
           nowIso: () => new Date().toISOString()
         },
         row.call_control_id,
-        decision.script
+        decision.script,
+        { trigger: "sweep" }
       );
       await telemetryRecord(supabase, "voice_amd_resolution_forced", {
         business_id: row.business_id,

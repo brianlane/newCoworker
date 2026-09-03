@@ -133,20 +133,34 @@ export type GreetingVerdict =
  * Decide what a greeting event means. The whole subtlety of the iOS mode
  * lives here, so it is testable and in one place.
  *
- * `prompt_ended` is the trap, and it cost a real call. It is NOT exclusive to
- * Apple call screening: Telnyx fires it whenever the prompt that followed a
- * machine verdict ends WITHOUT a beep, and an ordinary voicemail greeting does
- * exactly that. Reading it as "a person is screening" cancelled a CORRECT
- * machine verdict on Jennifer Kline's mailbox (2026-08-17 16:08Z), so nothing
- * hung up, the assistant pitched into her voicemail for two minutes, and the
- * flow recorded "spoke with them".
+ * TWO traps, both from real calls:
  *
- * The only proof a person is deciding is a real `call_screening.detected`
- * event, which the caller passes in as `screeningDetected`. Without it,
- * `prompt_ended` simply means the greeting finished.
+ * 1. `prompt_ended` is NOT exclusive to Apple call screening. Telnyx fires it
+ *    whenever the prompt that followed a machine verdict ends WITHOUT a beep,
+ *    and an ordinary voicemail greeting does exactly that: it is the first
+ *    pause in the greeting speech, not the beep. Reading it as "a person is
+ *    screening" cancelled a CORRECT machine verdict on Jennifer Kline's
+ *    mailbox (2026-08-17 16:08Z). The only proof a person is deciding is a
+ *    real `call_screening.detected` event (`screeningDetected`). Without it,
+ *    do NOT clear the stamp.
+ *
+ * 2. Resolving a stamped machine on `prompt_ended` (or `no_beep_detected`) and
+ *    speaking immediately is the next failure. Five Amy Laidlaw calls in late
+ *    Aug / early Sep 2026 spoke 1 to 3s after `prompt_ended`; the real beep
+ *    arrived 7 to 22s later; Telnyx cancelled the speak (`cancelled_amd`) and
+ *    the handler hung up, so nothing was recorded. `no_beep_detected` arrives
+ *    at +24 to +26s, inside Telnyx's default 30s iOS screening window, and
+ *    speaking then still hangs up on a live screen (Robert, 2026-09-02).
+ *
+ * Only `beep_detected` is the moment to speak. Everything else, including a
+ * stamped machine whose greeting paused, is `noted`: keep the stamp, wait.
  *
  * A beep still resolves regardless of screening: a screened call that rolls to
  * voicemail ends at a beep like any other.
+ *
+ * `machineStamped` stays on the state object because callers already have it
+ * and tests pin the Jennifer shape (stamped, not screened). It no longer
+ * drives the decision: a stamp without a beep is exactly the wait.
  */
 export function classifyGreetingEvent(
   result: unknown,
@@ -154,6 +168,6 @@ export function classifyGreetingEvent(
 ): GreetingVerdict {
   const value = typeof result === "string" ? result.trim().toLowerCase() : "";
   if (value === "prompt_ended" && state.screeningDetected) return "screening_person";
-  if (state.machineStamped || greetingImpliesMachine(value)) return "machine_resolved";
+  if (greetingImpliesMachine(value)) return "machine_resolved";
   return "noted";
 }

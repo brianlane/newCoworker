@@ -34,6 +34,14 @@ function machineContext(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
+describe("AMD_RESOLUTION_GRACE_MS", () => {
+  it("outlasts Telnyx's default 30s prompt_end_timeout plus a screening buffer", () => {
+    // Robert (ac0P3P, 2026-09-02) got call_screening.detected 31.5s after the
+    // machine stamp. 25s spoke into that still-pending screen.
+    expect(AMD_RESOLUTION_GRACE_MS).toBe(40_000);
+  });
+});
+
 describe("parseAmdResolutionConfig", () => {
   it("fails OFF for anything missing or malformed", () => {
     // The sweep forces irreversible call actions; a broken row must not
