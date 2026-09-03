@@ -215,6 +215,22 @@ describe("matchLateClaimReply, precedence (live → owner_ack → late → yank 
     expect(r?.row.id).toBe(live.id);
   });
 
+  it("stops scanning once every precedence bucket is filled", () => {
+    // The loop breaks only after a SIXTH candidate, once live, owner_ack,
+    // late, yank, and mine are all set. Five matching rows end the loop
+    // naturally and leave that branch unhit (the coverage pin).
+    const mine = row({ status: "done", routing: { claimed_by: JASON } });
+    const late = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
+    const yank = yankableRow();
+    const live = row({ routing: { offered: JASON, step_index: 5 } });
+    const park = row({
+      status: "done",
+      routing: { owner_direct: true, owner_direct_done: true, owner_direct_e164: JASON }
+    });
+    const extra = row({ routing: { offered: JASON, step_index: 5 } });
+    expect(match([mine, late, yank, park, live, extra])?.kind).toBe("live");
+  });
+
   it("prefers a true late claim over a yank and a re-ack", () => {
     const mine = row({ status: "done", routing: { claimed_by: JASON } });
     const yank = yankableRow();
