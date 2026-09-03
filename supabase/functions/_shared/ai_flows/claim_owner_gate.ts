@@ -49,7 +49,23 @@ export function claimBlockedByOwner(
 export function ownerConflictReplyText(ownerName: string, leadLabel: string): string {
   const who = ownerName.trim() || "another teammate";
   const lead = leadLabel.trim() || "This lead";
-  return `Thanks, ${lead} is already with ${who}: they own this contact from an earlier lead, so this one is theirs too. Nothing needed from you.`;
+  return `Thanks, ${lead} is already with ${who}: they own this contact, so this one is theirs too. Nothing needed from you.`;
+}
+
+/**
+ * Should the inbound claim-ownership gate skip this run entirely?
+ *
+ * An owner-direct park (`routing.owner_direct`) is the OWNER acknowledging a
+ * keep-for-owner alert, never a teammate claim (the worker's
+ * `ownerDirectResume` says so in so many words). Running the gate on it is
+ * how Amy Laidlaw's "1" on Robert Braid (2026-09-02) was refused because
+ * Gabrielle had claimed the same contact through a different door ten
+ * minutes earlier. A real offer (`owner_direct` absent/false) still claims.
+ *
+ * Pure: callers pass already-parsed routing.
+ */
+export function claimGateSkipsRun(routing: { owner_direct?: boolean } | null | undefined): boolean {
+  return routing?.owner_direct === true;
 }
 
 /** The var this module is about. Substring match, see flowDealsInLeadPhone. */

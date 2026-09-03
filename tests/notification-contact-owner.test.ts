@@ -33,6 +33,8 @@ const roster = (over: Record<string, unknown> = {}) => ({
 });
 
 const owned: OwnerContactRow = { id: "c1", owner_employee_id: "m1" };
+/** Scripted empty park lookup. Must sit after every unowned-contact result. */
+const noPark = { data: [] as unknown[] };
 const dave = (over: Partial<OwnerMemberRow> = {}): OwnerMemberRow => ({
   id: "m1",
   name: "Dave Lane",
@@ -121,7 +123,7 @@ function makeDb(results: Scripted[], rpcMode: "ok" | "error" | "throws" = "ok") 
   const from = (table: string) => {
     tables.push(table);
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "or", "limit", "maybeSingle"]) {
+    for (const m of ["select", "eq", "or", "in", "order", "limit", "maybeSingle"]) {
       builder[m] = () => builder;
     }
     builder["then"] = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
@@ -174,6 +176,7 @@ describe("resolveContactOwnerTarget", () => {
     // solo-owner rung); Dave is not the owner, so the broadcast still wins.
     const { db, tables } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { data: [roster()] },
       { data: { forward_to_e164: "+19998887777" } },
       { data: { phone_number: null } },
@@ -185,6 +188,7 @@ describe("resolveContactOwnerTarget", () => {
     expect(out.team.map((m) => m.phone)).toEqual([DAVE]);
     expect(tables).toEqual([
       "contacts",
+      "ai_flow_runs",
       "ai_flow_team_members",
       "business_telnyx_settings",
       "notification_preferences",
@@ -195,16 +199,18 @@ describe("resolveContactOwnerTarget", () => {
   it("skips the owner-number reads entirely for a multi-member roster", async () => {
     const { db, tables } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { data: [roster(), roster({ id: "m2", name: "Jason Lane", phone_e164: JASON })] }
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
     expect(out.target).toBe("team_broadcast");
-    expect(tables).toEqual(["contacts", "ai_flow_team_members"]);
+    expect(tables).toEqual(["contacts", "ai_flow_runs", "ai_flow_team_members"]);
   });
 
   it("narrows the broadcast to the teammates covering that lead type", async () => {
     const { db } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { data: [roster(), roster({ id: "m2", name: "Jason Lane", phone_e164: JASON, tags: ["buyer"] })] }
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD, "seller");
@@ -216,6 +222,7 @@ describe("resolveContactOwnerTarget", () => {
     // would mean no email at all for a lead nobody has claimed.
     const { db } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { data: [roster()] }
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
@@ -226,6 +233,7 @@ describe("resolveContactOwnerTarget", () => {
   it("falls to the business owner when nobody is broadcast-eligible", async () => {
     const { db } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { data: [roster({ team_broadcast_enabled: false })] }
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
@@ -237,6 +245,7 @@ describe("resolveContactOwnerTarget", () => {
   it("falls to the business owner when the roster read fails", async () => {
     const { db } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { error: { message: "roster down" } }
     ]);
     expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("business_owner");
@@ -245,6 +254,7 @@ describe("resolveContactOwnerTarget", () => {
   it("falls to the business owner when the roster read throws", async () => {
     const { db } = makeDb([
       { data: { id: "c1", owner_employee_id: null } },
+      noPark,
       { throws: true }
     ]);
     expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("business_owner");
@@ -281,6 +291,65 @@ describe("resolveContactOwnerTarget", () => {
   });
 });
 
+describe("resolveContactOwnerTarget: live owner-direct park", () => {
+  const unownedContact = { data: { id: "c1", owner_employee_id: null } };
+
+  it("pages the business owner, not the team, while a keep-for-owner park is live", async () => {
+    const { db, tables, rpcCalls } = makeDb([
+      unownedContact,
+      {
+        data: [
+          {
+            id: "run-1",
+            context: { routing: { owner_direct: true }, vars: { lead_phone: LEAD } }
+          }
+        ]
+      }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("owner_direct_live");
+    expect(out.team).toEqual([]);
+    expect(tables).toEqual(["contacts", "ai_flow_runs"]);
+    const ev = rpcCalls.find((c) => c.fn === "telemetry_record")?.args as {
+      p_payload: Record<string, unknown>;
+    };
+    expect(ev.p_payload).toMatchObject({ reason: "owner_direct_live", target: "business_owner" });
+  });
+
+  it("ignores a park that already finished (owner_direct_done) and broadcasts", async () => {
+    const { db } = makeDb([
+      unownedContact,
+      {
+        data: [
+          {
+            id: "run-1",
+            context: { routing: { owner_direct: true, owner_direct_done: true } }
+          }
+        ]
+      },
+      { data: [roster(), roster({ id: "m2", name: "Jason Lane", phone_e164: JASON })] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("team_broadcast");
+    expect(out.reason).toBe("contact_unowned");
+  });
+
+  it("falls to the owner when the park lookup errors, never to the team", async () => {
+    const { db } = makeDb([unownedContact, { error: { message: "runs down" } }]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("lookup_failed");
+  });
+
+  it("falls to the owner when the park lookup throws, never to the team", async () => {
+    const { db } = makeDb([unownedContact, { throws: true }]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("lookup_failed");
+  });
+});
+
 /**
  * The solo-owner rung (PR after #1500): a roster of exactly one ACTIVE
  * member who is provably the business owner has nobody to broadcast to but
@@ -304,6 +373,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
   it("resolves a solo owner-only roster to the owner, not a broadcast", async () => {
     const { db, tables } = makeDb([
       unowned,
+      noPark,
       { data: [brianRow()] },
       { data: { forward_to_e164: BRIAN_PHONE } },
       { data: { phone_number: null } },
@@ -323,6 +393,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
     expect(out.team).toEqual([]);
     expect(tables).toEqual([
       "contacts",
+      "ai_flow_runs",
       "ai_flow_team_members",
       "business_telnyx_settings",
       "notification_preferences",
@@ -333,6 +404,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
   it("keeps the email with the business owner when the roster row has none", async () => {
     const { db } = makeDb([
       unowned,
+      noPark,
       { data: [brianRow({ email: null })] },
       { data: { forward_to_e164: BRIAN_PHONE } },
       { data: { phone_number: null } },
@@ -349,6 +421,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
     // The owner really can hand this lead over, so "unowned" is still news.
     const { db } = makeDb([
       unowned,
+      noPark,
       { data: [brianRow({ id: "m-a", name: "Dana", phone_e164: DAVE })] },
       { data: { forward_to_e164: BRIAN_PHONE } },
       { data: { phone_number: null } },
@@ -363,6 +436,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
   it("unreadable owner numbers fail open to the broadcast, never to a false solo match", async () => {
     const { db } = makeDb([
       unowned,
+      noPark,
       { data: [brianRow()] },
       { error: { message: "down" } },
       { error: { message: "down" } },
@@ -377,6 +451,7 @@ describe("resolveContactOwnerTarget: solo owner", () => {
   it("records solo_owner routing telemetry", async () => {
     const { db, rpcCalls } = makeDb([
       unowned,
+      noPark,
       { data: [brianRow()] },
       { data: { forward_to_e164: BRIAN_PHONE } },
       { data: { phone_number: null } },

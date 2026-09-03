@@ -57,7 +57,13 @@ export const OFFER_REPLY_DECISION = {
    * we said what they still have. Before this existed the reply silently
    * claimed their most-recently-touched lead and stamped the name as an ETA.
    */
-  claim_name_unmatched: "claim_name_unmatched"
+  claim_name_unmatched: "claim_name_unmatched",
+  /**
+   * The owner's "1" after a keep-for-owner park already finished. Nothing
+   * re-opens; we said the reminders already stopped. Without this the reply
+   * fell through to an unrelated lapsed offer (Jason Ellis, 2026-09-02).
+   */
+  owner_direct_ack: "owner_direct_ack"
 } as const;
 
 export type OfferReplyDecision =

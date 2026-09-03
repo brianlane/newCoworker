@@ -41,7 +41,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [PostgREST 1000-row cap](project_postgrest_1000_row_cap.md) - un-limited selects silently truncate; .limit() or server-side RPC
 - [Ownership never binds to the sender](project_ownership_never_binds_to_sender.md) - empty lead_phone means UNKNOWN, not trigger.from
 - [Meta app review](project_meta_app_review.md) - DECIDED ~Aug 25: 17 privileges advanced, only ads_read rejected and PROVEN unnecessary; retire the grinder; a call counts only if the TOKEN carries the scope
-- [Claim by replying "1"](project_claim_by_reply_one.md) - claims offers + alerts + invites, LIFO by row TOUCH; stars/quotes around the digit are copy, not syntax; stacked alerts for one phone are one lead
+- [Claim by replying "1"](project_claim_by_reply_one.md) - claims offers + alerts + invites, LIFO by row TOUCH; stars/quotes around the digit are copy, not syntax; stacked alerts for one phone are one lead; owner-direct "1" is an ack, never a claim
 - [Edge functions auto-deploy on main](project_edge_functions_deploy_on_main.md) - inside the Vercel Deploy job; vps/ stays manual
 - [Stash is repo-global in worktrees](project_stash_is_repo_global_in_worktrees.md) - a no-op stash + pop grabs another session's entry
 - [Nango proxy throws on non-2xx](project_nango_proxy_throws_on_non_2xx.md) - branch via nangoProxyStatusForBusiness; never normalize globally

@@ -13,6 +13,7 @@ import {
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
   claimBlockedByOwner,
+  claimGateSkipsRun,
   flowDealsInLeadPhone,
   ownerConflictReplyText,
   ownershipLeadPhone
@@ -71,6 +72,7 @@ import {
   unmatchedClaimText,
   type OfferCandidate
 } from "../_shared/ai_flows/offer_identity.ts";
+import { ownerDirectAlreadyStoppedText } from "../_shared/ai_flows/owner_direct.ts";
 import {
   followUpAckText,
   followUpAmbiguityText,
@@ -1439,6 +1441,14 @@ async function contactOwnerBlocking(
   runId: string
 ): Promise<{ ownerName: string; leadLabel: string } | null> {
   try {
+    // Owner-direct parks are acknowledgements, never claims. Skip the gate
+    // so the owner's "1" reaches ownerDirectResume instead of being refused
+    // because a teammate claimed the same contact through a different door
+    // (Amy Laidlaw, Robert Braid, 2026-09-02).
+    const routing = parseRouting(
+      (runContext as { routing?: unknown } | null | undefined)?.routing
+    );
+    if (claimGateSkipsRun(routing)) return null;
     const vars = ((runContext as { vars?: Record<string, unknown> } | null)?.vars ?? {}) as Record<
       string,
       unknown
@@ -1850,6 +1860,22 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       decision: OFFER_REPLY_DECISION.late_claim_repeat
     });
     return new Response(JSON.stringify({ ok: true, agent_offer: "already_claimed" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (matched.kind === "owner_ack") {
+    const vars = ((match.context as { vars?: Record<string, unknown> } | null)?.vars ??
+      {}) as Record<string, unknown>;
+    await ack(ownerDirectAlreadyStoppedText(leadLabelFromVars(vars)), "owner-direct-ack");
+    await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+      business_id: businessId,
+      run_id: match.id,
+      event_id: eventId,
+      decision: OFFER_REPLY_DECISION.owner_direct_ack
+    });
+    return new Response(JSON.stringify({ ok: true, agent_offer: "owner_direct_ack" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });

@@ -27,6 +27,7 @@ import {
 } from "./offer_identity.ts";
 import { routingOfContext } from "./routing.ts";
 import { looksLikeTimeframe } from "./claim_timeframe.ts";
+import { OWNER_DIRECT_ACK_WINDOW_MS } from "./owner_direct.ts";
 
 /** The run-row shape the webhook fetches for the late-claim scan. */
 export type LateClaimCandidate = {
@@ -43,13 +44,15 @@ export type LateClaimCandidate = {
 export type LateClaimMatch = {
   /**
    * live, the sender's own active offer (any "1" form claims);
+   * owner_ack, a finished keep-for-owner park: the owner's "1" is an
+   *            acknowledgement, nothing re-opens (Jason Ellis, 2026-09-02);
    * late, a lapsed offer whose post-route steps already ran (re-open,
    *        claim/notify only, no step replay);
    * yank, first-to-claim: an offer live with ANOTHER teammate that this
    *        sender was texted earlier; bare "1" only;
    * mine, the sender already holds this lead (idempotent re-ack).
    */
-  kind: "live" | "late" | "yank" | "mine";
+  kind: "live" | "owner_ack" | "late" | "yank" | "mine";
   row: LateClaimCandidate;
   /** Rewind target (routing.step_index); -1 for "mine" (nothing re-opens). */
   stepIndex: number;
@@ -98,12 +101,13 @@ export type LateClaimResolution =
     }
   | { outcome: "none" };
 
-/** Bucket precedence as a sortable rank: live → late → yank → mine. */
+/** Bucket precedence as a sortable rank: live → owner_ack → late → yank → mine. */
 const KIND_RANK: Record<LateClaimMatch["kind"], number> = {
   live: 0,
-  late: 1,
-  yank: 2,
-  mine: 3
+  owner_ack: 1,
+  late: 2,
+  yank: 3,
+  mine: 4
 };
 
 /**
@@ -133,6 +137,18 @@ function classifyCandidate(args: {
   // re-opening. The worker clears routing.step_index when it finalizes a
   // claim, so this idempotent path must NOT require step_index.
   if (claimedBy === from) return { kind: "mine", row, stepIndex: -1 };
+  // Owner-direct ack after the park finished. finalize() already deleted
+  // step_index, which is why today's matcher skipped the run and a stray
+  // "1" late-claimed Jason Ellis (Amy Laidlaw, 2026-09-02). This branch
+  // MUST run before the step_index < 0 return.
+  if (
+    routing.owner_direct === true &&
+    routing.owner_direct_done === true &&
+    routing.owner_direct_e164 === from &&
+    nowMs - Date.parse(row.updated_at) <= OWNER_DIRECT_ACK_WINDOW_MS
+  ) {
+    return { kind: "owner_ack", row, stepIndex: -1 };
+  }
   // A fresh claim needs the rewind target the worker stamped on park.
   const stepIndex = routing.step_index ?? -1;
   if (stepIndex < 0) return null;
@@ -261,8 +277,8 @@ function collapseByLead(matches: readonly LateClaimMatch[]): LateClaimMatch[] {
  *    was touched most recently. Naming two different leads that both answer
  *    to the text asks instead of guessing. A text that names nothing is an
  *    ETA and falls through to (2) unchanged, so "1, 20 min" keeps its meaning.
- * 2. **By PRECEDENCE**, not raw recency: live → late → yank → mine. Within a
- *    bucket the newest candidate wins.
+ * 2. **By PRECEDENCE**, not raw recency: live → owner_ack → late → yank →
+ *    mine. Within a bucket the newest candidate wins.
  *
  * Returns outcome "none" when nothing is claimable so the caller can fall
  * through (stale-offer ack → normal inbound path).
@@ -325,7 +341,7 @@ export function matchLateClaimReply(args: {
     if (!looksLikeTimeframe(typed)) {
       // A lead the sender already holds is not on offer, so it never joins
       // the "here is what you can take" list.
-      const claimable = eligible.filter((m) => m.kind !== "mine");
+      const claimable = eligible.filter((m) => m.kind !== "mine" && m.kind !== "owner_ack");
       const claimedElsewhere = findClaimedElsewhere({
         candidates,
         from,
@@ -358,7 +374,7 @@ export function matchLateClaimReply(args: {
 
 /**
  * The original recency-and-precedence pick, used for a bare "1" and for a
- * comma'd text that named no lead. Scanning stops as soon as all four buckets
+ * comma'd text that named no lead. Scanning stops as soon as all five buckets
  * are filled: candidates are newest-first, so nothing later can win.
  */
 function pickByPrecedence(args: {
@@ -372,12 +388,13 @@ function pickByPrecedence(args: {
   const { candidates, from, digit, timeframe, nowMs, windowMs } = args;
 
   let live: LateClaimMatch | null = null;
+  let ownerAck: LateClaimMatch | null = null;
   let late: LateClaimMatch | null = null;
   let yank: LateClaimMatch | null = null;
   let mine: LateClaimMatch | null = null;
 
   for (const row of candidates) {
-    if (live && late && yank && mine) break;
+    if (live && ownerAck && late && yank && mine) break;
     const m = classifyCandidate({ row, from, digit, nowMs, windowMs });
     if (!m) continue;
     if (m.kind === "mine") {
@@ -386,6 +403,8 @@ function pickByPrecedence(args: {
       if (!late) late = m;
     } else if (m.kind === "live") {
       if (!live) live = m;
+    } else if (m.kind === "owner_ack") {
+      if (!ownerAck) ownerAck = m;
     } else if (!yank && timeframe === "") {
       // An ETA means "not right now" and must not preempt another teammate's
       // active countdown. Only a bare "1" yanks here; a NAMED reply is
@@ -394,7 +413,7 @@ function pickByPrecedence(args: {
     }
   }
 
-  return live ?? late ?? yank ?? mine;
+  return live ?? ownerAck ?? late ?? yank ?? mine;
 }
 
 /**

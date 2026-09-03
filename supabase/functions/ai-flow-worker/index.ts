@@ -238,6 +238,7 @@ import {
   reminderClaimHint,
   reminderText
 } from "../_shared/ai_flows/offer_reminders.ts";
+import { ownerDirectNudgeText } from "../_shared/ai_flows/owner_direct.ts";
 import {
   formatContactSaid,
   loadContactSaid,
@@ -9737,6 +9738,9 @@ async function maybeOwnerDirect(
       routing.owner_nudges = 0;
       routing.offered = forward;
       routing.offered_name = "owner";
+      // Survives finalize() so a stray owner "1" after the park ends is an
+      // ack, not a late-claim of some unrelated lapsed offer.
+      routing.owner_direct_e164 = forward;
       return {
         kind: "pause_agent",
         e164: forward,
@@ -11336,19 +11340,6 @@ async function ownerForwardE164(supabase: Supabase, businessId: string): Promise
     .maybeSingle();
   const forward = (data as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
   return forward.trim() || null;
-}
-
-/**
- * ALL-CAPS owner reminder for an unacknowledged keep-for-owner alert. The
- * framing lines are uppercase (per Amy's ask); the alert body keeps its
- * original casing because it carries case-sensitive short links
- * (rltr.pro/XKVuC) and names that uppercasing would corrupt.
- */
-function ownerDirectNudgeText(alertBody: string, minutes: number, final: boolean): string {
-  const head = final
-    ? `FINAL REMINDER (${minutes} MINUTES): HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`
-    : `REMINDER (${minutes} MINUTES): HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`;
-  return `${head}\n${alertBody}\nREPLY "1" TO STOP THESE REMINDERS.`;
 }
 
 /**

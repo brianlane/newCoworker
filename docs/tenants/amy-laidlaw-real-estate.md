@@ -678,8 +678,33 @@ anywhere.
 That also removes the need for any waiting step on the owner-direct flows: the
 park holds the run until she replies or the second reminder lapses at 30
 minutes, so the verdict is already in `actions_taken` when the branch
-evaluates. A late "1" cannot change it either, because the exhaustion path
-deletes `step_index` and the late-claim matcher then skips the run entirely.
+evaluates. A late "1" after exhaustion is now a harmless acknowledgement
+(`owner_ack`), not a claim of some other lapsed lead.
+
+### Sep 2 2026: Robert Braid ($1.25M ReferralExchange buyer)
+
+Amy was told KEPT FOR YOU, NOT OFFERED TO THE TEAM at 8:30 AM Arizona.
+Three minutes later Robert texted "Are you married". The urgent-alert
+dispatcher saw an unowned contact and broadcast "Reply 1 to claim" to
+Jason, Dave and Gabby. Gabby claimed at 8:35. Amy's "1" at 8:45 was
+refused ("already with Gabrielle Mota... from an earlier lead": same
+lead, different door). The 30-minute FINAL reminder still invited a "1";
+her 9:03 reply late-claimed Jason Ellis instead.
+
+Four engine fixes, none of them a tenant one-shot:
+
+1. `claimGateSkipsRun`: an `owner_direct` park's "1" is an ack. The
+   inbound ownership gate no longer treats it as a rival claim.
+2. `owner_direct_live` in `contact_owner_target`: while that park is
+   live, a "Needs Human" alert about the same phone goes to the business
+   owner, not the team. After ack or 30-minute exhaustion the team rung
+   returns. Ownership is not stamped.
+3. FINAL reminder copy no longer invites a "1". A bare "1" from the
+   owner within 60 minutes of a finished park is `owner_ack`.
+4. Conflict copy dropped "from an earlier lead".
+
+Jason Ellis's contact owner was cleared after the fact. Robert Braid
+stayed with Gabby (a real claim through a real door).
 
 **Follow Up Requested is the exception, in two ways.** It has no
 `ownerDirectTemplate`, so its $1M+ leads really are offered to the team, the

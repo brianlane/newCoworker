@@ -349,6 +349,17 @@ describe("the $1M+ takeover arm", () => {
     expect(worker).toContain(OWNER_IGNORED_MARKER);
   });
 
+  it("the final owner-direct reminder no longer invites a 1", () => {
+    // The invite on the LAST reminder is what sent Amy's second "1" onto
+    // Jason Ellis (2026-09-02). Copy lives in owner_direct.ts; the worker
+    // must keep importing it rather than inlining the old tail.
+    const copy = readFileSync("supabase/functions/_shared/ai_flows/owner_direct.ts", "utf8");
+    const worker = readFileSync("supabase/functions/ai-flow-worker/index.ts", "utf8");
+    expect(copy).toContain("THIS WAS THE LAST REMINDER. NO REPLY NEEDED.");
+    expect(copy).toContain(`REPLY "1" TO STOP THESE REMINDERS.`);
+    expect(worker).toContain('from "../_shared/ai_flows/owner_direct.ts"');
+  });
+
   it("needs no waiting step on the owner-direct shape", () => {
     // The owner-direct park does not complete until the owner replies or the
     // second reminder lapses at 30 minutes, so the verdict is in

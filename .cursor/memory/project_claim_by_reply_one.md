@@ -224,4 +224,45 @@ same `lead_e164`; the list and the named matcher did not.
 
 Related: [[project_claim_by_reply_one_two_paths]],
 [[project_informational_team_alert_gets_replied_1]],
-[[project_starred_claim_reply_falls_to_coworker]].
+[[project_starred_claim_reply_falls_to_coworker]],
+[[project_owner_ask_reaches_the_flows]].
+
+## project_owner_direct_ack_is_not_a_claim
+
+Observed live on Amy Laidlaw's account, 2026-09-02, Robert Braid ($1.25M
+ReferralExchange buyer, run `f66e576f`). Three stacked bugs around the
+keep-for-owner ($1M+) path, whose "1" is an acknowledgement, never a
+claim (the worker's `ownerDirectResume` already said so).
+
+**The gate blind spot.** `contactOwnerBlocking` ran the contact-ownership
+claim gate on every "1", including the owner-direct park. Gabby had
+claimed the same contact 10 minutes earlier through an `unowned_lead_alerts`
+row, so Amy's ack was refused: "already with Gabrielle Mota: they own this
+contact from an earlier lead." `claimGateSkipsRun` now returns true when
+`routing.owner_direct` is true. A real offer to the owner still claims.
+
+**The dispatcher blind spot.** Keep-for-owner never stamps
+`contacts.owner_employee_id`. The urgent-alert dispatcher
+(`contact_owner_target.ts`) only reads that column, so Robert's "Are you
+married" text three minutes after KEPT FOR YOU, NOT OFFERED TO THE TEAM
+broadcast a claimable alert to Jason, Dave and Gabby. While a live
+`owner_direct` park exists for that `lead_phone`, the unowned rung now
+returns `TO_OWNER("owner_direct_live")` (no `unowned_lead_alerts` row).
+After ack or 30-minute exhaustion the team rung returns. Do not stamp
+ownership as a shortcut: that would keep later leads of the same person
+with Amy forever.
+
+**The stray-"1" LIFO landing.** The FINAL reminder still said REPLY "1"
+TO STOP THESE REMINDERS after the ladder was spent. Amy's second "1" had
+no live park, so late-claim LIFO picked her most recently touched lapsed
+offer: Jason Ellis. `finalize()` had deleted `step_index`, which is why
+the matcher skipped the finished park. Now: the FINAL reminder says NO
+REPLY NEEDED; `routing.owner_direct_e164` survives finalize; `classifyCandidate`
+returns `owner_ack` (before the `step_index < 0` return, 60-minute
+window, ranked after `live` and before `late`). A named "1, <other lead>"
+still claims that other lead.
+
+Related: [[project_bare_digit_claim_is_lifo]],
+[[project_informational_team_alert_gets_replied_1]],
+[[project_unowned_lead_alerts_tagged_team]],
+[[project_ownership_never_binds_to_sender]].
