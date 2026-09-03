@@ -2,6 +2,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 
 - [Full test coverage requirement](feedback_testing.md) - npx vitest run --coverage must pass at 100%
 - [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - env overrides deploy defaults; 3.7-flash 400s on minimal thinking; ~4x metered
+- [Gemini model eval](project_gemini_model_eval.md) - list Google's models, do not pass an id; adopt flagship only at post-intro price; never promo rates
 - [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers
 - [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha; Cloud Agent PRs squash-merge via cursor-automerge.yml, not Dependabot
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
