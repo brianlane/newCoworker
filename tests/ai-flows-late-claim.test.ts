@@ -113,15 +113,122 @@ describe("matchLateClaimReply, buckets", () => {
   });
 });
 
-describe("matchLateClaimReply, precedence (live → late → yank → mine)", () => {
+describe("matchLateClaimReply, owner_ack (finished keep-for-owner park)", () => {
+  const AMY = "+16026951142";
+
+  function finishedPark(over: Record<string, unknown> = {}): LateClaimCandidate {
+    return row({
+      status: "done",
+      updated_at: new Date(NOW - 5 * 60 * 1000).toISOString(),
+      routing: {
+        owner_direct: true,
+        owner_direct_done: true,
+        owner_direct_e164: AMY,
+        ...over
+      },
+      vars: { lead_name: "Robert Braid", lead_phone: "+14169378424" }
+    });
+  }
+
+  it("the owner's 1 after the park finished is an ack, even with no step_index", () => {
+    const park = finishedPark();
+    expect(match([park], { from: AMY })).toEqual({
+      kind: "owner_ack",
+      row: park,
+      stepIndex: -1
+    });
+  });
+
+  it("beats an unrelated lapsed offer (Jason Ellis trap)", () => {
+    const jason = lapsed({ name: "Jason Ellis", phone: "+15413719818" }, AMY);
+    const park = finishedPark();
+    const r = match([jason, park], { from: AMY });
+    expect(r?.kind).toBe("owner_ack");
+    expect(r?.row.id).toBe(park.id);
+  });
+
+  it("a still-open live offer still claims ahead of a finished park", () => {
+    const live = row({ routing: { offered: AMY, step_index: 5 } });
+    const park = finishedPark();
+    expect(match([park, live], { from: AMY })?.kind).toBe("live");
+  });
+
+  it("naming a different lead still claims that lead", () => {
+    const jason = lapsed({ name: "Jason Ellis", phone: "+15413719818" }, AMY);
+    const park = finishedPark();
+    const r = resolve([park, jason], { from: AMY, timeframe: "Jason Ellis" });
+    expect(r.outcome).toBe("match");
+    if (r.outcome !== "match") return;
+    expect(r.match.kind).toBe("late");
+    expect(r.match.row.id).toBe(jason.id);
+  });
+
+  it("naming the keep-for-owner lead is still an ack", () => {
+    const jason = lapsed({ name: "Jason Ellis", phone: "+15413719818" }, AMY);
+    const park = finishedPark();
+    const r = resolve([jason, park], { from: AMY, timeframe: "Robert Braid" });
+    expect(r.outcome).toBe("match");
+    if (r.outcome !== "match") return;
+    expect(r.match.kind).toBe("owner_ack");
+  });
+
+  it("within the owner_ack bucket the newest park wins", () => {
+    const newer = finishedPark();
+    const older = finishedPark();
+    expect(match([newer, older], { from: AMY })?.row.id).toBe(newer.id);
+  });
+
+  it("a teammate's 1 never matches (owner_direct_e164 is the owner's number)", () => {
+    expect(match([finishedPark()], { from: JASON })).toBeNull();
+  });
+
+  it("ignores a park older than the one-hour window", () => {
+    const stale = finishedPark();
+    stale.updated_at = new Date(NOW - 61 * 60 * 1000).toISOString();
+    const jason = lapsed({ name: "Jason Ellis" }, AMY);
+    expect(match([stale, jason], { from: AMY })?.kind).toBe("late");
+  });
+
+  it("does not match a park that is not yet done", () => {
+    // Live owner-direct parks are claimed through the live path (offered =
+    // the owner, step_index still set). Without those, this is not owner_ack.
+    const livePark = row({
+      status: "awaiting_agent",
+      routing: { owner_direct: true, owner_direct_e164: AMY, offered: AMY, step_index: 16 }
+    });
+    expect(match([livePark], { from: AMY })?.kind).toBe("live");
+  });
+});
+
+describe("matchLateClaimReply, precedence (live → owner_ack → late → yank → mine)", () => {
   it("prefers the sender's own live offer over everything else", () => {
     const mine = row({ status: "done", routing: { claimed_by: JASON } });
     const late = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
     const yank = yankableRow();
     const live = row({ routing: { offered: JASON, step_index: 5 } });
-    const r = match([mine, late, yank, live]);
+    const park = row({
+      status: "done",
+      routing: { owner_direct: true, owner_direct_done: true, owner_direct_e164: JASON }
+    });
+    const r = match([mine, late, yank, park, live]);
     expect(r?.kind).toBe("live");
     expect(r?.row.id).toBe(live.id);
+  });
+
+  it("stops scanning once every precedence bucket is filled", () => {
+    // The loop breaks only after a SIXTH candidate, once live, owner_ack,
+    // late, yank, and mine are all set. Five matching rows end the loop
+    // naturally and leave that branch unhit (the coverage pin).
+    const mine = row({ status: "done", routing: { claimed_by: JASON } });
+    const late = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
+    const yank = yankableRow();
+    const live = row({ routing: { offered: JASON, step_index: 5 } });
+    const park = row({
+      status: "done",
+      routing: { owner_direct: true, owner_direct_done: true, owner_direct_e164: JASON }
+    });
+    const extra = row({ routing: { offered: JASON, step_index: 5 } });
+    expect(match([mine, late, yank, park, live, extra])?.kind).toBe("live");
   });
 
   it("prefers a true late claim over a yank and a re-ack", () => {
@@ -135,6 +242,19 @@ describe("matchLateClaimReply, precedence (live → late → yank → mine)", ()
     const mine = row({ status: "done", routing: { claimed_by: JASON } });
     const yank = yankableRow();
     expect(match([mine, yank])?.kind).toBe("yank");
+  });
+
+  it("prefers a finished owner-direct ack over a late claim", () => {
+    const late = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
+    const park = row({
+      status: "done",
+      routing: {
+        owner_direct: true,
+        owner_direct_done: true,
+        owner_direct_e164: JASON
+      }
+    });
+    expect(match([late, park])?.kind).toBe("owner_ack");
   });
 
   it("within a bucket the newest candidate wins (candidates are newest-first)", () => {

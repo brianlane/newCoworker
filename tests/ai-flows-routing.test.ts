@@ -74,19 +74,27 @@ describe("parseRouting", () => {
   });
 
   it("keeps well-typed owner-direct nudge fields and drops malformed ones", () => {
-    const good = parseRouting({ owner_direct: true, owner_nudges: 1, owner_direct_done: true });
+    const good = parseRouting({
+      owner_direct: true,
+      owner_nudges: 1,
+      owner_direct_done: true,
+      owner_direct_e164: "+16026951142"
+    });
     expect(good.owner_direct).toBe(true);
     expect(good.owner_nudges).toBe(1);
     expect(good.owner_direct_done).toBe(true);
+    expect(good.owner_direct_e164).toBe("+16026951142");
 
     const bad = parseRouting({
       owner_direct: "yes",
       owner_nudges: "1",
-      owner_direct_done: 1
+      owner_direct_done: 1,
+      owner_direct_e164: 42
     });
     expect(bad.owner_direct).toBeUndefined();
     expect(bad.owner_nudges).toBeUndefined();
     expect(bad.owner_direct_done).toBeUndefined();
+    expect(bad.owner_direct_e164).toBeUndefined();
   });
 
   it("keeps a well-typed solo_owner marker and drops malformed ones", () => {

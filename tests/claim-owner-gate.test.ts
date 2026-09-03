@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   claimBlockedByOwner,
+  claimGateSkipsRun,
   flowDealsInLeadPhone,
   ownerConflictReplyText,
   ownershipLeadPhone
@@ -52,6 +53,7 @@ describe("ownerConflictReplyText", () => {
     const t = ownerConflictReplyText("Dave Lane", "Austin Happ");
     expect(t).toContain("Austin Happ is already with Dave Lane");
     expect(t).toContain("they own this contact");
+    expect(t).not.toContain("from an earlier lead");
     expect(t).toContain("Nothing needed from you");
   });
 
@@ -62,6 +64,19 @@ describe("ownerConflictReplyText", () => {
 
   it("contains no em dash", () => {
     expect(ownerConflictReplyText("Dave Lane", "Austin Happ").includes("\u2014")).toBe(false);
+  });
+});
+
+describe("claimGateSkipsRun", () => {
+  it("skips the ownership gate on an owner-direct park (an ack, never a claim)", () => {
+    expect(claimGateSkipsRun({ owner_direct: true })).toBe(true);
+  });
+
+  it("does not skip a real teammate offer", () => {
+    expect(claimGateSkipsRun({})).toBe(false);
+    expect(claimGateSkipsRun({ owner_direct: false })).toBe(false);
+    expect(claimGateSkipsRun(null)).toBe(false);
+    expect(claimGateSkipsRun(undefined)).toBe(false);
   });
 });
 

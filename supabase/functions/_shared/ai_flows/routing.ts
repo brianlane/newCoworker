@@ -205,6 +205,14 @@ export type OfferRouting = {
    */
   owner_direct_done?: boolean;
   /**
+   * The owner's forward number this keep-for-owner alert was parked on.
+   * Set: worker alongside `owner_direct`. Never cleared (unlike `offered`,
+   * which finalize() deletes). The late-claim matcher uses it to absorb a
+   * stray owner "1" after the park ends, instead of falling through to an
+   * unrelated lapsed offer (Jason Ellis, 2026-09-02).
+   */
+  owner_direct_e164?: string;
+  /**
    * The roster is exactly one ACTIVE member and that member is provably the
    * business owner (solo_owner.ts), so the route step sent one informational
    * notice instead of running an offer race. No live offer ever existed
@@ -238,7 +246,8 @@ const STRING_FIELDS = [
   "reply_from",
   "claim_timeframe",
   "pass_reason",
-  "route_step_id"
+  "route_step_id",
+  "owner_direct_e164"
 ] as const;
 const NUMBER_FIELDS = [
   "step_index",

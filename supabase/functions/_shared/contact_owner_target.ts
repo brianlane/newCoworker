@@ -79,7 +79,14 @@ export type OwnerRedirectReason =
    * claim invite, no unowned_lead_alerts row. Read-time only; the contact's
    * owner_employee_id stays null.
    */
-  | "solo_owner";
+  | "solo_owner"
+  /**
+   * A keep-for-owner ($1M+) park is live for this lead, so the team must
+   * not be offered it (Amy Laidlaw, Robert Braid, 2026-09-02). Pages the
+   * business owner. The contact stays unowned; once the park ends the
+   * team-broadcast rung returns.
+   */
+  | "owner_direct_live";
 
 export type ContactOwnerTarget = {
   /**
@@ -346,6 +353,13 @@ async function resolveVerdict(
       // behavior: without a contact row there is no lead to speak of, and
       // broadcasting to the whole team on a lookup miss is noise, not rescue.
       if (verdict.reason !== "contact_unowned") return verdict;
+      // Keep-for-owner window: a live $1M+ park on this phone means the
+      // owner was told the team would not be offered it. Broadcasting a
+      // claimable "Needs Human" alert here is how Gabby claimed Robert
+      // Braid three minutes after Amy was told KEPT FOR YOU (2026-09-02).
+      const park = await findLiveOwnerDirectPark(supabase, businessId, phone);
+      if (park === "error") return TO_OWNER("lookup_failed");
+      if (park) return TO_OWNER("owner_direct_live");
       const roster = await readActiveRoster(supabase, businessId);
       // Solo-owner rung: a one-person owner-only roster has nobody to
       // broadcast to but the owner themselves, so skip the claim framing.
@@ -369,5 +383,53 @@ async function resolveVerdict(
   } catch (e) {
     console.error("contact_owner_target: lookup", e);
     return TO_OWNER("lookup_failed");
+  }
+}
+
+/**
+ * Is there a live keep-for-owner park for this lead phone?
+ *
+ * Never `maybeSingle()`: a multi-row match is an error on maybeSingle, and
+ * treating that error as "no park" would re-offer the team (the exact
+ * failure this rung exists to prevent). Cap the read (the Data API's
+ * 1000-row default is the other silent truncate) and scan in code: a
+ * just-exhausted park can sit in `queued` for one worker tick with
+ * `owner_direct_done` already set, and a newer finished row must not hide
+ * an older live one.
+ *
+ * "error" is distinct from "no park" so a down query cannot silently
+ * become a team broadcast.
+ */
+const OWNER_DIRECT_PARK_SCAN = 20;
+
+async function findLiveOwnerDirectPark(
+  supabase: AnyClient,
+  businessId: string,
+  phone: string
+): Promise<boolean | "error"> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("id, context")
+      .eq("business_id", businessId)
+      .in("status", ["awaiting_agent", "queued"])
+      .eq("context->routing->>owner_direct", "true")
+      .eq("context->vars->>lead_phone", phone)
+      .order("updated_at", { ascending: false })
+      .limit(OWNER_DIRECT_PARK_SCAN);
+    if (error) {
+      console.error("contact_owner_target: owner_direct park lookup", error);
+      return "error";
+    }
+    const rows = Array.isArray(data) ? data : [];
+    for (const row of rows) {
+      const routing = (row as { context?: { routing?: { owner_direct_done?: boolean } } } | null)
+        ?.context?.routing;
+      if (routing?.owner_direct_done !== true) return true;
+    }
+    return false;
+  } catch (e) {
+    console.error("contact_owner_target: owner_direct park lookup threw", e);
+    return "error";
   }
 }
