@@ -11,9 +11,10 @@ import {
  * The shared detect-and-persist path for a contact's language.
  *
  * The bug this module exists to fix: detection used to live inline in the SMS
- * reply path, so any turn an AiFlow owned (a parked wait_for_reply, or a flow
- * with suppressDefaultReply) never recorded language at all. A lead answering
- * a flow's question in Spanish stayed flagged English forever.
+ * reply path, so any turn an AiFlow owned (a parked wait_for_reply on a flow
+ * with suppressDefaultReply, or a newly queued flow with that flag) never
+ * recorded language at all. A lead answering a flow's question in Spanish
+ * stayed flagged English forever.
  */
 
 type Call = { table: string; op: string; payload?: unknown; filter?: string };

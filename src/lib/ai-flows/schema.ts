@@ -1355,8 +1355,10 @@ const nonBranchStepMembers = [
   // Park the run until the phone in phoneVar texts back (reply lands in
   // {{vars.<saveAs>}}, default reply_text) or timeoutMinutes elapses
   // ({{vars.<saveAs>}} = "no_reply" → the no-reply branch; a named sentinel
-  // because when-conditions require non-empty values). While parked, the
-  // lead's next inbound SMS is owned by the flow (default AI reply suppressed).
+  // because when-conditions require non-empty values). The captured reply
+  // skips remaining no_reply nudges. The coworker still answers unless the
+  // flow set options.suppressDefaultReply (it will send the next customer
+  // text itself).
   z.object({
     id: stepId,
     type: z.literal("wait_for_reply"),
@@ -2134,6 +2136,10 @@ export const aiFlowDefinitionSchema = z.object({
     .optional(),
   options: z
     .object({
+      // When true, an inbound SMS that fires this flow, or that a parked
+      // wait_for_reply of this flow captures, does not also get the coworker
+      // reply. Leave off on a silence-nudge cadence so a lead who texts back
+      // is handed to the coworker.
       suppressDefaultReply: z.boolean().optional(),
       // Per-flow opt-in: capture a screenshot on every browse step (and a
       // before/at-failure pair when a browse_action breaks) for the run

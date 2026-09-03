@@ -4,10 +4,11 @@
  *
  * Why this module exists: the reply path used to own this logic inline, so it
  * only ran when the worker was actually generating an AI reply. Any turn an
- * AiFlow owned (`suppress_reply`: a parked `wait_for_reply`, or a flow with
- * `options.suppressDefaultReply`) returned BEFORE it, which meant a lead who
- * answered a flow's question in Spanish was never recorded as a Spanish
- * speaker. Every later message, flow copy and AI reply alike, stayed English.
+ * AiFlow owned (`suppress_reply`: a parked `wait_for_reply` on a flow with
+ * `options.suppressDefaultReply`, or a newly queued flow with that flag)
+ * returned BEFORE it, which meant a lead who answered a flow's question in
+ * Spanish was never recorded as a Spanish speaker. Every later message, flow
+ * copy and AI reply alike, stayed English.
  * Lifting it here lets the suppressed branch record language too, with one
  * implementation so the two paths can never drift.
  *

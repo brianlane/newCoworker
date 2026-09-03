@@ -242,8 +242,8 @@ export async function replayInboundSms(
   if (candidates.length === 0) return summary;
 
   // Live parity: an inbound text consumed by a parked wait_for_reply run
-  // never reaches trigger evaluation (the flow owns that turn, see
-  // resumeAwaitingReplyRun in telnyx-sms-inbound), so a replay must not
+  // never reaches trigger evaluation (the waiting flow already has that
+  // turn's text, see resumeAwaitingReplyRun), so a replay must not
   // treat it as a fresh lead either. The consumption isn't stamped on the
   // job row, but the resumed run persists it: waiting_reply.result="reply",
   // waiting_reply.from=<sender>, and vars[save_as]=<the consumed text>.

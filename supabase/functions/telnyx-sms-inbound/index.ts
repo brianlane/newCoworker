@@ -91,6 +91,7 @@ import {
 import { isBusinessOwnerPhone, loadStaffMatcher } from "../_shared/ai_flows/staff_numbers.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
+import { resumeAwaitingReplyRun } from "../_shared/ai_flows/wait_reply_resume.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
 import {
@@ -435,100 +436,6 @@ async function evaluateAndEnqueueAiFlows(
     });
   }
   return { suppressingRunQueued };
-}
-
-/**
- * wait_for_reply resume: match this sender to EVERY run parked waiting on
- * their number (status='awaiting_reply', context.waiting_reply.from), one
- * lead can legitimately have several flows waiting, and their single text
- * answers all of them. Each run gets the reply written into
- * context.vars[save_as], the per-step resolution marker stamped, and a
- * re-queue. Revision-gated like the offer-reply resumes so a concurrent
- * timeout sweep can't be clobbered, losing a race means that run's
- * no-reply branch already ran. Returns the resumed run ids; a non-empty
- * list makes the caller suppress the default Coworker reply AND skip
- * trigger evaluation (the flow owns this turn), and exempts those runs
- * from the "replied" goal jump, the reply must flow through their
- * authored branch logic, not leapfrog it.
- */
-async function resumeAwaitingReplyRun(
-  supabase: SupabaseClient,
-  businessId: string,
-  from: string | null,
-  bodyText: string
-): Promise<string[]> {
-  if (!from) return [];
-  try {
-    const { data } = await supabase
-      .from("ai_flow_runs")
-      .select("id, context, revision")
-      .eq("business_id", businessId)
-      .eq("status", "awaiting_reply")
-      .eq("context->waiting_reply->>from", from)
-      .order("updated_at", { ascending: false })
-      .limit(10);
-    const rows = (data ?? []) as Array<{
-      id: string;
-      context: Record<string, unknown> | null;
-      revision: number;
-    }>;
-    if (rows.length === 0) return [];
-
-    const resumedIds: string[] = [];
-    for (const run of rows) {
-      const waiting =
-        (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
-      const saveAs =
-        typeof waiting.save_as === "string" && waiting.save_as.trim()
-          ? waiting.save_as
-          : "reply_text";
-      const prevVars =
-        run.context?.vars && typeof run.context.vars === "object"
-          ? (run.context.vars as Record<string, unknown>)
-          : {};
-      const markerVars =
-        typeof waiting.marker === "string" && waiting.marker.trim()
-          ? { [waiting.marker]: "1" }
-          : {};
-      const nextContext = {
-        ...(run.context ?? {}),
-        vars: { ...prevVars, [saveAs]: bodyText.slice(0, 4000), ...markerVars },
-        waiting_reply: {
-          ...(run.context?.waiting_reply as Record<string, unknown>),
-          result: "reply"
-        }
-      };
-      const { data: resumed, error } = await supabase
-        .from("ai_flow_runs")
-        .update({
-          status: "queued",
-          respond_by_at: null,
-          claimed_at: null,
-          context: nextContext,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", run.id)
-        .eq("revision", run.revision)
-        .eq("status", "awaiting_reply")
-        .select("id");
-      if (error) {
-        console.error("ai_flow_runs wait_for_reply resume", error);
-        continue;
-      }
-      if ((resumed ?? []).length > 0) {
-        resumedIds.push(run.id);
-        await telemetryRecord(supabase, "ai_flow_run_reply_resumed", {
-          business_id: businessId,
-          run_id: run.id
-        });
-      }
-    }
-    return resumedIds;
-  } catch (e) {
-    // Never let the resume path break inbound SMS processing.
-    console.error("resumeAwaitingReplyRun", e);
-    return [];
-  }
 }
 
 /**
@@ -4684,7 +4591,7 @@ serve(async (req: Request) => {
     if (teamMember) {
       const staffWaitResumed =
         (await resumeAwaitingReplyRun(supabase, businessId, from, inboundSmsBody(payload)))
-          .length > 0;
+          .resumedIds.length > 0;
       if (staffWaitResumed) {
         const { error: swJobErr } = await supabase.from("sms_inbound_jobs").insert({
           business_id: businessId,
@@ -4790,16 +4697,20 @@ serve(async (req: Request) => {
     }
 
     // wait_for_reply resume: if a flow run is parked waiting for THIS sender's
-    // next text, capture the message into the run and re-queue it. The flow
-    // owns this conversational turn (same philosophy as suppressDefaultReply),
-    // so a successful resume also suppresses the default Coworker reply below.
-    const resumedWaitRunIds = await resumeAwaitingReplyRun(
+    // next text, capture the message into the run and re-queue it so remaining
+    // no_reply nudges skip. That does NOT mute the coworker unless the waiting
+    // flow set suppressDefaultReply (it will send its own next customer text).
+    // A silence-nudge cadence (KIN 2026-09-02) must hand the reply to the
+    // coworker: "if they reply the ai worker will nurture".
+    const waitResume = await resumeAwaitingReplyRun(
       supabase,
       businessId,
       from,
       inboundSmsBody(payload)
     );
+    const resumedWaitRunIds = waitResume.resumedIds;
     const waitReplyResumed = resumedWaitRunIds.length > 0;
+    const waitOwnsCoworker = waitResume.suppressCoworker;
 
     // Stop on response: cancel this sender's pending runs of flows that stop
     // when the contact replies. Runs whose wait just consumed this reply are
@@ -4848,8 +4759,11 @@ serve(async (req: Request) => {
       payload: envelope as unknown as Record<string, unknown>,
       status: "pending",
       // Only suppress when a flow that requested it actually has a queued run
-      // (or a parked wait_for_reply run just captured this message).
-      suppress_reply: suppressingRunQueued || waitReplyResumed,
+      // (or a parked wait_for_reply whose flow set suppressDefaultReply just
+      // captured this message). A cadence wait without that flag still
+      // records the reply and skips remaining nudges, then the coworker
+      // answers.
+      suppress_reply: suppressingRunQueued || waitOwnsCoworker,
       // Stamp the sender up front so the contact page + summarizer (which query
       // by this column, not the JSONB payload) see the message even when an
       // AiFlow suppresses the reply, the worker's suppression branch returns
@@ -4867,7 +4781,7 @@ serve(async (req: Request) => {
         // promote the existing still-pending job to suppressed so it doesn't get
         // a normal Coworker reply alongside the AiFlow. Only touch pending rows
         // so we never race the worker after it has claimed the job.
-        if (suppressingRunQueued || waitReplyResumed) {
+        if (suppressingRunQueued || waitOwnsCoworker) {
           await supabase
             .from("sms_inbound_jobs")
             .update({ suppress_reply: true })

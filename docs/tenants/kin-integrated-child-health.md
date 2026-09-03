@@ -123,6 +123,11 @@ Routing happens twice, because a lead can say what they need at two moments:
 2. **Reactive, in the coworker.** The moment a lead replies, the SMS
    coworker owns the conversation (Kingsley's plan: "if they reply the ai
    worker will nurture"). It reads the same table out of `identity.md`.
+   Engine contract since 2026-09-03: a parked `wait_for_reply` captures the
+   text so remaining nudges skip, but it does **not** mute the coworker
+   unless the flow set `suppressDefaultReply`. KIN's cadence does not set
+   that flag. Before that change, a booked-but-unsure reply on 2026-09-02
+   closed as `suppressed_by_ai_flow` and nobody answered.
 
 **Counselling pages turn away the wrong age group**, so a counselling
 inquiry with no usable age answer is NEVER guessed into one: the flow sends
@@ -205,6 +210,10 @@ they are a distinct human.
   alert instantly but the greeting waits for 09:00 if it lands after 20:00
   Edmonton. That is the chosen trade; revisit with Kingsley if he wants
   later texting.
+- **Cadence waits used to mute the coworker.** Until 2026-09-03 a parked
+  `wait_for_reply` stamped `suppress_reply` on every inbound, so a lead who
+  answered the last nudge got silence. The engine now mutes only when the
+  flow set `suppressDefaultReply`. KIN's cadence does not.
 
 ## One-shots
 
@@ -235,6 +244,10 @@ they are a distinct human.
   routing built in both the flow and the coworker knowledge. He also stated
   the operating model: text leads the links, follow up only on no reply, and
   let the coworker nurture anyone who replies.
+- 2026-09-02: a lead replied that they had booked but were unsure of the
+  time. The cadence wait swallowed the inbound (`suppressed_by_ai_flow`) and
+  nobody answered. Engine fix 2026-09-03: wait_for_reply no longer mutes the
+  coworker unless the flow set suppressDefaultReply.
 - 2026-08-24: asked for a payment link by SMS, the HQ coworker sent the
   questionnaire instead (root cause of PRs #1589/#1591/#1593); paid via
   re-issued link 15:20 UTC; provisioned onto srv1864812; white-glove build
