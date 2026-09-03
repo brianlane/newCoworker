@@ -8,15 +8,21 @@ described below. Build the sandbox first.
 
 ## The sandbox
 
-> **v1.0.0 was rejected on 2026-08-19.** The reason given: "We're unable to
-> complete your sign-in or OAuth flow. Please ensure valid, working credentials
-> are included and that they include no additional setup or verification to
-> access your service."
+> **v1.0.0 was rejected twice.**
 >
-> The cause was not the OAuth code, which verifies end to end. There was **no
-> sandbox tenant at all**, so the Testing step's credentials field was empty
-> and the reviewer had nothing to sign in with. Build the sandbox BEFORE
-> filling the form, not after.
+> 1. **2026-08-19:** "We're unable to complete your sign-in or OAuth flow."
+>    The OAuth code was fine. There was **no sandbox tenant at all**, so the
+>    Testing step's credentials field was empty. Build the sandbox BEFORE
+>    filling the form, not after.
+> 2. **2026-09-01:** "One or more of your test cases did not produce correct
+>    results... consistently on both ChatGPT web and mobile." The five cases
+>    below are the rewrite. They assert live MCP JSON, not widgets, not
+>    ChatGPT confirmation UX, and not a calendar the sandbox does not have.
+>
+> **Resubmitted 2026-09-02 ~8:51 PM Phoenix.** Version
+> `asdk_app_v_6a7eba8c28208191853a7554ffe2605a` is in REVIEW. Same 1.0.0
+> string. Subtitle is `Look up and message customers` (30-character cap on
+> Info; a longer phrase blocks Submit even when Testing is complete).
 
 ### Build it with the script
 
@@ -55,8 +61,9 @@ likes from a pool that contains paying customers' lines: a reviewer's demo text
 would appear to come from a real customer, and a reply would land in that
 customer's inbox.
 
-The one thing the script cannot do for you is connect a calendar. Test case 4
-returns nothing without one.
+The script cannot connect a calendar. Do not submit a `calendar_find_slots`
+test case against this sandbox: that tool throws "No calendar is connected"
+and was the Sep 1 rejection. Case 4 below reads the business profile instead.
 
 
 OpenAI's wording is strict and each clause is a rejection if missed: test
@@ -93,7 +100,8 @@ Business: **Cedar Street Dental**, timezone America/Phoenix.
 | Tom Becker | +1 555 0177 | One completed call with a summary about pricing |
 | Priya Nair | +1 555 0198 | Contact only, no messages |
 
-At least one open slot on the connected calendar in the next seven days.
+Maria's live number is whatever `--sms-target` last set. The table above is
+the fictional fallback, not a promise the reviewer will see `+15550142`.
 
 If you use different names, change them in the cases below too. A test case
 naming someone who does not exist reads as a broken app.
@@ -102,40 +110,45 @@ naming someone who does not exist reads as a broken app.
 
 ## Five test cases
 
+Every prompt starts with `Using New Coworker,` so the reviewer does not have
+to @-mention the app. Expected output is the MCP JSON shape, not a widget and
+not ChatGPT's spoken reply. Widgets skip or fail on mobile, which is the
+"web and mobile" clause in the Sep 1 rejection.
+
 ### 1. Look up a customer
 
-- **Scenario:** Find a customer and read their profile.
-- **User prompt:** `Look up Maria Alvarez in New Coworker and tell me what you know about her.`
-- **Tool triggered:** `search`, then `fetch`
-- **Expected output:** Search returns Maria as both a contact and a conversation. Fetch returns her profile: name, phone, tags, when she was last in touch, and the assistant's rolling summary. The contact card renders inline. Each result carries a link back into the dashboard.
+- **Scenario:** Look up a customer and read their profile
+- **User prompt:** `Using New Coworker, look up Maria Alvarez and tell me what you know about her.`
+- **Tool triggered:** `search`, `fetch`
+- **Expected output:** search returns two results for Maria Alvarez: a contact titled Maria Alvarez and a thread titled Text conversation with Maria Alvarez. Each result has an id and a url. fetch of the contact id returns text that includes Name: Maria Alvarez, Tags: patient, pinned notes about preferring late-afternoon appointments, and a rolling summary about moving her cleaning to Thursday afternoon. fetch is text-only. Do not require an inline widget. Same result shape on ChatGPT web and mobile.
 
 ### 2. Read a conversation
 
-- **Scenario:** Catch up on a text thread with a customer.
-- **User prompt:** `Show me my text conversation with Maria Alvarez.`
-- **Tool triggered:** `get_sms_thread` (usually after `search`)
-- **Expected output:** The conversation renders in the message-thread widget, oldest first, with inbound and outbound distinguished. Content matches the seeded thread about moving her cleaning.
+- **Scenario:** Read a text conversation with a customer
+- **User prompt:** `Using New Coworker, show me my text conversation with Maria Alvarez.`
+- **Tool triggered:** `search`, `get_sms_thread`
+- **Expected output:** get_sms_thread returns an object with phone and messages, oldest first. The seeded thread includes an inbound message about moving a Tuesday cleaning and an outbound reply offering Thursday at 2:00 PM Arizona time. Directions are inbound and outbound. A conversation widget may appear on web. It is not required. Judge the JSON messages, not a widget. Same on ChatGPT web and mobile.
 
 ### 3. Review a phone call
 
-- **Scenario:** Find out what a caller wanted without listening to a recording.
-- **User prompt:** `What did my last call with Tom Becker cover?`
-- **Tool triggered:** `list_call_transcripts`, then `fetch`
-- **Expected output:** The call is listed with caller, time and status, and the summary says he asked about pricing. Fetching it returns the summary plus the transcript turns.
+- **Scenario:** Review what a phone call was about
+- **User prompt:** `Using New Coworker, what did my last call with Tom Becker cover?`
+- **Tool triggered:** `list_call_transcripts`, `fetch`
+- **Expected output:** list_call_transcripts returns a calls array that includes Tom Becker's completed inbound call. The summary mentions a crown, pricing, and insurance. Each row has a fetch_id. fetch of that fetch_id returns text with a Summary section matching that, plus Transcript turns that include Delta Dental. No widget. Same on ChatGPT web and mobile.
 
-### 4. Check the calendar
+### 4. Read the signed-in business
 
-- **Scenario:** Find open appointment times before offering one to a customer.
-- **User prompt:** `What appointment times are open this week?`
-- **Tool triggered:** `calendar_find_slots`
-- **Expected output:** Up to three genuinely open slots render in the open-times widget, with each time shown in the business timezone (America/Phoenix), matching the timezone label on the card.
+- **Scenario:** Read the signed-in business profile
+- **User prompt:** `Using New Coworker, what is my business called and what timezone is it in?`
+- **Tool triggered:** `list_businesses`, `get_business`
+- **Expected output:** list_businesses returns exactly one business named Cedar Street Dental (demo), with role owner and tier standard. get_business returns timezone America/Phoenix and status online. No widget. Same on ChatGPT web and mobile.
 
-### 5. Send a text, with confirmation first
+### 5. Send a text
 
-- **Scenario:** Reply to a customer by text from ChatGPT.
-- **User prompt:** `Text Maria Alvarez that we can fit her in Thursday at 2pm.`
-- **Tool triggered:** `send_sms` (after `search` to resolve her number)
-- **Expected output:** **ChatGPT confirms before sending**, because the tool is annotated open-world and the server instructions require confirming anything that reaches a customer. After approval the message sends from the business number, the reply names the timezone rather than a bare "2pm", and the result reports the message id. The demo number is one we control, so no real person is contacted.
+- **Scenario:** Send a customer a text from the business number
+- **User prompt:** `Using New Coworker, text Maria Alvarez that we can fit her in Thursday at 2:00 PM Arizona time.`
+- **Tool triggered:** `search`, `send_sms`
+- **Expected output:** search resolves Maria. send_sms then returns sent true, her stored phone number in to, a non-empty message_id, and channel sms or rcs. Because send_sms is open-world, ChatGPT may show a confirmation before the tool runs. If it does, approve it. Do not require a widget. Do not require specific assistant reply wording. The MCP result after a successful send is sent true plus a message_id. Same on ChatGPT web and mobile.
 
 ---
 
@@ -173,7 +186,7 @@ customer-facing copy, not reviewer-facing: no tool names, no sandbox details,
 no test-plan pointers, and never credentials. Reviewer-only material belongs in
 the test cases above and in the reviewer test plan page.
 
-**Two traps in the Submit step, both found the hard way.**
+**Traps in the Submit step, found the hard way.**
 
 1. The Submit step does NOT autosave and does NOT save on navigation. Every
    other step persists when you click Continue or switch sections; this one
@@ -184,6 +197,16 @@ the test cases above and in the reviewer test plan page.
    business (terms, industry compliance, no money transfers, no ads, content
    rights, not aimed at under-13s). They are for the account owner to tick
    personally.
+3. Info subtitle must be 30 characters or fewer. A longer phrase (for
+   example `Look up customers, read texts and calls, send messages`) lights
+   a Plugin issues banner and disables Submit for Review. Shorten it on
+   Info, then return to Submit in the same sitting so the release notes are
+   still in the box.
+4. Do not click Scan Tools on MCP unless the form has no justifications.
+   A re-scan would force re-justifying every tool and is a new rejection
+   risk. The first Submit click can toast "Failed to save plugin changes";
+   retry in the same sitting. Success is a "submitted for review" modal and
+   version status REVIEW, not "Draft saved".
 
 ### v1.0, first release
 

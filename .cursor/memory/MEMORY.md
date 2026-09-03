@@ -45,7 +45,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Edge functions auto-deploy on main](project_edge_functions_deploy_on_main.md) - inside the Vercel Deploy job; vps/ stays manual
 - [Stash is repo-global in worktrees](project_stash_is_repo_global_in_worktrees.md) - a no-op stash + pop grabs another session's entry
 - [Nango proxy throws on non-2xx](project_nango_proxy_throws_on_non_2xx.md) - branch via nangoProxyStatusForBusiness; never normalize globally
-- [A ChatGPT app IS an MCP server](project_chatgpt_app_is_an_mcp_server.md) - reviewer sandbox texts Brian BY DESIGN; Submit does not save
+- [A ChatGPT app IS an MCP server](project_chatgpt_app_is_an_mcp_server.md) - resubmitted Sep 2 2026 (status REVIEW); sandbox texts Brian BY DESIGN; subtitle max 30 chars; Submit does not save
 - [Annotate what a call sets in motion](project_mcp_annotate_what_a_call_sets_in_motion.md) - create_contact fires automations that text
 - [Supabase as an OAuth server](project_supabase_oauth_server_capabilities.md) - userinfo yes, CIMD no, accepts resource; shared aud
 - [next build does not typecheck tests](project_next_build_skips_test_typecheck.md) - run npx tsc --noEmit after editing tests
