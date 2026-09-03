@@ -1,0 +1,126 @@
+name: Gemini model eval
+
+# Weekly check: list Google's Gemini models, diff our worker pins, probe
+# anything newer, and open an issue when a pin should adopt or wait.
+#
+# Why a workflow rather than only a scheduled agent: this runs on GitHub,
+# beside the pin registry it diffs, and depends on no one person still
+# being here. The Cursor skill is the same procedure for a human or Cloud
+# Agent run.
+#
+# The script never takes a model name. If Google has shipped a newer GA
+# Flash than our pins, models.list is how we find out.
+
+on:
+  schedule:
+    # 15:00 UTC Monday = 08:00 America/Phoenix. Weekly is enough: Flash
+    # launches are not daily, and each probe spends real Gemini tokens.
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  eval:
+    name: List Google models and score pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run gemini-model-eval
+        id: eval
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GOOGLE_API_KEY secret is not available to this run."
+            exit 1
+          fi
+          set +e
+          npx tsx debug/gemini-model-eval.ts --out gemini-eval.md
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ -f gemini-eval.md ]; then
+            echo "## Gemini model eval" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat gemini-eval.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$code" -eq 1 ]; then
+            exit 1
+          fi
+          exit 0
+
+      - name: Open or update the tracking issue
+        if: steps.eval.outputs.exit_code == '2'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.existsSync("gemini-eval.md")
+              ? fs.readFileSync("gemini-eval.md", "utf8")
+              : "(eval report missing)";
+            const LABEL = "gemini-model-eval";
+            const title = "Gemini model eval: newer than our pins";
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: LABEL,
+                color: "0e8a16",
+                description: "A newer Gemini GA id than our worker pins, scored by debug/gemini-model-eval.ts"
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: LABEL,
+              per_page: 100
+            });
+            const prior = existing.find((issue) => issue.title === title);
+            const wrapped = [
+              "Produced by `.github/workflows/gemini-model-eval.yml` from `npx tsx debug/gemini-model-eval.ts`.",
+              "The script listed Google's models and scored anything newer than `src/lib/gemini-model-pins.ts`.",
+              "Follow `.cursor/skills/gemini-model-eval/SKILL.md` to adopt or skip.",
+              "",
+              "```",
+              body,
+              "```"
+            ].join("\n");
+            if (prior) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prior.number,
+                body: wrapped
+              });
+              core.info(`Updated #${prior.number}`);
+              return;
+            }
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: wrapped,
+              labels: [LABEL]
+            });
+            core.info(`Opened #${created.data.number}`);

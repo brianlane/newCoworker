@@ -4,7 +4,7 @@ Cursor loads these automatically. Claude Code loads the same rule files
 through `@` imports in `CLAUDE.md`.
 
 - [`.cursor/rules/`](.cursor/rules/) always-on working agreements, plus globbed migration rules
-- [`.cursor/skills/`](.cursor/skills/) (`e2e-bug-hunt`, `dependabot-triage`, `oneshot-patch`)
+- [`.cursor/skills/`](.cursor/skills/) (`e2e-bug-hunt`, `dependabot-triage`, `oneshot-patch`, `gemini-model-eval`)
 - [`.cursor/hooks.json`](.cursor/hooks.json) session start copies the context pack
 - [`.cursor/memory/MEMORY.md`](.cursor/memory/MEMORY.md) project memories; open the linked file when the task matches
 

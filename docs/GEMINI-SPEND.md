@@ -160,3 +160,16 @@ missing.
   `meterGeminiSpendForBusiness`.
 - Billed data lags Google by up to 24h; the card clips the metered side to
   the days billed data covers, so "today" never reads as a false leak.
+
+## Checking for a newer Gemini than our pins
+
+Worker defaults live in `src/lib/gemini-model-pins.ts`. Do not start from a
+model name. This lists Google's models and scores anything newer:
+
+```bash
+npx tsx debug/gemini-model-eval.ts
+```
+
+Weekly Action: `.github/workflows/gemini-model-eval.yml`. Procedure:
+`.cursor/skills/gemini-model-eval/SKILL.md`. Use the `internal-ci-debug`
+key, never the tenant key.
