@@ -35,6 +35,8 @@ greeting does. Treating it as "a live person is screening" cancelled a CORRECT
 machine verdict (PR #1412 regression, fixed in #1428). Only a real
 `call.machine.premium.call_screening.detected` proves a person is deciding.
 `classifyGreetingEvent` in `_shared/voice_amd.ts` owns that rule now.
+Only `beep_detected` is `machine_resolved` (speaking on `prompt_ended` is
+the cancelled_amd hangup; see [[voicemail-beep-trigger-sep2026]]).
 
 **How to apply:** never trust a single voicemail signal, and never assume an
 event name means what its docs' prose implies. Related:

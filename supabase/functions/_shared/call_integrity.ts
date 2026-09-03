@@ -102,7 +102,7 @@ export type CallIntegrityFinding = {
 const ROLE_TOKEN_LEAK = /(^|[\s.!?"'])(user|assistant|model)\s*[:\n]/i;
 
 /** Phrases only a recording says. Matched against the CALLER side. */
-const MACHINE_PHRASES = [
+export const MACHINE_PHRASES = [
   "press one",
   "press 1",
   "press two",
@@ -359,6 +359,23 @@ function textOf(turn: IntegrityTurn): string {
 }
 
 /**
+ * Assistant turns the lead never heard: muted model audio, or the
+ * `[Voicemail]` badge the hangup path writes for Telnyx TTS. Counting them
+ * as a conversation is how the Sep 1 2026 `talked_to_recording` email
+ * became a false alarm (one heard greeting plus a muted turn plus a badge).
+ */
+export function isUnheardAssistantTurn(text: string): boolean {
+  const t = text.trimStart();
+  return t.startsWith("[Voicemail]") || t.startsWith("[Muted]");
+}
+
+function isHeardAssistant(turn: IntegrityTurn): boolean {
+  if (!isAssistant(turn)) return false;
+  const text = textOf(turn);
+  return text !== "" && !isUnheardAssistantTurn(text);
+}
+
+/**
  * Findings for one call, newest rules first. At most one `role_leak` per
  * call, and one `invented_contact_number` per distinct number: the point is
  * to name the call, and quoting every offending turn would bury the operator
@@ -394,7 +411,7 @@ export function detectCallIntegrity(
   if (opts.allowedNumbers) {
     const flagged = new Set<string>();
     for (const turn of turns) {
-      if (!isAssistant(turn)) continue;
+      if (!isHeardAssistant(turn)) continue;
       const text = textOf(turn);
       for (const n of extractSpokenNumbers(text)) {
         if (opts.allowedNumbers.has(n) || flagged.has(n)) continue;
@@ -404,7 +421,7 @@ export function detectCallIntegrity(
           number: n,
           detail:
             `spoke ${n}, which is not a number this business owns: ` +
-            `"${text.replace(/\s+/g, " ").slice(0, 140)}"`
+            `"${clipEvidenceQuote(text, 140)}"`
         });
       }
     }
@@ -416,7 +433,7 @@ export function detectCallIntegrity(
   if (opts.allowedAmounts) {
     const flagged = new Set<number>();
     for (const turn of turns) {
-      if (!isAssistant(turn)) continue;
+      if (!isHeardAssistant(turn)) continue;
       const text = textOf(turn);
       for (const v of spokenAmounts(text)) {
         if (amountIsSourced(v, opts.allowedAmounts) || flagged.has(v)) continue;
@@ -425,7 +442,7 @@ export function detectCallIntegrity(
           kind: "invented_amount",
           detail:
             `said $${v.toLocaleString("en-US")}, which nothing on this call supplied: ` +
-            `"${text.replace(/\s+/g, " ").slice(0, 140)}"`
+            `"${clipEvidenceQuote(text, 140)}"`
         });
       }
     }
@@ -434,16 +451,16 @@ export function detectCallIntegrity(
   // Only OUR side can leak a role token. The caller side is a transcription
   // of whatever was on the line, so a menu that happens to read "user:" is
   // not the AI misbehaving.
-  const leaked = turns.find((t) => isAssistant(t) && textOf(t) !== "" && hasRoleLeak(textOf(t)));
+  const leaked = turns.find((t) => isHeardAssistant(t) && hasRoleLeak(textOf(t)));
   if (leaked) {
     findings.push({
       kind: "role_leak",
-      detail: textOf(leaked).replace(/\s+/g, " ").slice(0, 240)
+      detail: clipOnWordBoundary(textOf(leaked).replace(/\s+/g, " "), 240)
     });
   }
 
   const callerTurns = turns.filter((t) => !isAssistant(t) && textOf(t) !== "");
-  const assistantTurns = turns.filter((t) => isAssistant(t) && textOf(t) !== "");
+  const assistantTurns = turns.filter((t) => isHeardAssistant(t));
   // The partner was still asking us to accept when the call ended, so the
   // referral was never taken. Checked against the LAST caller turn only: see
   // ACCEPT_PROMPT for why a repeat count cannot separate a lost referral from
@@ -454,7 +471,7 @@ export function detectCallIntegrity(
       kind: "gate_never_cleared",
       detail:
         "the call ended with the partner still asking us to accept: " +
-        `"${textOf(lastCaller).replace(/\s+/g, " ").slice(0, 160)}"`
+        `"${clipEvidenceQuote(textOf(lastCaller), 160)}"`
     });
   }
 
@@ -471,7 +488,7 @@ export function detectCallIntegrity(
       kind: "talked_to_recording",
       detail:
         `${assistantTurns.length} assistant turns against ${callerTurns.length} ` +
-        `machine-sounding caller turns, e.g. "${textOf(machineTurns[0]!).replace(/\s+/g, " ").slice(0, 120)}"`
+        `machine-sounding caller turns, e.g. "${clipEvidenceQuote(textOf(machineTurns[0]!), 120)}"`
     });
   }
 
@@ -493,8 +510,43 @@ export type CallIntegrityAlertItem = CallIntegrityFinding & {
 /** How many findings the alert body names before it starts counting. */
 const ALERT_MAX_ITEMS = 10;
 
-/** Per-finding evidence clip, so one long turn cannot dominate the post. */
-const ALERT_DETAIL_CHARS = 160;
+/**
+ * Per-finding evidence clip. Must cover the longest detail every rule can
+ * produce (role_leak's 240-char turn, plus a short prefix on other rules).
+ * The Sep 1 2026 email died at 160, mid-word, inside an open quote.
+ */
+export const ALERT_DETAIL_CHARS = 280;
+
+const ELLIPSIS = "...";
+
+/**
+ * Cut on a word boundary and append an ellipsis so a clip never ends
+ * mid-word. Exported so the alert formatter and the per-rule quote clips
+ * share one judgement.
+ */
+export function clipOnWordBoundary(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const budget = Math.max(0, maxChars - ELLIPSIS.length);
+  let cut = text.slice(0, budget);
+  const sp = cut.lastIndexOf(" ");
+  if (sp >= Math.floor(budget * 0.6)) cut = cut.slice(0, sp);
+  return `${cut.replace(/[.,;:]+$/, "")}${ELLIPSIS}`;
+}
+
+/** Collapse whitespace, then clip, for an evidence quote inside a finding. */
+export function clipEvidenceQuote(text: string, maxChars: number): string {
+  return clipOnWordBoundary(text.replace(/\s+/g, " ").trim(), maxChars);
+}
+
+/**
+ * Clip a finding's detail for the alert body. If a quote is left open, close
+ * it so the line cannot die at `"...or pre`.
+ */
+export function clipAlertDetail(detail: string, maxChars: number = ALERT_DETAIL_CHARS): string {
+  const clipped = clipOnWordBoundary(detail, maxChars);
+  const quotes = (clipped.match(/"/g) ?? []).length;
+  return quotes % 2 === 1 ? `${clipped}"` : clipped;
+}
 
 /**
  * The predicate for one finding, reading after "the AI ...".
@@ -549,7 +601,7 @@ export function formatCallIntegrityAlert(items: readonly CallIntegrityAlertItem[
   const lines = items.slice(0, ALERT_MAX_ITEMS).map((i) => {
     const when = i.startedAt ?? "unknown time";
     const who = i.caller ?? "unknown caller";
-    const detail = i.detail.slice(0, ALERT_DETAIL_CHARS);
+    const detail = clipAlertDetail(i.detail, ALERT_DETAIL_CHARS);
     return `• ${i.business}: the AI ${kindPhrase(i.kind)} (${who}, ${when}, ${i.transcriptId}) ${detail}`;
   });
   const rest = items.length - Math.min(items.length, ALERT_MAX_ITEMS);
