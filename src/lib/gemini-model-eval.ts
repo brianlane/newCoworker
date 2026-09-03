@@ -16,6 +16,7 @@
 import { isThinkingLevelRejection } from "@/lib/gemini-generate-content";
 import {
   compareGeminiVersions,
+  isUnstableGeminiId,
   parseGeminiModelId,
   type GeminiModelPin,
   type GeminiParsedModel
@@ -344,11 +345,77 @@ export function predecessorPriceFor(
 }
 
 /**
- * Pull input/output USD-per-1M rates out of a Google pricing page. When a
- * model lists both an intro rate and a later standard rate, keep the pair
- * with the higher output so we never meter a launch promo.
+ * Pull Standard-SKU input/output USD-per-1M rates out of a Google pricing
+ * page. Intro + post-intro rows keep the higher number (never the launch
+ * promo). Grounding ($14 / 1,000 requests), cache storage, and
+ * Batch/Flex/Priority tables are not token rates and must not win.
+ *
+ * Google's HTML is one `<h2 id="gemini-...">` section per model, with
+ * Input price / Output price in the first (Standard) table. Compact
+ * snippets (tests, markdown) fall through to adjacent $ pairing.
  */
 export function parsePublishedGeminiPrices(text: string): Record<string, GeminiPrice> {
+  const html = parsePricingPageHtml(text);
+  if (Object.keys(html).length > 0) return html;
+  return parseCompactPublishedPrices(text);
+}
+
+function parsePricingPageHtml(text: string): Record<string, GeminiPrice> {
+  const out: Record<string, GeminiPrice> = {};
+  const sectionRe = /<h2 id="(gemini-[^"]+)"[^>]*>([\s\S]*?)(?=<h2 id="gemini-|$)/gi;
+  for (const match of text.matchAll(sectionRe)) {
+    const id = match[1].toLowerCase();
+    if (isUnstableGeminiId(id)) continue;
+    const pair = parseStandardTablePrices(match[2] || "");
+    if (pair) out[id] = pair;
+  }
+  return out;
+}
+
+function parseStandardTablePrices(section: string): GeminiPrice | null {
+  const standard = standardSkuSection(section);
+  const inputRow = rowAfterLabel(standard, /Input price/i);
+  const outputRow = rowAfterLabel(standard, /Output price/i);
+  if (!inputRow || !outputRow) return null;
+  const inn = maxDollar(inputRow);
+  const outp = maxDollar(outputRow);
+  if (inn == null || outp == null || outp <= inn) return null;
+  return { in: inn, out: outp };
+}
+
+/** Cut before Batch/Flex/Priority h3s so those SKUs cannot replace Standard. */
+function standardSkuSection(section: string): string {
+  const cuts = [
+    section.search(/<h3\b[^>]*id="batch/i),
+    section.search(/<h3\b[^>]*>\s*Batch\b/i)
+  ].filter((n) => n >= 0);
+  return cuts.length === 0 ? section : section.slice(0, Math.min(...cuts));
+}
+
+function rowAfterLabel(html: string, label: RegExp): string | null {
+  const idx = html.search(label);
+  if (idx < 0) return null;
+  const slice = html.slice(idx);
+  const trEnd = slice.search(/<\/tr>/i);
+  const nextLabel = slice.slice(1).search(/Input price|Output price|Context caching|Grounding with/i);
+  let end = Math.min(slice.length, 500);
+  if (trEnd >= 0) end = Math.min(end, trEnd);
+  if (nextLabel >= 0) end = Math.min(end, nextLabel + 1);
+  return slice.slice(0, end);
+}
+
+function maxDollar(text: string): number | null {
+  const amounts = dollarAmounts(text);
+  return amounts.length > 0 ? Math.max(...amounts) : null;
+}
+
+function dollarAmounts(text: string): number[] {
+  return [...text.matchAll(/\$([0-9]+(?:\.[0-9]+)?)/g)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n) && n > 0 && n < 100);
+}
+
+function parseCompactPublishedPrices(text: string): Record<string, GeminiPrice> {
   const out: Record<string, GeminiPrice> = {};
   const compact = text.replace(/\s+/g, " ");
   const chunks = compact.split(/(?=gemini-\d)/i);
@@ -356,11 +423,8 @@ export function parsePublishedGeminiPrices(text: string): Record<string, GeminiP
     const idMatch = /^(gemini-\d+(?:\.\d+)?(?:-[a-z0-9.]+)*)/i.exec(chunk.trim());
     if (!idMatch) continue;
     const id = idMatch[1].toLowerCase();
-    if (isUnstableIdForPrice(id)) continue;
-    const amounts = [...chunk.matchAll(/\$([0-9]+(?:\.[0-9]+)?)/g)]
-      .map((m) => Number(m[1]))
-      .filter((n) => Number.isFinite(n) && n > 0 && n < 100);
-    const pair = highestInOutPair(amounts);
+    if (isUnstableGeminiId(id)) continue;
+    const pair = highestInOutPair(dollarAmounts(chunk));
     if (!pair) continue;
     const prev = out[id];
     if (!prev || prev.in + prev.out < pair.in + pair.out) {
@@ -382,15 +446,6 @@ export function highestInOutPair(amounts: number[]): GeminiPrice | null {
     }
   }
   return best;
-}
-
-function isUnstableIdForPrice(id: string): boolean {
-  return (
-    id.includes("preview") ||
-    id.includes("cyber") ||
-    id.includes("-exp") ||
-    id.endsWith("-latest")
-  );
 }
 
 export function resolveCandidatePrice(

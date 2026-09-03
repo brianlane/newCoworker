@@ -136,6 +136,78 @@ describe("parsePublishedGeminiPrices / highestInOutPair", () => {
   it("skips a model id with no dollar amounts nearby", () => {
     expect(parsePublishedGeminiPrices("gemini-3.9-flash has no prices here")).toEqual({});
   });
+
+  it("reads Standard Input/Output rows from Google's pricing HTML and ignores grounding $14", () => {
+    const html = `
+      <h2 id="gemini-3.8-flash-preview">Preview</h2>
+      <table><tr><td>Input price</td><td>$0.10</td></tr><tr><td>Output price</td><td>$0.40</td></tr></table>
+      <h2 id="gemini-3.8-flash" data-text="Gemini 3.8 Flash">Gemini 3.8 Flash</h2>
+      <em><code>gemini-3.8-flash</code></em>
+      <section><h3 id="standard">Standard</h3><table>
+        <tr><td>Input price</td><td>$0.75 through December 31, 2026.<br>$1.50 starting January 1, 2027.</td></tr>
+        <tr><td>Output price (including thinking tokens)</td><td>$3.75 through December 31, 2026.<br>$7.50 starting January 1, 2027.</td></tr>
+        <tr><td>Context caching price</td><td>$0.15<br>$1.00 / 1,000,000 tokens per hour</td></tr>
+        <tr><td>Grounding with Google Search</td><td>then $14 per 1,000 requests.</td></tr>
+      </table></section>
+      <section><h3 id="batch">Batch</h3><table>
+        <tr><td>Input price</td><td>$0.375</td></tr>
+        <tr><td>Output price</td><td>$1.875</td></tr>
+      </table></section>
+      <h2 id="gemini-3.7-flash">Gemini 3.7 Flash</h2>
+      <table>
+        <tr><td>Input price</td><td>$1.50</td></tr>
+        <tr><td>Output price</td><td>$7.50</td></tr>
+      </table>
+    `;
+    const parsed = parsePublishedGeminiPrices(html);
+    expect(parsed["gemini-3.8-flash"]).toEqual({ in: 1.5, out: 7.5 });
+    expect(parsed["gemini-3.7-flash"]).toEqual({ in: 1.5, out: 7.5 });
+    expect(parsed["gemini-3.8-flash-preview"]).toBeUndefined();
+  });
+
+  it("skips an HTML section that has no usable Standard input/output pair", () => {
+    const html = `
+      <h2 id="gemini-9.9-flash">Nine</h2>
+      <p>no table</p>
+      <h2 id="gemini-9.8-flash">Inverted</h2>
+      <table>
+        <tr><td>Input price</td><td>$9</td></tr>
+        <tr><td>Output price</td><td>$1</td></tr>
+      </table>
+      <h2 id="gemini-9.7-flash">Input only</h2>
+      <table>
+        <tr><td>Input price</td><td>$1.50</td></tr>
+      </table>
+      <h2 id="gemini-9.6-flash">Output only</h2>
+      <table>
+        <tr><td>Output price</td><td>$7.50</td></tr>
+      </table>
+    `;
+    expect(parsePublishedGeminiPrices(html)).toEqual({});
+  });
+
+  it("still reads a Standard row when the table omits </tr>", () => {
+    const html = `
+      <h2 id="gemini-3.9-flash">Three nine</h2>
+      Input price $0.40 $0.80
+      Output price $2 $4
+      <h3>Batch</h3>
+      Input price $0.10
+      Output price $0.20
+    `;
+    expect(parsePublishedGeminiPrices(html)["gemini-3.9-flash"]).toEqual({ in: 0.8, out: 4 });
+  });
+
+  it("skips HTML Standard rows that name Input/Output but have no dollar amounts", () => {
+    const html = `
+      <h2 id="gemini-9.4-flash"><h2 id="gemini-9.3-flash">Free</h2>
+      <table>
+        <tr><td>Input price</td><td>Free of charge</td></tr>
+        <tr><td>Output price</td><td>Free of charge</td></tr>
+      </table>
+    `;
+    expect(parsePublishedGeminiPrices(html)).toEqual({});
+  });
 });
 
 describe("resolveCandidatePrice", () => {
