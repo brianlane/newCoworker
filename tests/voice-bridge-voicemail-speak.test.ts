@@ -116,4 +116,21 @@ describe("bridge speakVoicemailDeterministic", () => {
     });
     expect(await speakVoicemailDeterministic(deps, "v3:leg", "script")).toBe("speaking");
   });
+
+  it("claims the retry without stopping the stream again", async () => {
+    const { deps, rpcCalls, httpCalls } = makeDeps({
+      rpcResults: { voice_claim_voicemail_retry: [{ data: true, error: null }] }
+    });
+    expect(
+      await speakVoicemailDeterministic(deps, "v3:leg", "retry script", {
+        trigger: "cancelled_retry",
+        alreadyClaimed: true
+      })
+    ).toBe("speaking");
+    expect(httpCalls.map((c) => action(c.url))).toEqual(["speak"]);
+    expect(rpcCalls.map((c) => c.fn)).toEqual([
+      "voice_claim_voicemail_retry",
+      "voice_session_context_merge"
+    ]);
+  });
 });

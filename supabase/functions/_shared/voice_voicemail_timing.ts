@@ -72,21 +72,79 @@ export function edgeVoicemailPlausiblyDelivered(opts: {
  */
 export type SpeakEndedAction = "stamp_and_hangup" | "retry_speak" | "record_only";
 
+/** Whether this speak.ended belongs to a voicemail we issued. */
+export type SpeakEndedOwnership = "ours" | "legacy_spoken" | "not_voicemail";
+
+/**
+ * Slack for matching a speak.ended to the speak we just accepted. We stamp
+ * `voicemail_speak_started_at` after Telnyx's 2xx, so THIS speak's ended
+ * event can slightly precede the stamp. Two seconds covers that without
+ * swallowing a prior speak that ended seconds earlier.
+ */
+export const SPEAK_ENDED_STALE_SLACK_MS = 2_000;
+
 /** Status values that mean the message did not finish playing. */
 const INTERRUPTED_SPEAK_STATUSES = new Set(["cancelled_amd", "call_hangup"]);
+
+/**
+ * Is this `call.speak.ended` for a voicemail we issued?
+ *
+ * `voicemail_speak_started_at` is the honest "we issued this speak" mark.
+ * A legacy `voicemail_spoken` stamp with no start time is the deploy-boundary
+ * path: the old code stamped spoken at accept. That call already played a
+ * message; it is ours to hang up, not to retry.
+ */
+export function classifySpeakEndedOwnership(opts: {
+  speakStartedAt: unknown;
+  voicemailSpoken: unknown;
+}): SpeakEndedOwnership {
+  if (typeof opts.speakStartedAt === "string") return "ours";
+  if (opts.voicemailSpoken === true) return "legacy_spoken";
+  return "not_voicemail";
+}
+
+/**
+ * True when the event happened before the current speak started, so it is a
+ * redelivery (or a late first-speak ended) and must not hang up a retry.
+ */
+export function speakEndedEventIsStale(
+  eventOccurredAtIso: unknown,
+  speakStartedAtIso: unknown
+): boolean {
+  const occurred = Date.parse(typeof eventOccurredAtIso === "string" ? eventOccurredAtIso : "");
+  const started = Date.parse(typeof speakStartedAtIso === "string" ? speakStartedAtIso : "");
+  if (!Number.isFinite(occurred) || !Number.isFinite(started)) return false;
+  return occurred + SPEAK_ENDED_STALE_SLACK_MS < started;
+}
 
 export function classifySpeakEnded(opts: {
   status: unknown;
   alreadyRestarted: boolean;
   plausible: boolean;
+  /** True when `voicemail_spoken` is already on the session. Never retry. */
+  alreadySpoken?: boolean;
+  eventOccurredAtIso?: unknown;
+  speakStartedAtIso?: unknown;
 }): SpeakEndedAction {
+  if (speakEndedEventIsStale(opts.eventOccurredAtIso, opts.speakStartedAtIso)) {
+    return "record_only";
+  }
   const status = typeof opts.status === "string" ? opts.status.trim().toLowerCase() : "";
+  const noRetry = opts.alreadyRestarted || opts.alreadySpoken === true;
   if (status === "completed") {
-    if (opts.plausible) return "stamp_and_hangup";
-    return opts.alreadyRestarted ? "record_only" : "retry_speak";
+    if (opts.plausible) {
+      // After a retry, a completed without an occurred_at cannot be proven
+      // to belong to this speak. Hanging up would cut the retry mid-playout
+      // if this is a redelivered first completed judged against the retry clock.
+      if (opts.alreadyRestarted && typeof opts.eventOccurredAtIso !== "string") {
+        return "record_only";
+      }
+      return "stamp_and_hangup";
+    }
+    return noRetry ? "record_only" : "retry_speak";
   }
   if (status === "cancelled_amd") {
-    return opts.alreadyRestarted ? "record_only" : "retry_speak";
+    return noRetry ? "record_only" : "retry_speak";
   }
   return "record_only";
 }

@@ -80,10 +80,13 @@ export const VOICEMAIL_SPEAK_VOICE = "female";
 export type VoicemailSpeakOpts = {
   trigger?: VoicemailSpeakTrigger;
   /**
-   * Skip the claim and the stream-stop. Used when Telnyx cancelled an early
-   * speak (`cancelled_amd`) and we already hold the claim: the stream is
-   * already detached, and re-claiming would return already_claimed and never
-   * re-issue the message.
+   * Skip the first-speak claim and the stream-stop. Used when Telnyx
+   * cancelled an early speak (`cancelled_amd`) and we already hold the
+   * claim: the stream is already detached, and re-claiming
+   * `voice_claim_voicemail_speak` would return already_claimed and never
+   * re-issue the message. The retry itself is still compare-and-set via
+   * `voice_claim_voicemail_retry`, so two in-flight speak.ended handlers
+   * cannot both play the script.
    */
   alreadyClaimed?: boolean;
 };
@@ -109,7 +112,19 @@ export async function speakVoicemailDeterministic(
     if (error) console.error("voicemail: claim release failed", error);
   };
 
-  if (!opts.alreadyClaimed) {
+  if (opts.alreadyClaimed) {
+    // We already hold the first-speak claim. Flip the retry bit in one
+    // compare-and-set so a redelivered cancelled_amd cannot speak twice.
+    // Do not hang up on a lost race: the winner owns the leg.
+    const { data: claimed, error: retryErr } = await rpc("voice_claim_voicemail_retry", {
+      p_call_control_id: callControlId
+    });
+    if (retryErr) {
+      console.error("voicemail: retry claim failed", retryErr);
+      return "claim_failed";
+    }
+    if (claimed !== true) return "already_claimed";
+  } else {
     const { data: claimed, error: claimErr } = await rpc("voice_claim_voicemail_speak", {
       p_call_control_id: callControlId
     });

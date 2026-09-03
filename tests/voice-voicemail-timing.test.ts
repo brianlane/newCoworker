@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   EDGE_VOICEMAIL_MIN_DELIVERED_FRACTION,
   EDGE_VOICEMAIL_READ_CHARS_PER_SECOND,
+  SPEAK_ENDED_STALE_SLACK_MS,
   classifySpeakEnded,
+  classifySpeakEndedOwnership,
   edgeVoicemailFullReadMs,
   edgeVoicemailPlausiblyDelivered,
   resolveEdgeVoicemailSpoken,
+  speakEndedEventIsStale,
   speakEndedWasInterrupted
 } from "../supabase/functions/_shared/voice_voicemail_timing.ts";
 import {
@@ -219,13 +222,50 @@ describe("resolveEdgeVoicemailSpoken", () => {
   });
 });
 
+describe("classifySpeakEndedOwnership", () => {
+  it("treats a start stamp as ours, a legacy spoken stamp as hangup-only, and nothing as not ours", () => {
+    expect(
+      classifySpeakEndedOwnership({
+        speakStartedAt: "2026-08-27T15:35:34.000Z",
+        voicemailSpoken: undefined
+      })
+    ).toBe("ours");
+    expect(
+      classifySpeakEndedOwnership({ speakStartedAt: undefined, voicemailSpoken: true })
+    ).toBe("legacy_spoken");
+    expect(
+      classifySpeakEndedOwnership({ speakStartedAt: undefined, voicemailSpoken: false })
+    ).toBe("not_voicemail");
+  });
+});
+
+describe("speakEndedEventIsStale", () => {
+  const started = "2026-08-27T15:35:40.000Z";
+  it("rejects an event that ended before the current speak started", () => {
+    expect(speakEndedEventIsStale("2026-08-27T15:35:34.000Z", started)).toBe(true);
+    expect(SPEAK_ENDED_STALE_SLACK_MS).toBe(2_000);
+  });
+  it("keeps an event within the stamp slack, and refuses to guess on missing times", () => {
+    expect(speakEndedEventIsStale("2026-08-27T15:35:39.000Z", started)).toBe(false);
+    expect(speakEndedEventIsStale("2026-08-27T15:35:50.000Z", started)).toBe(false);
+    expect(speakEndedEventIsStale(undefined, started)).toBe(false);
+    expect(speakEndedEventIsStale(started, undefined)).toBe(false);
+  });
+});
+
 describe("classifySpeakEnded", () => {
   it("stamps and hangs up only on a completed speak the wall clock agrees with", () => {
     expect(
       classifySpeakEnded({ status: "completed", alreadyRestarted: false, plausible: true })
     ).toBe("stamp_and_hangup");
     expect(
-      classifySpeakEnded({ status: "  COMPLETED ", alreadyRestarted: true, plausible: true })
+      classifySpeakEnded({
+        status: "  COMPLETED ",
+        alreadyRestarted: true,
+        plausible: true,
+        eventOccurredAtIso: "2026-08-27T15:35:50.000Z",
+        speakStartedAtIso: "2026-08-27T15:35:40.000Z"
+      })
     ).toBe("stamp_and_hangup");
   });
 
@@ -253,6 +293,40 @@ describe("classifySpeakEnded", () => {
     ).toBe("record_only");
     expect(
       classifySpeakEnded({ status: undefined, alreadyRestarted: false, plausible: true })
+    ).toBe("record_only");
+  });
+
+  it("ignores a redelivered first completed that lands after the retry started", () => {
+    expect(
+      classifySpeakEnded({
+        status: "completed",
+        alreadyRestarted: true,
+        plausible: true,
+        eventOccurredAtIso: "2026-08-27T15:35:34.500Z",
+        speakStartedAtIso: "2026-08-27T15:35:40.000Z"
+      })
+    ).toBe("record_only");
+  });
+
+  it("does not hang up a retry on a dateless completed, and never retries a spoken leg", () => {
+    expect(
+      classifySpeakEnded({ status: "completed", alreadyRestarted: true, plausible: true })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({
+        status: "cancelled_amd",
+        alreadyRestarted: false,
+        plausible: false,
+        alreadySpoken: true
+      })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({
+        status: "completed",
+        alreadyRestarted: false,
+        plausible: false,
+        alreadySpoken: true
+      })
     ).toBe("record_only");
   });
 });

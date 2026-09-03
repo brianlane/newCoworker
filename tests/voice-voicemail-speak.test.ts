@@ -147,22 +147,51 @@ describe("speakVoicemailDeterministic", () => {
     ]);
   });
 
-  it("skips the claim and stream-stop when the caller already holds the claim", async () => {
-    // cancelled_amd retry: re-claiming would return already_claimed and the
-    // message would never go out a second time.
-    const { deps, rpcCalls, httpCalls } = makeDeps();
+  it("claims the retry, skips the stream-stop, speaks, and stamps restarted", async () => {
+    // cancelled_amd retry: re-claiming the first-speak bit would return
+    // already_claimed and the message would never go out a second time. The
+    // retry claim is a separate compare-and-set so two in-flight handlers
+    // cannot both speak.
+    const { deps, rpcCalls, httpCalls } = makeDeps({
+      rpcResults: { voice_claim_voicemail_retry: [{ data: true, error: null }] }
+    });
     const outcome = await speakVoicemailDeterministic(deps, "v3:leg", "retry script", {
       trigger: "cancelled_retry",
       alreadyClaimed: true
     });
     expect(outcome).toBe("speaking");
     expect(httpCalls.map((c) => action(c.url))).toEqual(["speak"]);
-    expect(rpcCalls.map((c) => c.fn)).toEqual(["voice_session_context_merge"]);
-    expect(rpcCalls[0]?.args?.p_patch).toEqual({
+    expect(rpcCalls.map((c) => c.fn)).toEqual([
+      "voice_claim_voicemail_retry",
+      "voice_session_context_merge"
+    ]);
+    expect(rpcCalls[1]?.args?.p_patch).toEqual({
       voicemail_speak_started_at: "2026-08-27T15:35:34.000Z",
       voicemail_speak_script_chars: "retry script".length,
       voicemail_speak_trigger: "cancelled_retry",
       voicemail_speak_restarted: true
     });
+  });
+
+  it("leaves the leg alone when another handler already claimed the retry", async () => {
+    const { deps, httpCalls } = makeDeps({
+      rpcResults: { voice_claim_voicemail_retry: [{ data: false, error: null }] }
+    });
+    expect(
+      await speakVoicemailDeterministic(deps, "v3:leg", "retry script", { alreadyClaimed: true })
+    ).toBe("already_claimed");
+    expect(httpCalls).toEqual([]);
+  });
+
+  it("does not hang up when the retry claim RPC errors", async () => {
+    // The other in-flight handler may already be speaking. Cutting the leg
+    // would drop the message we are trying to save.
+    const { deps, httpCalls } = makeDeps({
+      rpcResults: { voice_claim_voicemail_retry: [{ error: { message: "db down" } }] }
+    });
+    expect(
+      await speakVoicemailDeterministic(deps, "v3:leg", "retry script", { alreadyClaimed: true })
+    ).toBe("claim_failed");
+    expect(httpCalls).toEqual([]);
   });
 });

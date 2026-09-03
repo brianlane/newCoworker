@@ -36,6 +36,7 @@ describe("voicemail speak lockstep (bridge vs edge)", () => {
   it("pins the claim RPCs, patch keys, and trigger names", () => {
     for (const needle of [
       "voice_claim_voicemail_speak",
+      "voice_claim_voicemail_retry",
       "voice_release_voicemail_claim",
       "voice_session_context_merge",
       "voicemail_speak_started_at",

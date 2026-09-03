@@ -57,7 +57,12 @@ Only the beep-triggered one is provably right.
   unknown results are `noted`. The machine stamp stays (Jennifer Kline: do
   **not** return `screening_person` without a real screening event).
 - `classifySpeakEnded`: re-speak once on `cancelled_amd` or implausibly
-  short `completed`; hang up only on plausible completed.
+  short `completed`; hang up only on plausible completed. The retry is
+  compare-and-set via `voice_claim_voicemail_retry` (two in-flight
+  speak.ended handlers cannot both speak). A redelivered first-speak
+  ended whose `occurred_at` is before the retry's `started_at` is ignored
+  so it cannot hang up the retry. A legacy `voicemail_spoken` stamp with
+  no start time hangs up and does not retry.
 - `resolveEdgeVoicemailSpoken` refuses the wall-clock promote on
   `cancelled_amd` / `call_hangup` without a restart.
 - Sweep grace 25s → 40s (past the 30s default timeout + Robert's +31.5s).

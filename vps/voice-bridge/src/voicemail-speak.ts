@@ -61,7 +61,16 @@ export async function speakVoicemailDeterministic(
     if (error) console.error("voicemail: claim release failed", error);
   };
 
-  if (!opts.alreadyClaimed) {
+  if (opts.alreadyClaimed) {
+    const { data: claimed, error: retryErr } = await rpc("voice_claim_voicemail_retry", {
+      p_call_control_id: callControlId
+    });
+    if (retryErr) {
+      console.error("voicemail: retry claim failed", retryErr);
+      return "claim_failed";
+    }
+    if (claimed !== true) return "already_claimed";
+  } else {
     const { data: claimed, error: claimErr } = await rpc("voice_claim_voicemail_speak", {
       p_call_control_id: callControlId
     });

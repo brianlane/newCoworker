@@ -41,8 +41,10 @@ import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
 import { speakVoicemailDeterministic } from "../_shared/voice_voicemail_speak.ts";
 import {
   classifySpeakEnded,
+  classifySpeakEndedOwnership,
   edgeVoicemailPlausiblyDelivered,
-  resolveEdgeVoicemailSpoken
+  resolveEdgeVoicemailSpoken,
+  speakEndedEventIsStale
 } from "../_shared/voice_voicemail_timing.ts";
 import { parseReachClientState } from "../_shared/voice_reach.ts";
 import {
@@ -922,7 +924,8 @@ async function handleHandoffAmd(
  */
 async function handleSpeakEnded(
   supabase: SupabaseClient,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  occurredAt?: unknown
 ): Promise<Response> {
   const callControlId = String(payload["call_control_id"] ?? "");
   const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
@@ -939,8 +942,29 @@ async function handleSpeakEnded(
   // `voicemail_speak_started_at` marks the speak WE issued (the accepted
   // command); legacy `voicemail_spoken` is kept for events redelivered
   // across the deploy boundary, when the old code stamped spoken at accept.
-  const oursStarted = typeof ctx.voicemail_speak_started_at === "string";
-  if (!oursStarted && ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
+  const ownership = classifySpeakEndedOwnership({
+    speakStartedAt: ctx.voicemail_speak_started_at,
+    voicemailSpoken: ctx.voicemail_spoken
+  });
+  if (ownership === "not_voicemail") return jsonOk("speak_not_voicemail");
+  if (ownership === "legacy_spoken") {
+    // Already played (old code stamped spoken at accept). Hang up to end
+    // billed silence; do not retry, or we would leave a second message.
+    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    return jsonOk("voicemail_left_hangup");
+  }
+  const eventOccurredAt =
+    typeof occurredAt === "string"
+      ? occurredAt
+      : typeof payload["occurred_at"] === "string"
+        ? payload["occurred_at"]
+        : undefined;
+  // A redelivered first-speak ended arrives after we have already restarted.
+  // Judging it against the retry clock would hang up mid-playout. Ignore it
+  // entirely so it cannot overwrite voicemail_speak_ended_status either.
+  if (speakEndedEventIsStale(eventOccurredAt, ctx.voicemail_speak_started_at)) {
+    return jsonOk("voicemail_speak_stale");
+  }
   const status =
     typeof payload["status"] === "string" ? payload["status"].trim().toLowerCase() : "";
   const storedChars =
@@ -953,13 +977,16 @@ async function handleSpeakEnded(
   const scriptChars = storedChars > 0 ? storedChars : fallbackChars;
   const plausible = edgeVoicemailPlausiblyDelivered({
     startedAtIso: ctx.voicemail_speak_started_at,
-    endedAtIso: new Date().toISOString(),
+    endedAtIso: eventOccurredAt ?? new Date().toISOString(),
     scriptChars
   });
   const action = classifySpeakEnded({
     status,
     alreadyRestarted: ctx.voicemail_speak_restarted === true,
-    plausible
+    alreadySpoken: ctx.voicemail_spoken === true,
+    plausible,
+    eventOccurredAtIso: eventOccurredAt,
+    speakStartedAtIso: ctx.voicemail_speak_started_at
   });
   const { error: statusErr } = await supabase.rpc("voice_session_context_merge", {
     p_call_control_id: callControlId,
@@ -2166,7 +2193,14 @@ serve(async (req: Request) => {
     });
   }
 
-  let envelope: { data?: { id?: string; event_type?: string; payload?: Record<string, unknown> } };
+  let envelope: {
+    data?: {
+      id?: string;
+      event_type?: string;
+      occurred_at?: string;
+      payload?: Record<string, unknown>;
+    };
+  };
   try {
     envelope = JSON.parse(rawBody);
   } catch {
@@ -2223,7 +2257,7 @@ serve(async (req: Request) => {
 
   // The end of a voicemail message we spoke, so the leg can be released.
   if (eventType === "call.speak.ended") {
-    return await handleSpeakEnded(supabase, data?.payload ?? {});
+    return await handleSpeakEnded(supabase, data?.payload ?? {}, data?.occurred_at);
   }
 
   // A "reach a teammate" B leg. Recorded before the outbound handler so a leg
