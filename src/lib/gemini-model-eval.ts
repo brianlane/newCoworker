@@ -75,14 +75,6 @@ function priceWorse(candidate: GeminiPrice, current: GeminiPrice): boolean {
 }
 
 function pinParsedOrThrow(pin: GeminiModelPin): GeminiParsedModel {
-  if (pin.family === "live") {
-    return {
-      id: pin.defaultModel,
-      family: "live",
-      version: [0, 0],
-      unstable: false
-    };
-  }
   const parsed = parseGeminiModelId(pin.defaultModel);
   if (!parsed) {
     throw new Error(`gemini-model-eval: pin ${pin.id} has an unparseable default ${pin.defaultModel}`);
@@ -262,13 +254,20 @@ export function recommendAllPins(
 }
 
 /**
- * Listed Google ids that are a newer GA model in a family at least one
- * auto-adopt pin accepts.
+ * Listed Google ids that are a newer GA model than at least one auto-adopt
+ * pin that accepts the family. Ids we already pin are skipped so the
+ * weekly report is not "3.5-lite and 3.7 exist" every Monday. A cheap
+ * successor (2.6-flash-lite vs webchat on 2.5-flash-lite) still appears
+ * because webchat accepts mid, even though parseGeminiModelId never
+ * returns the usage family `cheap`.
  */
 export function findNewerCandidates(
   listedIds: string[],
   pins: readonly GeminiModelPin[]
 ): string[] {
+  const alreadyPinned = new Set(
+    pins.map((p) => p.defaultModel.trim().replace(/^models\//i, "").toLowerCase())
+  );
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of listedIds) {
@@ -277,10 +276,11 @@ export function findNewerCandidates(
     if (parsed.family === "other" || parsed.family === "pro" || parsed.family === "live") {
       continue;
     }
+    if (alreadyPinned.has(parsed.id)) continue;
     let newer = false;
     for (const pin of pins) {
       if (!pin.autoAdopt) continue;
-      if (pin.family !== parsed.family) continue;
+      if (!pin.acceptsFamilies.includes(parsed.family)) continue;
       const current = pinParsedOrThrow(pin);
       if (compareGeminiVersions(parsed.version, current.version) > 0) {
         newer = true;

@@ -111,6 +111,17 @@ describe("GEMINI_MODEL_PINS", () => {
     expect(pinsForFamily("flagship").length).toBeGreaterThan(0);
   });
 
+  it("live pin default is the real source id, not a placeholder", () => {
+    const live = pinById("gemini-live");
+    expect(live).toBeDefined();
+    expect(live?.autoAdopt).toBe(false);
+    expect(live?.defaultModel).not.toBe("gemini-live-audio");
+    expect(parseGeminiModelId(live!.defaultModel)?.family).toBe("live");
+    for (const source of live!.sources) {
+      expect(source.mustContain).toContain(live!.defaultModel);
+    }
+  });
+
   it("every source file still contains the pin's mustContain string", () => {
     const missing: string[] = [];
     for (const pin of GEMINI_MODEL_PINS) {

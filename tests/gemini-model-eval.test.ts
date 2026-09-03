@@ -387,6 +387,15 @@ describe("findNewerCandidates / evaluateListedModels", () => {
     ).toEqual(["gemini-3.8-flash"]);
   });
 
+  it("surfaces a cheap-pin successor that is newer than webchat but older than the mid pins", () => {
+    expect(
+      findNewerCandidates(
+        ["gemini-2.5-flash-lite", "gemini-2.6-flash-lite", "gemini-3.5-flash-lite"],
+        GEMINI_MODEL_PINS
+      )
+    ).toEqual(["gemini-2.6-flash-lite"]);
+  });
+
   it("discovers a newer listed flagship without being told the id up front", () => {
     const report = evaluateListedModels({
       listedIds: [
