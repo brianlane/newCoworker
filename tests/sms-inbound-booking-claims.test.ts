@@ -24,21 +24,22 @@ describe("bare-1 gate", () => {
     );
   });
 
-  it("counts bookings into the ambiguity ask-back with offers and alerts", () => {
-    expect(webhook).toContain(
-      "liveOffers.length + alertCandidates.length + bookingCandidates.length > 1"
-    );
-    expect(webhook).toContain("...bookingCandidates.map((b) => bookingClaimLabel(b))");
+  it("counts unique leads, not stacked alert rows, into the ambiguity ask-back", () => {
+    expect(webhook).toContain("collapseOfferCandidates([");
+    expect(webhook).toContain("uniqueLeads.length > 1");
+    expect(webhook).toContain("bareDigitAmbiguityText(askBackLabels(uniqueLeads))");
+    expect(webhook).toContain("...bookingCandidates.map((b) => ({");
+    expect(webhook).toContain("leadLabel: bookingClaimLabel(b)");
   });
 
-  it("claims a lone booking candidate only when no offer and no alert competes", () => {
-    expect(webhook).toMatch(
-      /if \(!offer && alertCandidates\.length === 0 && bookingCandidates\.length === 1\) \{\s*\n\s*return await consumeBookingClaim\(/
+  it("claims a lone booking candidate by the collapsed id, not by list position", () => {
+    expect(webhook).toContain("onlyLead?.runId.startsWith(BOOKING_CANDIDATE_PREFIX)");
+    expect(webhook).toContain(
+      "`${BOOKING_CANDIDATE_PREFIX}${b.offerId}` === onlyLead.runId"
     );
-    // Alerts keep their existing precedence branch above the booking one.
-    const alertBranch = webhook.indexOf("if (!offer && alertCandidates.length === 1)");
+    const alertBranch = webhook.indexOf("onlyLead?.runId.startsWith(ALERT_CANDIDATE_PREFIX)");
     const bookingBranch = webhook.indexOf(
-      "if (!offer && alertCandidates.length === 0 && bookingCandidates.length === 1)"
+      "onlyLead?.runId.startsWith(BOOKING_CANDIDATE_PREFIX)"
     );
     expect(alertBranch).toBeGreaterThan(-1);
     expect(bookingBranch).toBeGreaterThan(alertBranch);
@@ -52,6 +53,21 @@ describe("named claims (1, <name>)", () => {
     expect(webhook).toMatch(
       /match\.runId\.startsWith\(BOOKING_CANDIDATE_PREFIX\)/
     );
+  });
+
+  it("collapses stacked same-phone alerts before matching the name", () => {
+    expect(webhook).toContain("const combined: OfferCandidate[] = collapseOfferCandidates([");
+    expect(webhook).toContain("namedNoMatchLabels = askBackLabels(combined)");
+  });
+
+  it("retires leftover alerts when an offer claim wins the collapsed race", () => {
+    expect(webhook).toContain("await retireLiveUnownedAlertsForLead(supabase, {");
+    const liveClaim = webhook.indexOf("async function tryAgentClaimWithTimeframe");
+    const lateClaim = webhook.indexOf("async function tryLateClaim");
+    expect(liveClaim).toBeGreaterThan(-1);
+    expect(lateClaim).toBeGreaterThan(liveClaim);
+    expect(webhook.indexOf("retireLiveUnownedAlertsForLead", liveClaim)).toBeGreaterThan(liveClaim);
+    expect(webhook.indexOf("retireLiveUnownedAlertsForLead", lateClaim)).toBeGreaterThan(lateClaim);
   });
 });
 

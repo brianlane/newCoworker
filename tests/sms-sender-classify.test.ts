@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyReplyTarget, isSmsShortcode } from "../supabase/functions/_shared/sms_sender";
-import { normalizeE164 } from "../supabase/functions/_shared/normalize_e164";
+import { e164CollapseKey, e164LookupValues, normalizeE164 } from "../supabase/functions/_shared/normalize_e164";
 
 describe("isSmsShortcode", () => {
   it("recognizes the real short codes lead services blast from", () => {
@@ -80,5 +80,21 @@ describe("classifyReplyTarget", () => {
     expect(classifyReplyTarget({ fromRaw: "garbage", fromE164: "", text: "hi" })).toEqual({
       kind: "fail"
     });
+  });
+});
+
+describe("e164CollapseKey / e164LookupValues", () => {
+  it("collapses 10-digit NANP onto +1 E.164", () => {
+    expect(e164CollapseKey("4803813509")).toBe("+14803813509");
+    expect(e164CollapseKey("+14803813509")).toBe("+14803813509");
+    expect(e164CollapseKey("")).toBe("");
+    expect(e164LookupValues("4803813509")).toEqual(
+      expect.arrayContaining(["+14803813509", "14803813509", "4803813509"])
+    );
+  });
+
+  it("does not invent a 10-digit form for a non-NANP number", () => {
+    expect(e164CollapseKey("+442071838750")).toBe("+442071838750");
+    expect(e164LookupValues("+442071838750")).toEqual(["+442071838750", "442071838750"]);
   });
 });

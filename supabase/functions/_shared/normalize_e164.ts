@@ -42,3 +42,24 @@ export function normalizeE164(raw: string | undefined): string | null {
 
   return candidate;
 }
+
+/**
+ * Canonical key for "is this the same lead phone?": 10-digit NANP and
+ * +1 E.164 collapse together. Empty when the input is not a phone.
+ */
+export function e164CollapseKey(raw: string | undefined): string {
+  return normalizeE164(raw) ?? "";
+}
+
+/**
+ * Stored forms a lead phone might have been written as, so a PostgREST
+ * `.in("lead_e164", ...)` catches both `+14803813509` and `4803813509`.
+ */
+export function e164LookupValues(raw: string | undefined): string[] {
+  const n = normalizeE164(raw);
+  if (!n) return [];
+  const digits = n.slice(1);
+  const values = new Set<string>([n, digits]);
+  if (digits.length === 11 && digits.startsWith("1")) values.add(digits.slice(1));
+  return [...values];
+}

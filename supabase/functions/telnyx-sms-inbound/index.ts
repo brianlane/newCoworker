@@ -61,8 +61,10 @@ import {
 } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
   ambiguousClaimText,
+  askBackLabels,
   bareDigitAmbiguityText,
   claimAckText,
+  collapseOfferCandidates,
   leadLabelFromVars,
   leadPhoneFromVars,
   matchOfferByLeadName,
@@ -130,6 +132,7 @@ import {
 import {
   claimUnownedLeadAlert,
   findLiveUnownedAlertsFor,
+  retireLiveUnownedAlertsForLead,
   type UnownedAlertCandidate
 } from "../_shared/unowned_lead_alerts.ts";
 import {
@@ -809,17 +812,13 @@ async function consumeAlertClaim(args: {
     // Alerts about one lead can pile up (a second reply days later raises a
     // new one), and leaving the siblings claimable would let a second
     // teammate claim one and also be told the lead is theirs.
-    const { error: sibErr } = await supabase
-      .from("unowned_lead_alerts")
-      .update({
-        claimed_at: nowIso,
-        claimed_by_e164: from,
-        claimed_by_member_id: member?.id ?? null
-      })
-      .eq("business_id", businessId)
-      .eq("lead_e164", outcome.leadE164)
-      .is("claimed_at", null);
-    if (sibErr) console.error("alert claim sibling retire", sibErr);
+    await retireLiveUnownedAlertsForLead(supabase, {
+      businessId,
+      leadE164: outcome.leadE164,
+      claimedByE164: from,
+      memberId: member?.id ?? null,
+      nowIso
+    });
 
     // Ownership so LATER alerts about this lead reach the claimer instead of
     // the business owner. Compare-and-swap on `owner_employee_id is null`:
@@ -1204,6 +1203,28 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       ...args,
       telemetryDecision: OFFER_REPLY_DECISION.claim_timeframe_raced
     });
+  }
+  // Collapse keeps the offer when the same phone also has a live alert.
+  // Retire those alerts or a second teammate can still claim one.
+  {
+    const leadPhone = leadPhoneFromVars(
+      (offer.context?.vars ?? {}) as Record<string, unknown>
+    );
+    if (leadPhone) {
+      const { data: claimerRow } = await supabase
+        .from("ai_flow_team_members")
+        .select("id")
+        .eq("business_id", businessId)
+        .eq("phone_e164", from)
+        .maybeSingle();
+      await retireLiveUnownedAlertsForLead(supabase, {
+        businessId,
+        leadE164: leadPhone,
+        claimedByE164: from,
+        memberId: (claimerRow as { id?: string } | null)?.id ?? null,
+        nowIso: new Date().toISOString()
+      });
+    }
   }
   // Ordinarily no acknowledgement is texted back: the offer SMS already
   // carried the lead details, so "you've claimed this lead..." only promised a
@@ -1838,11 +1859,12 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // "<name> claimed …" (offered_name was cleared on the owner fallback).
   const { data: memberRow } = await supabase
     .from("ai_flow_team_members")
-    .select("name")
+    .select("id, name")
     .eq("business_id", businessId)
     .eq("phone_e164", from)
     .maybeSingle();
-  const memberName = (memberRow as { name?: string } | null)?.name ?? "";
+  const memberName = (memberRow as { id?: string; name?: string } | null)?.name ?? "";
+  const memberId = (memberRow as { id?: string; name?: string } | null)?.id ?? null;
 
   // Ownership gate: late and yank claims are still claims; a contact owned
   // by another active teammate is refused the same way a live claim is.
@@ -1944,6 +1966,21 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
+  }
+
+  {
+    const leadPhone = leadPhoneFromVars(
+      (match.context?.vars ?? {}) as Record<string, unknown>
+    );
+    if (leadPhone) {
+      await retireLiveUnownedAlertsForLead(supabase, {
+        businessId,
+        leadE164: leadPhone,
+        claimedByE164: from,
+        memberId,
+        nowIso: new Date().toISOString()
+      });
+    }
   }
 
   // A named claim made from several candidates confirms WHICH lead was taken;
@@ -3164,7 +3201,7 @@ serve(async (req: Request) => {
             from,
             new Date().toISOString()
           );
-          const combined: OfferCandidate[] = [
+          const combined: OfferCandidate[] = collapseOfferCandidates([
             ...liveOffers.map((o) => o.candidate),
             ...alertCands.map((a) => ({
               runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
@@ -3176,7 +3213,7 @@ serve(async (req: Request) => {
               leadLabel: b.attendeeName || b.summary || "",
               leadPhone: ""
             }))
-          ];
+          ]);
           if (combined.length > 0) {
             const match = matchOfferByLeadName(combined, claimTf.timeframe);
             if (match.kind === "ambiguous") {
@@ -3238,9 +3275,7 @@ serve(async (req: Request) => {
             // than claim whichever run was touched most recently.
             if (match.kind === "none" && !looksLikeTimeframe(claimTf.timeframe)) {
               namedNoMatch = true;
-              namedNoMatchLabels = combined.map(
-                (c, i) => c.leadLabel || `lead ${i + 1} (no name on file)`
-              );
+              namedNoMatchLabels = askBackLabels(combined);
             }
             if (match.kind === "one") {
               const picked = liveOffers.find((o) => o.run.id === match.runId);
@@ -3415,14 +3450,23 @@ serve(async (req: Request) => {
         // with "1".
         if (bareClaim && (offer || alertCandidates.length > 0 || bookingCandidates.length > 0)) {
           const liveOffers = offer ? await findLiveOfferRunsFor(supabase, businessId, from) : [];
-          if (liveOffers.length + alertCandidates.length + bookingCandidates.length > 1) {
-            const labels = [
-              ...liveOffers.map(
-                (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
-              ),
-              ...alertCandidates.map((a) => a.leadLabel || a.leadE164),
-              ...bookingCandidates.map((b) => bookingClaimLabel(b))
-            ];
+          // Offers, alerts, and bookings are counted TOGETHER, then collapsed
+          // to one row per lead. Stacked alerts about the same phone used to
+          // make a lone "1" ask "Christopher or Christopher".
+          const uniqueLeads = collapseOfferCandidates([
+            ...liveOffers.map((o) => o.candidate),
+            ...alertCandidates.map((a) => ({
+              runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
+              leadLabel: a.leadLabel ?? "",
+              leadPhone: a.leadE164
+            })),
+            ...bookingCandidates.map((b) => ({
+              runId: `${BOOKING_CANDIDATE_PREFIX}${b.offerId}`,
+              leadLabel: bookingClaimLabel(b),
+              leadPhone: ""
+            }))
+          ]);
+          if (uniqueLeads.length > 1) {
             return await consumeAmbiguousOfferReply({
               supabase,
               businessId,
@@ -3433,39 +3477,50 @@ serve(async (req: Request) => {
               telnyxApiKey,
               messagingProfileId,
               smsFromE164,
-              text: bareDigitAmbiguityText(labels)
+              text: bareDigitAmbiguityText(askBackLabels(uniqueLeads))
             });
           }
+          const onlyLead = uniqueLeads[0];
           // Exactly one candidate and it is an alert: no run to resume, so
           // claim the alert here. An offer falls through to the paths below.
-          if (!offer && alertCandidates.length === 1) {
-            return await consumeAlertClaim({
-              supabase,
-              businessId,
-              from,
-              ackTo: to,
-              eventId,
-              envelope,
-              telnyxApiKey,
-              messagingProfileId,
-              smsFromE164,
-              candidate: alertCandidates[0]
-            });
+          if (onlyLead?.runId.startsWith(ALERT_CANDIDATE_PREFIX)) {
+            const picked = alertCandidates.find(
+              (a) => `${ALERT_CANDIDATE_PREFIX}${a.alertId}` === onlyLead.runId
+            );
+            if (picked) {
+              return await consumeAlertClaim({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                candidate: picked
+              });
+            }
           }
           // Exactly one candidate and it is a booking invite: same shape.
-          if (!offer && alertCandidates.length === 0 && bookingCandidates.length === 1) {
-            return await consumeBookingClaim({
-              supabase,
-              businessId,
-              from,
-              ackTo: to,
-              eventId,
-              envelope,
-              telnyxApiKey,
-              messagingProfileId,
-              smsFromE164,
-              candidate: bookingCandidates[0]
-            });
+          if (onlyLead?.runId.startsWith(BOOKING_CANDIDATE_PREFIX)) {
+            const picked = bookingCandidates.find(
+              (b) => `${BOOKING_CANDIDATE_PREFIX}${b.offerId}` === onlyLead.runId
+            );
+            if (picked) {
+              return await consumeBookingClaim({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                candidate: picked
+              });
+            }
           }
         }
         if (offer && (bareClaim || barePass)) {
