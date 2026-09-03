@@ -322,7 +322,9 @@ export default async function AdminDashboardPage() {
                   </span>
                 </div>
                 {log.message && (
-                  <p className="text-xs text-parchment/50 truncate">{log.message}</p>
+                  <p className="text-xs text-parchment/50 whitespace-pre-wrap break-words">
+                    {log.message}
+                  </p>
                 )}
               </li>
             ))}

@@ -172,6 +172,12 @@ pitches that bounced after the Aug 28 pass: ASAP Plumbing
 same day was a no-op. Live webhook retirement shipped in #1764, so new
 bounces should not need this script.
 
+**Outreach bounce log copy restamped (2026-09-02):**
+`rewrite-outreach-bounce-log-copy.ts --apply` rewrote `email_delivery_failed`
+messages so they say the outreach follow-up was cancelled, instead of
+quoting Resend's "remove them from your mailing list" advice. The live
+webhook writes that sentence from here on.
+
 **Bounced-pitch prospects retired (2026-08-28):**
 `retire-bounced-outreach-prospects.ts --apply` moved five prospects whose
 pitch provably bounced from `sent` to `failed`, which is what removes them

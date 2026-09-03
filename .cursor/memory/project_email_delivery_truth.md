@@ -34,6 +34,15 @@ the fact. The live path is `retireProspectsOnBounce` in
 mail), skip a row that already replied or already got its nudge. The one-shot
 stays as backfill for receipts that landed before that shipped.
 
+The `system_logs` message must not quote Resend's "remove them from your
+mailing list" paragraph. That reads as a to-do on the admin System Errors
+card after the webhook already cancelled the follow-up.
+`formatEmailDeliveryFailedLogMessage` writes our sentence instead; the
+vendor text stays in `payload.errorMessage`. The fleet card wraps the full
+message (`whitespace-pre-wrap break-words`); it used to `truncate`, which
+hid the ending unless you copy-pasted. Existing rows are restamped by
+`scripts/oneshot/rewrite-outreach-bounce-log-copy.ts`.
+
 **`provider_message_id` is NOT unique.** A live scan on 2026-08-26 found 7
 duplicated ids in a 1000-row sample, all Gmail-style hex ids from the
 owner-mailbox paths. A unique index would fail to apply, and `maybeSingle()`
