@@ -14,12 +14,16 @@ const FROM = "+14035550111";
 const FLOW_ID = "00000000-0000-0000-0000-0000000000aa";
 const RUN_ID = "00000000-0000-0000-0000-0000000000bb";
 
-type Scripted = { data?: unknown; error?: unknown };
+type Scripted = { data?: unknown; error?: unknown; throw?: unknown };
 
 function makeDb(results: Scripted[]) {
   const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
   let idx = 0;
-  const next = () => results[idx++] ?? { data: null, error: null };
+  const next = () => {
+    const r = results[idx++] ?? { data: null, error: null };
+    if (Object.prototype.hasOwnProperty.call(r, "throw")) throw r.throw;
+    return r;
+  };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
     for (const m of ["select", "update", "eq", "in", "order", "limit"]) {
@@ -28,7 +32,13 @@ function makeDb(results: Scripted[]) {
         return builder;
       };
     }
-    builder["then"] = (resolve: (v: unknown) => unknown) => Promise.resolve(next()).then(resolve);
+    builder["then"] = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+      try {
+        return Promise.resolve(next()).then(resolve, reject);
+      } catch (e) {
+        return Promise.reject(e).then(resolve, reject);
+      }
+    };
     return builder;
   };
   const rpc = async (fn: string, args?: Record<string, unknown>) => {
@@ -304,6 +314,21 @@ describe("resumeAwaitingReplyRun", () => {
       { data: [{ id: RUN_ID }], error: null },
       { error: null },
       { data: null, error: { message: "timeout" } }
+    ]);
+    expect(await resumeAwaitingReplyRun(db, BIZ, FROM, "hi")).toEqual({
+      resumedIds: [RUN_ID],
+      suppressCoworker: true
+    });
+    err.mockRestore();
+  });
+
+  it("a thrown options lookup after resume still reports the captured run", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = makeDb([
+      { data: [parkedRun()], error: null },
+      { data: [{ id: RUN_ID }], error: null },
+      { error: null },
+      { throw: new Error("lookup exploded") }
     ]);
     expect(await resumeAwaitingReplyRun(db, BIZ, FROM, "hi")).toEqual({
       resumedIds: [RUN_ID],

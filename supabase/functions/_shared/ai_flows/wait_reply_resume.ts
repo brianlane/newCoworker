@@ -65,6 +65,10 @@ export async function resumeAwaitingReplyRun(
   bodyText: string
 ): Promise<WaitReplyResumeResult> {
   if (!from) return EMPTY;
+  // Hoisted so a throw after a successful re-queue still reports those ids.
+  // Returning EMPTY from the outer catch would let trigger evaluation start
+  // a second run, and would fail-open the coworker mute.
+  const resumed: Array<{ id: string; flowId: string | null }> = [];
   try {
     const { data } = await supabase
       .from("ai_flow_runs")
@@ -82,7 +86,6 @@ export async function resumeAwaitingReplyRun(
     }>;
     if (rows.length === 0) return EMPTY;
 
-    const resumed: Array<{ id: string; flowId: string | null }> = [];
     for (const run of rows) {
       const waiting =
         (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
@@ -162,6 +165,10 @@ export async function resumeAwaitingReplyRun(
     };
   } catch (e) {
     console.error("resumeAwaitingReplyRun", e);
-    return EMPTY;
+    if (resumed.length === 0) return EMPTY;
+    return {
+      resumedIds: resumed.map((r) => r.id),
+      suppressCoworker: true
+    };
   }
 }

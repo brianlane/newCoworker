@@ -26,7 +26,10 @@ renewal, realtor lead-source) set it so the flow's own next customer text
 is not doubled by the coworker.
 
 A flow-options read failure fails CLOSED (mute), because a realtor-style
-flow that sends its own ack must not double-text on a blip.
+flow that sends its own ack must not double-text on a blip. If that lookup
+throws after the wait was already re-queued, the helper still returns the
+resumed ids (skip trigger evaluation) and mutes: returning empty would
+start a second run and fail-open the mute.
 
 Staff wait-resume (an employee testing a flow from their own phone) still
 persists a suppressed audit row: that inbound is not a customer turn.
