@@ -312,9 +312,15 @@ describe("processResendDeliveryEvent", () => {
         event: "email_delivery_failed"
       })
     );
-    const { message } = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
+    const { message, payload } = recordSystemLog.mock.calls[0][0] as unknown as {
+      message: string;
+      payload: { errorMessage?: string; outreachRetired?: number };
+    };
     expect(message).toContain("owner@example.com");
-    expect(message).toContain("Mailbox does not exist");
+    expect(message).not.toContain("Mailbox does not exist");
+    expect(message.toLowerCase()).not.toContain("mailing list");
+    expect(payload.errorMessage).toBe("Mailbox does not exist");
+    expect(payload.outreachRetired).toBe(0);
   });
 
   it("names the failure even when the receipt carried no detail", async () => {
@@ -326,7 +332,7 @@ describe("processResendDeliveryEvent", () => {
       errorMessage: null
     });
     const { message } = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
-    expect(message).toBe("Email was not delivered (complained)");
+    expect(message).toBe("Email was not delivered (complained).");
   });
 
   it("stays quiet about a routine delivery", async () => {
@@ -351,13 +357,13 @@ describe("processResendDeliveryEvent", () => {
       })
     );
     const { message } = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
-    expect(message).toContain("matched no logged send");
+    expect(message).toContain("Matched no logged send.");
 
     // Same path with nothing to say about it still names the failure.
     recordSystemLog.mockClear();
     await processResendDeliveryEvent({ ...event, to: null, errorMessage: null });
     const second = recordSystemLog.mock.calls[0][0] as unknown as { message: string };
-    expect(second.message).toBe("Email was not delivered (bounced), and matched no logged send");
+    expect(second.message).toBe("Email was not delivered (bounced). Matched no logged send.");
   });
 
   it("stays quiet about an unattributed receipt that is not a failure", async () => {
@@ -465,6 +471,18 @@ describe("processResendDeliveryEvent", () => {
       occurredAt: "2026-08-26T06:00:00.000Z",
       businessId: BIZ
     });
+  });
+
+  it("says the outreach follow-up was cancelled when a pitch was retired", async () => {
+    applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ });
+    retireProspectsOnBounce.mockResolvedValue(1);
+    await processResendDeliveryEvent(event);
+    const { message, payload } = recordSystemLog.mock.calls[0][0] as unknown as {
+      message: string;
+      payload: { outreachRetired?: number };
+    };
+    expect(message).toContain("Outreach follow-up cancelled");
+    expect(payload.outreachRetired).toBe(1);
   });
 
   it("still tries to retire when the bounce could not be attributed", async () => {

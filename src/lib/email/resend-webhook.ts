@@ -15,6 +15,7 @@ import {
   resendEventToStatus,
   type EmailDeliveryStatus
 } from "@/lib/email/delivery";
+import { formatEmailDeliveryFailedLogMessage } from "@/lib/email/delivery-failure-log";
 import { retireProspectsOnBounce } from "@/lib/outreach/bounce";
 
 /**
@@ -210,41 +211,45 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
     // Logged with a null business_id, which is what the fleet-wide error feed
     // is for. Deliberately failures only: Resend fires for every message on
     // the account, so logging routine misses would drown the feed.
+    const retiredCount = await maybeRetireOutreachPitch(event, result.businessId);
     if (result.outcome === "not_found" && isEmailDeliveryFailure(event.status)) {
       await recordSystemLog({
         businessId: null,
         level: "error",
         source: "email",
         event: "email_delivery_failed_unattributed",
-        message:
-          `Email was not delivered (${event.status})` +
-          (event.to ? ` to ${event.to}` : "") +
-          ", and matched no logged send" +
-          (event.errorMessage ? `: ${event.errorMessage}` : ""),
+        message: formatEmailDeliveryFailedLogMessage({
+          status: event.status,
+          to: event.to,
+          retiredCount,
+          unattributed: true
+        }),
         payload: {
           status: event.status,
           providerMessageId: event.providerMessageId,
           to: event.to,
           subject: event.subject,
           errorCode: event.errorCode,
-          errorMessage: event.errorMessage
+          errorMessage: event.errorMessage,
+          outreachRetired: retiredCount
         }
       });
     }
-    await maybeRetireOutreachPitch(event, result.businessId);
     return false;
   }
 
+  const retiredCount = await maybeRetireOutreachPitch(event, result.businessId);
   if (isEmailDeliveryFailure(event.status)) {
     await recordSystemLog({
       businessId: result.businessId,
       level: "error",
       source: "email",
       event: "email_delivery_failed",
-      message:
-        `Email was not delivered (${event.status})` +
-        (event.to ? ` to ${event.to}` : "") +
-        (event.errorMessage ? `: ${event.errorMessage}` : ""),
+      message: formatEmailDeliveryFailedLogMessage({
+        status: event.status,
+        to: event.to,
+        retiredCount
+      }),
       payload: {
         status: event.status,
         providerMessageId: event.providerMessageId,
@@ -252,6 +257,7 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
         subject: event.subject,
         errorCode: event.errorCode,
         errorMessage: event.errorMessage,
+        outreachRetired: retiredCount,
         // Flagged so an operator reading the feed knows this receipt was
         // matched heuristically (recipient + subject in a recent window)
         // rather than by provider id.
@@ -259,7 +265,6 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
       }
     });
   }
-  await maybeRetireOutreachPitch(event, result.businessId);
   return true;
 }
 
@@ -273,11 +278,11 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
 async function maybeRetireOutreachPitch(
   event: ResendDeliveryEvent,
   businessId: string | null
-): Promise<void> {
-  if (event.status !== "bounced" && event.status !== "failed") return;
-  if (!event.to) return;
+): Promise<number> {
+  if (event.status !== "bounced" && event.status !== "failed") return 0;
+  if (!event.to) return 0;
   try {
-    await retireProspectsOnBounce({
+    return await retireProspectsOnBounce({
       to: event.to,
       subject: event.subject,
       status: event.status,
@@ -291,6 +296,7 @@ async function maybeRetireOutreachPitch(
       to: event.to,
       error: err instanceof Error ? err.message : String(err)
     });
+    return 0;
   }
 }
 
