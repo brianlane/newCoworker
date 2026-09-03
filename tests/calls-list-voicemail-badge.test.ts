@@ -103,3 +103,10 @@ describe("analytics drill-down voicemail badge", () => {
     expect(ANALYTICS_LIB).toMatch(/voicemailLeft: row\.voicemail_left === true/);
   });
 });
+
+describe("call detail hides muted model turns", () => {
+  it("filters [Muted] turns out of the rendered list", () => {
+    expect(DETAIL).toContain("isMutedTranscriptTurn");
+    expect(DETAIL).toContain("visibleTurns");
+  });
+});

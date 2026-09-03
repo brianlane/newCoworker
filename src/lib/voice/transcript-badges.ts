@@ -114,3 +114,13 @@ export function turnSpeaker(input: {
   if (from === null || from === undefined) return "caller";
   return input.turnIndex >= from ? "callerOrTeammate" : "caller";
 }
+
+/**
+ * True when this turn is model audio the lead never heard (the bridge prefixes
+ * `[Muted]` while `modelAudioMuted`). Hidden on the call page so it cannot
+ * read as something that went out over the line. `[Voicemail]` stays visible:
+ * that badge is the script Telnyx TTS actually spoke.
+ */
+export function isMutedTranscriptTurn(content: unknown): boolean {
+  return typeof content === "string" && content.trimStart().startsWith("[Muted]");
+}

@@ -8,9 +8,12 @@ import {
   collectAllowedNumbers,
   detectCallIntegrity,
   callIntegrityAlertSubject,
+  clipAlertDetail,
+  clipOnWordBoundary,
   extractSpokenNumbers,
   formatCallIntegrityAlert,
   hasRoleLeak,
+  isUnheardAssistantTurn,
   kindPhrase,
   isAcceptPrompt,
   looksMachineGenerated,
@@ -147,6 +150,36 @@ describe("detectCallIntegrity", () => {
     );
   });
 
+  it("does not count [Muted] or [Voicemail] assistant turns as a conversation", () => {
+    // Sep 1 2026 call 9b03d39d (Jon, Amy Laidlaw). The email named three
+    // assistant turns against two machine caller turns. Only "Hi Jon," was
+    // heard: the model turn was muted, the badge is code-written.
+    const findings = detectCallIntegrity([
+      t("caller", "Hi, you've reached Jon. Please leave a message after the tone."),
+      t("assistant", "Hi Jon,"),
+      t("caller", "I couldn't hear you. To continue recording, press two."),
+      t(
+        "assistant",
+        "[Muted] This is Amy Laidlaw Real Estate's office, calling about your inquiry."
+      ),
+      t("assistant", "[Voicemail] Hi Jon, this is Amy Laidlaw with Amy Laidlaw Real Estate.")
+    ]);
+    expect(findings.map((f) => f.kind)).not.toContain("talked_to_recording");
+  });
+
+  it("does not blame muted or badge turns for a leaked role or invented number", () => {
+    const findings = detectCallIntegrity(
+      [
+        t("caller", "hello"),
+        t("assistant", "[Muted] Is that correct?user\nCorrect."),
+        t("assistant", "[Voicemail] Call us back at 480-269-7977.")
+      ],
+      { allowedNumbers: new Set(["6026951142"]) }
+    );
+    expect(findings.map((f) => f.kind)).not.toContain("role_leak");
+    expect(findings.map((f) => f.kind)).not.toContain("invented_contact_number");
+  });
+
   it("ignores empty and malformed turns without throwing", () => {
     expect(
       detectCallIntegrity([
@@ -160,6 +193,15 @@ describe("detectCallIntegrity", () => {
 
   it("defaults to three assistant turns", () => {
     expect(DEFAULT_MIN_ASSISTANT_TURNS).toBe(3);
+  });
+});
+
+describe("isUnheardAssistantTurn", () => {
+  it("names the two prefixes the lead never heard", () => {
+    expect(isUnheardAssistantTurn("[Voicemail] script")).toBe(true);
+    expect(isUnheardAssistantTurn("[Muted] chatter")).toBe(true);
+    expect(isUnheardAssistantTurn("  [Muted] still")).toBe(true);
+    expect(isUnheardAssistantTurn("Hi Jon,")).toBe(false);
   });
 });
 
@@ -409,7 +451,7 @@ describe("formatCallIntegrityAlert", () => {
       detail: "x".repeat(400)
     }));
     const text = formatCallIntegrityAlert(many);
-    expect(text.length).toBeLessThan(4000);
+    expect(text.length).toBeLessThan(8000);
     expect(text).toContain("40 call-integrity failures");
     expect(text).toContain("and 30 more");
   });
@@ -427,6 +469,47 @@ describe("formatCallIntegrityAlert", () => {
 
   it("returns empty string for no findings, so callers cannot post nothing", () => {
     expect(formatCallIntegrityAlert([])).toBe("");
+  });
+
+  it("keeps the Sep 1 talked_to_recording detail intact instead of clipping mid-word", () => {
+    const detail =
+      "3 assistant turns against 2 machine-sounding caller turns, e.g. " +
+      '"Hi, you\'ve reached Jon. Please leave a message after the tone or pre-record."';
+    const text = formatCallIntegrityAlert([
+      {
+        ...call,
+        transcriptId: "9b03d39d-7b2c-4a1e-a02d-76e8c8482c30",
+        kind: "talked_to_recording",
+        detail
+      }
+    ]);
+    expect(text).toContain("or pre-record");
+    expect(text).not.toMatch(/or pre"/);
+  });
+});
+
+describe("clipAlertDetail", () => {
+  it("cuts on a word boundary and closes an open quote", () => {
+    const detail =
+      '3 assistant turns against 2 machine-sounding caller turns, e.g. "Hi, you\'ve reached Jon. Please leave a message after the tone or pre-record your name and number for a callback."';
+    const clipped = clipAlertDetail(detail, 160);
+    expect(clipped.endsWith('"')).toBe(true);
+    expect(clipped).toContain("...");
+    expect(clipped).not.toMatch(/or pre$/);
+    expect(clipped.includes("pre-record") || clipped.includes("...")).toBe(true);
+  });
+
+  it("leaves a short detail alone", () => {
+    expect(clipOnWordBoundary("short", 160)).toBe("short");
+    expect(clipAlertDetail("no quotes here", 160)).toBe("no quotes here");
+  });
+
+  it("clips a single long token without searching for a space", () => {
+    expect(clipOnWordBoundary("x".repeat(50), 10)).toBe(`${"x".repeat(7)}...`);
+  });
+
+  it("strips trailing punctuation before the ellipsis", () => {
+    expect(clipOnWordBoundary("Hello, world extra words here", 12)).toBe("Hello...");
   });
 });
 
@@ -565,6 +648,12 @@ describe("detectCallIntegrity: figures nothing gave it", () => {
     expect(amounts).toHaveLength(2);
     expect(amounts[0]!.detail).toContain("$375,000");
     expect(amounts[1]!.detail).toContain("$395,000");
+  });
+
+  it("ignores a muted turn that would otherwise look invented", () => {
+    const turns = [t("caller", "Sure."), t("assistant", `[Muted] ${INCIDENT}`)];
+    const findings = detectCallIntegrity(turns, { allowedAmounts: callerAmounts(turns) });
+    expect(findings.map((f) => f.kind)).not.toContain("invented_amount");
   });
 
   it("stays quiet when the caller supplied the figure", () => {

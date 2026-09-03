@@ -85,7 +85,10 @@ export type TranscriptAdapter = {
 };
 
 export type TranscriptRecorder = {
-  ingest: (message: LiveTranscriptMessage | null | undefined) => Promise<void>;
+  ingest: (
+    message: LiveTranscriptMessage | null | undefined,
+    opts?: { assistantMuted?: boolean }
+  ) => Promise<void>;
   finalize: (opts?: { errored?: boolean }) => Promise<void>;
   /**
    * Record that interpreting starts HERE, at the next turn to be written.
@@ -141,6 +144,7 @@ export function createTranscriptRecorder(
   let createInFlight: Promise<string | null> | null = null;
   let callerBuf = "";
   let assistantBuf = "";
+  let assistantMuted = false;
   let turnIndex = 0;
   let finalized = false;
   // Tracks every in-flight `flushTurn` so `finalize` can wait for them to
@@ -187,9 +191,12 @@ export function createTranscriptRecorder(
     // match the synchronous order flushTurn was invoked in, which is the
     // order the turnComplete events arrived.
     const caller = callerBuf.trim();
-    const assistant = stripEmDashes(assistantBuf.trim());
+    const assistantRaw = stripEmDashes(assistantBuf.trim());
+    const assistant =
+      assistantMuted && assistantRaw !== "" ? `[Muted] ${assistantRaw}` : assistantRaw;
     callerBuf = "";
     assistantBuf = "";
+    assistantMuted = false;
     if (!caller && !assistant) return;
     const callerIdx = caller ? turnIndex++ : -1;
     const assistantIdx = assistant ? turnIndex++ : -1;
@@ -229,11 +236,17 @@ export function createTranscriptRecorder(
     return p;
   }
 
-  async function ingest(message: LiveTranscriptMessage | null | undefined): Promise<void> {
+  async function ingest(
+    message: LiveTranscriptMessage | null | undefined,
+    opts: { assistantMuted?: boolean } = {}
+  ): Promise<void> {
     if (finalized || !message) return;
     const { callerText, assistantText, turnComplete } = extractTranscriptionFrame(message);
     if (callerText) callerBuf += callerText;
-    if (assistantText) assistantBuf += assistantText;
+    if (assistantText) {
+      assistantBuf += assistantText;
+      if (opts.assistantMuted) assistantMuted = true;
+    }
     if (turnComplete) {
       await trackFlush();
     }

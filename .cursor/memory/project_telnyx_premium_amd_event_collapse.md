@@ -85,6 +85,22 @@ Correlation, not proof: Telnyx ran scheduled "Programmable Voice" platform
 maintenance completed Aug 26 and Aug 27 (status page), and an Aug 25
 outbound-PSTN incident. The collapse begins with the first calls of Aug 25.
 
+## UPDATE 2026-09-03: events resumed Aug 29, and prompt_ended is not the beep
+
+Greeting and detection events returned after Aug 29. The collapse window
+was Aug 25-28. Speaking on the resumed `greeting.ended result=prompt_ended`
+then lost about a third of Amy's voicemails: Telnyx fires `prompt_ended` at
+the first pause in the greeting, not the beep, then cancels an in-flight
+speak (`cancelled_amd`) when the real beep arrives. `call_screening.detected`
+can arrive AFTER `prompt_ended` (Robert, Sep 2, +31.5s after the machine
+stamp); the documented order does not hold. The 25s sweep grace spoke into
+that still-pending screen. Detail and the fix:
+[[voicemail-beep-trigger-sep2026]].
+
+Grace is now 40s. Edge speaks only on `beep_detected`. `voicemail_spoken`
+is no longer promoted from the wall clock when the latest speak ended
+`cancelled_amd` or `call_hangup` without a restart.
+
 ## Consequence chain
 
 Under `premium_ios_call_screening_detection` a `machine` verdict is
@@ -106,7 +122,9 @@ side; the Edge side kept it only because the path was dead in practice.
 
 A 15-second pg_cron sweep (`voice-amd-resolution-sweep`; the job's SQL
 gates its net.http_post on an indexed EXISTS, so idle ticks make no HTTP
-call) forces resolution of a machine stamp unresolved past a 25s grace:
+call) forces resolution of a machine stamp unresolved past a 40s grace
+(raised from 25s so the sweep cannot speak into a still-pending iOS
+screen; Telnyx default `prompt_end_timeout_millis` is 30s):
 speak the configured script or hang up scriptless legs, through the SAME
 `voice_claim_voicemail_speak` claim as the greeting handler and the
 model's tool, so no two paths can double-speak. `stampMachine` writes

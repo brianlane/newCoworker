@@ -108,6 +108,20 @@ describe("voice-bridge transcript recorder", () => {
     ]);
   });
 
+  it("prefixes assistant turns generated while muted so the sweep can skip them", async () => {
+    const { adapter, turns } = makeAdapter();
+    const r = createTranscriptRecorder(adapter, INIT);
+    await r.ingest(frame({ assistant: "Hi Jon,", turnComplete: true }));
+    await r.ingest(frame({ assistant: "This is Amy" }), { assistantMuted: true });
+    await r.ingest(frame({ assistant: " Laidlaw's office.", turnComplete: true }), {
+      assistantMuted: true
+    });
+    expect(turns.map((t) => t.content)).toEqual([
+      "Hi Jon,",
+      "[Muted] This is Amy Laidlaw's office."
+    ]);
+  });
+
   it("increments turnIndex across multiple turns and reuses the transcript row", async () => {
     const { adapter, createCalls, turns } = makeAdapter();
     const r = createTranscriptRecorder(adapter, INIT);

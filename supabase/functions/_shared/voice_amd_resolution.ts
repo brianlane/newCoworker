@@ -35,14 +35,15 @@
 /**
  * How long an UNRESOLVED machine stamp must stand before the sweep acts.
  *
- * Chosen against the healthy-period event timings (Aug 12-24): greeting.ended
- * arrived 5-10s after the verdict, screening (had it ever fired) inside the
- * same window, and the model's voicemail_reached claim typically landed
- * within ~20s of the verdict (greeting end plus beep). At 25s every
- * legitimate resolver has had its turn, while the mailbox (recording limits
- * run 60-180s) still has ample room for the script.
+ * Chosen against the iOS screening window, not against a healthy beep.
+ * Telnyx's default `prompt_end_timeout_millis` is 30s (we do not send a
+ * custom `answering_machine_detection_config`), and a real screening event
+ * landed 31.5s after the machine stamp (Robert, 2026-09-02, call ac0P3P).
+ * 25s spoke into that still-pending screen. 40s is past the default timeout
+ * plus a small buffer; timely delivery is the beep (Telnyx `beep_detected`
+ * or the bridge detector), not this sweep.
  */
-export const AMD_RESOLUTION_GRACE_MS = 25_000;
+export const AMD_RESOLUTION_GRACE_MS = 40_000;
 
 /**
  * Stamps older than this are stale sessions (a crashed leg, a lost hangup),

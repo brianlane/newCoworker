@@ -250,10 +250,21 @@ Rollout: fleet redeploy required for the bridge; Amy enrolled in
 `voice_spoken_number_guard` post-deploy (deterministic mode arms from her
 existing `voice_amd_resolution` enrollment). Grade with transcripts +
 `debug/amd-resolution-measure.ts`; watch `voice_bridge_spoken_number_suppressed`,
-`voice_bridge_voicemail_deterministic`, `voice_bridge_end_call_deferred_for_voicemail`,
+  `voice_bridge_voicemail_deterministic`, `voice_bridge_end_call_deferred_for_voicemail`,
 teardown `muted_chunks`. Known limits: digit-form transcriptions only
 (words-spelled-out slips the regex), and a badly lagging transcription
 could lose the race on a long turn.
+
+## 2026-09-03: deterministic delivery was speaking at the wrong moment
+
+#1742 stopped the model inventing callback numbers. It did not land the
+script at the beep. Aug 29 to Sep 2, speaking on `prompt_ended` (first
+pause, not the beep) lost about a third of Amy's voicemails to
+`cancelled_amd` hangups, and four of those five still stamped
+`voicemail_spoken: true` via the wall-clock promote. The Sep 1 integrity
+email was a separate false alarm (muted turn + `[Voicemail]` badge counted
+as heard speech) with a mid-word clip. Fix and grade notes:
+[[voicemail-beep-trigger-sep2026]].
 
 ## Original fix direction (superseded by the above)
 

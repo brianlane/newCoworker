@@ -206,6 +206,56 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
     expect(body.data.turns[1].role).toBe("assistant");
   });
 
+  it("hides [Muted] turns so they do not read as heard audio", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "u",
+      email: "o@o.com",
+      isAdmin: false
+    });
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
+    vi.mocked(getTranscriptById).mockResolvedValue(TRANSCRIPT);
+    vi.mocked(listTurns).mockResolvedValue([
+      {
+        id: 1,
+        transcript_id: TRANSCRIPT_ID,
+        role: "assistant",
+        content: "Hi Jon,",
+        turn_index: 0,
+        started_at: null,
+        ended_at: null,
+        created_at: "2026-04-23T00:00:01Z"
+      },
+      {
+        id: 2,
+        transcript_id: TRANSCRIPT_ID,
+        role: "assistant",
+        content: "[Muted] This is Amy Laidlaw Real Estate's office.",
+        turn_index: 1,
+        started_at: null,
+        ended_at: null,
+        created_at: "2026-04-23T00:00:02Z"
+      },
+      {
+        id: 3,
+        transcript_id: TRANSCRIPT_ID,
+        role: "assistant",
+        content: "[Voicemail] Call us back at 602-695-1142.",
+        turn_index: 2,
+        started_at: null,
+        ended_at: null,
+        created_at: "2026-04-23T00:00:03Z"
+      }
+    ]);
+
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.turns.map((t: { content: string }) => t.content)).toEqual([
+      "Hi Jon,",
+      "[Voicemail] Call us back at 602-695-1142."
+    ]);
+  });
+
   it("validates the transcript-id param shape (non-uuid rejected)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",

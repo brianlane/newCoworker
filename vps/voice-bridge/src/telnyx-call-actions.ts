@@ -271,6 +271,45 @@ export async function telnyxStreamingStop(
   }
 }
 
+/**
+ * Speak text on a live call leg via Telnyx TTS (`/actions/speak`). Lockstep
+ * body with `_shared/telnyx_call_actions.ts` telnyxSpeak: payload, voice,
+ * language. Used by the bridge-side deterministic voicemail speaker when
+ * the uplink beep detector fires.
+ */
+export async function telnyxSpeak(
+  apiKey: string,
+  callControlId: string,
+  text: string,
+  voice = "female",
+  fetchImpl: typeof fetch = fetch,
+  language = "en-US"
+): Promise<TelnyxActionResult> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!callControlId) return { ok: false, status: 0, body: "missing call_control_id" };
+  if (!text) return { ok: false, status: 0, body: "missing text" };
+
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/speak`;
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        payload: text,
+        voice,
+        language
+      })
+    });
+    const body = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: body.slice(0, 500) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export type TelnyxSmsOptions = {
   toE164: string;
   fromE164: string;

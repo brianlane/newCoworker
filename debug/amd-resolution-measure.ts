@@ -118,10 +118,53 @@ async function transcriptLooksLive(callControlId: string): Promise<boolean> {
   return spoken.length >= 3;
 }
 
+type TelnyxDelivery = {
+  webhook?: {
+    event_type?: string;
+    payload?: { call_control_id?: string; status?: string };
+  };
+};
+
+const cancelledAmd = new Set<string>();
+const telnyxKey = process.env.TELNYX_API_KEY ?? "";
+if (telnyxKey) {
+  try {
+    let url: string | null =
+      `https://api.telnyx.com/v2/webhook_deliveries?page[size]=250&filter[started_at][gte]=${encodeURIComponent(since)}`;
+    for (let page = 0; page < 8 && url; page++) {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${telnyxKey}` } });
+      if (!res.ok) {
+        console.warn("telnyx webhook_deliveries", res.status, (await res.text()).slice(0, 200));
+        break;
+      }
+      const json = (await res.json()) as {
+        data?: TelnyxDelivery[];
+        meta?: { next_page_url?: string | null };
+      };
+      for (const row of json.data ?? []) {
+        const eventType = row.webhook?.event_type ?? "";
+        const status = String(row.webhook?.payload?.status ?? "")
+          .trim()
+          .toLowerCase();
+        const cc = row.webhook?.payload?.call_control_id ?? "";
+        if (cc && eventType.includes("speak.ended") && status === "cancelled_amd") {
+          cancelledAmd.add(cc);
+        }
+      }
+      url = json.meta?.next_page_url ?? null;
+    }
+  } catch (err) {
+    console.warn("telnyx webhook_deliveries fetch failed", err);
+  }
+} else {
+  console.log("(no TELNYX_API_KEY: skipped webhook_deliveries cancelled_amd cross-check)\n");
+}
+
 let machine = 0;
 let verdictBacked = 0;
 let swept = 0;
 let spokenCount = 0;
+let cancelledCount = 0;
 const alarms: string[] = [];
 console.log(`flow-placed calls since ${since}: ${calls.length}\n`);
 for (const call of calls) {
@@ -129,6 +172,12 @@ for (const call of calls) {
   const tel = byCall.get(call.call_control_id) ?? { verdicts: [], sweep: [] };
   const isMachine = ctx.machine_detected === true;
   const spoken = ctx.voicemail_spoken === true;
+  const trigger = typeof ctx.voicemail_speak_trigger === "string" ? ctx.voicemail_speak_trigger : "-";
+  const ended =
+    typeof ctx.voicemail_speak_ended_status === "string" ? ctx.voicemail_speak_ended_status : "-";
+  const restarted = ctx.voicemail_speak_restarted === true;
+  const telnyxCancelled = cancelledAmd.has(call.call_control_id);
+  const interrupted = (ended === "cancelled_amd" || ended === "call_hangup") && !restarted;
   const speakVia =
     typeof ctx.voicemail_speak_started_at === "string"
       ? "edge"
@@ -138,19 +187,27 @@ for (const call of calls) {
   if (isMachine) machine++;
   if (isMachine && tel.verdicts.length) verdictBacked++;
   if (tel.sweep.length) swept++;
-  if (isMachine && spoken) spokenCount++;
+  if (interrupted || (telnyxCancelled && !restarted)) cancelledCount++;
+  const delivered = isMachine && spoken && !interrupted && !(telnyxCancelled && !restarted);
+  if (delivered) spokenCount++;
   let alarm = "";
   if (tel.sweep.length && (await transcriptLooksLive(call.call_control_id))) {
     alarm = "  << ALARM: sweep acted on a live-looking transcript";
     alarms.push(call.call_control_id);
   }
+  if (telnyxCancelled && spoken && !restarted) {
+    alarm += "  << cancelled_amd (do not count as delivered)";
+  }
   console.log(
     `${call.created_at}  ${call.call_control_id.slice(0, 18)}… to=${call.from_e164 ?? "?"}\n` +
-      `  machine=${isMachine} verdicts=[${tel.verdicts.join(",")}] sweep=[${tel.sweep.join(",")}] spoken=${spoken} via=${speakVia}${alarm}`
+      `  machine=${isMachine} verdicts=[${tel.verdicts.join(",")}] sweep=[${tel.sweep.join(",")}] ` +
+      `spoken=${spoken} via=${speakVia} trigger=${trigger} ended=${ended} restarted=${restarted}` +
+      `${telnyxCancelled ? " telnyx_cancelled_amd=yes" : ""}${alarm}`
   );
 }
 console.log(
-  `\nsummary: machine=${machine} verdict_backed=${verdictBacked} sweep_acted=${swept} scripted_message_delivered=${spokenCount}`
+  `\nsummary: machine=${machine} verdict_backed=${verdictBacked} sweep_acted=${swept} ` +
+    `scripted_message_delivered=${spokenCount} cancelled_amd=${cancelledCount}`
 );
 if (alarms.length) {
   console.log(`ALARMS (listen to recordings before widening rollout): ${alarms.join(", ")}`);

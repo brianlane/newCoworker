@@ -82,6 +82,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Plan change fires subscription.deleted while row looks active](project_change_plan_deleted_webhook_ordering.md) - guard on the replacement row
 - [voice-bridge escapes root tsc](project_voice_bridge_excluded_from_root_tsc.md) - type errors pass CI, break the redeploy; run its own tsc
 - [AMD false negatives are routine](project_amd_false_negatives_and_prompt_ended.md) - human_residence on voicemail; prompt_ended not iOS-only
+- [Voicemail beep is the only honest speak trigger](project_voicemail_beep_trigger_sep2026.md) - prompt_ended is the first pause (cancelled_amd hangup); Sep 1 email was muted-turn false alarm + mid-word clip; speak only on beep_detected; 40s sweep grace
 - [Always babysit, never ask](feedback_always_babysit_never_ask.md) - carry every PR to green + merged + worktree gone, own fixes included
 - [Booking alerts fire on EVERY booking](project_booking_alert_audience.md) - misnamed table; dashboard bookings never alert
 - [A step `when` var must already exist](project_flow_when_var_must_be_produced.md) - borrow a real var, compare to an impossible value
@@ -118,8 +119,8 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Undoing a claim needs ownership cleared](project_undoing_a_claim_needs_ownership_cleared.md) - clear contacts.owner_employee_id first, alias-aware
 - [Owner asks that reach the flows](project_owner_ask_reaches_the_flows.md) - memory NEVER reaches AiFlows; owner SMS runs on the platform engine
 - [WhatsApp delivery truth](project_whatsapp_delivery_truth.md) - ok = ACCEPTED not delivered; receipts since #1609; KYP blocked by billing 131042
-- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - SOLVED #1742: the script NEVER reached the model (dropped tool-response field); deterministic TTS delivery + spoken-number firewall; prompt fixes #1612 had failed
-- [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25 platform-side; #1674 sweep forces resolution at 25s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
+- [AI invents callback numbers on voicemail](project_ai_invents_callback_numbers_on_voicemail.md) - SOLVED #1742: the script NEVER reached the model (dropped tool-response field); deterministic TTS delivery + spoken-number firewall; prompt fixes #1612 had failed; post-#1742 grade: speaking on prompt_ended lost ~1/3 of voicemails (see voicemail-beep-trigger-sep2026)
+- [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25-28 platform-side; events resumed Aug 29; #1674 sweep forces resolution at 40s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
 - [Edge admin-alert email was stale](project_edge_admin_alert_email_stale.md) - FIXED Aug 27; Edge secrets held the personal gmail; recipient-only, digests verify by sha256
 - [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; bounce of a sent pitch retires the prospect; provider_message_id NOT unique
 - [Delivered is not received](feedback_delivered_is_not_received.md) - a carrier receipt proves a device ACKed, never that the person reads it; a loud broken channel beats a silent one

@@ -20,9 +20,10 @@
  * kill the leg early (today's failure ended the call 9 seconds after the
  * verdict, before any deterministic path could act), and the platform's
  * edge machinery speaks the script itself over Telnyx text-to-speech:
- * `greeting.ended` when Telnyx delivers the beep event, else the AMD
- * resolution sweep 25 seconds after the machine stamp (PR #1674). Both run
- * through the shared `voice_claim_voicemail_speak` claim, both stamp
+ * `greeting.ended` when Telnyx delivers `beep_detected`, else the bridge
+ * uplink beep detector, else the AMD resolution sweep 40 seconds after the
+ * machine stamp (past Telnyx's default 30s prompt_end_timeout). All three
+ * run through the shared `voice_claim_voicemail_speak` claim, stamp
  * `voicemail_spoken` only on confirmed playout, and a spoken script is then
  * verbatim BY CONSTRUCTION.
  *
@@ -121,7 +122,7 @@ export const VOICEMAIL_DETERMINISTIC_END_CALL_REPLY =
  * How long the model's `end_call` is refused after the deterministic verdict.
  *
  * Long enough for the slowest legitimate resolution: the sweep runs on a 15s
- * cadence and acts 25s after the machine stamp, then the spoken script needs
+ * cadence and acts 40s after the machine stamp, then the spoken script needs
  * its playout (the longest authored script today reads in well under 30s).
  * Short enough that a broken resolver cannot pin the leg: past this window
  * the model may end the call again, and the mailbox's own recording limit
@@ -165,3 +166,28 @@ export const VOICEMAIL_MUTE_LIFTED_CUE =
   "on the line. Continue the conversation normally: if they speak, respond; if the line " +
   "is quiet, greet them once with your opening line. End with the end_call tool when the " +
   "conversation is genuinely over.";
+
+/**
+ * Whether a detected uplink beep should make the bridge speak the voicemail.
+ *
+ * Load-bearing: Telnyx `machine_detected` under
+ * `premium_ios_call_screening_detection` is provisional. An Apple screening
+ * tone in the Goertzel band would otherwise fire the script into a live
+ * person (Robert, 2026-09-02, never called `voicemail_reached`). Speak only
+ * when the model already reported a mailbox OR a caller turn already matched
+ * a recording phrase. Screening, or a claim someone else holds, is a skip
+ * (no diag). A tone with neither piece of evidence is `no_verdict` (diag,
+ * do nothing).
+ */
+export type BridgeBeepSpeakDecision = "speak" | "skip" | "no_verdict";
+
+export function shouldSpeakOnBridgeBeep(state: {
+  iosScreening: boolean;
+  alreadyClaimed: boolean;
+  voicemailReached: boolean;
+  heardMachinePhrase: boolean;
+}): BridgeBeepSpeakDecision {
+  if (state.iosScreening || state.alreadyClaimed) return "skip";
+  if (state.voicemailReached || state.heardMachinePhrase) return "speak";
+  return "no_verdict";
+}

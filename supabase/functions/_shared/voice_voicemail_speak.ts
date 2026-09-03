@@ -67,10 +67,35 @@ export type VoicemailSpeakOutcome =
   /** Speak ACCEPTED; started_at stamped. Playout confirmation comes later. */
   | "speaking";
 
+/**
+ * Why this speak was issued. Stamped on the session so the measurement script
+ * can tell a beep-triggered delivery from a sweep backstop or a cancelled_amd
+ * retry without reading Telnyx's lossy webhook log.
+ */
+export type VoicemailSpeakTrigger = "beep" | "sweep" | "bridge_beep" | "cancelled_retry";
+
+/** Voice name handed to Telnyx `/actions/speak`. Pinned by the lockstep test. */
+export const VOICEMAIL_SPEAK_VOICE = "female";
+
+export type VoicemailSpeakOpts = {
+  trigger?: VoicemailSpeakTrigger;
+  /**
+   * Skip the first-speak claim and the stream-stop. Used when Telnyx
+   * cancelled an early speak (`cancelled_amd`) and we already hold the
+   * claim: the stream is already detached, and re-claiming
+   * `voice_claim_voicemail_speak` would return already_claimed and never
+   * re-issue the message. The retry itself is still compare-and-set via
+   * `voice_claim_voicemail_retry`, so two in-flight speak.ended handlers
+   * cannot both play the script.
+   */
+  alreadyClaimed?: boolean;
+};
+
 export async function speakVoicemailDeterministic(
   deps: VoicemailSpeakDeps,
   callControlId: string,
-  script: string
+  script: string,
+  opts: VoicemailSpeakOpts = {}
 ): Promise<VoicemailSpeakOutcome> {
   const { rpc, apiKey, fetchImpl } = deps;
 
@@ -87,30 +112,52 @@ export async function speakVoicemailDeterministic(
     if (error) console.error("voicemail: claim release failed", error);
   };
 
-  const { data: claimed, error: claimErr } = await rpc("voice_claim_voicemail_speak", {
-    p_call_control_id: callControlId
-  });
-  if (claimErr) {
-    console.error("voicemail: claim failed", claimErr);
-    return await giveUpAndHangUp("claim_failed");
-  }
-  if (claimed !== true) return "already_claimed";
+  if (opts.alreadyClaimed) {
+    // We already hold the first-speak claim. Flip voicemail_speak_retry_claimed
+    // in one compare-and-set so a redelivered cancelled_amd cannot speak twice.
+    // Do not hang up on a lost race: the winner owns the leg.
+    // Do NOT flip voicemail_speak_restarted here: that flag means the retry
+    // speak was ACCEPTED, and hangup uses it to allow the wall-clock promote.
+    const { data: claimed, error: retryErr } = await rpc("voice_claim_voicemail_retry", {
+      p_call_control_id: callControlId
+    });
+    if (retryErr) {
+      console.error("voicemail: retry claim failed", retryErr);
+      return "claim_failed";
+    }
+    if (claimed !== true) return "already_claimed";
+  } else {
+    const { data: claimed, error: claimErr } = await rpc("voice_claim_voicemail_speak", {
+      p_call_control_id: callControlId
+    });
+    if (claimErr) {
+      console.error("voicemail: claim failed", claimErr);
+      return await giveUpAndHangUp("claim_failed");
+    }
+    if (claimed !== true) return "already_claimed";
 
-  const stopped = await telnyxStreamingStop(apiKey, callControlId, fetchImpl);
-  if (!stopped.ok) {
-    // Speaking now would record our message UNDER the assistant's chatter.
-    // A clean "no message" beats an unintelligible one.
-    console.error(
-      "voicemail: streaming_stop failed",
-      callControlId,
-      stopped.status,
-      (await stopped.text()).slice(0, 300)
-    );
-    await releaseClaim();
-    return await giveUpAndHangUp("stream_stop_failed");
+    const stopped = await telnyxStreamingStop(apiKey, callControlId, fetchImpl);
+    if (!stopped.ok) {
+      // Speaking now would record our message UNDER the assistant's chatter.
+      // A clean "no message" beats an unintelligible one.
+      console.error(
+        "voicemail: streaming_stop failed",
+        callControlId,
+        stopped.status,
+        (await stopped.text()).slice(0, 300)
+      );
+      await releaseClaim();
+      return await giveUpAndHangUp("stream_stop_failed");
+    }
   }
 
-  const res = await telnyxSpeak(apiKey, callControlId, script, "female", fetchImpl);
+  const res = await telnyxSpeak(
+    apiKey,
+    callControlId,
+    script,
+    VOICEMAIL_SPEAK_VOICE,
+    fetchImpl
+  );
   if (!res.ok) {
     console.error(
       "voicemail: speak failed",
@@ -125,12 +172,15 @@ export async function speakVoicemailDeterministic(
   // The command is accepted and playout is starting. Stamp WHEN it started
   // and HOW LONG the script is, so completion can be judged honestly later
   // (call.speak.ended, or the hangup path's plausibility fallback).
+  const patch: Record<string, unknown> = {
+    voicemail_speak_started_at: deps.nowIso(),
+    voicemail_speak_script_chars: script.length
+  };
+  if (opts.trigger) patch.voicemail_speak_trigger = opts.trigger;
+  if (opts.alreadyClaimed) patch.voicemail_speak_restarted = true;
   const { error: markErr } = await rpc("voice_session_context_merge", {
     p_call_control_id: callControlId,
-    p_patch: {
-      voicemail_speak_started_at: deps.nowIso(),
-      voicemail_speak_script_chars: script.length
-    }
+    p_patch: patch
   });
   if (markErr) {
     // The message IS going out; a lost stamp only understates it.

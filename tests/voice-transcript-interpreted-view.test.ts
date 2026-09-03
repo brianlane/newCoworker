@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forwardedCallNotice, turnSpeaker } from "@/lib/voice/transcript-badges";
+import { forwardedCallNotice, isMutedTranscriptTurn, turnSpeaker } from "@/lib/voice/transcript-badges";
 
 /**
  * What the call view is allowed to CLAIM about a transferred call.
@@ -93,5 +93,19 @@ describe("turnSpeaker", () => {
     expect(
       turnSpeaker({ role: "assistant", turnIndex: 9, interpretedFromTurnIndex: 7 })
     ).toBe("assistant");
+  });
+});
+
+describe("isMutedTranscriptTurn", () => {
+  it("hides model audio the lead never heard", () => {
+    expect(isMutedTranscriptTurn("[Muted] This is Amy Laidlaw Real Estate's office.")).toBe(true);
+    expect(isMutedTranscriptTurn("  [Muted] still muted")).toBe(true);
+  });
+
+  it("leaves heard speech and the voicemail badge visible", () => {
+    expect(isMutedTranscriptTurn("Hi Jon,")).toBe(false);
+    expect(isMutedTranscriptTurn("[Voicemail] Call us back at 602-695-1142.")).toBe(false);
+    expect(isMutedTranscriptTurn("")).toBe(false);
+    expect(isMutedTranscriptTurn(null)).toBe(false);
   });
 });

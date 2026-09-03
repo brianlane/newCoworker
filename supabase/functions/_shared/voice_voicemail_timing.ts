@@ -57,6 +57,121 @@ export function edgeVoicemailPlausiblyDelivered(opts: {
 }
 
 /**
+ * What `call.speak.ended` should do to a voicemail we issued.
+ *
+ * Extracted from the Deno handler so the status matrix is unit-tested. The
+ * handler used to hang up on every speak.ended, including `cancelled_amd`,
+ * which is Telnyx cutting an early speak because it just heard the beep:
+ * hanging up then is how five late-Aug voicemails recorded nothing.
+ *
+ *  - `stamp_and_hangup`: playout finished and the wall clock agrees.
+ *  - `retry_speak`: Telnyx cancelled an early speak, or reported completed
+ *    faster than half the script could have played. Re-issue once.
+ *  - `record_only`: the leg is already ending (`call_hangup`) or a retry
+ *    already happened. Stamp the status, do not hang up, do not loop.
+ */
+export type SpeakEndedAction = "stamp_and_hangup" | "retry_speak" | "record_only";
+
+/** Whether this speak.ended belongs to a voicemail we issued. */
+export type SpeakEndedOwnership = "ours" | "legacy_spoken" | "not_voicemail";
+
+/**
+ * Slack for matching a speak.ended to the speak we just accepted. We stamp
+ * `voicemail_speak_started_at` after Telnyx's 2xx, so THIS speak's ended
+ * event can slightly precede the stamp. Two seconds covers that without
+ * swallowing a prior speak that ended seconds earlier.
+ */
+export const SPEAK_ENDED_STALE_SLACK_MS = 2_000;
+
+/** Status values that mean the message did not finish playing. */
+const INTERRUPTED_SPEAK_STATUSES = new Set(["cancelled_amd", "call_hangup"]);
+
+/**
+ * Is this `call.speak.ended` for a voicemail we issued?
+ *
+ * `voicemail_speak_started_at` is the honest "we issued this speak" mark.
+ * A legacy `voicemail_spoken` stamp with no start time is the deploy-boundary
+ * path: the old code stamped spoken at accept. That call already played a
+ * message; it is ours to hang up, not to retry.
+ */
+export function classifySpeakEndedOwnership(opts: {
+  speakStartedAt: unknown;
+  voicemailSpoken: unknown;
+}): SpeakEndedOwnership {
+  if (typeof opts.speakStartedAt === "string") return "ours";
+  if (opts.voicemailSpoken === true) return "legacy_spoken";
+  return "not_voicemail";
+}
+
+/**
+ * True when the event happened before the current speak started, so it is a
+ * redelivery (or a late first-speak ended) and must not hang up a retry.
+ */
+export function speakEndedEventIsStale(
+  eventOccurredAtIso: unknown,
+  speakStartedAtIso: unknown
+): boolean {
+  const occurred = Date.parse(typeof eventOccurredAtIso === "string" ? eventOccurredAtIso : "");
+  const started = Date.parse(typeof speakStartedAtIso === "string" ? speakStartedAtIso : "");
+  if (!Number.isFinite(occurred) || !Number.isFinite(started)) return false;
+  return occurred + SPEAK_ENDED_STALE_SLACK_MS < started;
+}
+
+export function classifySpeakEnded(opts: {
+  status: unknown;
+  alreadyRestarted: boolean;
+  plausible: boolean;
+  /** True when `voicemail_spoken` is already on the session. Never retry. */
+  alreadySpoken?: boolean;
+  eventOccurredAtIso?: unknown;
+  speakStartedAtIso?: unknown;
+  /**
+   * True when `voice_claim_voicemail_retry` won. That is earlier than
+   * `alreadyRestarted` (which waits for Telnyx 2xx). While the retry speak
+   * is in flight, a redelivered first completed must not hang up.
+   */
+  retryClaimed?: boolean;
+}): SpeakEndedAction {
+  if (speakEndedEventIsStale(opts.eventOccurredAtIso, opts.speakStartedAtIso)) {
+    return "record_only";
+  }
+  // Claimed but not yet accepted: do not hang up on the first speak's
+  // completed, and do not issue a second retry.
+  if (opts.retryClaimed === true && !opts.alreadyRestarted) {
+    return "record_only";
+  }
+  const status = typeof opts.status === "string" ? opts.status.trim().toLowerCase() : "";
+  const noRetry = opts.alreadyRestarted || opts.alreadySpoken === true;
+  if (status === "completed") {
+    if (opts.plausible) {
+      // After a retry, a completed without an occurred_at cannot be proven
+      // to belong to this speak. Hanging up would cut the retry mid-playout
+      // if this is a redelivered first completed judged against the retry clock.
+      if (opts.alreadyRestarted && typeof opts.eventOccurredAtIso !== "string") {
+        return "record_only";
+      }
+      return "stamp_and_hangup";
+    }
+    return noRetry ? "record_only" : "retry_speak";
+  }
+  if (status === "cancelled_amd") {
+    return noRetry ? "record_only" : "retry_speak";
+  }
+  return "record_only";
+}
+
+/**
+ * True when a speak.ended status means the audio was cut, so the hangup
+ * path must not promote `voicemail_spoken` from the wall clock. A restart
+ * that later completed is a different speak; the caller passes the LATEST
+ * status, and a completed restart is not interrupted.
+ */
+export function speakEndedWasInterrupted(status: unknown): boolean {
+  const value = typeof status === "string" ? status.trim().toLowerCase() : "";
+  return INTERRUPTED_SPEAK_STATUSES.has(value);
+}
+
+/**
  * The hangup path's single question: did a voicemail message actually go
  * out on this leg?
  *
@@ -68,6 +183,10 @@ export function edgeVoicemailPlausiblyDelivered(opts: {
  * the configured script is the fallback for a context where the merge half
  * failed. No speak start stamp means no Edge speak was ever issued, so only
  * the direct stamp can answer.
+ *
+ * An interrupted speak (`cancelled_amd` / `call_hangup`) that was never
+ * retried cannot have delivered, no matter how long the leg stayed up:
+ * Telnyx kept listening for the beep, it did not play our message.
  */
 export function resolveEdgeVoicemailSpoken(opts: {
   voicemailSpoken: unknown;
@@ -75,8 +194,23 @@ export function resolveEdgeVoicemailSpoken(opts: {
   storedScriptChars: unknown;
   fallbackScript: unknown;
   endedAtIso: unknown;
+  /**
+   * Latest `call.speak.ended` status written onto the session. When this is
+   * `cancelled_amd` or `call_hangup` and no restart completed, the wall-clock
+   * promote is a lie: the leg stayed up while Telnyx kept listening for the
+   * beep, not while our message played (four of five cancelled_amd calls in
+   * late Aug / early Sep 2026 were stamped delivered this way).
+   */
+  speakEndedStatus?: unknown;
+  /** True when a cancelled/short speak was re-issued AND Telnyx accepted that retry. */
+  restarted?: unknown;
 }): boolean {
   if (opts.voicemailSpoken === true) return true;
+  // An interrupted speak that was never retried cannot have delivered, no
+  // matter how long the leg stayed up afterwards.
+  if (speakEndedWasInterrupted(opts.speakEndedStatus) && opts.restarted !== true) {
+    return false;
+  }
   if (typeof opts.startedAtIso !== "string") return false;
   const stored =
     typeof opts.storedScriptChars === "number" && Number.isFinite(opts.storedScriptChars)

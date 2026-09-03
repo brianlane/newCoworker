@@ -164,10 +164,13 @@ describe("classifyGreetingEvent", () => {
     expect(classifyGreetingEvent("prompt_ended", screened)).toBe("screening_person");
   });
 
-  it("prompt_ended with no screening is a voicemail greeting ending: resolve it", () => {
-    // The exact Jennifer case. Before the fix this returned the screening
-    // verdict, cancelled the machine stamp, and left the call running.
-    expect(classifyGreetingEvent("prompt_ended", machineOnly)).toBe("machine_resolved");
+  it("prompt_ended with no screening keeps the stamp and waits (Jennifer Kline)", () => {
+    // The exact Jennifer case: must NOT return screening_person (that
+    // cancelled a correct machine verdict). Must also NOT resolve-and-speak:
+    // prompt_ended is the first pause, not the beep, and speaking then is
+    // the cancelled_amd hangup. noted = keep the stamp, wait for the beep.
+    expect(classifyGreetingEvent("prompt_ended", machineOnly)).toBe("noted");
+    expect(classifyGreetingEvent("prompt_ended", machineOnly)).not.toBe("screening_person");
   });
 
   it("a beep resolves even on a screened call, which rolled to voicemail", () => {
@@ -175,9 +178,11 @@ describe("classifyGreetingEvent", () => {
     expect(classifyGreetingEvent("beep_detected", nothingKnown)).toBe("machine_resolved");
   });
 
-  it("a stamped machine resolves on any greeting result", () => {
+  it("a stamped machine still waits on anything that is not a beep", () => {
+    // no_beep_detected arrives at +24 to +26s, inside the iOS screening
+    // window. Unknown future Telnyx values fail toward not speaking.
     for (const r of ["no_beep_detected", "ended", "not_sure", "something_new", ""]) {
-      expect(classifyGreetingEvent(r, machineOnly), r).toBe("machine_resolved");
+      expect(classifyGreetingEvent(r, machineOnly), r).toBe("noted");
     }
   });
 

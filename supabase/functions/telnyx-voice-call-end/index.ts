@@ -39,7 +39,13 @@ import {
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
 import { speakVoicemailDeterministic } from "../_shared/voice_voicemail_speak.ts";
-import { resolveEdgeVoicemailSpoken } from "../_shared/voice_voicemail_timing.ts";
+import {
+  classifySpeakEnded,
+  classifySpeakEndedOwnership,
+  edgeVoicemailPlausiblyDelivered,
+  resolveEdgeVoicemailSpoken,
+  speakEndedEventIsStale
+} from "../_shared/voice_voicemail_timing.ts";
 import { parseReachClientState } from "../_shared/voice_reach.ts";
 import {
   resumeFlowRunWithCallOutcome,
@@ -626,18 +632,11 @@ async function handleMachineDetection(
   //    this handler exists to prevent. A beep with no verdict recorded yet is
   //    treated as a machine; anything else is acknowledged and dropped.
   if (!AMD_DETECTION_EVENTS.has(eventType)) {
-    // The iOS screening prompt finished WITHOUT an Apple tone or a beep: a
-    // live person heard the caller's identification and is deciding (or about
-    // to speak). The provisional machine stamp from detection.ended must not
-    // survive this, or a screened call the human then answers would settle as
-    // no_answer and its follow-up ladder would redial someone who picked up.
-    // Never speak a voicemail script here and never hang up.
-    // classifyGreetingEvent owns the subtlety (see its docstring): the same
-    // `prompt_ended` result means "a person is screening" only when screening
-    // actually announced itself, and otherwise means an ordinary voicemail
-    // greeting just finished. Reading it as screening unconditionally
-    // cancelled a correct machine verdict on a live call (Jennifer Kline,
-    // 2026-08-17), so the decision now lives in one tested place.
+    // classifyGreetingEvent owns the two traps (see its docstring):
+    // `prompt_ended` without a real screening event is the first pause in a
+    // voicemail greeting, NOT the beep, and must not clear the stamp
+    // (Jennifer Kline, 2026-08-17) NOR speak (cancelled_amd hangups, late
+    // Aug / early Sep 2026). Only `beep_detected` is `machine_resolved`.
     const already = await machineAlreadyStamped(supabase, callControlId);
     const greeting = classifyGreetingEvent(payload["result"], {
       machineStamped: already,
@@ -648,6 +647,18 @@ async function handleMachineDetection(
       return jsonOk("amd_screening_prompt_ended");
     }
     if (greeting === "noted") {
+      // prompt_ended is the first pause, not the beep. Record it so the
+      // measurement script can see the pause without treating it as a speak
+      // trigger. Keep the machine stamp; wait for beep_detected.
+      const resultValue =
+        typeof payload["result"] === "string" ? payload["result"].trim().toLowerCase() : "";
+      if (resultValue === "prompt_ended") {
+        const { error: markErr } = await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: callControlId,
+          p_patch: { greeting_prompt_ended_at: new Date().toISOString() }
+        });
+        if (markErr) console.error("amd: greeting_prompt_ended_at stamp failed", markErr);
+      }
       return jsonOk("amd_greeting_noted");
     }
     const script = await voicemailScriptFor(supabase, callControlId);
@@ -913,7 +924,8 @@ async function handleHandoffAmd(
  */
 async function handleSpeakEnded(
   supabase: SupabaseClient,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  occurredAt?: unknown
 ): Promise<Response> {
   const callControlId = String(payload["call_control_id"] ?? "");
   const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
@@ -930,33 +942,90 @@ async function handleSpeakEnded(
   // `voicemail_speak_started_at` marks the speak WE issued (the accepted
   // command); legacy `voicemail_spoken` is kept for events redelivered
   // across the deploy boundary, when the old code stamped spoken at accept.
-  const oursStarted = typeof ctx.voicemail_speak_started_at === "string";
-  if (!oursStarted && ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
-  // Playout FINISHED is the only speak.ended that proves delivery: Telnyx
-  // reports interrupted playout through this same event with a non-completed
-  // status (cancelled, call_hangup), and stamping those would record a
-  // mid-message drop as a left voicemail, the exact accepted-vs-delivered
-  // lie this path exists to remove (Bugbot, PR #1674). A non-completed or
-  // missing status stamps nothing: if the message did in fact play long
-  // enough, the hangup path's wall-clock fallback promotes it honestly.
+  const ownership = classifySpeakEndedOwnership({
+    speakStartedAt: ctx.voicemail_speak_started_at,
+    voicemailSpoken: ctx.voicemail_spoken
+  });
+  if (ownership === "not_voicemail") return jsonOk("speak_not_voicemail");
+  if (ownership === "legacy_spoken") {
+    // Already played (old code stamped spoken at accept). Hang up to end
+    // billed silence; do not retry, or we would leave a second message.
+    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    return jsonOk("voicemail_left_hangup");
+  }
+  const eventOccurredAt =
+    typeof occurredAt === "string"
+      ? occurredAt
+      : typeof payload["occurred_at"] === "string"
+        ? payload["occurred_at"]
+        : undefined;
+  // A redelivered first-speak ended arrives after we have already restarted.
+  // Judging it against the retry clock would hang up mid-playout. Ignore it
+  // entirely so it cannot overwrite voicemail_speak_ended_status either.
+  if (speakEndedEventIsStale(eventOccurredAt, ctx.voicemail_speak_started_at)) {
+    return jsonOk("voicemail_speak_stale");
+  }
   const status =
     typeof payload["status"] === "string" ? payload["status"].trim().toLowerCase() : "";
-  if (status === "completed") {
-    // The stamp lands BEFORE the hangup so the hangup webhook's outcome
-    // derivation reads it. Stamping at command-accept overstated: a leg that
-    // died mid-playout still recorded a left voicemail (the same lie PR
-    // #1672 removed from the bridge-spoken path).
+  const storedChars =
+    typeof ctx.voicemail_speak_script_chars === "number" &&
+    Number.isFinite(ctx.voicemail_speak_script_chars)
+      ? ctx.voicemail_speak_script_chars
+      : 0;
+  const vm = ctx.voicemail as { script?: unknown } | undefined;
+  const fallbackChars = typeof vm?.script === "string" ? vm.script.trim().length : 0;
+  const scriptChars = storedChars > 0 ? storedChars : fallbackChars;
+  const plausible = edgeVoicemailPlausiblyDelivered({
+    startedAtIso: ctx.voicemail_speak_started_at,
+    endedAtIso: eventOccurredAt ?? new Date().toISOString(),
+    scriptChars
+  });
+  const action = classifySpeakEnded({
+    status,
+    alreadyRestarted: ctx.voicemail_speak_restarted === true,
+    alreadySpoken: ctx.voicemail_spoken === true,
+    retryClaimed: ctx.voicemail_speak_retry_claimed === true,
+    plausible,
+    eventOccurredAtIso: eventOccurredAt,
+    speakStartedAtIso: ctx.voicemail_speak_started_at
+  });
+  const { error: statusErr } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: callControlId,
+    p_patch: { voicemail_speak_ended_status: status || "unknown" }
+  });
+  if (statusErr) console.error("speak-ended: status stamp failed", statusErr);
+
+  if (action === "retry_speak") {
+    // Telnyx just heard the beep and cut an early speak, or reported
+    // completed faster than half the script could have played. Re-issue
+    // once through the claim we already hold; do not hang up.
+    const script = typeof vm?.script === "string" ? vm.script.trim() : "";
+    if (!script) return jsonOk("voicemail_speak_retry_no_script");
+    const outcome = await speakVoicemailDeterministic(
+      {
+        rpc: (fn, args) => supabase.rpc(fn, args),
+        apiKey: Deno.env.get("TELNYX_API_KEY") ?? "",
+        fetchImpl: fetch,
+        nowIso: () => new Date().toISOString()
+      },
+      callControlId,
+      script,
+      { trigger: "cancelled_retry", alreadyClaimed: true }
+    );
+    return jsonOk(`voicemail_speak_retry_${outcome}`);
+  }
+
+  if (action === "stamp_and_hangup") {
     const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
       p_call_control_id: callControlId,
       p_patch: { voicemail_spoken: true }
     });
     if (spokenErr) console.error("speak-ended: voicemail_spoken stamp failed", spokenErr);
+    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    return jsonOk("voicemail_left_hangup");
   }
-  // End the leg regardless: our voicemail speak is the last thing this leg
-  // does, and on an interrupted status the hangup is a harmless no-op
-  // against a call that is already ending.
-  await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
-  return jsonOk(status === "completed" ? "voicemail_left_hangup" : "voicemail_speak_interrupted");
+
+  return jsonOk("voicemail_speak_interrupted");
 }
 
 /**
@@ -1139,7 +1208,8 @@ async function speakVoicemail(
       nowIso: () => new Date().toISOString()
     },
     callControlId,
-    script
+    script,
+    { trigger: "beep" }
   );
   return jsonOk(`amd_voicemail_${outcome}`);
 }
@@ -1388,6 +1458,8 @@ async function handleHandoffLifecycle(
       voicemail_spoken?: unknown;
       voicemail_speak_started_at?: unknown;
       voicemail_speak_script_chars?: unknown;
+      voicemail_speak_ended_status?: unknown;
+      voicemail_speak_restarted?: unknown;
       voicemail?: { script?: unknown };
     };
     await supabase
@@ -1427,7 +1499,9 @@ async function handleHandoffLifecycle(
         startedAtIso: obCtx.voicemail_speak_started_at,
         storedScriptChars: obCtx.voicemail_speak_script_chars,
         fallbackScript: obCtx.voicemail?.script,
-        endedAtIso
+        endedAtIso,
+        speakEndedStatus: obCtx.voicemail_speak_ended_status,
+        restarted: obCtx.voicemail_speak_restarted
       });
       if (spoken && obCtx.voicemail_spoken !== true) {
         // The fallback promoted it: persist the stamp so later readers (the
@@ -2120,7 +2194,14 @@ serve(async (req: Request) => {
     });
   }
 
-  let envelope: { data?: { id?: string; event_type?: string; payload?: Record<string, unknown> } };
+  let envelope: {
+    data?: {
+      id?: string;
+      event_type?: string;
+      occurred_at?: string;
+      payload?: Record<string, unknown>;
+    };
+  };
   try {
     envelope = JSON.parse(rawBody);
   } catch {
@@ -2177,7 +2258,7 @@ serve(async (req: Request) => {
 
   // The end of a voicemail message we spoke, so the leg can be released.
   if (eventType === "call.speak.ended") {
-    return await handleSpeakEnded(supabase, data?.payload ?? {});
+    return await handleSpeakEnded(supabase, data?.payload ?? {}, data?.occurred_at);
   }
 
   // A "reach a teammate" B leg. Recorded before the outbound handler so a leg

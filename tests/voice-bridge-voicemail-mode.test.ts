@@ -5,6 +5,7 @@ import {
   NUMBER_GUARD_SETTINGS_KEY,
   parseRolloutGate,
   rolloutIncludes,
+  shouldSpeakOnBridgeBeep,
   VOICEMAIL_DETERMINISTIC_END_CALL_REPLY,
   VOICEMAIL_DETERMINISTIC_TOOL_REPLY,
   VOICEMAIL_END_CALL_HOLD_MS,
@@ -120,7 +121,7 @@ describe("deterministic-mode constants", () => {
   });
 
   it("the end_call hold outlives the sweep's grace but never a mailbox recording limit", () => {
-    // The sweep acts 25s after the stamp on a 15s cadence, then the script
+    // The sweep acts 40s after the stamp on a 15s cadence, then the script
     // needs playout; a mailbox bounds the leg at 60-180s regardless.
     expect(VOICEMAIL_END_CALL_HOLD_MS).toBeGreaterThanOrEqual(60_000);
     expect(VOICEMAIL_END_CALL_HOLD_MS).toBeLessThanOrEqual(180_000);
@@ -138,5 +139,32 @@ describe("deterministic-mode constants", () => {
     expect(VOICEMAIL_MUTE_LIFTED_CUE.startsWith("[Coordinator]")).toBe(true);
     expect(VOICEMAIL_MUTE_LIFTED_CUE).toMatch(/Disregard/i);
     expect(VOICEMAIL_MUTE_LIFTED_CUE).toMatch(/end_call/);
+  });
+});
+
+describe("shouldSpeakOnBridgeBeep", () => {
+  const ready = {
+    iosScreening: false,
+    alreadyClaimed: false,
+    voicemailReached: false,
+    heardMachinePhrase: false
+  };
+
+  it("speaks only after voicemail_reached or a machine-phrase transcript", () => {
+    expect(shouldSpeakOnBridgeBeep({ ...ready, voicemailReached: true })).toBe("speak");
+    expect(shouldSpeakOnBridgeBeep({ ...ready, heardMachinePhrase: true })).toBe("speak");
+  });
+
+  it("skips a screening tone or a claim someone else already holds", () => {
+    expect(shouldSpeakOnBridgeBeep({ ...ready, voicemailReached: true, iosScreening: true })).toBe(
+      "skip"
+    );
+    expect(shouldSpeakOnBridgeBeep({ ...ready, heardMachinePhrase: true, alreadyClaimed: true })).toBe(
+      "skip"
+    );
+  });
+
+  it("does not speak on a tone with only a provisional machine stamp", () => {
+    expect(shouldSpeakOnBridgeBeep(ready)).toBe("no_verdict");
   });
 });
