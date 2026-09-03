@@ -43,6 +43,7 @@ describe("voicemail speak lockstep (bridge vs edge)", () => {
       "voicemail_speak_script_chars",
       "voicemail_speak_trigger",
       "voicemail_speak_restarted",
+      "voicemail_speak_retry_claimed",
       "bridge_beep",
       "cancelled_retry"
     ]) {

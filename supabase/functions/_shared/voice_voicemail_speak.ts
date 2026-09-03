@@ -113,9 +113,11 @@ export async function speakVoicemailDeterministic(
   };
 
   if (opts.alreadyClaimed) {
-    // We already hold the first-speak claim. Flip the retry bit in one
-    // compare-and-set so a redelivered cancelled_amd cannot speak twice.
+    // We already hold the first-speak claim. Flip voicemail_speak_retry_claimed
+    // in one compare-and-set so a redelivered cancelled_amd cannot speak twice.
     // Do not hang up on a lost race: the winner owns the leg.
+    // Do NOT flip voicemail_speak_restarted here: that flag means the retry
+    // speak was ACCEPTED, and hangup uses it to allow the wall-clock promote.
     const { data: claimed, error: retryErr } = await rpc("voice_claim_voicemail_retry", {
       p_call_control_id: callControlId
     });

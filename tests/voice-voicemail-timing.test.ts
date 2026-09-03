@@ -208,6 +208,8 @@ describe("resolveEdgeVoicemailSpoken", () => {
   });
 
   it("still judges a restarted speak by the wall clock when the retry's ended event is lost", () => {
+    // `restarted` is only true after Telnyx accepted the retry speak. A
+    // claim that has not yet spoken must not reach this branch.
     expect(
       resolveEdgeVoicemailSpoken({
         voicemailSpoken: undefined,

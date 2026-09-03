@@ -8,8 +8,10 @@
 -- would both pass "not yet restarted" and talk over each other into the
 -- mailbox.
 --
--- Same compare-and-set shape as the first claim. Returns true only for the
--- caller that flipped voicemail_speak_restarted.
+-- The claim key is voicemail_speak_retry_claimed, NOT voicemail_speak_restarted.
+-- Restarted is written only after Telnyx accepts the retry speak. Flipping
+-- restarted here would let the hangup path treat a refused retry as a delivered
+-- one: it would promote voicemail_spoken from the first, cancelled start time.
 
 create or replace function public.voice_claim_voicemail_retry(
   p_call_control_id text
@@ -24,10 +26,10 @@ declare
 begin
   update voice_handoff_sessions
      set context = coalesce(context, '{}'::jsonb)
-                  || '{"voicemail_speak_restarted": true}'::jsonb
+                  || '{"voicemail_speak_retry_claimed": true}'::jsonb
    where call_control_id = p_call_control_id
      and coalesce(context->>'voicemail_claimed', '') = 'true'
-     and coalesce(context->>'voicemail_speak_restarted', '') <> 'true'
+     and coalesce(context->>'voicemail_speak_retry_claimed', '') <> 'true'
   returning true into v_claimed;
   return coalesce(v_claimed, false);
 end;

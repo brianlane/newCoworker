@@ -75,7 +75,12 @@ describe("voice_claim_voicemail_retry (compare-and-set)", () => {
       .select("context")
       .eq("call_control_id", ids.claimed)
       .single();
-    expect((data as { context: Record<string, unknown> }).context.voicemail_speak_restarted).toBe(
+    expect((data as { context: Record<string, unknown> }).context.voicemail_speak_retry_claimed).toBe(
+      true
+    );
+    // The claim is not delivery. Hangup must not see restarted until Telnyx
+    // accepts the retry speak.
+    expect((data as { context: Record<string, unknown> }).context.voicemail_speak_restarted).not.toBe(
       true
     );
   });

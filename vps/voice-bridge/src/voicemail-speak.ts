@@ -62,6 +62,8 @@ export async function speakVoicemailDeterministic(
   };
 
   if (opts.alreadyClaimed) {
+    // voicemail_speak_retry_claimed is the compare-and-set. Restarted is
+    // stamped only after Telnyx accepts the speak.
     const { data: claimed, error: retryErr } = await rpc("voice_claim_voicemail_retry", {
       p_call_control_id: callControlId
     });

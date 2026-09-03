@@ -58,8 +58,11 @@ Only the beep-triggered one is provably right.
   **not** return `screening_person` without a real screening event).
 - `classifySpeakEnded`: re-speak once on `cancelled_amd` or implausibly
   short `completed`; hang up only on plausible completed. The retry is
-  compare-and-set via `voice_claim_voicemail_retry` (two in-flight
-  speak.ended handlers cannot both speak). A redelivered first-speak
+  compare-and-set via `voice_claim_voicemail_retry` on
+  `voicemail_speak_retry_claimed` (two in-flight speak.ended handlers
+  cannot both speak). `voicemail_speak_restarted` is stamped only after
+  Telnyx accepts the retry, so hangup cannot promote a refused retry from
+  the first start time. A redelivered first-speak
   ended whose `occurred_at` is before the retry's `started_at` is ignored
   so it cannot hang up the retry. A legacy `voicemail_spoken` stamp with
   no start time hangs up and does not retry.

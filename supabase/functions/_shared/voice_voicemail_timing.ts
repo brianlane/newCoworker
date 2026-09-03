@@ -191,7 +191,7 @@ export function resolveEdgeVoicemailSpoken(opts: {
    * late Aug / early Sep 2026 were stamped delivered this way).
    */
   speakEndedStatus?: unknown;
-  /** True when a cancelled/short speak was re-issued and that retry is the latest speak. */
+  /** True when a cancelled/short speak was re-issued AND Telnyx accepted that retry. */
   restarted?: unknown;
 }): boolean {
   if (opts.voicemailSpoken === true) return true;
