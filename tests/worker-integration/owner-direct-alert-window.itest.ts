@@ -107,4 +107,21 @@ describe("owner-direct alert window (real JSON-path filter)", () => {
     expect(after.reason).toBe("contact_unowned");
     expect(after.team.map((m) => m.phone).sort()).toEqual([DAVE, GABBY, JASON].sort());
   });
+
+  it("a newer finished park does not hide an older live park", async () => {
+    const biz = await seedBusiness(db, "IT owner-direct window newer-done");
+    await seedThreeMemberRoster(biz);
+    await seedContact(db, biz, LEAD);
+    await insertParkedRun(biz);
+    const doneId = await insertParkedRun(biz, { owner_direct_done: true });
+    const { error } = await db
+      .from("ai_flow_runs")
+      .update({ updated_at: new Date(Date.now() + 60_000).toISOString() })
+      .eq("id", doneId);
+    if (error) throw new Error(error.message);
+
+    const out = await resolveContactOwnerTarget(db, biz, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("owner_direct_live");
+  });
 });

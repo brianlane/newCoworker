@@ -389,16 +389,19 @@ async function resolveVerdict(
 /**
  * Is there a live keep-for-owner park for this lead phone?
  *
- * Uses `.limit(1)` and takes the first row, never `maybeSingle()`: a
- * multi-row match is an error on maybeSingle, and treating that error as
- * "no park" would re-offer the team (the exact failure this rung exists
- * to prevent). `owner_direct_done` is filtered in code because a just-
- * exhausted park can sit in `queued` for one worker tick with the flag
- * already set.
+ * Never `maybeSingle()`: a multi-row match is an error on maybeSingle, and
+ * treating that error as "no park" would re-offer the team (the exact
+ * failure this rung exists to prevent). Cap the read (the Data API's
+ * 1000-row default is the other silent truncate) and scan in code: a
+ * just-exhausted park can sit in `queued` for one worker tick with
+ * `owner_direct_done` already set, and a newer finished row must not hide
+ * an older live one.
  *
  * "error" is distinct from "no park" so a down query cannot silently
  * become a team broadcast.
  */
+const OWNER_DIRECT_PARK_SCAN = 20;
+
 async function findLiveOwnerDirectPark(
   supabase: AnyClient,
   businessId: string,
@@ -413,7 +416,7 @@ async function findLiveOwnerDirectPark(
       .eq("context->routing->>owner_direct", "true")
       .eq("context->vars->>lead_phone", phone)
       .order("updated_at", { ascending: false })
-      .limit(1);
+      .limit(OWNER_DIRECT_PARK_SCAN);
     if (error) {
       console.error("contact_owner_target: owner_direct park lookup", error);
       return "error";

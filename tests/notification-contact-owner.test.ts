@@ -317,6 +317,30 @@ describe("resolveContactOwnerTarget: live owner-direct park", () => {
     expect(ev.p_payload).toMatchObject({ reason: "owner_direct_live", target: "business_owner" });
   });
 
+  it("a newer finished park does not hide an older live one", async () => {
+    // Bugbot: limit(1) + newest-first meant a just-exhausted row (still
+    // queued, owner_direct_done already set) hid the live park behind it
+    // and re-offered the team.
+    const { db } = makeDb([
+      unownedContact,
+      {
+        data: [
+          {
+            id: "run-done",
+            context: { routing: { owner_direct: true, owner_direct_done: true } }
+          },
+          {
+            id: "run-live",
+            context: { routing: { owner_direct: true } }
+          }
+        ]
+      }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("owner_direct_live");
+  });
+
   it("ignores a park that already finished (owner_direct_done) and broadcasts", async () => {
     const { db } = makeDb([
       unownedContact,
