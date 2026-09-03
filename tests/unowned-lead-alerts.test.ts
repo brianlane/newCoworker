@@ -176,6 +176,22 @@ describe("findLiveUnownedAlertsFor", () => {
     ]);
   });
 
+  it("collapses two live alerts about the same phone to the newest", async () => {
+    const { db } = makeDb([
+      {
+        data: [
+          { id: "new", lead_e164: LEAD, lead_label: "Christopher Ackermann" },
+          { id: "old", lead_e164: LEAD, lead_label: "Christopher Ackermann" },
+          { id: "other", lead_e164: "+16025703299", lead_label: "Jeffrey Cutler" }
+        ]
+      }
+    ]);
+    expect(await findLiveUnownedAlertsFor(db, BIZ, DAVE, NOW_ISO)).toEqual([
+      { alertId: "new", leadE164: LEAD, leadLabel: "Christopher Ackermann" },
+      { alertId: "other", leadE164: "+16025703299", leadLabel: "Jeffrey Cutler" }
+    ]);
+  });
+
   it("normalizes a blank label to null", async () => {
     const { db } = makeDb([{ data: [{ id: "a1", lead_e164: LEAD, lead_label: "   " }] }]);
     expect((await findLiveUnownedAlertsFor(db, BIZ, DAVE, NOW_ISO))[0].leadLabel).toBeNull();

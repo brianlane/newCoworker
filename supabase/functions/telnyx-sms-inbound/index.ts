@@ -61,8 +61,10 @@ import {
 } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
   ambiguousClaimText,
+  askBackLabels,
   bareDigitAmbiguityText,
   claimAckText,
+  collapseOfferCandidates,
   leadLabelFromVars,
   leadPhoneFromVars,
   matchOfferByLeadName,
@@ -3164,7 +3166,7 @@ serve(async (req: Request) => {
             from,
             new Date().toISOString()
           );
-          const combined: OfferCandidate[] = [
+          const combined: OfferCandidate[] = collapseOfferCandidates([
             ...liveOffers.map((o) => o.candidate),
             ...alertCands.map((a) => ({
               runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
@@ -3176,7 +3178,7 @@ serve(async (req: Request) => {
               leadLabel: b.attendeeName || b.summary || "",
               leadPhone: ""
             }))
-          ];
+          ]);
           if (combined.length > 0) {
             const match = matchOfferByLeadName(combined, claimTf.timeframe);
             if (match.kind === "ambiguous") {
@@ -3238,9 +3240,7 @@ serve(async (req: Request) => {
             // than claim whichever run was touched most recently.
             if (match.kind === "none" && !looksLikeTimeframe(claimTf.timeframe)) {
               namedNoMatch = true;
-              namedNoMatchLabels = combined.map(
-                (c, i) => c.leadLabel || `lead ${i + 1} (no name on file)`
-              );
+              namedNoMatchLabels = askBackLabels(combined);
             }
             if (match.kind === "one") {
               const picked = liveOffers.find((o) => o.run.id === match.runId);
@@ -3415,14 +3415,23 @@ serve(async (req: Request) => {
         // with "1".
         if (bareClaim && (offer || alertCandidates.length > 0 || bookingCandidates.length > 0)) {
           const liveOffers = offer ? await findLiveOfferRunsFor(supabase, businessId, from) : [];
-          if (liveOffers.length + alertCandidates.length + bookingCandidates.length > 1) {
-            const labels = [
-              ...liveOffers.map(
-                (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
-              ),
-              ...alertCandidates.map((a) => a.leadLabel || a.leadE164),
-              ...bookingCandidates.map((b) => bookingClaimLabel(b))
-            ];
+          // Offers, alerts, and bookings are counted TOGETHER, then collapsed
+          // to one row per lead. Stacked alerts about the same phone used to
+          // make a lone "1" ask "Christopher or Christopher".
+          const uniqueLeads = collapseOfferCandidates([
+            ...liveOffers.map((o) => o.candidate),
+            ...alertCandidates.map((a) => ({
+              runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
+              leadLabel: a.leadLabel ?? "",
+              leadPhone: a.leadE164
+            })),
+            ...bookingCandidates.map((b) => ({
+              runId: `${BOOKING_CANDIDATE_PREFIX}${b.offerId}`,
+              leadLabel: bookingClaimLabel(b),
+              leadPhone: ""
+            }))
+          ]);
+          if (uniqueLeads.length > 1) {
             return await consumeAmbiguousOfferReply({
               supabase,
               businessId,
@@ -3433,39 +3442,50 @@ serve(async (req: Request) => {
               telnyxApiKey,
               messagingProfileId,
               smsFromE164,
-              text: bareDigitAmbiguityText(labels)
+              text: bareDigitAmbiguityText(askBackLabels(uniqueLeads))
             });
           }
+          const onlyLead = uniqueLeads[0];
           // Exactly one candidate and it is an alert: no run to resume, so
           // claim the alert here. An offer falls through to the paths below.
-          if (!offer && alertCandidates.length === 1) {
-            return await consumeAlertClaim({
-              supabase,
-              businessId,
-              from,
-              ackTo: to,
-              eventId,
-              envelope,
-              telnyxApiKey,
-              messagingProfileId,
-              smsFromE164,
-              candidate: alertCandidates[0]
-            });
+          if (onlyLead?.runId.startsWith(ALERT_CANDIDATE_PREFIX)) {
+            const picked = alertCandidates.find(
+              (a) => `${ALERT_CANDIDATE_PREFIX}${a.alertId}` === onlyLead.runId
+            );
+            if (picked) {
+              return await consumeAlertClaim({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                candidate: picked
+              });
+            }
           }
           // Exactly one candidate and it is a booking invite: same shape.
-          if (!offer && alertCandidates.length === 0 && bookingCandidates.length === 1) {
-            return await consumeBookingClaim({
-              supabase,
-              businessId,
-              from,
-              ackTo: to,
-              eventId,
-              envelope,
-              telnyxApiKey,
-              messagingProfileId,
-              smsFromE164,
-              candidate: bookingCandidates[0]
-            });
+          if (onlyLead?.runId.startsWith(BOOKING_CANDIDATE_PREFIX)) {
+            const picked = bookingCandidates.find(
+              (b) => `${BOOKING_CANDIDATE_PREFIX}${b.offerId}` === onlyLead.runId
+            );
+            if (picked) {
+              return await consumeBookingClaim({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                candidate: picked
+              });
+            }
           }
         }
         if (offer && (bareClaim || barePass)) {

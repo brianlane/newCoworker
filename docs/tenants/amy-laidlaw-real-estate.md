@@ -105,6 +105,13 @@ These are mistakes already made on this account. Do not remake them.
   quote the typed reply like the ask-back that already worked. The staff
   coworker is also forbidden from promising a claim.
 
+- **Stacked alerts about one lead are still one lead.** Sep 2 2026: each
+  follow-up ping on Christopher Ackermann inserted another 24h
+  `unowned_lead_alerts` row. Jason's bare `1` listed him twice
+  (`Summer Lolling, Christopher Ackermann or Christopher Ackermann`).
+  Claiming already retired sibling rows; the ask-back did not. The list
+  is now one row per phone.
+
 - **A claim stamps the CONTACT, so clearing a run does not undo it.** Repairing
   the four runs above meant clearing `routing.claimed_by` and requeuing them,
   which is only half the artifact: the claim had also written

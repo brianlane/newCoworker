@@ -146,6 +146,49 @@ function displayLabels(candidates: OfferCandidate[]): string[] {
   });
 }
 
+function phoneKey(phone: string | undefined): string {
+  return (phone ?? "").replace(/\D/g, "");
+}
+
+/**
+ * One row per phone, keeping the first (callers pass newest-first, offers
+ * before alerts before bookings).
+ *
+ * Unowned-lead alerts stack: each `notify_team` ping inserts a new 24h
+ * row for the same number, so a teammate who replies "1" sees
+ * "Christopher Ackermann or Christopher Ackermann" (Jason Lane, 2026-09-02).
+ * Claiming already retires sibling rows; the ask-back and the named matcher
+ * did not. Same-phone offer + alert is the other shape of the same miss.
+ *
+ * Phoneless rows are left as-is. Two bookings for the same attendee are
+ * different appointments and must both stay listable.
+ */
+export function collapseOfferCandidates(
+  candidates: readonly OfferCandidate[]
+): OfferCandidate[] {
+  const kept: OfferCandidate[] = [];
+  const seenPhone = new Set<string>();
+  for (const c of candidates) {
+    const phone = phoneKey(c.leadPhone);
+    if (phone) {
+      if (seenPhone.has(phone)) continue;
+      seenPhone.add(phone);
+    }
+    kept.push(c);
+  }
+  return kept;
+}
+
+/**
+ * Labels for a "which one?" SMS. Blank names get a placeholder; identical
+ * names that survived collapse (two people, two phones) get last-four digits.
+ */
+export function askBackLabels(candidates: readonly OfferCandidate[]): string[] {
+  return displayLabels([...candidates]).map(
+    (label, i) => label.trim() || `lead ${i + 1} (no name on file)`
+  );
+}
+
 /**
  * Resolve what a teammate typed after "1," against their own live offers.
  *

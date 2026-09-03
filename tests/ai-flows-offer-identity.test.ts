@@ -3,6 +3,8 @@ import {
   ambiguousClaimText,
   bareDigitAmbiguityText,
   claimAckText,
+  askBackLabels,
+  collapseOfferCandidates,
   joinLabels,
   leadLabelFromVars,
   leadPhoneFromVars,
@@ -131,6 +133,92 @@ describe("matchOfferByLeadName", () => {
     expect(matchOfferByLeadName([DANIEL], "   ")).toEqual({ kind: "none" });
     expect(matchOfferByLeadName([{ runId: "x", leadLabel: "" }], "daniel")).toEqual({ kind: "none" });
     expect(matchOfferByLeadName([], "daniel")).toEqual({ kind: "none" });
+  });
+});
+
+describe("collapseOfferCandidates", () => {
+  /**
+   * Jason Lane, 2026-09-02: two live unowned-lead alerts for Christopher
+   * Ackermann (+14803813509) made a bare "1" list him twice. Same phone is
+   * one lead; the first (newest / offer-before-alert) row wins.
+   */
+  it("keeps one row per phone, first wins", () => {
+    const newer: OfferCandidate = {
+      runId: "alert:new",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "+14803813509"
+    };
+    const older: OfferCandidate = {
+      runId: "alert:old",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "+14803813509"
+    };
+    const other: OfferCandidate = {
+      runId: "run-shawonna",
+      leadLabel: "Shawonna Gooch",
+      leadPhone: "+16023271619"
+    };
+    expect(collapseOfferCandidates([newer, older, other])).toEqual([newer, other]);
+  });
+
+  it("treats formatted and digit-only phones as the same lead", () => {
+    const a: OfferCandidate = { runId: "a", leadLabel: "Chris", leadPhone: "+1 (480) 381-3509" };
+    const b: OfferCandidate = { runId: "b", leadLabel: "Christopher Ackermann", leadPhone: "14803813509" };
+    expect(collapseOfferCandidates([a, b])).toEqual([a]);
+  });
+
+  it("does not merge phoneless rows, even with the same name", () => {
+    const one: OfferCandidate = { runId: "booking:1", leadLabel: "booking: Jim" };
+    const two: OfferCandidate = { runId: "booking:2", leadLabel: "booking: Jim" };
+    expect(collapseOfferCandidates([one, two])).toEqual([one, two]);
+  });
+
+  it("prefers an offer over a same-phone alert when the offer is first", () => {
+    const offer: OfferCandidate = {
+      runId: "run-offer",
+      leadLabel: "Kimberly Morgan-Hutcherson",
+      leadPhone: "+17143668399"
+    };
+    const alert: OfferCandidate = {
+      runId: "alert:x",
+      leadLabel: "Kimberly Morgan-Hutcherson",
+      leadPhone: "+17143668399"
+    };
+    expect(collapseOfferCandidates([offer, alert])).toEqual([offer]);
+  });
+
+  it("makes a named reply resolve after stacked same-phone alerts", () => {
+    const newer: OfferCandidate = {
+      runId: "alert:new",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "+14803813509"
+    };
+    const older: OfferCandidate = {
+      runId: "alert:old",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "+14803813509"
+    };
+    const other: OfferCandidate = {
+      runId: "run-shawonna",
+      leadLabel: "Shawonna Gooch",
+      leadPhone: "+16023271619"
+    };
+    const stacked = [newer, older, other];
+    expect(matchOfferByLeadName(stacked, "Christopher").kind).toBe("ambiguous");
+    const match = matchOfferByLeadName(collapseOfferCandidates(stacked), "Christopher");
+    expect(match).toEqual({ kind: "one", runId: "alert:new", label: "Christopher Ackermann" });
+  });
+});
+
+describe("askBackLabels", () => {
+  it("suffixes last four digits when two remaining leads share a name", () => {
+    const a: OfferCandidate = { runId: "1", leadLabel: "Pat Lee", leadPhone: "+15551111111" };
+    const b: OfferCandidate = { runId: "2", leadLabel: "Pat Lee", leadPhone: "+15552222222" };
+    expect(askBackLabels([a, b])).toEqual(["Pat Lee (...1111)", "Pat Lee (...2222)"]);
+  });
+
+  it("uses a placeholder when the lead has no name", () => {
+    expect(askBackLabels([{ runId: "x", leadLabel: "" }])).toEqual(["lead 1 (no name on file)"]);
   });
 });
 

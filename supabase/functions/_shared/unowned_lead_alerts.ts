@@ -116,11 +116,22 @@ export async function findLiveUnownedAlertsFor(
       console.error("findLiveUnownedAlertsFor", error);
       return [];
     }
-    return ((data ?? []) as UnownedLeadAlertRow[]).map((r) => ({
+    const mapped = ((data ?? []) as UnownedLeadAlertRow[]).map((r) => ({
       alertId: r.id,
       leadE164: r.lead_e164,
       leadLabel: (r.lead_label ?? "").trim() || null
     }));
+    // Newest-first already. Two live rows for one phone are one lead: each
+    // follow-up ping inserts another 24h alert, and listing both makes a
+    // bare "1" ask "Christopher or Christopher" (Amy Laidlaw, 2026-09-02).
+    const seen = new Set<string>();
+    const unique: UnownedAlertCandidate[] = [];
+    for (const c of mapped) {
+      if (seen.has(c.leadE164)) continue;
+      seen.add(c.leadE164);
+      unique.push(c);
+    }
+    return unique;
   } catch (e) {
     console.error("findLiveUnownedAlertsFor threw", e);
     return [];
