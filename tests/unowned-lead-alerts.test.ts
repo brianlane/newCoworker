@@ -3,7 +3,8 @@ import {
   ALERT_CLAIM_WINDOW_MS,
   claimUnownedLeadAlert,
   findLiveUnownedAlertsFor,
-  recordUnownedLeadAlert
+  recordUnownedLeadAlert,
+  retireLiveUnownedAlertsForLead
 } from "../supabase/functions/_shared/unowned_lead_alerts";
 
 /**
@@ -32,6 +33,10 @@ function makeDb(script: Array<{ data?: unknown; error?: unknown; throws?: boolea
     for (const m of ["select", "eq", "is", "gt", "contains", "order", "limit", "maybeSingle", "or"]) {
       builder[m] = () => builder;
     }
+    builder["in"] = (col: string, vals: unknown) => {
+      calls.push({ table, op: `in:${col}`, payload: vals });
+      return builder;
+    };
     builder["insert"] = (payload: unknown) => {
       op = "insert";
       calls.push({ table, op, payload });
@@ -176,6 +181,35 @@ describe("findLiveUnownedAlertsFor", () => {
     ]);
   });
 
+  it("keeps a non-E.164 lead_e164 as its own key rather than merging blanks", async () => {
+    const { db } = makeDb([
+      {
+        data: [
+          { id: "junk", lead_e164: "73339", lead_label: "shortcode" },
+          { id: "also", lead_e164: "not-a-phone", lead_label: "x" }
+        ]
+      }
+    ]);
+    expect(await findLiveUnownedAlertsFor(db, BIZ, DAVE, NOW_ISO)).toEqual([
+      { alertId: "junk", leadE164: "73339", leadLabel: "shortcode" },
+      { alertId: "also", leadE164: "not-a-phone", leadLabel: "x" }
+    ]);
+  });
+
+  it("collapses 10-digit NANP and +1 E.164 as the same phone", async () => {
+    const { db } = makeDb([
+      {
+        data: [
+          { id: "e164", lead_e164: "+14803813509", lead_label: "Christopher Ackermann" },
+          { id: "nanp", lead_e164: "4803813509", lead_label: "Christopher Ackermann" }
+        ]
+      }
+    ]);
+    expect(await findLiveUnownedAlertsFor(db, BIZ, DAVE, NOW_ISO)).toEqual([
+      { alertId: "e164", leadE164: "+14803813509", leadLabel: "Christopher Ackermann" }
+    ]);
+  });
+
   it("collapses two live alerts about the same phone to the newest", async () => {
     const { db } = makeDb([
       {
@@ -298,5 +332,65 @@ describe("claimUnownedLeadAlert", () => {
     await claimUnownedLeadAlert(db, { ...args, memberId: null });
     const upd = calls.find((c) => c.op === "update")!.payload as Record<string, unknown>;
     expect(upd.claimed_by_member_id).toBeNull();
+  });
+});
+
+describe("retireLiveUnownedAlertsForLead", () => {
+  const NOW_ISO = new Date(NOW).toISOString();
+
+  it("stamps every live row for that phone, including 10-digit NANP variants", async () => {
+    const { db, calls } = makeDb([{ data: null }]);
+    await retireLiveUnownedAlertsForLead(db, {
+      businessId: BIZ,
+      leadE164: "4803813509",
+      claimedByE164: DAVE,
+      memberId: "m1",
+      nowIso: NOW_ISO
+    });
+    const upd = calls.find((c) => c.op === "update")!.payload as Record<string, unknown>;
+    expect(upd.claimed_at).toBe(NOW_ISO);
+    expect(upd.claimed_by_e164).toBe(DAVE);
+    expect(upd.claimed_by_member_id).toBe("m1");
+    const inCall = calls.find((c) => c.op === "in:lead_e164");
+    expect(inCall?.payload).toEqual(
+      expect.arrayContaining(["+14803813509", "14803813509", "4803813509"])
+    );
+  });
+
+  it("does nothing when the input is not a phone", async () => {
+    const { db, calls } = makeDb([]);
+    await retireLiveUnownedAlertsForLead(db, {
+      businessId: BIZ,
+      leadE164: "not-a-phone",
+      claimedByE164: DAVE,
+      memberId: null,
+      nowIso: NOW_ISO
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("never throws: the claim already landed", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failed = makeDb([{ error: { message: "nope" } }]);
+    await expect(
+      retireLiveUnownedAlertsForLead(failed.db, {
+        businessId: BIZ,
+        leadE164: LEAD,
+        claimedByE164: DAVE,
+        memberId: null,
+        nowIso: NOW_ISO
+      })
+    ).resolves.toBeUndefined();
+    const threw = makeDb([{ throws: true }]);
+    await expect(
+      retireLiveUnownedAlertsForLead(threw.db, {
+        businessId: BIZ,
+        leadE164: LEAD,
+        claimedByE164: DAVE,
+        memberId: null,
+        nowIso: NOW_ISO
+      })
+    ).resolves.toBeUndefined();
+    err.mockRestore();
   });
 });

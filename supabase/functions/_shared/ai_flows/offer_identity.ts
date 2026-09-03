@@ -16,8 +16,10 @@
  * ETA parser when nothing matches. No lead is named "20 min", so every
  * existing reply keeps its meaning.
  *
- * Pure and dependency-free so vitest can pin it without booting Deno.
+ * Uses the shared E.164 helper so 10-digit NANP and +1 forms are one lead.
  */
+
+import { e164CollapseKey } from "../normalize_e164.ts";
 
 /**
  * Var names a flow may keep the lead's display name under, most specific
@@ -147,7 +149,7 @@ function displayLabels(candidates: OfferCandidate[]): string[] {
 }
 
 function phoneKey(phone: string | undefined): string {
-  return (phone ?? "").replace(/\D/g, "");
+  return e164CollapseKey(phone);
 }
 
 /**

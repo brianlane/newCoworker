@@ -59,6 +59,16 @@ describe("named claims (1, <name>)", () => {
     expect(webhook).toContain("const combined: OfferCandidate[] = collapseOfferCandidates([");
     expect(webhook).toContain("namedNoMatchLabels = askBackLabels(combined)");
   });
+
+  it("retires leftover alerts when an offer claim wins the collapsed race", () => {
+    expect(webhook).toContain("await retireLiveUnownedAlertsForLead(supabase, {");
+    const liveClaim = webhook.indexOf("async function tryAgentClaimWithTimeframe");
+    const lateClaim = webhook.indexOf("async function tryLateClaim");
+    expect(liveClaim).toBeGreaterThan(-1);
+    expect(lateClaim).toBeGreaterThan(liveClaim);
+    expect(webhook.indexOf("retireLiveUnownedAlertsForLead", liveClaim)).toBeGreaterThan(liveClaim);
+    expect(webhook.indexOf("retireLiveUnownedAlertsForLead", lateClaim)).toBeGreaterThan(lateClaim);
+  });
 });
 
 describe("consumeBookingClaim", () => {

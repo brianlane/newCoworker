@@ -132,6 +132,7 @@ import {
 import {
   claimUnownedLeadAlert,
   findLiveUnownedAlertsFor,
+  retireLiveUnownedAlertsForLead,
   type UnownedAlertCandidate
 } from "../_shared/unowned_lead_alerts.ts";
 import {
@@ -811,17 +812,13 @@ async function consumeAlertClaim(args: {
     // Alerts about one lead can pile up (a second reply days later raises a
     // new one), and leaving the siblings claimable would let a second
     // teammate claim one and also be told the lead is theirs.
-    const { error: sibErr } = await supabase
-      .from("unowned_lead_alerts")
-      .update({
-        claimed_at: nowIso,
-        claimed_by_e164: from,
-        claimed_by_member_id: member?.id ?? null
-      })
-      .eq("business_id", businessId)
-      .eq("lead_e164", outcome.leadE164)
-      .is("claimed_at", null);
-    if (sibErr) console.error("alert claim sibling retire", sibErr);
+    await retireLiveUnownedAlertsForLead(supabase, {
+      businessId,
+      leadE164: outcome.leadE164,
+      claimedByE164: from,
+      memberId: member?.id ?? null,
+      nowIso
+    });
 
     // Ownership so LATER alerts about this lead reach the claimer instead of
     // the business owner. Compare-and-swap on `owner_employee_id is null`:
@@ -1206,6 +1203,28 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       ...args,
       telemetryDecision: OFFER_REPLY_DECISION.claim_timeframe_raced
     });
+  }
+  // Collapse keeps the offer when the same phone also has a live alert.
+  // Retire those alerts or a second teammate can still claim one.
+  {
+    const leadPhone = leadPhoneFromVars(
+      (offer.context?.vars ?? {}) as Record<string, unknown>
+    );
+    if (leadPhone) {
+      const { data: claimerRow } = await supabase
+        .from("ai_flow_team_members")
+        .select("id")
+        .eq("business_id", businessId)
+        .eq("phone_e164", from)
+        .maybeSingle();
+      await retireLiveUnownedAlertsForLead(supabase, {
+        businessId,
+        leadE164: leadPhone,
+        claimedByE164: from,
+        memberId: (claimerRow as { id?: string } | null)?.id ?? null,
+        nowIso: new Date().toISOString()
+      });
+    }
   }
   // Ordinarily no acknowledgement is texted back: the offer SMS already
   // carried the lead details, so "you've claimed this lead..." only promised a
@@ -1840,11 +1859,12 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // "<name> claimed …" (offered_name was cleared on the owner fallback).
   const { data: memberRow } = await supabase
     .from("ai_flow_team_members")
-    .select("name")
+    .select("id, name")
     .eq("business_id", businessId)
     .eq("phone_e164", from)
     .maybeSingle();
-  const memberName = (memberRow as { name?: string } | null)?.name ?? "";
+  const memberName = (memberRow as { id?: string; name?: string } | null)?.name ?? "";
+  const memberId = (memberRow as { id?: string; name?: string } | null)?.id ?? null;
 
   // Ownership gate: late and yank claims are still claims; a contact owned
   // by another active teammate is refused the same way a live claim is.
@@ -1946,6 +1966,21 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
+  }
+
+  {
+    const leadPhone = leadPhoneFromVars(
+      (match.context?.vars ?? {}) as Record<string, unknown>
+    );
+    if (leadPhone) {
+      await retireLiveUnownedAlertsForLead(supabase, {
+        businessId,
+        leadE164: leadPhone,
+        claimedByE164: from,
+        memberId,
+        nowIso: new Date().toISOString()
+      });
+    }
   }
 
   // A named claim made from several candidates confirms WHICH lead was taken;

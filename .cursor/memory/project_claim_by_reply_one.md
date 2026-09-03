@@ -212,11 +212,15 @@ same `lead_e164`; the list and the named matcher did not.
 **How it works now:**
 
 - `findLiveUnownedAlertsFor` keeps the newest row per phone.
+  10-digit NANP and +1 E.164 are the same key.
 - `collapseOfferCandidates` does the same across offers + alerts +
   bookings (phone present = one lead; phoneless bookings stay distinct).
 - Bare `1` and `1, name` both run on that collapsed list.
   `askBackLabels` still suffixes last-four digits when two remaining
   people share a name.
+- An offer claim that wins that collapse retires leftover live alerts
+  for the same phone (`retireLiveUnownedAlertsForLead`). Alert claims
+  already did this for sibling rows.
 
 Related: [[project_claim_by_reply_one_two_paths]],
 [[project_informational_team_alert_gets_replied_1]],

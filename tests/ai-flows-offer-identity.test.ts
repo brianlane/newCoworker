@@ -161,10 +161,18 @@ describe("collapseOfferCandidates", () => {
     expect(collapseOfferCandidates([newer, older, other])).toEqual([newer, other]);
   });
 
-  it("treats formatted and digit-only phones as the same lead", () => {
-    const a: OfferCandidate = { runId: "a", leadLabel: "Chris", leadPhone: "+1 (480) 381-3509" };
-    const b: OfferCandidate = { runId: "b", leadLabel: "Christopher Ackermann", leadPhone: "14803813509" };
-    expect(collapseOfferCandidates([a, b])).toEqual([a]);
+  it("treats 10-digit NANP and +1 E.164 as the same lead", () => {
+    const offer: OfferCandidate = {
+      runId: "run-offer",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "4803813509"
+    };
+    const alert: OfferCandidate = {
+      runId: "alert:x",
+      leadLabel: "Christopher Ackermann",
+      leadPhone: "+14803813509"
+    };
+    expect(collapseOfferCandidates([offer, alert])).toEqual([offer]);
   });
 
   it("does not merge phoneless rows, even with the same name", () => {
