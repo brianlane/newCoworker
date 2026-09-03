@@ -37,8 +37,11 @@ import {
   VOICEMAIL_END_CALL_HOLD_MS,
   VOICEMAIL_MUTE_LIFTED_CUE,
   VOICEMAIL_RESOLUTION_POLL_MS,
+  shouldSpeakOnBridgeBeep,
   type VoicemailResolutionState
 } from "./voicemail-mode.js";
+import { createBeepDetector } from "./beep-detector.js";
+import { looksMachineGenerated } from "./machine-phrases.js";
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
@@ -579,10 +582,19 @@ export type GeminiBridgeOptions = {
    * `voicemail_reached` stops handing the script to the model: the bridge
    * stamps the verdict, mutes the model's audio for the rest of the call,
    * refuses the model's `end_call` while the platform still owes the
-   * voicemail, and the edge greeting handler or AMD resolution sweep speaks
-   * the script over Telnyx TTS through the shared claim.
+   * voicemail, and the edge greeting handler, the uplink beep detector, or
+   * the AMD resolution sweep speaks the script over Telnyx TTS through the
+   * shared claim.
    */
   deterministicVoicemail?: boolean;
+  /**
+   * Fired when the uplink beep detector completes a tone-then-drop. The
+   * bridge has already applied shouldSpeakOnBridgeBeep; `speak` is true only
+   * when that gate passed. The callback records the diag (including offset
+   * from the machine stamp) and, when `speak` is true, runs the lockstep
+   * voicemail speaker.
+   */
+  onBeepDetected?: (info: { detectedAtMs: number; speak: boolean }) => Promise<void> | void;
 };
 
 function extractModelAudioParts(message: LiveServerMessage): Array<{ dataB64: string; mimeType?: string }> {
@@ -810,6 +822,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // leg 9 seconds after the machine verdict, before any deterministic speaker
   // could act. 0 means not pending.
   let voicemailDeterministicPendingAtMs = 0;
+  // Bridge beep-detector gate. Telnyx machine_detected alone is not enough
+  // (provisional under iOS screening). Speak only after voicemail_reached or
+  // a caller turn that already matched a recording phrase.
+  let iosScreening = false;
+  let voicemailReachedAccepted = false;
+  let heardMachinePhrase = false;
+  let beepSpeakIssued = false;
+  const beepDetector = opts.deterministicVoicemail ? createBeepDetector() : null;
+  let callerBeepBuf = "";
   // SPOKEN-NUMBER FIREWALL state. `modelAudioMuted` is permanent for the rest
   // of the call (machine legs); `suppressTurnAudio` drops the remainder of the
   // CURRENT model turn after a violation and resets at turnComplete.
@@ -1088,12 +1109,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           // call.speak.ended hangs up. The mute stays (model chatter over
           // the script is the double-speak the claim exists to prevent),
           // and polling is done.
+          beepSpeakIssued = true;
           emitDiag("voice_bridge_voicemail_resolution_speaking", {});
           return;
         }
         if (state === "live") {
           voicemailDeterministicPendingAtMs = 0;
           modelAudioMuted = false;
+          iosScreening = true;
+          voicemailReachedAccepted = false;
           emitDiag("voice_bridge_voicemail_mute_lifted", {});
           try {
             session.sendRealtimeInput({ text: VOICEMAIL_MUTE_LIFTED_CUE });
@@ -1840,8 +1864,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // transcript missing the sentence that prompted the transfer.
         callerSpeech.ingest(message);
         handleModelToolCalls(message);
+        const transcriptFrame = extractTranscriptionFrame(message);
+        if (transcriptFrame.callerText) {
+          callerBeepBuf += transcriptFrame.callerText;
+          if (looksMachineGenerated(callerBeepBuf)) heardMachinePhrase = true;
+        }
+        if (transcriptFrame.turnComplete) callerBeepBuf = "";
         if (transcriptRecorder) {
-          void transcriptRecorder.ingest(message);
+          void transcriptRecorder.ingest(message, { assistantMuted: modelAudioMuted });
         }
         // SPOKEN-NUMBER FIREWALL, and it must run BEFORE the audio loop below:
         // when the transcription revealing a fabricated number rides the same
@@ -2476,14 +2506,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // handed this exact moment and betrayed it: it claimed the voicemail,
         // rewrote the script with an invented "offer came through" and a
         // fabricated callback number, and ended the leg 9 seconds after the
-        // verdict, before the resolution sweep's 25s grace could act. So in
+        // verdict, before the resolution sweep's 40s grace could act. So in
         // this mode the tool response carries NO script, the model's audio is
         // muted for the rest of the call (plus a queue flush for anything
         // already in flight), the capability stamps the verdict WITHOUT
-        // claiming the speak, and the edge (greeting.ended handler, else the
-        // AMD resolution sweep) speaks the authored script over Telnyx TTS,
-        // verbatim by construction. The pending stamp is set SYNCHRONOUSLY so
-        // a same-batch end_call reaching the loop after this is deferred.
+        // claiming the speak, and the edge (beep_detected, the uplink beep
+        // detector, else the AMD resolution sweep) speaks the authored script
+        // over Telnyx TTS, verbatim by construction. The pending stamp is set
+        // SYNCHRONOUSLY so a same-batch end_call reaching the loop after this
+        // is deferred.
         if (opts.deterministicVoicemail) {
           // First report starts the clock; a repeat must NOT re-credit the
           // end_call hold, or a model looping this tool could pin the leg
@@ -2523,6 +2554,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
               // leg as a withdrawn verdict (Bugbot, PR #1742). The
               // capability's own read is belt to this ordering's braces.
               if (firstDeterministicReport) startVoicemailResolutionPoll();
+              voicemailReachedAccepted = true;
               sendToolResponse(call.id, name, {
                 ok: true,
                 detail: VOICEMAIL_DETERMINISTIC_TOOL_REPLY
@@ -2982,6 +3014,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           if (a > peak) peak = a;
         }
         if (peak > diag.uplinkPeakSampleWindow) diag.uplinkPeakSampleWindow = peak;
+        if (beepDetector && opts.onBeepDetected && !beepSpeakIssued && !ended) {
+          if (beepDetector.push(samples)) {
+            const decision = shouldSpeakOnBridgeBeep({
+              iosScreening,
+              alreadyClaimed: beepSpeakIssued,
+              voicemailReached: voicemailReachedAccepted,
+              heardMachinePhrase
+            });
+            if (decision === "speak") beepSpeakIssued = true;
+            const speak = decision === "speak";
+            if (decision === "no_verdict") {
+              emitDiag("voice_bridge_beep_without_verdict", {});
+            }
+            void Promise.resolve(
+              opts.onBeepDetected({ detectedAtMs: Date.now(), speak })
+            ).catch((err) => {
+              console.error("gemini-bridge: onBeepDetected threw", err);
+            });
+          }
+        }
       }
       // Use the modern `audio:` field. Passing `media:` makes the SDK
       // serialize the chunk as `realtime_input.media_chunks`, which the

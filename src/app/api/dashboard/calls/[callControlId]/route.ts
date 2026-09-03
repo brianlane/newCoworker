@@ -18,11 +18,8 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
-import {
-  getTranscriptById,
-  listTurns,
-  softDeleteTranscript
-} from "@/lib/db/voice-transcripts";
+import { getTranscriptById, listTurns, softDeleteTranscript } from "@/lib/db/voice-transcripts";
+import { isMutedTranscriptTurn } from "@/lib/voice/transcript-badges";
 
 export const dynamic = "force-dynamic";
 
@@ -81,13 +78,15 @@ export async function GET(
         startedAt: transcript.started_at,
         endedAt: transcript.ended_at
       },
-      turns: turns.map((t) => ({
-        id: t.id,
-        role: t.role,
-        content: t.content,
-        turnIndex: t.turn_index,
-        createdAt: t.created_at
-      }))
+      turns: turns
+        .filter((t) => !isMutedTranscriptTurn(t.content))
+        .map((t) => ({
+          id: t.id,
+          role: t.role,
+          content: t.content,
+          turnIndex: t.turn_index,
+          createdAt: t.created_at
+        }))
     });
   } catch (err) {
     return handleRouteError(err);

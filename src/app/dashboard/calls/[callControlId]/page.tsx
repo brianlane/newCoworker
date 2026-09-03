@@ -34,7 +34,7 @@ import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
-import { forwardedCallNotice, turnSpeaker } from "@/lib/voice/transcript-badges";
+import { forwardedCallNotice, isMutedTranscriptTurn, turnSpeaker } from "@/lib/voice/transcript-badges";
 
 export const dynamic = "force-dynamic";
 
@@ -137,6 +137,7 @@ export default async function CallTranscriptPage({
     turnCount: turns.length,
     interpretedFromTurnIndex: transcript.interpreted_from_turn_index
   });
+  const visibleTurns = turns.filter((turn) => !isMutedTranscriptTurn(turn.content));
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -245,7 +246,7 @@ export default async function CallTranscriptPage({
           then invokes transfer_to_owner, the pre-transfer exchange (greeting,
           caller request, handoff line) is transcribed. Hide the turns card
           only when there is genuinely nothing to show (ring-time forwards). */}
-      {transcript.call_kind === "forwarded" && turns.length === 0 ? null : turns.length === 0 ? (
+      {transcript.call_kind === "forwarded" && visibleTurns.length === 0 ? null : visibleTurns.length === 0 ? (
         <Card>
           <p className="text-sm text-parchment/60 text-center py-6">
             No transcript turns recorded for this call yet.
@@ -254,7 +255,7 @@ export default async function CallTranscriptPage({
       ) : (
         <Card padding="md">
           <ul className="space-y-4">
-            {turns.map((turn) => {
+            {visibleTurns.map((turn) => {
               const isCaller = turn.role === "caller";
               const speaker = turnSpeaker({
                 role: turn.role,

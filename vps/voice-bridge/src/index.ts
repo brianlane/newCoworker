@@ -31,6 +31,7 @@ import {
   telnyxSendDtmf,
   telnyxStreamingStop
 } from "./telnyx-call-actions.js";
+import { speakVoicemailDeterministic as speakVoicemailOnBridge } from "./voicemail-speak.js";
 import {
   parseReachLadderConfig,
   runReachLadder,
@@ -1635,7 +1636,7 @@ function main(): void {
                 // (the AMD resolution sweep's clock). The edge's stampMachine
                 // writes it exactly once on the AMD webhook; only fill it here
                 // when Telnyx never delivered a verdict, and never move an
-                // existing clock (a moved clock restarts the 25s grace).
+                // existing clock (a moved clock restarts the 40s grace).
                 let stampPatch: Record<string, unknown> = { machine_detected: true };
                 if (deterministicVoicemail) {
                   const { data: sessRow } = await supabase
@@ -1677,7 +1678,9 @@ function main(): void {
                 // AMD resolution sweep 25s after the stamp), which claims when
                 // it acts. The model's tool winning the claim is exactly what
                 // stood the sweep down on call 5e325829 while the model
-                // betrayed the read with a fabricated number.
+                // betrayed the read with a fabricated number. Delivery is
+                // beep_detected, the uplink beep detector, or the sweep 40s
+                // after the stamp.
                 if (deterministicVoicemail) {
                   return { ok: true, detail: "machine stamped, platform delivers" };
                 }
@@ -2330,7 +2333,42 @@ function main(): void {
             intake,
             recordDiag,
             numberGuard: numberGuardOpts,
-            deterministicVoicemail
+            deterministicVoicemail,
+            onBeepDetected:
+              deterministicVoicemail && hangupApiKey
+                ? async ({ detectedAtMs, speak }) => {
+                    let offsetMs: number | null = null;
+                    try {
+                      const { data: sessRow } = await supabase
+                        .from("voice_handoff_sessions")
+                        .select("context")
+                        .eq("call_control_id", callControlId)
+                        .maybeSingle();
+                      const ctx = ((sessRow as { context?: unknown } | null)?.context ??
+                        {}) as Record<string, unknown>;
+                      if (typeof ctx.machine_stamped_at === "string") {
+                        const stamped = Date.parse(ctx.machine_stamped_at);
+                        if (Number.isFinite(stamped)) offsetMs = detectedAtMs - stamped;
+                      }
+                    } catch (err) {
+                      console.error("voice-bridge: beep stamp read failed", err);
+                    }
+                    recordDiag("voice_bridge_beep_detected", { offset_ms: offsetMs, speak });
+                    if (!speak) return;
+                    const outcome = await speakVoicemailOnBridge(
+                      {
+                        rpc: (fn, args) => supabase.rpc(fn, args),
+                        apiKey: hangupApiKey,
+                        fetchImpl: fetch,
+                        nowIso: () => new Date().toISOString()
+                      },
+                      callControlId,
+                      intakeVoicemailScript,
+                      { trigger: "bridge_beep" }
+                    );
+                    recordDiag("voice_bridge_beep_speak", { outcome });
+                  }
+                : undefined
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
