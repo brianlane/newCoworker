@@ -984,6 +984,7 @@ async function handleSpeakEnded(
     status,
     alreadyRestarted: ctx.voicemail_speak_restarted === true,
     alreadySpoken: ctx.voicemail_spoken === true,
+    retryClaimed: ctx.voicemail_speak_retry_claimed === true,
     plausible,
     eventOccurredAtIso: eventOccurredAt,
     speakStartedAtIso: ctx.voicemail_speak_started_at

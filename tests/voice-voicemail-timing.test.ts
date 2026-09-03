@@ -331,6 +331,35 @@ describe("classifySpeakEnded", () => {
       })
     ).toBe("record_only");
   });
+
+  it("does not hang up while the retry speak is claimed but not yet accepted", () => {
+    expect(
+      classifySpeakEnded({
+        status: "completed",
+        alreadyRestarted: false,
+        plausible: true,
+        retryClaimed: true
+      })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({
+        status: "cancelled_amd",
+        alreadyRestarted: false,
+        plausible: false,
+        retryClaimed: true
+      })
+    ).toBe("record_only");
+    expect(
+      classifySpeakEnded({
+        status: "completed",
+        alreadyRestarted: true,
+        plausible: true,
+        retryClaimed: true,
+        eventOccurredAtIso: "2026-08-27T15:35:50.000Z",
+        speakStartedAtIso: "2026-08-27T15:35:40.000Z"
+      })
+    ).toBe("stamp_and_hangup");
+  });
 });
 
 describe("speakEndedWasInterrupted", () => {

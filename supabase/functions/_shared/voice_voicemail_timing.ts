@@ -125,8 +125,19 @@ export function classifySpeakEnded(opts: {
   alreadySpoken?: boolean;
   eventOccurredAtIso?: unknown;
   speakStartedAtIso?: unknown;
+  /**
+   * True when `voice_claim_voicemail_retry` won. That is earlier than
+   * `alreadyRestarted` (which waits for Telnyx 2xx). While the retry speak
+   * is in flight, a redelivered first completed must not hang up.
+   */
+  retryClaimed?: boolean;
 }): SpeakEndedAction {
   if (speakEndedEventIsStale(opts.eventOccurredAtIso, opts.speakStartedAtIso)) {
+    return "record_only";
+  }
+  // Claimed but not yet accepted: do not hang up on the first speak's
+  // completed, and do not issue a second retry.
+  if (opts.retryClaimed === true && !opts.alreadyRestarted) {
     return "record_only";
   }
   const status = typeof opts.status === "string" ? opts.status.trim().toLowerCase() : "";
