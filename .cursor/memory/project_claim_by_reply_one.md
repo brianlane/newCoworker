@@ -193,6 +193,35 @@ quotes (`Reply "1, <name>"`), so the two instructions disagreed.
   Team SMS is Rowboat, not the owner-operator engine, so "Can I take it?"
   must be answered with "reply 1, the name", never "it's yours".
 
+## project_stacked_alerts_are_one_lead
+
+Observed live on Amy Laidlaw's account, 2026-09-02, the day after the
+starred-claim parser shipped. Jason Lane replied a bare `1` and the
+ask-back listed Christopher Ackermann twice:
+`Summer Lolling, Christopher Ackermann or Christopher Ackermann`, then
+later `Jim Allivato, Shawonna Gooch, Christopher Ackermann or
+Christopher Ackermann`. He named Jim and that claim worked. Naming
+Christopher would have been ambiguous too: two exact matches.
+
+**Why:** each `notify_team` ping inserts a new `unowned_lead_alerts` row
+with its own 24h window. Christopher had four of them in two days; two
+were still live. `findLiveUnownedAlertsFor` returned both. The ask-back
+counted rows, not people. Claiming already retired sibling rows for the
+same `lead_e164`; the list and the named matcher did not.
+
+**How it works now:**
+
+- `findLiveUnownedAlertsFor` keeps the newest row per phone.
+  10-digit NANP and +1 E.164 are the same key.
+- `collapseOfferCandidates` does the same across offers + alerts +
+  bookings (phone present = one lead; phoneless bookings stay distinct).
+- Bare `1` and `1, name` both run on that collapsed list.
+  `askBackLabels` still suffixes last-four digits when two remaining
+  people share a name.
+- An offer claim that wins that collapse retires leftover live alerts
+  for the same phone (`retireLiveUnownedAlertsForLead`). Alert claims
+  already did this for sibling rows.
+
 Related: [[project_claim_by_reply_one_two_paths]],
 [[project_informational_team_alert_gets_replied_1]],
-[[project_owner_ask_reaches_the_flows]].
+[[project_starred_claim_reply_falls_to_coworker]].

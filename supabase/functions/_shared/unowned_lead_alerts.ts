@@ -17,6 +17,8 @@
  * (reader and claimer), so the two cannot disagree about what "live" means.
  */
 
+import { e164CollapseKey, e164LookupValues } from "./normalize_e164.ts";
+
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any
 type AnyClient = any;
@@ -116,11 +118,23 @@ export async function findLiveUnownedAlertsFor(
       console.error("findLiveUnownedAlertsFor", error);
       return [];
     }
-    return ((data ?? []) as UnownedLeadAlertRow[]).map((r) => ({
+    const mapped = ((data ?? []) as UnownedLeadAlertRow[]).map((r) => ({
       alertId: r.id,
       leadE164: r.lead_e164,
       leadLabel: (r.lead_label ?? "").trim() || null
     }));
+    // Newest-first already. Two live rows for one phone are one lead: each
+    // follow-up ping inserts another 24h alert, and listing both makes a
+    // bare "1" ask "Christopher or Christopher" (Amy Laidlaw, 2026-09-02).
+    const seen = new Set<string>();
+    const unique: UnownedAlertCandidate[] = [];
+    for (const c of mapped) {
+      const key = e164CollapseKey(c.leadE164) || c.leadE164;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(c);
+    }
+    return unique;
   } catch (e) {
     console.error("findLiveUnownedAlertsFor threw", e);
     return [];
@@ -189,4 +203,42 @@ export async function claimUnownedLeadAlert(
     return { ok: false, reason: "already_claimed", by: row.claimed_by_e164 ?? null };
   }
   return { ok: false, reason: "gone" };
+}
+
+/**
+ * Retire every live unclaimed alert about this lead. Alert claims already
+ * did this for sibling rows. Offer claims that won a collapsed same-phone
+ * race must too, or a leftover alert stays claimable and a second teammate
+ * is told the lead is theirs.
+ *
+ * Never throws: the claim already landed, and a leftover alert is worse
+ * than failing this cleanup.
+ */
+export async function retireLiveUnownedAlertsForLead(
+  supabase: AnyClient,
+  args: {
+    businessId: string;
+    leadE164: string;
+    claimedByE164: string;
+    memberId: string | null;
+    nowIso: string;
+  }
+): Promise<void> {
+  const phones = e164LookupValues(args.leadE164);
+  if (phones.length === 0) return;
+  try {
+    const { error } = await supabase
+      .from("unowned_lead_alerts")
+      .update({
+        claimed_at: args.nowIso,
+        claimed_by_e164: args.claimedByE164,
+        claimed_by_member_id: args.memberId
+      })
+      .eq("business_id", args.businessId)
+      .in("lead_e164", phones)
+      .is("claimed_at", null);
+    if (error) console.error("retireLiveUnownedAlertsForLead", error);
+  } catch (e) {
+    console.error("retireLiveUnownedAlertsForLead threw", e);
+  }
 }
