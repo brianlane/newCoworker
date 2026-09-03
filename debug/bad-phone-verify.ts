@@ -302,7 +302,9 @@ if (cmd === "setup") {
   if (error || (data ?? []).length === 0) throw new Error(error?.message ?? "claim raced");
   console.log(`claimed run ${run.id}${timeframe ? ` (ETA ${timeframe})` : ""}`);
 } else if (cmd === "report") {
-  // MIRROR of resumeAwaitingReplyRun (the staff wait-resume exception).
+  // MIRROR of resumeAwaitingReplyRun (the staff wait-resume exception in
+  // wait_reply_resume.ts). The tester is staff, so this CLI resumes the wait
+  // directly rather than going through the coworker.
   const text = positionalArgs().join(" ");
   if (!text) throw new Error("usage: report <text>");
   const run = await latestRun();

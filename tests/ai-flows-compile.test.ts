@@ -67,6 +67,18 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"equals":"no_reply"');
   });
 
+  it("teaches that wait_for_reply captures the reply but does not mute the coworker unless suppressDefaultReply", () => {
+    // KIN 2026-09-02: a silence-nudge cadence wait swallowed a booked-but-unsure
+    // reply because the prompt (and the inbound webhook) treated every parked
+    // wait as owning the conversational turn. The generator must not re-learn
+    // that. Cadence waits skip remaining nudges; suppressDefaultReply is what
+    // quiets the coworker when the flow will send the next customer text.
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("coworker still replies UNLESS options.suppressDefaultReply");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).not.toContain(
+      "the default AI conversational reply stays quiet for that message"
+    );
+  });
+
   it("documents the flow-level options (stop on response, re-entry)", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("stopOnResponse");
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("allowReentry");

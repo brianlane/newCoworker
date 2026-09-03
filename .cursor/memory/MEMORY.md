@@ -35,7 +35,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented
 - [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
-- [SMS send logging split](project_sms_send_logging_split.md) - replies live in sms_inbound_jobs.assistant_reply_text, NOT sms_outbound_log
+- [Wait_for_reply does not mute the coworker](project_wait_for_reply_does_not_mute_coworker.md) - cadence waits skip nudges; suppressDefaultReply is what quiets auto-reply (KIN 2026-09-02)
 - [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - .github/audit-allowlist.json with expiry; stale ratchet self-destructs
 - [Cloudflare scraper rules 403 Googlebot](project_cloudflare_scraper_rules_block_googlebot.md) - probe with Accept-Language
 - [PostgREST 1000-row cap](project_postgrest_1000_row_cap.md) - un-limited selects silently truncate; .limit() or server-side RPC

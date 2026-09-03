@@ -1096,8 +1096,11 @@ serve(async (req: Request) => {
     }
 
     // AiFlow suppression: a matched flow with options.suppressDefaultReply owns
-    // the response to this inbound, so skip the normal Coworker reply (no Rowboat
-    // call, no outbound send). This runs AFTER the kill-switch/Safe-Mode gate so
+    // the response to this inbound (either a newly queued run, or a parked
+    // wait_for_reply whose flow set that flag), so skip the normal Coworker
+    // reply (no Rowboat call, no outbound send). A cadence wait without the
+    // flag still captures the reply for no_reply gating, then this worker
+    // answers. This runs AFTER the kill-switch/Safe-Mode gate so
     // a suppressed lead in Safe Mode is still forwarded to the owner above; only
     // the AI auto-reply is suppressed. The job is marked done for the audit
     // trail; the AiFlow run was enqueued separately by the webhook.

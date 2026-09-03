@@ -38,6 +38,12 @@
  *                                       nudge, lead tagged Inactive.
  *   s_goal (LAST)                       replied / appointment_booked.
  *
+ * A parked wait_for_reply captures a real reply so later no_reply nudges
+ * skip. It does not mute the SMS coworker: this flow does not set
+ * suppressDefaultReply, so a lead who texts back is handed to the coworker
+ * (Kingsley's "if they reply the ai worker will nurture"). That split
+ * shipped 2026-09-03 after a booked-but-unsure reply was swallowed.
+ *
  * KNOWN LIMIT, recorded in docs/tenants/kin-integrated-child-health.md:
  * JaneApp has no integration, so nothing can observe a booking. The
  * `appointment_booked` goal and the booking precheck are inert, and a lead

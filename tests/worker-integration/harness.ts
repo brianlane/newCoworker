@@ -18,6 +18,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
+import { resumeAwaitingReplyRun } from "../../supabase/functions/_shared/ai_flows/wait_reply_resume";
 
 export const SUPABASE_URL = (process.env.ITEST_SUPABASE_URL ?? "http://127.0.0.1:54321").replace(
   /\/$/,
@@ -240,10 +241,9 @@ export async function getSmsJob(db: SupabaseClient, jobId: string): Promise<SmsJ
 
 /**
  * Resume a parked wait_for_reply run the way the telnyx-sms-inbound webhook
- * does. MIRROR of `resumeAwaitingReplyRun` in
- * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync), the
- * webhook itself can't be invoked here because it verifies Telnyx's
- * Ed25519 signature, which a test cannot forge by design.
+ * does. The webhook itself can't be invoked here because it verifies Telnyx's
+ * Ed25519 signature, which a test cannot forge by design. Calls the same
+ * shared helper the webhook uses (`resumeAwaitingReplyRun`).
  */
 export async function resumeReplyLikeWebhook(
   db: SupabaseClient,
@@ -251,51 +251,6 @@ export async function resumeReplyLikeWebhook(
   fromE164: string,
   bodyText: string
 ): Promise<string[]> {
-  const { data } = await db
-    .from("ai_flow_runs")
-    .select("id, context, revision")
-    .eq("business_id", businessId)
-    .eq("status", "awaiting_reply")
-    .eq("context->waiting_reply->>from", fromE164)
-    .order("updated_at", { ascending: false })
-    .limit(10);
-  const resumed: string[] = [];
-  for (const run of (data ?? []) as Array<{
-    id: string;
-    context: Record<string, unknown> | null;
-    revision: number;
-  }>) {
-    const waiting =
-      (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
-    const saveAs =
-      typeof waiting.save_as === "string" && waiting.save_as.trim() ? waiting.save_as : "reply_text";
-    const prevVars =
-      run.context?.vars && typeof run.context.vars === "object"
-        ? (run.context.vars as Record<string, unknown>)
-        : {};
-    const markerVars =
-      typeof waiting.marker === "string" && waiting.marker.trim() ? { [waiting.marker]: "1" } : {};
-    const { data: updated, error } = await db
-      .from("ai_flow_runs")
-      .update({
-        status: "queued",
-        respond_by_at: null,
-        claimed_at: null,
-        context: {
-          ...(run.context ?? {}),
-          vars: { ...prevVars, [saveAs]: bodyText.slice(0, 4000), ...markerVars },
-          waiting_reply: {
-            ...(run.context?.waiting_reply as Record<string, unknown>),
-            result: "reply"
-          }
-        },
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", run.id)
-      .eq("revision", run.revision)
-      .eq("status", "awaiting_reply")
-      .select("id");
-    if (!error && ((updated ?? []) as unknown[]).length > 0) resumed.push(run.id);
-  }
-  return resumed;
+  const result = await resumeAwaitingReplyRun(db, businessId, fromE164, bodyText);
+  return result.resumedIds;
 }

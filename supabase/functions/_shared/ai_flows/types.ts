@@ -1392,9 +1392,10 @@ export type FlowStep =
       /**
        * Park the run until the phone number held in `phoneVar` texts back (or
        * `timeoutMinutes` elapses). The inbound webhook resumes the run with
-       * the reply text in {{vars.<saveAs>}} and SUPPRESSES the default AI
-       * conversational reply for that message, the flow owns the turn, like
-       * options.suppressDefaultReply. On timeout the sweep resumes with
+       * the reply text in {{vars.<saveAs>}}. Remaining `no_reply` nudges then
+       * skip. The default coworker still answers unless the flow set
+       * `options.suppressDefaultReply` (it will send its own next customer
+       * text). On timeout the sweep resumes with
        * {{vars.<saveAs>}} = "no_reply" so later steps branch with
        * `when: { var: saveAs, equals/notEquals "no_reply" }`. An unusable
        * phone in phoneVar resolves immediately to "no_reply", a lead-data
@@ -1684,9 +1685,12 @@ export type FlowStepType = FlowStep["type"];
 
 export type AiFlowOptions = {
   /**
-   * When true, an inbound SMS that fires this flow does NOT also get the normal
-   * Coworker AI reply (e.g. a ReferralExchange lead-source number we only want
-   * to act on, not chat back to).
+   * When true, an inbound SMS that fires this flow, or that a parked
+   * wait_for_reply of this flow captures, does NOT also get the normal
+   * Coworker AI reply (e.g. a ReferralExchange lead-source number we only
+   * want to act on, or a classify-then-ack sequence that will text the
+   * lead itself). A silence-nudge cadence should leave this off so a lead
+   * who texts back is handed to the coworker.
    */
   suppressDefaultReply?: boolean;
   /**

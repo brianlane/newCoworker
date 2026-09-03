@@ -75,7 +75,7 @@ export async function pauseLeadAutomationOnCall(
 /**
  * Resolve every parked wait_for_reply run watching this caller with the
  * customer_called sentinel (revision-gated like the SMS-reply resume in
- * telnyx-sms-inbound; losing a race means that run already resolved).
+ * wait_reply_resume.ts; losing a race means that run already resolved).
  */
 async function resumeWaitsWithSentinel(
   supabase: AnyClient,

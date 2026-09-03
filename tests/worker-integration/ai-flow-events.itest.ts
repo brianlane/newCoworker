@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { applyGoalEvent, GOAL_JUMP_SKIP } from "../../supabase/functions/_shared/ai_flows/goal_events";
+import { resumeAwaitingReplyRun } from "../../supabase/functions/_shared/ai_flows/wait_reply_resume";
 import type { FlowStep } from "../../supabase/functions/_shared/ai_flows/types";
 import {
   createFlow,
@@ -33,11 +34,14 @@ const TRIGGER = {
 };
 
 /** Same fixture convention as ai-flow-worker.itest.ts (extract feeds lead_phone). */
-function flow(steps: unknown[]): Record<string, unknown> {
+function flow(
+  steps: unknown[],
+  options: { suppressDefaultReply?: boolean } = { suppressDefaultReply: false }
+): Record<string, unknown> {
   const def = {
     version: 1,
     trigger: { channel: "sms", conditions: [] },
-    options: { suppressDefaultReply: false },
+    options,
     steps: [
       {
         id: "extract",
@@ -58,36 +62,34 @@ beforeAll(() => {
 });
 
 describe("wait_for_reply resume by reply (webhook-shaped)", () => {
+  const waitAndTagSteps = [
+    {
+      id: "wait",
+      type: "wait_for_reply",
+      saveAs: "reply",
+      phoneVar: "lead_phone",
+      timeoutMinutes: 120
+    },
+    {
+      id: "tag_replied",
+      type: "update_contact",
+      when: { var: "reply", notEquals: "no_reply" },
+      addTags: ["Replied"],
+      phoneVar: "lead_phone"
+    },
+    {
+      id: "tag_noreply",
+      type: "update_contact",
+      when: { var: "reply", equals: "no_reply" },
+      addTags: ["NoReply"],
+      phoneVar: "lead_phone"
+    }
+  ];
+
   it("a parked run resumes with the reply text and takes the replied arm", async () => {
     const biz = await seedBusiness(db, "IT reply-resume");
     await seedContact(db, biz, LEAD);
-    const flowId = await createFlow(
-      db,
-      biz,
-      flow([
-        {
-          id: "wait",
-          type: "wait_for_reply",
-          saveAs: "reply",
-          phoneVar: "lead_phone",
-          timeoutMinutes: 120
-        },
-        {
-          id: "tag_replied",
-          type: "update_contact",
-          when: { var: "reply", notEquals: "no_reply" },
-          addTags: ["Replied"],
-          phoneVar: "lead_phone"
-        },
-        {
-          id: "tag_noreply",
-          type: "update_contact",
-          when: { var: "reply", equals: "no_reply" },
-          addTags: ["NoReply"],
-          phoneVar: "lead_phone"
-        }
-      ])
-    );
+    const flowId = await createFlow(db, biz, flow(waitAndTagSteps));
     const runId = await enqueueRun(db, flowId, biz, TRIGGER);
 
     await tickWorker();
@@ -103,6 +105,34 @@ describe("wait_for_reply resume by reply (webhook-shaped)", () => {
     const tags = await getContactTags(db, biz, LEAD);
     expect(tags).toContain("Replied");
     expect(tags).not.toContain("NoReply");
+  });
+
+  it("a cadence wait without suppressDefaultReply does not mute the coworker", async () => {
+    // KIN 2026-09-02: the webhook helper is the source of suppress_reply; the
+    // webhook itself cannot be invoked here (Ed25519).
+    const biz = await seedBusiness(db, "IT reply-resume-nurture");
+    await seedContact(db, biz, LEAD);
+    const flowId = await createFlow(db, biz, flow(waitAndTagSteps, { suppressDefaultReply: false }));
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER);
+    await tickWorker();
+    expect((await getRun(db, runId)).status).toBe("awaiting_reply");
+
+    const decision = await resumeAwaitingReplyRun(db, biz, LEAD, "I booked, unsure of the time");
+    expect(decision.resumedIds).toEqual([runId]);
+    expect(decision.suppressCoworker).toBe(false);
+  });
+
+  it("a wait on a suppressDefaultReply flow still mutes the coworker", async () => {
+    const biz = await seedBusiness(db, "IT reply-resume-owns");
+    await seedContact(db, biz, LEAD);
+    const flowId = await createFlow(db, biz, flow(waitAndTagSteps, { suppressDefaultReply: true }));
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER);
+    await tickWorker();
+    expect((await getRun(db, runId)).status).toBe("awaiting_reply");
+
+    const decision = await resumeAwaitingReplyRun(db, biz, LEAD, "Yes call me");
+    expect(decision.resumedIds).toEqual([runId]);
+    expect(decision.suppressCoworker).toBe(true);
   });
 });
 
