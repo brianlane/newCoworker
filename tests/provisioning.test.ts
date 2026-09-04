@@ -348,7 +348,17 @@ describe("provisioning/orchestrate", () => {
 
     await orchestrateProvisioning(
       { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
-      { vpsProvisioner, remoteExec }
+      {
+        vpsProvisioner,
+        remoteExec,
+        // The billing id on the stub is what this test is about, and it
+        // also arms the paid-through lookup. That defaults to a live
+        // Hostinger list call. Main CI 33892657463 timed both of these
+        // cases out at 15s on that network hop; the same suite on the PR
+        // was green. Inject, the way the pool-expiry cases already do.
+        resolvePaidThrough: async () => null,
+        sleep: async () => undefined
+      }
     );
 
     expect(persistHostingerBillingIdOnLiveSubscription).toHaveBeenCalledWith("biz-uuid-1", "hsub-1");
@@ -361,10 +371,16 @@ describe("provisioning/orchestrate", () => {
       hostingerBillingSubscriptionId: "hsub-1"
     });
     const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const hermetic = {
+      vpsProvisioner,
+      remoteExec,
+      resolvePaidThrough: async () => null,
+      sleep: async () => undefined
+    };
 
     const result = await orchestrateProvisioning(
       { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
-      { vpsProvisioner, remoteExec }
+      hermetic
     );
 
     expect(result.vpsId).toBe("123");
@@ -372,7 +388,7 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(persistHostingerBillingIdOnLiveSubscription).mockRejectedValueOnce("db down");
     const result2 = await orchestrateProvisioning(
       { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
-      { vpsProvisioner, remoteExec }
+      hermetic
     );
     expect(result2.vpsId).toBe("123");
   });
