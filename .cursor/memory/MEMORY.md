@@ -153,6 +153,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Extraction prompt style lines](project_extraction_prompt_style_lines.md) - a global style rule broke person-role extraction; extraction takes its own scoped spelling line
 - [Translator interpret flake](project_translator_interpret_flake.md) - the cue scores 79/80; the nightly went red because this file had no retry
 - [Aug 28-29 nightly reds: three causes, kyp owner-choice drift](project_nightly_red_aug29_kyp_owner_choice_drift.md) - Aug 29 kyp failure is model drift ~40% local, prompt-only contract; NOT #1728
+- [Sep 4 nightly red: two unrelated flakes](project_nightly_red_sep4_two_flakes.md) - kyp regex rejected "triggered"/"ran"/"starts"; reminder-covered 1/6 then 0/10, retry+dump not a prompt edit; NOT #1793
 - [Page only on what is actionable](feedback_page_only_on_what_is_actionable.md) - three false alarms in a week; error level is for what a human here can act on; the tension with "delivered is not received" resolved
 - [Hostinger billing id must be on the live subscription row](project_subscription_hostinger_link_must_be_stamped.md) - inventory is not the join the audit/sweeps use; leftover unpaid pending carts next to a live sibling make a tenant appear twice
 - [Watchdog SLOW line is per sweep](project_watchdog_slow_line_is_per_sweep.md) - 120s is the DEFAULT; 7 long-budget sweeps judged at 80% of their own maxDuration; a 552s migration run is the sweep WORKING

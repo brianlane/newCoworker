@@ -56,6 +56,17 @@ import { recordGeminiUsage } from "./usage-log";
  * since the Aug 2026 flagship bump). */
 const OPERATOR_MODEL = "gemini-3.7-flash";
 
+/**
+ * Honest "I ran the automation" confirmation. Widened Sep 4 2026 after
+ * nightly 33879483886 rejected two correct replies: "i just triggered
+ * your ... automation" and "i ran the ... automation ... it starts in
+ * about a minute". "starts" is not "started"; "triggered" / "ran" were
+ * not in the old /running|started|enqueued|on it/ list. Word-bounded so
+ * "ran" does not match inside "grand" / "arranged".
+ */
+const FLOW_RAN_CONFIRMATION =
+  /\b(running|started|starts|triggered|ran|kicked off|launched|enqueued|queued|on it)\b/;
+
 const JAMES_E164 = "+15145188192";
 const UDAY_E164 = "+17326190286";
 
@@ -375,6 +386,18 @@ describe("scenario 1, James's exact request, confirmation flow still disabled (p
 });
 
 describe("scenario 2, flow ENABLED: presents both options, then executes the owner's choice", () => {
+  it("accepts the Sep 4 nightly phrasings the old confirmation regex missed", () => {
+    const triggered =
+      'i just triggered your "booking confirmation text (calendly)" automation for uday nandam. you can follow the run at /dashboard/aiflows.';
+    const ran =
+      'i ran the "booking confirmation text (calendly)" automation for uday nandam (+1 732-619-0286). it starts in about a minute, and you can track it at /dashboard/aiflows.';
+    const old = /running|started|enqueued|on it/;
+    expect(triggered).not.toMatch(old);
+    expect(ran).not.toMatch(old);
+    expect(triggered).toMatch(FLOW_RAN_CONFIRMATION);
+    expect(ran).toMatch(FLOW_RAN_CONFIRMATION);
+  });
+
   // One retried test instead of beforeAll + three tests: a marginal round-1
   // draw (the model committing an action before asking, seen once on PR
   // #729's CI run) must re-roll the WHOLE exchange, and vitest retry cannot
@@ -430,7 +453,7 @@ describe("scenario 2, flow ENABLED: presents both options, then executes the own
       expect(run, `round2 calls: ${JSON.stringify(round2.calls)}`).toBeDefined();
       expect(String(run!.args.flow)).toMatch(/booking confirmation|11111111-aaaa/i);
       expect(round2.calls.find((c) => c.name === "send_sms")).toBeUndefined();
-      expect(round2.finalText.toLowerCase()).toMatch(/running|started|enqueued|on it/);
+      expect(round2.finalText.toLowerCase(), round2.finalText).toMatch(FLOW_RAN_CONFIRMATION);
     }
   );
 });
