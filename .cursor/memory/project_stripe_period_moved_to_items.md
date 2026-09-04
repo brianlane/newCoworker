@@ -7,8 +7,8 @@ metadata:
 
 Stripe API `2025-03-31.basil` moved `current_period_start` / `current_period_end`
 OFF the top-level Subscription object and ONTO each `SubscriptionItem`. Our
-Stripe SDK is pinned to `2026-07-29.dahlia` (`src/lib/stripe/client.ts`) and the
-**live account default is `2026-03-25.dahlia`** — so a raw REST GET that sends no
+Stripe SDK is pinned to `2026-08-26.dahlia` (`src/lib/stripe/client.ts`) and the
+**live account default is `2026-03-25.dahlia`**, so a raw REST GET that sends no
 `Stripe-Version` header ALSO gets the new shape. Top-level period fields are
 simply absent everywhere now.
 

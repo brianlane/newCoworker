@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     console.error("STRIPE_SECRET_KEY is not set (source .env first)");
     process.exit(2);
   }
-  const stripe = new Stripe(secret, { apiVersion: "2026-07-29.dahlia" });
+  const stripe = new Stripe(secret, { apiVersion: "2026-08-26.dahlia" });
   const isLive = secret.startsWith("sk_live");
   console.log(`[term-prices] mode=${APPLY ? "APPLY" : "dry-run"} stripe=${isLive ? "LIVE" : "test"}`);
 

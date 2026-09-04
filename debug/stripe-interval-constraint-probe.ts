@@ -22,7 +22,7 @@ process.env.STRIPE_SECRET_KEY = testKey;
 
 import Stripe from "stripe";
 
-const stripe = new Stripe(testKey, { apiVersion: "2026-07-29.dahlia" });
+const stripe = new Stripe(testKey, { apiVersion: "2026-08-26.dahlia" });
 
 type Rec = { interval: "day" | "week" | "month" | "year"; interval_count?: number };
 
