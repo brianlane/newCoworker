@@ -14,7 +14,7 @@ import {
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_SECRET_KEY is not configured");
-  return new Stripe(key, { apiVersion: "2026-07-29.dahlia" });
+  return new Stripe(key, { apiVersion: "2026-08-26.dahlia" });
 }
 
 export function verifyWebhook(payload: string, signature: string, secret?: string): Stripe.Event {

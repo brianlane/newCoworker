@@ -45,7 +45,7 @@ import {
   prioritySupportDaysLeft
 } from "@/lib/plans/priority-support";
 
-const stripe = new Stripe(testKey, { apiVersion: "2026-07-29.dahlia" });
+const stripe = new Stripe(testKey, { apiVersion: "2026-08-26.dahlia" });
 const BIZ = "00000000-0000-4000-8000-0000000000ff";
 const DAY = 24 * 60 * 60 * 1000;
 

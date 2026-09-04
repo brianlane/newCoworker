@@ -206,6 +206,9 @@ describe("declarations", () => {
       if (typeof node !== "object" || node === null) return;
       for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
         expect(LEGAL_KEYS.has(key), `illegal schema key "${key}" at ${path}`).toBe(true);
+        if (key === "type") {
+          expect(typeof value, `schema type must be a string at ${path}`).toBe("string");
+        }
         if (key === "properties") {
           for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
             walk(pv, `${path}.${pk}`);
@@ -257,7 +260,7 @@ describe("declarations", () => {
     expect(props.day.description).toBe("null closes the day");
     expect(props.mode.enum).toEqual(["fast"]);
     expect(props.tags.items).toMatchObject({ enum: ["a", "b"] });
-    expect(Array.isArray(props.choice.anyOf)).toBe(true);
+    expect(props.choice.anyOf).toEqual([{ type: "string" }, { type: "number" }]);
     expect(decl.parameters.required).toEqual(["day", "mode"]);
   });
 
@@ -309,6 +312,21 @@ describe("declarations", () => {
     expect(sanitizeSchemaNode({ type: "object", required: [] })).toEqual({
       type: "object"
     });
+    // Zod 4.5+ compact simple unions to a JSON Schema type array. Gemini
+    // does not accept that, so expand back to anyOf / nullable.
+    expect(sanitizeSchemaNode({ type: ["string", "number"] })).toEqual({
+      anyOf: [{ type: "string" }, { type: "number" }]
+    });
+    expect(
+      sanitizeSchemaNode({ type: ["string", "null"], description: "d" })
+    ).toEqual({ type: "string", nullable: true, description: "d" });
+    expect(sanitizeSchemaNode({ type: ["string", "number", "null"] })).toEqual({
+      anyOf: [{ type: "string" }, { type: "number" }],
+      nullable: true
+    });
+    expect(sanitizeSchemaNode({ type: ["string"] })).toEqual({ type: "string" });
+    // A type array that is not all strings is not a compact union: drop it.
+    expect(sanitizeSchemaNode({ type: ["string", 1] })).toEqual({});
   });
 
   it("applies the fetch description override", () => {

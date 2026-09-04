@@ -27,7 +27,7 @@ export type SubscriptionBillingPeriod = string | null | undefined;
  *
  * Stripe API version `2025-03-31.basil` moved `current_period_start` /
  * `current_period_end` OFF the top-level Subscription and ONTO each
- * `SubscriptionItem`. Our SDK is pinned past that (`2026-07-29.dahlia`) and the
+ * `SubscriptionItem`. Our SDK is pinned past that (`2026-08-26.dahlia`) and the
  * live account default is `2026-03-25.dahlia`, so a raw REST GET that sends no
  * `Stripe-Version` header ALSO receives the new shape: the top-level fields are
  * simply absent. Reading only the top level silently yields `null` on every
