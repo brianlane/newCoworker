@@ -267,6 +267,11 @@ function bridgedDefs(deps: McpBridgeDeps = {}): McpToolDef[] {
  * additionalProperties) is dropped: those are VALIDATION concerns, and the
  * handler's own zod parse remains the enforcement point.
  *
+ * Zod 4.5+ also emits simple unions as a JSON Schema type array
+ * (`type: ["string", "number"]` instead of `anyOf`). Gemini's OpenAPI 3.0
+ * subset does not accept type arrays, so those expand back into anyOf
+ * (and the same `[null, X]` flatten) before the rest of the pass.
+ *
  * Exported for its own tests: the non-object guard is unreachable through
  * zod-generated schemas but must hold if a hand-written def ever feeds it.
  */
@@ -275,8 +280,15 @@ export function sanitizeSchemaNode(node: unknown): Record<string, unknown> {
   const src = node as Record<string, unknown>;
   const out: Record<string, unknown> = {};
 
-  if (Array.isArray(src.anyOf)) {
-    const arms = (src.anyOf as unknown[]).map((a) => a as Record<string, unknown>);
+  const unionArms: unknown[] | undefined = Array.isArray(src.anyOf)
+    ? (src.anyOf as unknown[])
+    : Array.isArray(src.type) &&
+        (src.type as unknown[]).every((t) => typeof t === "string")
+      ? (src.type as string[]).map((t) => ({ type: t }))
+      : undefined;
+
+  if (Array.isArray(unionArms)) {
+    const arms = unionArms.map((a) => a as Record<string, unknown>);
     const nonNull = arms.filter((a) => a.type !== "null");
     const hadNull = nonNull.length !== arms.length;
     if (nonNull.length === 1) {
