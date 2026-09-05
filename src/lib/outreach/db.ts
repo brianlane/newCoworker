@@ -225,6 +225,56 @@ export async function insertProspects(
   return (data ?? []) as OutreachProspectRow[];
 }
 
+/** A ledger row written straight in as a draft, with its pitch already composed. */
+export type DraftedProspectInsert = Pick<
+  OutreachProspectRow,
+  | "id"
+  | "business_id"
+  | "domain"
+  | "business_name"
+  | "email"
+  | "phone"
+  | "website"
+  | "vertical"
+  | "city"
+  | "findings"
+  | "pitch_subject"
+  | "pitch_paragraphs"
+  | "pitch_body"
+  | "drafted_at"
+>;
+
+/**
+ * File a prospect that arrives already written: an owner's connector (Claude,
+ * ChatGPT) handing us a draft rather than the sweep discovering a domain.
+ *
+ * ONE write, landing at `drafted`. Inserting as `discovered` and then
+ * advancing would open a window where the sweep's probe phase reads the row,
+ * fetches the prospect's site, and either retires it ("no published contact
+ * address") or overwrites the caller's pitch with its own. The id is supplied
+ * by the caller because the unsubscribe link inside `pitch_body` has to name
+ * it, and that link is assembled before anything is written.
+ *
+ * Returns null when either suppression axis refuses the row (this business
+ * already has a row for the domain, or another prospect already fronts the
+ * address). That is the ledger doing its job, not an error: nobody is
+ * cold-emailed twice, whatever became of the first row.
+ */
+export async function insertDraftedProspect(
+  row: DraftedProspectInsert,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .insert({ ...row, status: "drafted", status_detail: null })
+    .select()
+    .single();
+  if (!error) return data as OutreachProspectRow;
+  if (error.code === PG_UNIQUE_VIOLATION) return null;
+  throw new Error(`insertDraftedProspect: ${error.message}`);
+}
+
 /**
  * Domains of this business already in the ledger, whatever their status.
  * Discovery calls this BEFORE probing, so a suppressed domain costs no

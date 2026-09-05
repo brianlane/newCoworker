@@ -27,6 +27,7 @@ import {
   findProspectByEmail,
   getOutreachSettings,
   getProspect,
+  insertDraftedProspect,
   insertProspects,
   listActiveOutreachSettings,
   listProspectOutcomes,
@@ -197,6 +198,54 @@ describe("insertProspects", () => {
     await expect(
       insertProspects([row], makeDb(chain({ data: null, error: { message: "ins" } })))
     ).rejects.toThrow(/ins/);
+  });
+});
+
+describe("insertDraftedProspect", () => {
+  const row = {
+    id: PROSPECT,
+    business_id: BIZ,
+    domain: "acme.com",
+    business_name: "Acme",
+    email: "info@acme.com",
+    phone: null,
+    website: null,
+    vertical: "",
+    city: "Tempe AZ",
+    findings: [],
+    pitch_subject: "Acme: hello",
+    pitch_paragraphs: "Hi Acme,",
+    pitch_body: "Hi Acme,\n\nfooter\n",
+    drafted_at: "2026-09-05T00:00:00Z"
+  };
+
+  it("inserts ONE row already at drafted and returns it", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: { ...row, status: "drafted" }, error: null });
+    expect(await insertDraftedProspect(row, makeDb(c))).toMatchObject({ id: PROSPECT, status: "drafted" });
+    // Straight to drafted: a row that passed through `discovered` would be
+    // probed by the sweep and overwritten or retired before the owner saw it.
+    expect(c.insert).toHaveBeenCalledWith({ ...row, status: "drafted", status_detail: null });
+    expect(c.select).toHaveBeenCalled();
+
+    const d = chain();
+    d.single.mockResolvedValue({ data: { ...row, status: "drafted" }, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(d));
+    expect(await insertDraftedProspect(row)).toMatchObject({ id: PROSPECT });
+  });
+
+  it("reports a unique violation as null and throws on anything else", async () => {
+    // Both suppression axes surface as the same code: the (business, domain)
+    // constraint and the partial index on lower(email).
+    const dup = chain();
+    dup.single.mockResolvedValue({ data: null, error: { code: PG_UNIQUE_VIOLATION, message: "dup" } });
+    expect(await insertDraftedProspect(row, makeDb(dup))).toBeNull();
+
+    const bad = chain();
+    bad.single.mockResolvedValue({ data: null, error: { code: "42P01", message: "no table" } });
+    await expect(insertDraftedProspect(row, makeDb(bad))).rejects.toThrow(
+      /insertDraftedProspect: no table/
+    );
   });
 });
 

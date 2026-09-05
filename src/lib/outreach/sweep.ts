@@ -25,6 +25,7 @@
  * everything after the send, which is what an owner should control.
  */
 
+import { randomUUID } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import {
   placesQueriesPerDayForTier,
@@ -62,6 +63,7 @@ import {
   existingProspectDomains,
   getOutreachSettings,
   getProspect,
+  insertDraftedProspect,
   insertProspects,
   listActiveOutreachSettings,
   OUTREACH_ACTIVE_PAGE_SIZE,
@@ -78,6 +80,7 @@ import {
 import {
   buildQueryRotation,
   dayIndexFor,
+  normalizeDomain,
   prospectsFromHits,
   rotationWindow,
   searchPlaces
@@ -1286,6 +1289,172 @@ export async function editProspectDraft(
   const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
   if (!saved) return { ok: false, reason: "not_drafted" };
   return { ok: true, prospect: patch };
+}
+
+/**
+ * Mail hosts shared by the public. An address on one of these says nothing
+ * about which business it belongs to, so it cannot stand in for the
+ * prospect's domain: the ledger keys suppression on (business, domain), and
+ * filing "gmail.com" would block every later Gmail-hosted prospect of the
+ * same tenant as a duplicate.
+ */
+export const SHARED_MAIL_HOSTS: ReadonlySet<string> = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "ymail.com",
+  "hotmail.com",
+  "outlook.com",
+  "live.com",
+  "msn.com",
+  "aol.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "protonmail.com",
+  "proton.me",
+  "comcast.net",
+  "att.net",
+  "sbcglobal.net",
+  "cox.net",
+  "verizon.net",
+  "mail.com",
+  "zoho.com"
+]);
+
+/**
+ * The suppression key for a draft that arrives without a Places hit: the
+ * domain the caller named, else the address's own host. Accepts a bare host
+ * or a full URL, and returns null when neither yields a real domain, or when
+ * the host was inferred from an address on a shared mail provider (see
+ * SHARED_MAIL_HOSTS). An explicitly named shared host is still refused for
+ * the same reason: it would claim the ledger slot for every prospect on it.
+ */
+export function draftDomainFor(explicitDomain: string | undefined, email: string): string | null {
+  const named = explicitDomain?.trim() ?? "";
+  const raw = named || email.trim().split("@")[1] || "";
+  if (!raw) return null;
+  const domain = normalizeDomain(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  if (!domain || SHARED_MAIL_HOSTS.has(domain)) return null;
+  return domain;
+}
+
+export type DraftCreateInput = {
+  businessName: string;
+  email: string;
+  city: string;
+  subject: string;
+  /** The editable middle only, blank-line separated. Never the footer. */
+  paragraphs: string;
+  /** Suppression key. Defaults to the address's host; see draftDomainFor. */
+  domain?: string;
+  vertical?: string;
+  website?: string;
+  phone?: string;
+};
+
+export type DraftCreateResult =
+  | {
+      ok: true;
+      prospect: OutreachProspectRow;
+      /** The mode the row now sits under: in `auto` the sweep will send it. */
+      mode: OutreachSettingsRow["mode"];
+    }
+  | {
+      ok: false;
+      reason:
+        | "not_configured"
+        | "tier_blocked"
+        | "empty_text"
+        | "too_long"
+        | "invalid_domain"
+        | "duplicate";
+      detail?: string;
+    };
+
+/**
+ * File a draft somebody else wrote: an owner's connector (Claude, ChatGPT,
+ * Grok over /api/mcp) handing us a prospect and a pitch, instead of the sweep
+ * discovering one. The row lands in the same review queue, through the same
+ * assembly, so the Marketing page cannot tell the two apart and neither can
+ * the send path.
+ *
+ * The caller supplies the PARAGRAPHS only, exactly as the dashboard's edit
+ * box does. The CTA, signature, unsubscribe link, and postal address are put
+ * on by `assembleBody` in code, which is the whole reason this exists as a
+ * write path: a connector composing the finished email itself would have to
+ * carry the compliance footer in model output, where it can be dropped or
+ * reworded, and a Gmail draft wraps every link in a tracking redirect.
+ *
+ * `findings` is written empty. There was no probe, so there is no evidence
+ * for "Write it again" to re-compose from, and that button refuses such a
+ * draft with "nothing specific enough left to say" rather than inventing an
+ * observation about a site nobody looked at. Edit and Send work as normal.
+ *
+ * In `auto` mode the sweep sends any drafted row inside the cap and window
+ * with no further owner action, so a caller in that mode is putting an email
+ * in motion, not just a row. Callers surface the mode for that reason.
+ */
+export async function createProspectDraft(
+  businessId: string,
+  input: DraftCreateInput,
+  deps: OutreachSweepDeps = {}
+): Promise<DraftCreateResult> {
+  const subject = input.subject.trim();
+  const text = input.paragraphs.trim();
+  if (!subject || !text) return { ok: false, reason: "empty_text" };
+  if (subject.length > MAX_EDITED_SUBJECT_CHARS || text.length > MAX_EDITED_BODY_CHARS) {
+    return { ok: false, reason: "too_long" };
+  }
+  const domain = draftDomainFor(input.domain, input.email);
+  if (!domain) {
+    return {
+      ok: false,
+      reason: "invalid_domain",
+      detail: "pass the prospect's own website domain; a shared mail host cannot identify a business"
+    };
+  }
+
+  const r = await resolveDeps(deps);
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { ok: false, reason: "not_configured" };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) {
+    return {
+      ok: false,
+      reason: resolved.blockedBy === "tier" ? "tier_blocked" : "not_configured",
+      detail: resolved.missing
+    };
+  }
+
+  // The id is minted here because the unsubscribe link has to name it and
+  // the link is part of the body being written. One write, no read-back.
+  const id = randomUUID();
+  const unsubscribeUrl = buildOutreachUnsubscribeUrl(r.appUrl, businessId, id);
+  const paragraphs = splitParagraphs(text);
+  const row = await insertDraftedProspect(
+    {
+      id,
+      business_id: businessId,
+      domain,
+      business_name: input.businessName.trim(),
+      // Lowercased like the probe writes it, so the address-axis unique index
+      // (on lower(email)) and findProspectByEmail's equality read agree.
+      email: input.email.trim().toLowerCase(),
+      phone: input.phone?.trim() || null,
+      website: input.website?.trim() || null,
+      vertical: input.vertical?.trim() ?? "",
+      city: input.city.trim(),
+      findings: [],
+      pitch_subject: subject,
+      pitch_paragraphs: paragraphs.join("\n\n"),
+      pitch_body: assembleBody(resolved.tenant, paragraphs, unsubscribeUrl),
+      drafted_at: r.now.toISOString()
+    },
+    r.db
+  );
+  if (!row) return { ok: false, reason: "duplicate" };
+  return { ok: true, prospect: row, mode: settings.mode };
 }
 
 /**
