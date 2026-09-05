@@ -1771,6 +1771,25 @@ What this means channel by channel:
   `src/lib/sms/destination-rates.ts`) exists so metering and guardrails
   are ready if a capable sender type ever ships, but today every
   non-NANP send dies at Telnyx regardless.
+- **AiFlow texts to a non-US/CA lead skip, email instead, and say so.**
+  While `TELNYX_INTL_GATEWAY_E164` is unset, the worker skips any 1:1
+  `send_sms` to a non-US/CA destination (step result
+  `international_sms_no_gateway`, warn event
+  `ai_flow_sms_international_skipped`) instead of letting the carrier's
+  permanent reject kill the run. A LEAD-facing skip then does two more
+  things (Sep 2026). It emails the lead the same message when an address
+  exists (the step's after-hours `emailFallbackVar`, else the `email` on
+  the lead's contact record; through the tenant AI mailbox, logged in
+  `email_log`, recorded on the step as `email_fallback`
+  `emailed` / `no_email` / `email_failed`). And it records the skip in
+  the run (`__untextable_sms`, `_shared/ai_flows/untextable_sms.ts`) so
+  every later `notify_owner` / `notify_lead_owner` message and every
+  teammate text gets an appended note naming the number, its country,
+  that no text went out, and whether email carried it. A run with no
+  owner alert step about to fire gets one standalone alert through the
+  normal notify_owner ladder (`ai_flow_sms_international_owner_alerted`).
+  Teammate (roster) skips stay plain skips. Pinned by
+  `tests/worker-integration/international-sms-skip.itest.ts`.
 - **Alphanumeric sender (registration pending): one-way only.** The
   supported Telnyx path for international notifications is the
   registered alphanumeric sender NEWCOWORKER. It has no inbound path, so
