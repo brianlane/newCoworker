@@ -331,6 +331,14 @@ describe("update_marketing_draft", () => {
       subject: "s",
       paragraphs: ""
     });
+    // And the mirror case: new paragraphs on a row with no stored subject.
+    await expect(
+      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, paragraphs: "p" }, AUTH)
+    ).rejects.toThrow(/subject line and something to say/);
+    expect(editProspectDraft).toHaveBeenLastCalledWith("biz-1", DRAFT_ID, {
+      subject: "",
+      paragraphs: "p"
+    });
   });
 
   it("skips through the dashboard's own skipProspect and reports a stale queue", async () => {
