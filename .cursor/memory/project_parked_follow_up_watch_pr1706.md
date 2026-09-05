@@ -48,6 +48,24 @@ only a hit in the default window is a finding.
 **Sep 5 2026 reading (this session):** 8 days since deploy, 0 parked,
 0 self-send deaths. Row 1 of the table: still unproven.
 
+**Sep 5 base-rate measurement (sms_inbound_jobs + ai_flow_runs, since
+Jul 1):** 298 staff replies, 13 F-shaped, ALL Amy's tenant; 10 tagged
+fine, 1 was "1, F" (user error), 2 were Rhonda inside the window. Three
+more "F - name" texts went through the coworker AI path and also worked.
+HomeLight is the only withheld-details source: 11 of 12 referral runs
+opened `contact_release=withheld`, and only 5 of those 11 ever filed
+`lead_phone`; the other 6 ended `done`/`failed` 1 to 2.5 hours later with
+no phone and no contact row after. So a parked F fires in roughly 45% of
+the windows it can be parked in. In the other 55% the run ends, the marker
+dies with it (the only reader is `upsertCustomerStep`; there is no
+end-of-run withdrawal, by design: "needs no sweep to expire"), and the
+teammate who was told "I'll text you to confirm" is never texted. That is
+a structural silent promise-break the #1706 defect table did not list.
+Intersection so far: 1 lead in 9 weeks. At that rate a proven-good apply
+is months away. The honest reply has a real cue behind it: the HomeLight
+`to_agent` hand-off texts the claimer the moment the contact is filed, so
+"re-send F" lands right when it can work.
+
 Trap: zero here is not "works". The mechanism fires only when a teammate
 texts F during a referral's withheld-details window, which is rare on
 Amy's traffic. If it stays at zero for weeks, the honest reading is
