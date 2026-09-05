@@ -58,13 +58,24 @@ title, so name-based routing would break.
 
 Read live: `tsx debug/flow-poll.ts a912aff5-dd87-49fb-ad6a-477acefb66c0`.
 
-One flow: **"Lead follow-up (white-glove build)"**, installed by the
-white-glove apply on 2026-08-24, **disabled**. It stays disabled until BOTH:
+Live snapshot 2026-09-05 (1 on / 3 total).
 
-1. Kingsley approves the wording, and
-2. the JaneApp links are in place. Done 2026-08-25: the applier's
-   placeholder refusal no longer trips, so only the wording approval
-   remains.
+| Flow | State | Note |
+| --- | --- | --- |
+| Lead follow-up (white-glove build) (webhook) | **on** | The build. Installed disabled by the white-glove apply 2026-08-24, **enabled on purpose since 2026-08-26** (first live run 00:11 UTC that day, which is the evening of Aug 25 in Edmonton; the row's `updated_at` is 05:41 UTC Aug 26). 15 runs by 2026-09-05, several parked in `awaiting_reply` at any time |
+| Confirm document receipt | off | Stock platform template (`src/lib/ai-flows/templates.ts`), created 2026-08-25 03:17 UTC. Not part of the build, never enabled, no one-shot in this repo touches it |
+| New Lead Intake | off | Same: stock template, created seconds after the row above, never enabled |
+
+**The lead flow is ENABLED, and that is the intended state** (Brian confirmed
+2026-09-05). It was installed disabled behind two gates: Kingsley approving
+the wording, and the JaneApp links being real. The links landed 2026-08-25
+(the applier's placeholder refusal stopped tripping) and the routing shipped
+Aug 25-26 (PRs #1619, #1627, #1630). The flow went live 2026-08-26 and has
+run on real Meta leads since. The wording-approval gate is no longer holding
+it: what runs is Kingsley's own Aug 25 operating model (text leads the links,
+follow up only on no reply, let the coworker nurture anyone who replies). An
+older version of this file said the flow "stays disabled until approval";
+that was true before Aug 26 and is stale now. **Do not turn it off.**
 
 Shape after `patch-kin-lead-flow.ts`: extract -> upsert customer -> greeting
 SMS naming the clinic with the JaneApp link -> instant owner alert -> nudge
@@ -204,8 +215,13 @@ they are a distinct human.
   prevents new orphans; `reconcile-subscription-hostinger-links.ts` canceled
   the leftover unpaid cart. Checkout activation now cancels unpaid pending
   siblings so this shape cannot come back.
-- **The flow being OFF is on purpose** until wording approval + real link.
-  Do not "fix" it by enabling.
+- **The flow being ON is on purpose** (enabled 2026-08-26, confirmed by Brian
+  2026-09-05). Do not "fix" it by disabling. Two things still read like the
+  pre-launch hold and are not: the header comment in `patch-kin-lead-flow.ts`
+  still describes the flow as waiting on wording approval plus the real
+  JaneApp link, and the script deliberately leaves `enabled` untouched. Both
+  describe the applier's own behaviour (patch copy, never flip the bit), not
+  the live state. Read `enabled` from the row, never from prose or a comment.
 - **Speed-to-lead vs quiet hours:** an evening Meta lead gets the owner
   alert instantly but the greeting waits for 09:00 if it lands after 20:00
   Edmonton. That is the chosen trade; revisit with Kingsley if he wants
@@ -226,7 +242,8 @@ they are a distinct human.
   `tests/oneshot-kin-definitions.test.ts`)
 - `patch-kin-lead-flow.ts`: canonical flow copy (typo fixes, clinic name,
   JaneApp link, quiet hours). Refuses to apply while the link is a
-  placeholder. Leaves `enabled` untouched.
+  placeholder. Leaves `enabled` untouched, so re-running it against the
+  now-live flow patches copy in place without turning the flow off or on.
 - `kin-knowledge-content.ts` + `patch-kin-knowledge.ts`: writes the booking
   links into `identity.md` (so the coworker can hand out the right page on a
   reply) and repairs the typo'd white-glove greeting block in `soul.md`.
@@ -240,15 +257,22 @@ they are a distinct human.
   intake sent same day.
 - 2026-08-21: intake completed 06:41; self-serve signup abandoned at Stripe
   21:35 UTC.
-- 2026-08-25: Kingsley sent three service booking links plus a general one;
-  routing built in both the flow and the coworker knowledge. He also stated
-  the operating model: text leads the links, follow up only on no reply, and
-  let the coworker nurture anyone who replies.
-- 2026-09-02: a lead replied that they had booked but were unsure of the
-  time. The cadence wait swallowed the inbound (`suppressed_by_ai_flow`) and
-  nobody answered. Engine fix 2026-09-03: wait_for_reply no longer mutes the
-  coworker unless the flow set suppressDefaultReply.
 - 2026-08-24: asked for a payment link by SMS, the HQ coworker sent the
   questionnaire instead (root cause of PRs #1589/#1591/#1593); paid via
   re-issued link 15:20 UTC; provisioned onto srv1864812; white-glove build
-  applied 18:52 UTC (flow installed disabled).
+  applied 18:52 UTC (flow installed disabled, PR #1596).
+- 2026-08-25: Kingsley sent three service booking links plus a general one;
+  routing built in both the flow and the coworker knowledge (PR #1619). He
+  also stated the operating model: text leads the links, follow up only on
+  no reply, and let the coworker nurture anyone who replies. Two stock
+  template flows appeared on the account the same day, both off.
+- 2026-08-26: service-first routing (PR #1627) and the speech waitlist arm
+  (PR #1630) shipped. **The lead flow was enabled**: first live run 00:11
+  UTC, row `updated_at` 05:41 UTC. Live on real Meta leads from here on.
+- 2026-09-02: a lead replied that they had booked but were unsure of the
+  time. The cadence wait swallowed the inbound (`suppressed_by_ai_flow`) and
+  nobody answered. Engine fix 2026-09-03 (PR #1791): wait_for_reply no longer
+  mutes the coworker unless the flow set suppressDefaultReply.
+- 2026-09-05: Brian confirmed the enabled state is intentional and the
+  wording-approval gate is no longer blocking; this dossier's stale "stays
+  disabled" wording corrected (15 runs on the flow at that point).
