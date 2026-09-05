@@ -17,6 +17,9 @@
  *     the worker's TELNYX_API_BASE here): records the send and answers with
  *     a fresh message id, so the reply pipeline's DELIVERED body (e.g. the
  *     short-linked text) is assertable end to end.
+ *   - POST /emails, a Resend /emails stand-in (the suite points the worker's
+ *     RESEND_API_BASE here): records the send and answers with a fresh id,
+ *     so a flow email's DELIVERED recipient/subject/body is assertable.
  *   - POST /api/internal/aiflow-email-poll / aiflow-calendar-poll, the
  *     worker kicks these fire-and-forget every tick once AIFLOW_PLATFORM_URL
  *     is set; answered 200 so the logs stay quiet.
@@ -38,11 +41,18 @@ export type RecordedTelnyxSend = {
   body: { to?: string; from?: string; text?: string; messaging_profile_id?: string };
 };
 
+export type RecordedResendSend = {
+  authorization: string | null;
+  idempotencyKey: string | null;
+  body: { to?: string | string[]; from?: string; subject?: string; text?: string };
+};
+
 export type FakeApp = {
   port: number;
   precheckCalls: RecordedPrecheckCall[];
   bookingContextCalls: RecordedBookingContextCall[];
   telnyxSends: RecordedTelnyxSend[];
+  resendSends: RecordedResendSend[];
   /** Queue the NEXT precheck answer (FIFO). */
   scriptPrecheck(booked: boolean): void;
   /** Queue an HTTP failure for the NEXT precheck call (FIFO, shared queue). */
@@ -65,6 +75,7 @@ export async function startFakeApp(port = FAKE_APP_PORT): Promise<FakeApp> {
   const bookingContextCalls: RecordedBookingContextCall[] = [];
   const bookingContextScripted: Array<string | null> = [];
   const telnyxSends: RecordedTelnyxSend[] = [];
+  const resendSends: RecordedResendSend[] = [];
 
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -113,6 +124,21 @@ export async function startFakeApp(port = FAKE_APP_PORT): Promise<FakeApp> {
         telnyxSends.push({ authorization: req.headers.authorization ?? null, body });
         return answer(200, { data: { id: `fake-tx-${telnyxSends.length}` } });
       }
+      if (req.url === "/emails") {
+        let body: RecordedResendSend["body"] = {};
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          return answer(400, { message: "bad json" });
+        }
+        const idem = req.headers["idempotency-key"];
+        resendSends.push({
+          authorization: req.headers.authorization ?? null,
+          idempotencyKey: Array.isArray(idem) ? idem[0] ?? null : idem ?? null,
+          body
+        });
+        return answer(200, { id: `fake-email-${resendSends.length}` });
+      }
       // Poll kicks and anything else the worker fires at the platform.
       return answer(200, { ok: true, data: {} });
     });
@@ -129,6 +155,7 @@ export async function startFakeApp(port = FAKE_APP_PORT): Promise<FakeApp> {
     precheckCalls,
     bookingContextCalls,
     telnyxSends,
+    resendSends,
     scriptPrecheck: (booked: boolean) => {
       scripted.push({ booked });
     },

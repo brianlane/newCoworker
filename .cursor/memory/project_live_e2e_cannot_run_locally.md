@@ -34,6 +34,8 @@ AIFLOW_PLATFORM_URL=http://host.docker.internal:8978
 NEXT_PUBLIC_APP_URL=https://ncw.example
 TELNYX_API_KEY=itest-telnyx-key
 TELNYX_API_BASE=http://host.docker.internal:8978
+RESEND_API_KEY=itest-resend-key
+RESEND_API_BASE=http://host.docker.internal:8978
 EOF
 npx supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.itest &
 export ITEST_SERVICE_ROLE_KEY=$(npx supabase status -o json | python3 -c "import sys,json; print(json.load(sys.stdin)['SERVICE_ROLE_KEY'])")

@@ -157,15 +157,37 @@ How the pieces fit:
   (`ai_flow_sms_international_skipped`) in this account's log tail, and the
   run continues (pinned by
   `tests/worker-integration/international-sms-skip.itest.ts`, which also
-  covers the +852 roster-send class above). Still open, deliberately: the
-  bad-phone intake arm (email the lead, tell the human, skip the ladder)
-  keys on lead_phone = "none" and does NOT fire for a real international
-  number, because blanking it at extract would strip the number from the
-  contact record and the human alerts. Until that arm learns "textable" as
-  a separate idea from "present", an international lead gets no automated
-  outreach, just the FYI email and, about two days later, the ladder's
-  went-quiet flag with its "no reply to 3 messages" framing, which
-  overstates what was actually sent.
+  covers the +852 roster-send class above).
+  **Since Sep 2026 the skip is no longer silent toward the lead or the
+  owner.** A lead-facing skip emails the lead the same message when an
+  address is known: the flow files the contact (`s_file`, with
+  `emailVar`) before the greeting, so both the KYP and VFM ladders reach
+  an international lead by email at every rung (greeting plus nudges,
+  each through the tenant AI mailbox and logged in `email_log`; replies
+  land with the email coworker). The step records `email_fallback`
+  (`emailed` / `no_email` / `email_failed`) and the run remembers the
+  skip, so every owner alert that follows carries an appended note: the
+  number, its country, that no text went out, and whether email carried
+  it. In practice on this tenant: KYP's `s_notify` ("I sent them the
+  greeting and I'm on follow-up duty") and `s_flag_owner` ("hasn't
+  replied to 3 follow-ups") both end with that note, so neither reads as
+  texts delivered. The VFM lead flow has no notify_owner step (its
+  teammate touches are `send_email` to Liz), so there the platform sends
+  ONE standalone owner alert at the first skip ("Heads up: I could not
+  text the lead...") through the normal notify_owner ladder. On this
+  tenant that ladder is the same one every other KYP notify_owner rides:
+  an SMS to the `+1514` forwarding number, which James does not read (see
+  the channel map above); it only falls back to email + dashboard when
+  the forwarding number is absent or non-NANP. Making owner alerts reach
+  James is the open channel problem, not part of this change. Liz's own FYI and
+  went-quiet emails keep their existing copy and are NOT annotated
+  (plain `send_email` steps cannot be told apart from lead emails). What
+  still does not exist: a text to the lead, or a lead-side reply into the
+  SMS `wait_for_reply` (an email reply does not resume the wait, so the
+  ladder still runs its full cadence by email). The bad-phone intake arm
+  (`lead_phone = "none"`) is unchanged and still does not fire for a
+  real international number, by design: blanking the number would strip
+  it from the contact record and the human alerts.
 - **If James switches his owner phone to a Hong Kong (+852) number, every
   SMS to him goes dark and stays dark.** Telnyx confirmed (ticket #557577,
   Aug 2026) that our long codes cannot originate SMS outside NANP at all,
