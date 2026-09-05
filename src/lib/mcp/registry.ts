@@ -38,6 +38,7 @@ import { businessProfileTools } from "@/lib/mcp/tools/business-profile";
 import { businessKnowledgeTools } from "@/lib/mcp/tools/business-knowledge";
 import { coworkerToolSettingsTools } from "@/lib/mcp/tools/coworker-tool-settings";
 import { customTableTools } from "@/lib/mcp/tools/custom-tables";
+import { marketingDraftTools } from "@/lib/mcp/tools/marketing-drafts";
 import {
   MCP_WIDGETS,
   MCP_WIDGET_MIME,
@@ -59,7 +60,8 @@ export const allMcpTools: McpToolDef[] = [
   ...businessProfileTools,
   ...businessKnowledgeTools,
   ...coworkerToolSettingsTools,
-  ...customTableTools
+  ...customTableTools,
+  ...marketingDraftTools
 ];
 
 /**

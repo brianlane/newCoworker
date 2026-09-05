@@ -166,7 +166,16 @@ export const MCP_BRIDGE_EXCLUDED: Readonly<Record<string, string>> = {
   create_custom_table: "capability duplicate of inline custom_table_create (same core)",
   delete_custom_table:
     "capability duplicate of inline custom_table_delete, whose copy carries the confirm handshake",
-  restore_custom_table: "capability duplicate of inline custom_table_restore (same core)"
+  restore_custom_table: "capability duplicate of inline custom_table_restore (same core)",
+  // Marketing outreach drafts: connector-only for now. No Settings gate group
+  // covers cold email, and the Marketing page is the review surface the
+  // owner already has open; bridging would need a new toggle plus i18n.
+  list_marketing_drafts:
+    "no Settings gate group covers cold outreach; the Marketing page is the inline review surface, connectors keep the tool",
+  create_marketing_draft:
+    "no Settings gate group covers cold outreach; a chat turn writing cold email into the send queue needs its own owner toggle first",
+  update_marketing_draft:
+    "no Settings gate group covers cold outreach; edit and skip stay on the Marketing page for inline surfaces"
 };
 
 /**
