@@ -30,6 +30,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { oneLineSubject } from "../_shared/email_subject.ts";
+import { resendApiBase } from "../_shared/resend_api_base.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { truncateAtWord } from "../_shared/text_truncate.ts";
 import {
@@ -1084,7 +1085,7 @@ serve(async (req: Request) => {
         unsubscribeUrl,
         recipientEmail: targets.email
       });
-      const emailRes = await fetch("https://api.resend.com/emails", {
+      const emailRes = await fetch(`${resendApiBase()}/emails`, {
         method: "POST",
         headers,
         body: JSON.stringify({

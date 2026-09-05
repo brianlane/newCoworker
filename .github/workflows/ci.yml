@@ -276,6 +276,12 @@ jobs:
             echo "NEXT_PUBLIC_APP_URL=https://ncw.example"
             echo "TELNYX_API_KEY=itest-telnyx-key"
             echo "TELNYX_API_BASE=http://${GW}:8978"
+            # international-sms-skip suite: the fake app also stands in for
+            # Resend so the untextable-lead email fallback's DELIVERED body is
+            # assertable. Every flow email in the suite lands here, never at
+            # the real host.
+            echo "RESEND_API_KEY=itest-resend-key"
+            echo "RESEND_API_BASE=http://${GW}:8978"
           } > supabase/functions/.env.itest
           # --no-verify-jwt mirrors production: every function is deployed
           # with verify_jwt = false (see supabase/config.toml) because they
