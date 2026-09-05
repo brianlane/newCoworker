@@ -38,6 +38,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
 - [Wait_for_reply does not mute the coworker](project_wait_for_reply_does_not_mute_coworker.md) - cadence waits skip nudges; suppressDefaultReply is what quiets auto-reply (KIN 2026-09-02)
 - [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - .github/audit-allowlist.json with expiry; stale ratchet self-destructs
+- [Dependabot EOVERRIDE on dual-listed pins](project_dependabot_override_dollar_refs.md) - axios/postcss/sharp were both direct deps and versioned overrides; use $name refs so Dependabot can bump
 - [Cloudflare scraper rules 403 Googlebot](project_cloudflare_scraper_rules_block_googlebot.md) - probe with Accept-Language
 - [PostgREST 1000-row cap](project_postgrest_1000_row_cap.md) - un-limited selects silently truncate; .limit() or server-side RPC
 - [Ownership never binds to the sender](project_ownership_never_binds_to_sender.md) - empty lead_phone means UNKNOWN, not trigger.from
