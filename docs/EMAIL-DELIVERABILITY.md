@@ -120,8 +120,31 @@ of the dashboard Emails page). `POST /api/webhooks/resend` verifies the Svix
 signature against `RESEND_WEBHOOK_SECRET` and writes the receipt onto that
 row: `delivery_status` plus the bounce classification and reason. A failure
 (`bounced`, `complained`, `failed`) also raises a `system_logs` row at
-`level: error`, `source: email`, `event: email_delivery_failed`, which is
-what surfaces it on the admin System Errors view.
+`source: email`, `event: email_delivery_failed`, and WHO it is for decides
+the level:
+
+- A **customer-facing send** (the coworker or the owner wrote to a contact:
+  `email_log.source` in `ai_flow`, `tenant_mailbox_outbound`, the
+  `*_assistant` surfaces, `email_coworker`, `booking_reminder`,
+  `owner_manual`) is the tenant's to act on. The webhook pages the owner
+  through `notifyContactEmailBounce` (kind `contact_email_bounce`, category
+  `system`, routed to the contact's owner like any other contact-scoped
+  alert): what did not arrive, why, the contact's phone, and any DIFFERENT
+  address on their record. The contact is resolved phone-first: by the
+  address, then by an email-keyed row, then through the sending AiFlow run's
+  `lead_phone`, which is how the motivating case resolved (KYP / Vantage
+  Flow Media, 2026-09-03: the lead's contact carried the form email, the
+  Calendly booking used a dead work address, so neither address matched).
+  Once the tenant has been told, the admin row is `level: warn`: still in
+  the log, off the System Errors card, which is for what HQ can act on. One
+  alert per contact per 24h.
+- A **platform alert to the owner** (`source: notification`), an outreach
+  pitch through the owner mailbox (retired automatically, see below), an
+  unattributed failure, or a customer-facing failure whose page could NOT be
+  delivered stays `level: error`: there the action is ours.
+
+The backfill for receipts that landed before the tenant alert shipped is
+`scripts/oneshot/alert-bounced-contact-email.ts`.
 
 `delivery_status` is null for inbound rows, for anything sent before this
 shipped, and for callers that log no provider id. **Null means UNKNOWN, never

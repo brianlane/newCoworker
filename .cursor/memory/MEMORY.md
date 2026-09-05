@@ -125,6 +125,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Telnyx premium AMD event collapse](project_telnyx_premium_amd_event_collapse.md) - Aug 25-28 platform-side; events resumed Aug 29; #1674 sweep forces resolution at 40s + honest spoken stamp; Amy enrolled, grade with debug/amd-resolution-measure.ts
 - [Edge admin-alert email was stale](project_edge_admin_alert_email_stale.md) - FIXED Aug 27; Edge secrets held the personal gmail; recipient-only, digests verify by sha256
 - [Email delivery truth](project_email_delivery_truth.md) - id back = ACCEPTED not delivered; bounce of a sent pitch retires the prospect; provider_message_id NOT unique
+- [Contact email bounce alert](project_contact_email_bounce_alert.md) - a bounced email TO A CONTACT pages the tenant (kind contact_email_bounce, category system) and logs warn; owner alerts / outreach / unattributed stay error; contact resolved phone-first via the run's lead_phone
 - [Delivered is not received](feedback_delivered_is_not_received.md) - a carrier receipt proves a device ACKed, never that the person reads it; a loud broken channel beats a silent one
 - [HQ Gmail send-as relays via Resend SMTP](project_hq_gmail_sendas_resend_relay.md) - default alias team@ delivers through our Resend; bounces = unattributed; Sentry DSN scraped as email
 - [A truncated page is not uniqueness](feedback_truncated_page_is_not_uniqueness.md) - a post-query filter hides a real second match; test in SQL

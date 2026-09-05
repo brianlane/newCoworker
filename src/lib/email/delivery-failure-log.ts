@@ -17,6 +17,12 @@ export type EmailDeliveryFailedLogInput = {
   retiredCount: number;
   /** True when the receipt matched no email_log row. */
   unattributed?: boolean;
+  /**
+   * True when the send was customer-facing and the tenant was alerted (or
+   * had been, inside the throttle window). The row then reads as handled:
+   * the person who can reach the contact another way has been told.
+   */
+  ownerAlerted?: boolean;
 };
 
 export function formatEmailDeliveryFailedLogMessage(
@@ -31,6 +37,9 @@ export function formatEmailDeliveryFailedLogMessage(
   }
   if (input.unattributed) {
     parts.push("Matched no logged send.");
+  }
+  if (input.ownerAlerted) {
+    parts.push("The account owner was alerted; nothing for HQ to do.");
   }
   return parts.join(" ");
 }

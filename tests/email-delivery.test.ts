@@ -70,10 +70,32 @@ function makeDb(read: unknown, update: unknown) {
   return { from: vi.fn(() => (n++ === 0 ? read : update)) } as never;
 }
 
+/** The matched row as the lookups read it. */
+const ROW = {
+  id: "row-1",
+  business_id: BIZ,
+  source: "tenant_mailbox_outbound",
+  to_email: "lead@example.com",
+  subject: "Confirmed: your call",
+  run_id: "run-1",
+  flow_id: "flow-1"
+};
+
+/** The same row, as the result describes it to the webhook. */
+const SEND = {
+  id: "row-1",
+  businessId: BIZ,
+  source: "tenant_mailbox_outbound",
+  to: "lead@example.com",
+  subject: "Confirmed: your call",
+  runId: "run-1",
+  flowId: "flow-1"
+};
+
 /** A db whose existing row is `current` and whose update writes `updated`. */
 function dbWith(current: EmailDeliveryStatus | null, updated: unknown = [{ id: "row-1" }]) {
   const read = chain({
-    data: current === undefined ? [] : [{ id: "row-1", business_id: BIZ, delivery_status: current }],
+    data: current === undefined ? [] : [{ ...ROW, delivery_status: current }],
     error: null
   });
   const write = chain({ data: updated, error: null });
@@ -156,7 +178,7 @@ describe("applyEmailDeliveryStatus", () => {
       },
       db
     );
-    expect(result).toEqual({ outcome: "applied", businessId: BIZ });
+    expect(result).toEqual({ outcome: "applied", businessId: BIZ, send: SEND });
     expect(write.update).toHaveBeenCalledWith({
       delivery_status: "delivered",
       delivery_error_code: null,
@@ -165,6 +187,36 @@ describe("applyEmailDeliveryStatus", () => {
     });
     expect(read.eq).toHaveBeenCalledWith("provider_message_id", MID);
     expect(write.eq).toHaveBeenCalledWith("id", "row-1");
+  });
+
+  it("reads and returns what kind of send the row was, so the webhook can route the failure", async () => {
+    // `source` is what separates a bounced OWNER alert (HQ's problem) from a
+    // bounced email to a LEAD (the tenant's). Without these columns the
+    // webhook had a tenant id and nothing else to decide with.
+    const { db, read } = dbWith("sent");
+    await applyEmailDeliveryStatus({ providerMessageId: MID, status: "bounced" }, db);
+    const selected = read.select.mock.calls[0][0] as string;
+    for (const column of ["source", "to_email", "subject", "run_id", "flow_id"]) {
+      expect(selected).toContain(column);
+    }
+
+    // Columns the row lacks (rows written by an older schema, a test double)
+    // read as null rather than undefined, so the payload shape is stable.
+    const bare = makeDb(
+      chain({ data: [{ id: "row-1", business_id: BIZ, delivery_status: null }], error: null }),
+      chain({ data: [{ id: "row-1" }], error: null })
+    );
+    expect(
+      (await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" }, bare)).send
+    ).toEqual({
+      id: "row-1",
+      businessId: BIZ,
+      source: null,
+      to: null,
+      subject: null,
+      runId: null,
+      flowId: null
+    });
   });
 
   it("takes the newest OUTBOUND match rather than assuming the id is unique", async () => {
@@ -247,7 +299,7 @@ describe("applyEmailDeliveryStatus", () => {
       { providerMessageId: MID, status: "sent" },
       db
     );
-    expect(result).toEqual({ outcome: "stale", businessId: BIZ });
+    expect(result).toEqual({ outcome: "stale", businessId: BIZ, send: SEND });
     expect(write.update).not.toHaveBeenCalled();
   });
 
@@ -259,7 +311,7 @@ describe("applyEmailDeliveryStatus", () => {
       const { db } = dbWith("sent", updated);
       expect(
         await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" }, db)
-      ).toEqual({ outcome: "stale", businessId: BIZ });
+      ).toEqual({ outcome: "stale", businessId: BIZ, send: SEND });
     }
   });
 
@@ -269,13 +321,13 @@ describe("applyEmailDeliveryStatus", () => {
     const db = makeDb(chain({ data: [], error: null }), chain({ data: [], error: null }));
     expect(
       await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" }, db)
-    ).toEqual({ outcome: "not_found", businessId: null });
+    ).toEqual({ outcome: "not_found", businessId: null, send: null });
 
     // A null body means the same thing and must not throw either.
     const nullDb = makeDb(chain({ data: null, error: null }), chain({ data: [], error: null }));
     expect(
       await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" }, nullDb)
-    ).toEqual({ outcome: "not_found", businessId: null });
+    ).toEqual({ outcome: "not_found", businessId: null, send: null });
   });
 
   it("throws when the lookup fails", async () => {
@@ -300,7 +352,7 @@ describe("applyEmailDeliveryStatus", () => {
     defaultClientSpy.mockReturnValue(db);
     expect(
       await applyEmailDeliveryStatus({ providerMessageId: MID, status: "delivered" })
-    ).toEqual({ outcome: "applied", businessId: BIZ });
+    ).toEqual({ outcome: "applied", businessId: BIZ, send: SEND });
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
@@ -326,7 +378,8 @@ describe("applyEmailDeliveryStatusByRecipient", () => {
     const before = Date.now();
     expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
       outcome: "applied",
-      businessId: BIZ
+      businessId: BIZ,
+      send: SEND
     });
     expect(read.ilike).toHaveBeenCalledWith("to_email", "info@virginiaautoservice.com");
     expect(read.eq).toHaveBeenCalledWith("subject", input.subject);
@@ -366,7 +419,8 @@ describe("applyEmailDeliveryStatusByRecipient", () => {
       const db = makeDb(chain({ data, error: null }), chain());
       expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
         outcome: "not_found",
-        businessId: null
+        businessId: null,
+        send: null
       });
     }
   });
@@ -375,7 +429,8 @@ describe("applyEmailDeliveryStatusByRecipient", () => {
     const { db, write } = dbWith("failed");
     expect(await applyEmailDeliveryStatusByRecipient(input, db)).toEqual({
       outcome: "stale",
-      businessId: BIZ
+      businessId: BIZ,
+      send: SEND
     });
     expect(write.update).not.toHaveBeenCalled();
   });
@@ -400,7 +455,8 @@ describe("applyEmailDeliveryStatusByRecipient", () => {
     defaultClientSpy.mockReturnValue(db);
     expect(await applyEmailDeliveryStatusByRecipient(input)).toEqual({
       outcome: "applied",
-      businessId: BIZ
+      businessId: BIZ,
+      send: SEND
     });
     expect(defaultClientSpy).toHaveBeenCalled();
   });

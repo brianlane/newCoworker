@@ -8,14 +8,17 @@
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const applyEmailDeliveryStatus = vi.fn(async (_input: unknown) => ({
-  outcome: "applied",
-  businessId: null as string | null
-}));
-const applyEmailDeliveryStatusByRecipient = vi.fn(async (_input: unknown) => ({
-  outcome: "not_found",
-  businessId: null as string | null
-}));
+type MockedApply = {
+  outcome: string;
+  businessId: string | null;
+  send?: Record<string, unknown> | null;
+};
+const applyEmailDeliveryStatus = vi.fn(
+  async (_input: unknown): Promise<MockedApply> => ({ outcome: "applied", businessId: null })
+);
+const applyEmailDeliveryStatusByRecipient = vi.fn(
+  async (_input: unknown): Promise<MockedApply> => ({ outcome: "not_found", businessId: null })
+);
 vi.mock("@/lib/email/delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email/delivery")>()),
   applyEmailDeliveryStatus: (input: unknown) => applyEmailDeliveryStatus(input),
@@ -31,6 +34,16 @@ vi.mock("@/lib/outreach/bounce", () => ({
 const recordSystemLog = vi.fn(async (_input: unknown) => {});
 vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (input: unknown) => recordSystemLog(input)
+}));
+
+const notifyContactEmailBounce = vi.fn(async (_input: unknown) => ({
+  outcome: "alerted" as string,
+  contactE164: "+13025550100" as string | null
+}));
+vi.mock("@/lib/notifications/contact-email-bounce-notify", async (importOriginal) => ({
+  // The source classification is the real one; only the page itself is faked.
+  ...(await importOriginal<typeof import("@/lib/notifications/contact-email-bounce-notify")>()),
+  notifyContactEmailBounce: (input: unknown) => notifyContactEmailBounce(input)
 }));
 
 const warn = vi.fn((_msg: string, _meta?: unknown) => {});
@@ -297,6 +310,8 @@ describe("processResendDeliveryEvent", () => {
     });
     retireProspectsOnBounce.mockReset();
     retireProspectsOnBounce.mockResolvedValue(0);
+    notifyContactEmailBounce.mockReset();
+    notifyContactEmailBounce.mockResolvedValue({ outcome: "alerted", contactE164: "+13025550100" });
     recordSystemLog.mockClear();
     warn.mockClear();
   });
@@ -517,5 +532,167 @@ describe("processResendDeliveryEvent", () => {
 
     retireProspectsOnBounce.mockRejectedValue("not an error");
     expect(await processResendDeliveryEvent(event)).toBe(true);
+  });
+
+  describe("a failed send to a CONTACT is the tenant's to act on", () => {
+    // The motivating case (KYP / Vantage Flow Media, 2026-09-03): a booking
+    // confirmation to a lead whose booking email did not exist. The tenant is
+    // the only one who can reach the lead another way; HQ can do nothing.
+    const leadSend = {
+      id: "log-1",
+      businessId: BIZ,
+      source: "tenant_mailbox_outbound",
+      to: "lead@dead.example",
+      subject: "Confirmed: Strategy Call with Liz",
+      runId: "run-1",
+      flowId: "flow-1"
+    };
+    const leadEvent = { ...event, to: "lead@dead.example", subject: "Confirmed: Strategy Call with Liz" };
+
+    it("pages the owner and records the failure at warn, not error", async () => {
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ, send: leadSend });
+      expect(await processResendDeliveryEvent(leadEvent)).toBe(true);
+      expect(notifyContactEmailBounce).toHaveBeenCalledWith({
+        businessId: BIZ,
+        emailLogId: "log-1",
+        address: "lead@dead.example",
+        subject: "Confirmed: Strategy Call with Liz",
+        status: "bounced",
+        errorCode: "Permanent",
+        runId: "run-1",
+        flowId: "flow-1"
+      });
+      const logged = recordSystemLog.mock.calls[0][0] as unknown as {
+        level: string;
+        event: string;
+        message: string;
+        payload: Record<string, unknown>;
+      };
+      expect(logged.event).toBe("email_delivery_failed");
+      expect(logged.level).toBe("warn");
+      expect(logged.message).toContain("The account owner was alerted");
+      expect(logged.payload).toEqual(
+        expect.objectContaining({
+          emailLogSource: "tenant_mailbox_outbound",
+          ownerAlert: "alerted",
+          contactE164: "+13025550100"
+        })
+      );
+    });
+
+    it("treats an alert already sent inside the throttle window as handed off", async () => {
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ, send: leadSend });
+      notifyContactEmailBounce.mockResolvedValue({ outcome: "alerted_earlier", contactE164: "+13025550100" });
+      await processResendDeliveryEvent(leadEvent);
+      const logged = recordSystemLog.mock.calls[0][0] as unknown as { level: string; payload: Record<string, unknown> };
+      expect(logged.level).toBe("warn");
+      expect(logged.payload.ownerAlert).toBe("alerted_earlier");
+    });
+
+    it("keeps the admin error when the tenant could not be reached", async () => {
+      // If no channel accepted the page, or the pager threw, the action is
+      // back with HQ, and the row must say so at the level HQ reads.
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ, send: leadSend });
+      for (const outcome of ["not_delivered", "failed"]) {
+        recordSystemLog.mockClear();
+        notifyContactEmailBounce.mockResolvedValue({ outcome, contactE164: null });
+        await processResendDeliveryEvent(leadEvent);
+        const logged = recordSystemLog.mock.calls[0][0] as unknown as {
+          level: string;
+          message: string;
+          payload: Record<string, unknown>;
+        };
+        expect(logged.level).toBe("error");
+        expect(logged.message).not.toContain("owner was alerted");
+        expect(logged.payload.ownerAlert).toBe(outcome);
+      }
+    });
+
+    it("never echoes a bounced OWNER alert back to the tenant", async () => {
+      // A `notification` row is mail TO the owner. Its bounce means the
+      // owner's channel is dying, which is HQ's problem to chase, and the
+      // one address we know cannot receive it is the one that just bounced.
+      applyEmailDeliveryStatus.mockResolvedValue({
+        outcome: "applied",
+        businessId: BIZ,
+        send: { ...leadSend, source: "notification", to: "owner@example.com" }
+      });
+      await processResendDeliveryEvent(event);
+      expect(notifyContactEmailBounce).not.toHaveBeenCalled();
+      const logged = recordSystemLog.mock.calls[0][0] as unknown as { level: string; payload: Record<string, unknown> };
+      expect(logged.level).toBe("error");
+      expect(logged.payload.emailLogSource).toBe("notification");
+      expect(logged.payload).not.toHaveProperty("ownerAlert");
+    });
+
+    it("leaves an outreach pitch through the owner mailbox on the admin path", async () => {
+      // HQ's pitches leave through `owner_mailbox`; the bounce path already
+      // retires them, so a page would be a to-do that is already done.
+      applyEmailDeliveryStatus.mockResolvedValue({
+        outcome: "applied",
+        businessId: BIZ,
+        send: { ...leadSend, source: "owner_mailbox" }
+      });
+      retireProspectsOnBounce.mockResolvedValue(1);
+      await processResendDeliveryEvent(leadEvent);
+      expect(notifyContactEmailBounce).not.toHaveBeenCalled();
+      expect((recordSystemLog.mock.calls[0][0] as unknown as { level: string }).level).toBe("error");
+    });
+
+    it("stays on the admin path when the match carried no send details", async () => {
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ, send: null });
+      await processResendDeliveryEvent(leadEvent);
+      expect(notifyContactEmailBounce).not.toHaveBeenCalled();
+      const logged = recordSystemLog.mock.calls[0][0] as unknown as { level: string; payload: Record<string, unknown> };
+      expect(logged.level).toBe("error");
+      expect(logged.payload.emailLogSource).toBeNull();
+    });
+
+    it("falls back to the receipt's own recipient and subject when the row lacks them", async () => {
+      applyEmailDeliveryStatus.mockResolvedValue({
+        outcome: "applied",
+        businessId: BIZ,
+        send: { ...leadSend, to: null, subject: null }
+      });
+      await processResendDeliveryEvent(leadEvent);
+      expect(notifyContactEmailBounce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: "lead@dead.example",
+          subject: "Confirmed: Strategy Call with Liz"
+        })
+      );
+
+      // No address anywhere means nobody to describe; no page, admin error.
+      notifyContactEmailBounce.mockClear();
+      recordSystemLog.mockClear();
+      await processResendDeliveryEvent({ ...leadEvent, to: null });
+      expect(notifyContactEmailBounce).not.toHaveBeenCalled();
+      expect((recordSystemLog.mock.calls[0][0] as unknown as { level: string }).level).toBe("error");
+    });
+
+    it("pages the owner for a send matched by the recipient fallback too", async () => {
+      // The relay path returns the same row shape, so a bounce attributed by
+      // recipient + subject must route the same way as a provider-id match.
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "not_found", businessId: null, send: null });
+      applyEmailDeliveryStatusByRecipient.mockResolvedValue({
+        outcome: "applied",
+        businessId: BIZ,
+        send: { ...leadSend, source: "ai_flow" }
+      });
+      await processResendDeliveryEvent(leadEvent);
+      expect(notifyContactEmailBounce).toHaveBeenCalledWith(
+        expect.objectContaining({ businessId: BIZ, emailLogId: "log-1" })
+      );
+      const logged = recordSystemLog.mock.calls[0][0] as unknown as { level: string; payload: Record<string, unknown> };
+      expect(logged.level).toBe("warn");
+      expect(logged.payload.attributedBy).toBe("recipient_subject");
+    });
+
+    it("does not page anyone about a receipt that is not a failure", async () => {
+      applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ, send: leadSend });
+      await processResendDeliveryEvent({ ...leadEvent, status: "delivered" });
+      expect(notifyContactEmailBounce).not.toHaveBeenCalled();
+      expect(recordSystemLog).not.toHaveBeenCalled();
+    });
   });
 });
