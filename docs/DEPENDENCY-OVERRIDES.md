@@ -12,16 +12,27 @@ dependency tree actually requests the package. Keeping an orphaned pin is
 cheap insurance that a future dependency reintroducing the package lands on a
 safe version instead of silently reopening a fixed advisory.
 
+When the overridden package is ALSO a direct dependency, the override MUST
+be the `$name` form (`"postcss": "$postcss"`), not a second copy of the
+version range. npm rejects a literal override whose spec does not match the
+direct dep exactly (`EOVERRIDE`), and Dependabot hits that on every bump:
+it rewrites the override to the new exact version while leaving the direct
+range alone, then the updater job on main fails with "Override for
+X@Y conflicts with direct dependency." The `$name` form keeps nested copies
+on the direct pin and lets Dependabot bump only the direct entry. A CI
+guard in `tests/dependency-overrides.test.ts` fails the PR if a dual-listed
+pin regresses to a literal.
+
 ## Current overrides
 
 | Override | Introduced | Reason | Status (Aug 2026) |
 | --- | --- | --- | --- |
 | `@hono/node-server: ^2.0.5` | PR #825 (Jul 21, 2026) | Dependabot alert #37: path traversal in `serve-static` on Windows (moderate). Transitive under `@modelcontextprotocol/sdk`, which declared `^1.19.9` with no patched 1.x available. | **Orphaned.** The SDK was removed in PR #1181; nothing requests this package now. Kept as a safety pin; safe to delete if it blocks something. |
-| `axios: ^1.18.1` | Apr 2026 (pre-PR-flow commit `ec2625da`, bumped since) | `@nangohq/node` and `@nangohq/types` pin axios exactly (currently `1.18.0`); the override forces the patched line when advisories land faster than Nango releases. | **Live.** Matches the Nango-pinned copy. |
+| `axios: $axios` | Apr 2026 (pre-PR-flow commit `ec2625da`, bumped since; `$name` form Sep 2026) | `@nangohq/node` and `@nangohq/types` pin axios exactly (currently `1.18.0`); the override forces the patched line when advisories land faster than Nango releases. Direct pin is `^1.20.0`. | **Live.** Nested copies follow the direct dep. |
 | `fast-uri: ^3.1.5` | PR #809 (Jul 21, 2026, rider on the Gemini model migration) | GHSA-v2hh-gcrm-f6hx: host-confusion advisory, reached through `ajv` 8.x chains. | **Orphaned.** Both `ajv` chains that pulled it arrived via `@modelcontextprotocol/sdk` (removed in #1181). Kept as a safety pin: any future dep using `ajv` 8.x would re-pull it. |
 | `ip-address: ^10.4.0` | PR #1144 (Aug 3, 2026) | GHSA-mwp4-54f8-5fhr (high) plus two related advisories: parse bugs that defeat SSRF and trust-boundary checks. Reached through `express-rate-limit`. Note: our own SSRF protection is `src/lib/net/ip-classification.ts` and never used this package. | **Orphaned.** `express-rate-limit` came only via `@modelcontextprotocol/sdk` (removed in #1181). Kept as a safety pin given the advisory severity. |
-| `postcss: ^8.5.18` | PR #217 (Jun 18, 2026, originally `>=8.5.10`) | Moderate parsing advisory; the override dedupes Next.js's nested older copy onto the patched version. | **Live.** Matches copies requested by `next`, `@tailwindcss/postcss`, `sanitize-html`, and `vite`. |
-| `sharp: ^0.35.3` | PR #812 (Jul 21, 2026) | GHSA-f88m-g3jw-g9cj: libvips advisory. `next` optionally pins a vulnerable range. | **Live.** Matches `next`'s optional dependency. |
+| `postcss: $postcss` | PR #217 (Jun 18, 2026, originally `>=8.5.10`; `$name` form Sep 2026) | Moderate parsing advisory; the override dedupes Next.js's nested older copy onto the patched version. Direct pin is `^8.5.26`. | **Live.** Nested copies follow the direct dep (`next`, `@tailwindcss/postcss`, `sanitize-html`, `vite`). |
+| `sharp: $sharp` | PR #812 (Jul 21, 2026; `$name` form Sep 2026) | GHSA-f88m-g3jw-g9cj: libvips advisory. `next` optionally pins a vulnerable range (16.3.4 requires `^0.35.4` for AVIF). Direct pin is `^0.35.4`. | **Live.** Nested copies follow the direct dep. |
 
 ## Rules of thumb
 
@@ -29,6 +40,10 @@ safe version instead of silently reopening a fixed advisory.
   advisory is live in our tree and the owning package has no patched release
   we can adopt directly (same rule as the sub-tree guidance in
   `.github/workflows/audit.yml`).
+- If the package is also a direct dependency, write `"foo": "$foo"`, never a
+  second copy of the version range. Literal dual-listing is what failed the
+  Dependabot updater on 2026-09-05 (postcss 8.5.26, axios 1.20.0, sharp
+  0.35.4).
 - When the last requester of an overridden package leaves the tree, mark the
   row **Orphaned** here rather than deleting the pin, unless the pin itself
   starts causing ERESOLVE conflicts.
