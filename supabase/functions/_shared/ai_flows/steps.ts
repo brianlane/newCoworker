@@ -20,6 +20,7 @@ import {
 } from "./engine.ts";
 import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
+import { withUntextableSmsNote } from "./untextable_sms.ts";
 import { emailContactKey } from "../contact_key.ts";
 import type {
   BrowseAuth,
@@ -1596,8 +1597,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
     }
     case "notify_owner": {
-      const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
-      if (!message) return { ok: false, error: "notify_owner: message is empty after templating" };
+      const rendered = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
+      if (!rendered) return { ok: false, error: "notify_owner: message is empty after templating" };
+      // An owner alert written for the normal path ("I sent them the
+      // greeting") must not be the last word when this run skipped a lead
+      // text as untextable: the honest note about what actually went out
+      // (and by which channel) rides every owner-facing alert that follows.
+      const message = withUntextableSmsNote(rendered, scope.vars);
       // An unrenderable cooldown key (no thread id on this provider, a var the
       // run never set) drops the cooldown rather than falling back to a shared
       // empty key, which would silence every alert from the step after the
@@ -1623,10 +1629,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
     }
     case "notify_lead_owner": {
-      const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
-      if (!message) {
+      const rendered = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
+      if (!rendered) {
         return { ok: false, error: "notify_lead_owner: message is empty after templating" };
       }
+      // Same honesty rule as notify_owner: whoever owns this lead hears that
+      // the texts did not go out.
+      const message = withUntextableSmsNote(rendered, scope.vars);
       const readVar = (name?: string): string => {
         const v = name ? scope.vars?.[name] : undefined;
         return typeof v === "string" ? v.trim() : "";

@@ -66,6 +66,15 @@ import {
   INTERNATIONAL_MMS_SKIP_REASON,
   INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON
 } from "../_shared/sms_international_gateway.ts";
+import {
+  markUntextableSmsTold,
+  readUntextableSms,
+  recordUntextableSms,
+  untextableSmsOwnerAlert,
+  withUntextableSmsNote,
+  type UntextableSmsEmailOutcome
+} from "../_shared/ai_flows/untextable_sms.ts";
+import { resendApiBase } from "../_shared/resend_api_base.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -172,7 +181,8 @@ import {
   flattenSteps,
   isOnActivePath,
   resolveResumeIndex,
-  resumeMarkerFor
+  resumeMarkerFor,
+  type FlatStepEntry
 } from "../_shared/ai_flows/branching.ts";
 import {
   applyGoalEvent,
@@ -1722,6 +1732,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       return;
     }
     await recordStep(supabase, run, index, step, outcome.skipped ? "skipped" : "done", outcome.result);
+    // Untextable-lead honesty, the owner half. A lead text skipped as
+    // unreachable (send_sms recorded it in scope.vars) must reach the owner
+    // once per run: through the flow's own next owner alert when one is
+    // about to fire (the planner appends the note to it), otherwise through a
+    // standalone alert right now. Never for test runs, which simulate sends.
+    if (!scope.testMode) {
+      await untextableSmsOwnerFollowUp(supabase, run, flat, index, step, scope, outcome);
+    }
     index += 1;
     if (outcome.endRun) {
       // Late claim: jump to the end so the run completes as done without
@@ -2130,6 +2148,98 @@ type StepOutcome =
       /** The dialed leg, when known ("" when re-parking after a crash). */
       callControlId: string;
     };
+
+/** The step types whose message the planner annotates with the untextable note. */
+function isOwnerAlertStep(step: FlowStep): boolean {
+  return step.type === "notify_owner" || step.type === "notify_lead_owner";
+}
+
+/**
+ * Keep the owner honestly informed about a lead this run could not text.
+ *
+ * Two jobs, both keyed on the record send_sms leaves in scope.vars when it
+ * skips a lead text as unreachable (non-US/CA, no international gateway):
+ *
+ *   1. An owner alert step that just ran carried the note (the planner
+ *      appended it), so mark the run "told": no standalone alert on top.
+ *   2. The skip itself, when the owner has not been told yet: if a later
+ *      owner-alert step is going to fire on the current state (its `when`
+ *      passes now, its branch is chosen), the note rides that one, and the
+ *      owner reads one alert with the lead's details AND the truth about the
+ *      text. Otherwise nothing downstream would say it, so the platform says
+ *      it now, once, through the same notify_owner delivery ladder (owner
+ *      SMS, alpha sender, email + dashboard). A reachability guess about a
+ *      later step is deliberately conservative: an unset gate var or an
+ *      undecided branch counts as "will not fire".
+ *
+ * Best-effort like the self-phone owner notice: the alert is a bonus on top
+ * of a skip that exists to keep the run alive, so a delivery failure is
+ * logged, never thrown into the retry budget.
+ */
+async function untextableSmsOwnerFollowUp(
+  supabase: Supabase,
+  run: RunRow,
+  flat: FlatStepEntry[],
+  index: number,
+  step: FlowStep,
+  scope: Scope,
+  outcome: Extract<StepOutcome, { kind: "ok" }>
+): Promise<void> {
+  const state = readUntextableSms(scope.vars);
+  if (!state) return;
+  if (isOwnerAlertStep(step) && !outcome.skipped) {
+    markUntextableSmsTold(scope.vars);
+    return;
+  }
+  if (
+    state.told ||
+    step.type !== "send_sms" ||
+    !outcome.skipped ||
+    outcome.result?.skipped !== INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON ||
+    outcome.result?.lead_facing !== true
+  ) {
+    return;
+  }
+  const laterAlertWillFire = flat.slice(index + 1).some(
+    (entry) =>
+      isOwnerAlertStep(entry.step) &&
+      isOnActivePath(entry.branchPath, scope.vars) &&
+      (!entry.step.when || evaluateStepCondition(entry.step.when, scope))
+  );
+  if (laterAlertWillFire) return;
+  const message = untextableSmsOwnerAlert(state);
+  try {
+    const sent = await notifyOwnerStep(supabase, run, index, { kind: "notify_owner", message });
+    markUntextableSmsTold(scope.vars);
+    appendActionTaken(scope, "told the owner the lead's number cannot be texted");
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_sms_international_owner_alerted",
+      message: "Owner alerted that this run's lead cannot be texted (standalone alert, no flow alert step ahead)",
+      payload: {
+        run_id: run.id,
+        flow_id: run.flow_id,
+        step_index: index,
+        to: state.to,
+        country: state.country,
+        notified: sent.kind === "ok" ? (sent.result?.notified ?? null) : null
+      }
+    });
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("untextable lead owner alert failed", detail);
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_sms_international_owner_alert_failed",
+      message: `Could not alert the owner that ${state.to} cannot be texted: ${detail}`,
+      payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, to: state.to, detail }
+    });
+  }
+}
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -6217,6 +6327,76 @@ async function replyToCommentStep(
   return { kind: "ok", result: { mode: action.replyMode, id: result.id ?? null } };
 }
 
+/**
+ * scope.vars marker the quiet-hours branch sets once it has emailed a send_sms
+ * step's message overnight. Per step index: the defer re-runs the SAME step
+ * in the morning, and the marker is what keeps that email once-only across
+ * re-claims (and tells the untextable skip the lead already has the message).
+ */
+function afterHoursEmailedMarker(index: number): string {
+  return `_after_hours_emailed_${index}`;
+}
+
+/**
+ * The email address filed on the contact record for a lead number, or null.
+ * Alias-aware (a merged-away number still finds its contact). Best-effort:
+ * a lookup error reads as "no address on file", the caller's fallback is a
+ * bonus channel and must never fail the step it backs up.
+ */
+async function contactEmailOnFile(
+  supabase: Supabase,
+  businessId: string,
+  e164: string
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("email")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error("contactEmailOnFile", error.message);
+      return null;
+    }
+    const email = (data as { email?: string | null } | null)?.email?.trim() ?? "";
+    return email.includes("@") ? email : null;
+  } catch (e) {
+    console.error("contactEmailOnFile", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
+ * Email a lead the text they could not receive (untextable destination).
+ * Rides deliverFlowEmail (tenant AI mailbox, email_log row, per run+step
+ * Resend idempotency), but NEVER throws: the skip this backs up exists to
+ * keep the run alive, so a Resend outage is recorded on the step and in the
+ * owner's note rather than retried into a dead-lettered run.
+ */
+async function emailUntextableLead(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  args: { to: string; subject: string; body: string; fromConnectionId?: string }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const sent = await deliverFlowEmail(supabase, run, index, scope, {
+      to: args.to,
+      subject: args.subject,
+      body: args.body,
+      attachScreenshot: false,
+      ...(args.fromConnectionId ? { fromConnectionId: args.fromConnectionId } : {})
+    });
+    if (sent.kind === "ok") return { ok: true };
+    return { ok: false, error: sent.kind === "fail" ? sent.error : `unexpected outcome ${sent.kind}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function sendSmsStep(
   supabase: Supabase,
   run: RunRow,
@@ -6346,6 +6526,11 @@ async function sendSmsStep(
     action.toRef?.label ??
     rosterRecipient?.name ??
     "the lead";
+  // A teammate text about this run's lead ("you've got Ravi, I'm following
+  // up by text") carries the untextable note once a lead text has been
+  // skipped as unreachable, same honesty rule as notify_owner. Lead-facing
+  // bodies are never annotated: the note is about the lead, for the team.
+  if (internalAgentSend) bodyText = withUntextableSmsNote(bodyText, scope.vars);
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
   // right away (email is not time-gated) AND still defer the run so the text
@@ -6366,7 +6551,7 @@ async function sendSmsStep(
       // Defer re-runs this same step in the morning, so the email send must be
       // once-only across re-claims. The marker rides in scope.vars, which the
       // defer path persists into ai_flow_runs.context.
-      const emailedMarker = `_after_hours_emailed_${index}`;
+      const emailedMarker = afterHoursEmailedMarker(index);
       if (action.quiet.emailTo && !scope.vars[emailedMarker]) {
         const sent = await deliverFlowEmail(supabase, run, index, scope, {
           to: action.quiet.emailTo,
@@ -6470,12 +6655,61 @@ async function sendSmsStep(
   // the lead is unreachable by text. With TELNYX_INTL_GATEWAY_E164 set the
   // send proceeds instead, and telnyxSendSms swaps the from-number to the
   // gateway at its own seam.
+  //
+  // A LEAD-facing skip does not end at "skipped". The lead still deserves
+  // the message, so when they have an email address (the step's own
+  // after-hours fallback var, else the address filed on their contact
+  // record) the same text goes out by email through the tenant's AI
+  // mailbox, exactly like the after-hours email-instead branch. And the run
+  // remembers the skip (recordUntextableSms) so every owner-facing alert
+  // that follows says what really happened instead of "I sent them the
+  // greeting" (KYP Ads / VFM: the went-quiet flag used to read "no reply to
+  // 3 messages" about three texts that never went out). Teammate texts skip
+  // as before: the roster member is not a lead, and a tenant already sees
+  // the +1-only limit on every roster surface.
   if (isInternationalSmsDestination(destinationCountry) && !internationalGatewayFrom()) {
     const countryLabel = destinationCountry ?? "unrecognized-country";
+    let emailOutcome: UntextableSmsEmailOutcome = "no_email";
+    let emailTo: string | null = null;
+    let emailError: string | null = null;
+    if (!internalAgentSend) {
+      emailTo = action.quiet?.emailTo || (await contactEmailOnFile(supabase, run.business_id, toE164));
+      if (emailTo && action.quiet?.emailTo && scope.vars[afterHoursEmailedMarker(index)]) {
+        // The quiet-hours branch already emailed this exact message overnight
+        // and deferred the text to the morning resume; the lead has it.
+        emailOutcome = "emailed";
+      } else if (emailTo) {
+        const emailed = await emailUntextableLead(supabase, run, index, scope, {
+          to: emailTo,
+          subject: action.quiet?.emailSubject || "Following up on your inquiry",
+          body: bodyText,
+          // The step's own after-hours "send as me" mailbox choice applies
+          // to this email too; otherwise the tenant AI mailbox.
+          fromConnectionId: action.quiet?.emailFromConnectionId
+        });
+        emailOutcome = emailed.ok ? "emailed" : "email_failed";
+        emailError = emailed.ok ? null : emailed.error;
+      }
+      recordUntextableSms(scope.vars, {
+        to: toE164,
+        country: destinationCountry,
+        label: recipientLabel,
+        email: emailOutcome,
+        emailTo
+      });
+    }
+    const emailNote =
+      emailOutcome === "emailed"
+        ? `; emailed the same message to ${emailTo} instead`
+        : emailOutcome === "email_failed"
+          ? `; tried to email ${emailTo} instead but the email failed`
+          : internalAgentSend
+            ? "; the text was skipped"
+            : "; the text was skipped and they have no email on file";
     appendActionTaken(
       scope,
       `could not text ${recipientLabel} at ${toE164} (this account cannot send SMS to ` +
-        `${countryLabel} numbers); the text was skipped`
+        `${countryLabel} numbers)${emailNote}`
     );
     await systemLog(supabase, {
       businessId: run.business_id,
@@ -6485,13 +6719,17 @@ async function sendSmsStep(
       message:
         `send_sms skipped: no SMS route to ${toE164} (${countryLabel}). Tenant numbers ` +
         "are domestic-only (US/CA) and no international gateway is configured, so this " +
-        "recipient cannot be reached by text. The run continues without the send.",
+        `recipient cannot be reached by text${emailNote}. The run continues without the send.`,
       payload: {
         run_id: run.id,
         flow_id: run.flow_id,
         step_index: index,
         to: toE164,
-        country: destinationCountry
+        country: destinationCountry,
+        lead_facing: !internalAgentSend,
+        email_fallback: emailOutcome,
+        email_to: emailTo,
+        ...(emailError ? { email_error: emailError } : {})
       }
     });
     return {
@@ -6500,7 +6738,11 @@ async function sendSmsStep(
       result: {
         skipped: INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON,
         to: toE164,
-        country: destinationCountry
+        country: destinationCountry,
+        lead_facing: !internalAgentSend,
+        email_fallback: emailOutcome,
+        email_to: emailTo,
+        ...(emailError ? { email_error: emailError } : {})
       }
     };
   }
@@ -7215,7 +7457,7 @@ async function deliverFlowEmail(
   const fromHeader = mailbox.from;
   const replyTo = mailbox.address;
 
-  const res = await fetch("https://api.resend.com/emails", {
+  const res = await fetch(`${resendApiBase()}/emails`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -11497,7 +11739,7 @@ async function sendClaimOutcomeEmail(
     // Same identity rule as flow send_email: always FROM the tenant's own AI
     // mailbox, never the platform identity.
     const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
-    const res = await fetch("https://api.resend.com/emails", {
+    const res = await fetch(`${resendApiBase()}/emails`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
