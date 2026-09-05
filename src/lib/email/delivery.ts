@@ -128,7 +128,7 @@ export type ApplyEmailDeliveryInput = {
   timestamp?: string | null;
 };
 
-export type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
+type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
 
 /**
  * What the receipt landed on, handed back so the webhook can decide WHO a
@@ -137,7 +137,7 @@ export type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
  * (`tenant_mailbox_outbound`) is the tenant's, and until this was returned
  * the webhook could not tell the two apart.
  */
-export type EmailDeliveryMatchedSend = {
+type EmailDeliveryMatchedSend = {
   id: string;
   businessId: string;
   source: string | null;

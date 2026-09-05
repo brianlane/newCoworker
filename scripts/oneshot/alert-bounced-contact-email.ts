@@ -74,8 +74,7 @@ if (!url || !key) {
 const { createClient } = await import("@supabase/supabase-js");
 const { recordOneshotApplied } = await import("./_ledger.ts");
 const {
-  CONTACT_EMAIL_BOUNCE_KIND,
-  CUSTOMER_FACING_EMAIL_SOURCES,
+  isCustomerFacingEmailSource,
   notifyContactEmailBounce
 } = await import("../../src/lib/notifications/contact-email-bounce-notify.ts");
 
@@ -105,7 +104,6 @@ let query = db
   )
   .eq("direction", "outbound")
   .in("delivery_status", ["bounced", "complained", "failed"])
-  .in("source", [...CUSTOMER_FACING_EMAIL_SOURCES])
   .gte("created_at", SINCE)
   .order("created_at", { ascending: true })
   .limit(500);
@@ -116,7 +114,9 @@ if (error) {
   console.error(`read email_log: ${error.message}`);
   process.exit(1);
 }
-const rows = (data ?? []) as BouncedRow[];
+const rows = ((data ?? []) as BouncedRow[]).filter((row) =>
+  isCustomerFacingEmailSource(row.source)
+);
 
 console.log(
   `${APPLY ? "APPLY" : "DRY RUN"}: ${rows.length} bounced customer-facing email(s) since ${SINCE.slice(0, 10)}` +
@@ -144,7 +144,7 @@ for (const row of rows) {
     .from("notifications")
     .select("id", { count: "exact", head: true })
     .eq("business_id", row.business_id)
-    .eq("kind", CONTACT_EMAIL_BOUNCE_KIND)
+    .eq("kind", "contact_email_bounce")
     .eq("payload->>email_log_id", row.id);
   if (seenErr) {
     console.error(`  read notifications for ${row.id}: ${seenErr.message}`);

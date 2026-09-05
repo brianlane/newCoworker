@@ -164,6 +164,37 @@ describe("notifications/display", () => {
       ).toEqual({ href: "/dashboard/emails", label: "Open Emails" });
     });
 
+    it("opens the contact for a bounced customer email, not Activity or their thread", () => {
+      // Email and push already used ctaPath (contact page). The dashboard
+      // list used to fall through to Activity because this kind was missing
+      // and the payload stamps `to_e164`, not `contactE164`.
+      expect(
+        notificationLink({
+          kind: "contact_email_bounce",
+          payload: { to_e164: "+13023538730", address: "benjamin@dead.example" }
+        })
+      ).toEqual({
+        href: "/dashboard/customers/%2B13023538730",
+        label: "Open contact"
+      });
+      expect(
+        notificationLink({
+          kind: "contact_email_bounce",
+          payload: { contactE164: "+13023538730" }
+        })
+      ).toEqual({
+        href: "/dashboard/customers/%2B13023538730",
+        label: "Open contact"
+      });
+    });
+
+    it("falls back to Emails when a bounce alert carried no phone", () => {
+      expect(notificationLink({ kind: "contact_email_bounce", payload: {} })).toEqual({
+        href: "/dashboard/emails",
+        label: "Open Emails"
+      });
+    });
+
     it("routes connection alerts to Integrations", () => {
       for (const kind of ["byon_port", "byon_activation", "calendar_connection_broken"]) {
         expect(notificationLink({ kind, payload: {} })).toEqual({

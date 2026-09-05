@@ -25,9 +25,6 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient }));
 vi.mock("@/lib/logger", () => ({ logger: { warn } }));
 
 import {
-  CONTACT_EMAIL_BOUNCE_KIND,
-  CONTACT_EMAIL_BOUNCE_THROTTLE_MS,
-  CUSTOMER_FACING_EMAIL_SOURCES,
   isCustomerFacingEmailSource,
   notifyContactEmailBounce
 } from "@/lib/notifications/contact-email-bounce-notify";
@@ -87,7 +84,22 @@ beforeEach(() => {
 
 describe("isCustomerFacingEmailSource", () => {
   it("counts every coworker and owner-by-hand send to a contact", () => {
-    for (const source of CUSTOMER_FACING_EMAIL_SOURCES) {
+    // Pinned as literals so a deleted Set member cannot hide behind the
+    // export the production function already iterates.
+    for (const source of [
+      "ai_flow",
+      "tenant_mailbox_outbound",
+      "dashboard_chat",
+      "sms_assistant",
+      "voice_assistant",
+      "slack_assistant",
+      "telegram_assistant",
+      "teams_assistant",
+      "google_chat_assistant",
+      "email_coworker",
+      "booking_reminder",
+      "owner_manual"
+    ]) {
       expect(isCustomerFacingEmailSource(source)).toBe(true);
     }
     expect(isCustomerFacingEmailSource("tenant_mailbox_outbound")).toBe(true);
@@ -127,16 +139,16 @@ describe("notifyContactEmailBounce", () => {
 
     expect(hasRecent).toHaveBeenCalledWith(
       BIZ,
-      CONTACT_EMAIL_BOUNCE_KIND,
+      "contact_email_bounce",
       PHONE,
-      CONTACT_EMAIL_BOUNCE_THROTTLE_MS,
+      24 * 60 * 60 * 1000,
       db
     );
     const call = dispatch.mock.calls[0][0];
     expect(call).toEqual(
       expect.objectContaining({
         businessId: BIZ,
-        kind: CONTACT_EMAIL_BOUNCE_KIND,
+        kind: "contact_email_bounce",
         contactE164: PHONE,
         summary: "Email to Benjamin Dobrzynski did not arrive (Benjamin@Dead.example)",
         ctaPath: "/dashboard/customers/%2B13023538730"

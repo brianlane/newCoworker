@@ -30,7 +30,7 @@ import { logger } from "@/lib/logger";
 type ServiceClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** The `notifications.kind` these alerts are written under. */
-export const CONTACT_EMAIL_BOUNCE_KIND = "contact_email_bounce";
+const CONTACT_EMAIL_BOUNCE_KIND = "contact_email_bounce";
 
 /**
  * At most one alert per contact per day. A flow that emails the same dead
@@ -38,7 +38,7 @@ export const CONTACT_EMAIL_BOUNCE_KIND = "contact_email_bounce";
  * owner, not two pages; the dispatcher's own 30-minute duplicate gate is too
  * short for steps that are hours apart.
  */
-export const CONTACT_EMAIL_BOUNCE_THROTTLE_MS = 24 * 60 * 60 * 1000;
+const CONTACT_EMAIL_BOUNCE_THROTTLE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * `email_log.source` values that mean "the AI coworker (or the owner, by
@@ -57,7 +57,7 @@ export const CONTACT_EMAIL_BOUNCE_THROTTLE_MS = 24 * 60 * 60 * 1000;
  *   - the inbound sources (`email_trigger`, `tenant_mailbox_inbound`), which
  *     never produce a receipt.
  */
-export const CUSTOMER_FACING_EMAIL_SOURCES: ReadonlySet<string> = new Set([
+const CUSTOMER_FACING_EMAIL_SOURCES: ReadonlySet<string> = new Set([
   "ai_flow",
   "tenant_mailbox_outbound",
   "dashboard_chat",
@@ -76,7 +76,7 @@ export function isCustomerFacingEmailSource(source: string | null | undefined): 
   return typeof source === "string" && CUSTOMER_FACING_EMAIL_SOURCES.has(source);
 }
 
-export type ContactEmailBounceInput = {
+type ContactEmailBounceInput = {
   businessId: string;
   /** The email_log row the receipt landed on. */
   emailLogId: string;
@@ -90,7 +90,7 @@ export type ContactEmailBounceInput = {
   flowId: string | null;
 };
 
-export type ContactEmailBounceOutcome =
+type ContactEmailBounceOutcome =
   /** At least one channel (the dashboard counts) accepted the alert. */
   | "alerted"
   /** An alert about this contact went out inside the throttle window. */
@@ -106,7 +106,7 @@ export type ContactEmailBounceResult = {
   contactE164: string | null;
 };
 
-export type ContactEmailBounceDeps = {
+type ContactEmailBounceDeps = {
   client?: ServiceClient;
   dispatch?: typeof dispatchUrgentNotification;
   hasRecent?: typeof hasRecentNotificationForContact;

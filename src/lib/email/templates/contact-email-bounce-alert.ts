@@ -23,8 +23,20 @@
 import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import type { EmailDeliveryStatus } from "@/lib/email/delivery";
-import { formatAttendeePhone } from "@/lib/email/templates/booking-owner-alert";
 import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
+
+/**
+ * A US number the way a person reads it; anything else untouched.
+ *
+ * Same few lines as booking-owner-alert.ts. Kept local: exporting that
+ * helper made knip treat the export as production-unused (tests were its
+ * only named callers). Non-NANP numbers stay E.164 rather than being
+ * forced into a US shape.
+ */
+function formatAttendeePhone(e164: string): string {
+  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164.trim());
+  return match ? `(${match[1]}) ${match[2]}-${match[3]}` : e164;
+}
 
 export type ContactEmailBounceAlertInput = {
   /** The failure state the receipt carried (bounced / complained / failed). */

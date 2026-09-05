@@ -55,6 +55,12 @@ describe("buildContactEmailBounceAlert", () => {
     expect(noPhone.body).not.toContain("Phone:");
   });
 
+  it("leaves a non-US number in E.164 rather than forcing a US shape", () => {
+    expect(
+      buildContactEmailBounceAlert({ ...base, phone: "+525512345678" }).body
+    ).toContain("Phone: +525512345678");
+  });
+
   it("puts the phone in the SMS when there is one, so the owner can act from the text alone", () => {
     expect(buildContactEmailBounceAlert(base).smsBody).toBe(
       "New Coworker Alert: our email to Benjamin Dobrzynski at benjamin@dead.example did not arrive (address rejected it). Reach them at (302) 353-8730 instead."

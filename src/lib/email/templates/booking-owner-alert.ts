@@ -79,7 +79,7 @@ export type BookingOwnerAlertCopy = {
  * place for it. Non-NANP numbers stay E.164 rather than being forced into a
  * US shape, which matters now that Mexico tenants are live.
  */
-export function formatAttendeePhone(e164: string): string {
+function formatAttendeePhone(e164: string): string {
   const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164.trim());
   return match ? `(${match[1]}) ${match[2]}-${match[3]}` : e164;
 }
