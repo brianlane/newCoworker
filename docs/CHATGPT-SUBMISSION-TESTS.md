@@ -536,3 +536,21 @@ re-annotated without this file being updated in the same PR.
 - **Read Only: False** It clears the deleted mark on a table so the table and its rows are live again.
 - **Open World: False** A table update in our own database. No message is sent and no third party is contacted.
 - **Destructive: True** Marked destructive because it changes what the business's live data contains: a table that was deliberately removed comes back, along with every row it held. It is refused when a live table already uses the same name, so it never overwrites one.
+
+### `list_outreach_queue`
+
+- **Read Only: True** Reads the cold-outreach drafts waiting for the owner's review, plus the prospecting mode. No writes.
+- **Open World: False** Reads rows from our own database. No external service is contacted and nothing is sent.
+- **Destructive: False** Nothing is created, changed or removed. It reports the drafts in the review queue only.
+
+### `upsert_outreach_prospect`
+
+- **Read Only: False** It inserts a new outreach prospect and draft (name, email, subject, body paragraphs) into the business's review queue, or re-pitches one already there.
+- **Open World: True** Open-world because when the business has prospecting in automatic mode, the platform's sweep sends a drafted row to the prospect's email address inside the daily cap and send window without any further human action, so this call can put a cold email to an outside party in motion. In manual mode the owner presses Send on the dashboard first.
+- **Destructive: True** Destructive because a prospect already waiting in the queue, or discovered but not yet drafted, has its stored subject, body paragraphs, and identity fields replaced by the submitted ones. A prospect already sent, replied, skipped, or unsubscribed is refused, never rewritten.
+
+### `update_outreach_draft`
+
+- **Read Only: False** It rewrites a waiting draft's subject and body paragraphs, or marks the draft skipped.
+- **Open World: False** A row update in our own database. No message is sent by this call; sending remains a separate owner action or the sweep's, exactly as before the edit.
+- **Destructive: True** Destructive because the submitted subject or paragraphs overwrite the stored text, and skip retires the draft so it will not be sent and the prospect will not be rediscovered.

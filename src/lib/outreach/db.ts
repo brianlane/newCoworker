@@ -225,6 +225,56 @@ export async function insertProspects(
   return (data ?? []) as OutreachProspectRow[];
 }
 
+/** A ledger row written straight in as a draft, with its pitch already composed. */
+export type DraftedProspectInsert = Pick<
+  OutreachProspectRow,
+  | "id"
+  | "business_id"
+  | "domain"
+  | "business_name"
+  | "email"
+  | "phone"
+  | "website"
+  | "vertical"
+  | "city"
+  | "findings"
+  | "pitch_subject"
+  | "pitch_paragraphs"
+  | "pitch_body"
+  | "drafted_at"
+>;
+
+/**
+ * File a prospect that arrives already written: an owner's connector (Claude,
+ * ChatGPT) handing us a draft rather than the sweep discovering a domain.
+ *
+ * ONE write, landing at `drafted`. Inserting as `discovered` and then
+ * advancing would open a window where the sweep's probe phase reads the row,
+ * fetches the prospect's site, and either retires it ("no published contact
+ * address") or overwrites the caller's pitch with its own. The id is supplied
+ * by the caller because the unsubscribe link inside `pitch_body` has to name
+ * it, and that link is assembled before anything is written.
+ *
+ * Returns null when either suppression axis refuses the row (this business
+ * already has a row for the domain, or another prospect already fronts the
+ * address). That is the ledger doing its job, not an error: nobody is
+ * cold-emailed twice, whatever became of the first row.
+ */
+export async function insertDraftedProspect(
+  row: DraftedProspectInsert,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .insert({ ...row, status: "drafted", status_detail: null })
+    .select()
+    .single();
+  if (!error) return data as OutreachProspectRow;
+  if (error.code === PG_UNIQUE_VIOLATION) return null;
+  throw new Error(`insertDraftedProspect: ${error.message}`);
+}
+
 /**
  * Domains of this business already in the ledger, whatever their status.
  * Discovery calls this BEFORE probing, so a suppressed domain costs no
@@ -484,6 +534,28 @@ export async function getProspect(
 }
 
 /**
+ * The ledger row for one domain, if any: the domain axis of suppression,
+ * looked up when an insert has just lost to it and the caller needs to know
+ * what it collided with. Domains are stored lowercased and bare
+ * (normalizeDomain), so equality on the normalized needle is exact.
+ */
+export async function findProspectByDomain(
+  businessId: string,
+  domain: string,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .eq("domain", domain)
+    .maybeSingle();
+  if (error) throw new Error(`findProspectByDomain: ${error.message}`);
+  return (data as OutreachProspectRow | null) ?? null;
+}
+
+/**
  * The prospect this address belongs to, if any. Used when a reply or an
  * unsubscribe arrives and all we know is who sent it.
  *
@@ -606,6 +678,7 @@ export type OutreachProspectPatch = Partial<
     | "phone"
     | "website"
     | "vertical"
+    | "city"
     | "findings"
     | "pitch_subject"
     | "pitch_paragraphs"
@@ -670,6 +743,39 @@ export async function transitionProspect(
     .select("id");
   if (error) throw new Error(`transitionProspect: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * `transitionProspect` for a patch that can lose to the address key.
+ *
+ * The plain transition throws on any error, which is right for the sweep's
+ * own status moves (they never touch `email`). A re-pitch DOES write the
+ * address, and the partial unique index on lower(email) can refuse it when
+ * another row of the business took that address between the caller's read
+ * and this write. That is a refusal to report, not a crash to log, so the
+ * unique violation comes back as `conflict`; `stale` is the ordinary lost
+ * claim (the row left `fromStatus`), and `moved` is success.
+ */
+export async function tryTransitionProspect(
+  businessId: string,
+  prospectId: string,
+  fromStatus: OutreachProspectStatus,
+  patch: OutreachProspectPatch,
+  client?: SupabaseClient
+): Promise<"moved" | "stale" | "conflict"> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("id", prospectId)
+    .eq("status", fromStatus)
+    .select("id");
+  if (error) {
+    if (error.code === PG_UNIQUE_VIOLATION) return "conflict";
+    throw new Error(`tryTransitionProspect: ${error.message}`);
+  }
+  return Array.isArray(data) && data.length > 0 ? "moved" : "stale";
 }
 
 /**

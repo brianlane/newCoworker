@@ -25,6 +25,7 @@
  * everything after the send, which is what an owner should control.
  */
 
+import { randomUUID } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import {
   placesQueriesPerDayForTier,
@@ -60,8 +61,11 @@ import {
   countProspectsToRewrite,
   listProspectsContactedSince,
   existingProspectDomains,
+  findProspectByDomain,
+  findProspectByEmail,
   getOutreachSettings,
   getProspect,
+  insertDraftedProspect,
   insertProspects,
   listActiveOutreachSettings,
   OUTREACH_ACTIVE_PAGE_SIZE,
@@ -71,13 +75,16 @@ import {
   listProspectsToRewrite,
   patchProspect,
   transitionProspect,
+  tryTransitionProspect,
   upsertOutreachSettings,
   type OutreachProspectRow,
+  type OutreachProspectStatus,
   type OutreachSettingsRow
 } from "./db";
 import {
   buildQueryRotation,
   dayIndexFor,
+  normalizeDomain,
   prospectsFromHits,
   rotationWindow,
   searchPlaces
@@ -1286,6 +1293,325 @@ export async function editProspectDraft(
   const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
   if (!saved) return { ok: false, reason: "not_drafted" };
   return { ok: true, prospect: patch };
+}
+
+/**
+ * Brand labels of mail hosts shared by the public, matched on the FIRST label
+ * of the host so the country variants come along (`yahoo.co.uk`,
+ * `hotmail.fr`, `outlook.com.br`, `live.de`). An address on one of these says
+ * nothing about which business it belongs to, so it cannot stand in for the
+ * prospect's domain: the ledger keys suppression on (business, domain), and
+ * filing `yahoo.co.uk` would block every later Yahoo-hosted prospect of the
+ * same tenant as a duplicate. A denylist rather than an MX lookup, because a
+ * connector call must not wait on DNS, and the misses are cheap: the caller
+ * is told to pass the prospect's own domain.
+ */
+const SHARED_MAIL_BRANDS: ReadonlySet<string> = new Set([
+  "gmail",
+  "googlemail",
+  "yahoo",
+  "ymail",
+  "rocketmail",
+  "hotmail",
+  "outlook",
+  "live",
+  "msn",
+  "aol",
+  "icloud",
+  "me",
+  "mac",
+  "protonmail",
+  "proton",
+  "pm",
+  "gmx",
+  "yandex",
+  "mail",
+  "zoho",
+  "fastmail",
+  "hey",
+  "tutanota",
+  "tuta",
+  "hushmail",
+  "qq",
+  "163",
+  "126",
+  "comcast",
+  "att",
+  "sbcglobal",
+  "bellsouth",
+  "cox",
+  "verizon",
+  "charter",
+  "earthlink",
+  "juno",
+  "optonline",
+  "frontier",
+  "windstream",
+  "centurylink",
+  "btinternet",
+  "sky",
+  "virginmedia",
+  "ntlworld",
+  "talktalk",
+  "bigpond",
+  "optusnet",
+  "shaw",
+  "rogers",
+  "sympatico",
+  "telus",
+  "t-online",
+  "web",
+  "freenet",
+  "orange",
+  "wanadoo",
+  "laposte",
+  "libero",
+  "virgilio",
+  "seznam",
+  "bluewin",
+  "rediffmail"
+]);
+
+function isSharedMailHost(domain: string): boolean {
+  return SHARED_MAIL_BRANDS.has(domain.split(".")[0]);
+}
+
+/**
+ * The suppression key for a draft that arrives without a Places hit: the
+ * domain the caller named, else the address's own host. Accepts a bare host
+ * or a full URL, and returns null when neither yields a real domain, or when
+ * the host is a shared mail provider (see SHARED_MAIL_BRANDS). An explicitly
+ * named shared host is refused for the same reason as an inferred one: it
+ * would claim the ledger slot for every prospect on it.
+ */
+export function draftDomainFor(explicitDomain: string | undefined, email: string): string | null {
+  const named = explicitDomain?.trim() ?? "";
+  const raw = named || email.trim().split("@")[1] || "";
+  if (!raw) return null;
+  const domain = normalizeDomain(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  if (!domain || isSharedMailHost(domain)) return null;
+  return domain;
+}
+
+export type DraftUpsertInput = {
+  businessName: string;
+  email: string;
+  city: string;
+  subject: string;
+  /** The editable middle only, blank-line separated. Never the footer. */
+  paragraphs: string;
+  /** Suppression key. Defaults to the address's host; see draftDomainFor. */
+  domain?: string;
+  vertical?: string;
+  website?: string;
+  phone?: string;
+};
+
+export type DraftUpsertResult =
+  | {
+      ok: true;
+      prospect: OutreachProspectRow;
+      /** False when an existing pre-send row was re-pitched instead. */
+      created: boolean;
+      /** The mode the row now sits under: in `auto` the sweep will send it. */
+      mode: OutreachSettingsRow["mode"];
+    }
+  | {
+      ok: false;
+      reason:
+        | "not_configured"
+        | "tier_blocked"
+        | "empty_text"
+        | "too_long"
+        | "invalid_domain"
+        | "duplicate";
+      detail?: string;
+    };
+
+/**
+ * Statuses an upsert may write over. Both are BEFORE the send: `discovered`
+ * is a domain the sweep found and has not written to yet, `drafted` is a
+ * pitch waiting on the owner. Everything later is a thing that happened (a
+ * mail in someone's inbox, a reply, an opt-out, a deliberate skip), and the
+ * ledger exists so none of those is ever pitched again.
+ */
+const REPITCHABLE_STATUSES: ReadonlySet<OutreachProspectStatus> = new Set(["discovered", "drafted"]);
+
+/**
+ * File a draft somebody else wrote: an owner's connector (Claude, ChatGPT,
+ * Grok over /api/mcp) handing us a prospect and a pitch, instead of the sweep
+ * discovering one. The row lands in the same review queue, through the same
+ * assembly, so the Marketing page cannot tell the two apart and neither can
+ * the send path.
+ *
+ * The caller supplies the PARAGRAPHS only, exactly as the dashboard's edit
+ * box does. The CTA, signature, unsubscribe link, and postal address are put
+ * on by `assembleBody` in code, which is the whole reason this exists as a
+ * write path: a connector composing the finished email itself would have to
+ * carry the compliance footer in model output, where it can be dropped or
+ * reworded, and a Gmail draft wraps every link in a tracking redirect.
+ *
+ * UPSERT, on the ledger's own keys. A new domain inserts a row straight at
+ * `drafted`. A domain or address that already has a row still before the
+ * send (REPITCHABLE_STATUSES) has that row re-pitched in place, so an agent
+ * that re-runs its prospecting pass refreshes its drafts instead of being
+ * told they exist. Any other status is refused as a duplicate, with the
+ * status named: a sent, replied, unsubscribed, skipped, or failed prospect is
+ * never written to again. So is a pair of prospects where the address and
+ * the domain point at two different rows, because "re-pitch" has no single
+ * answer there.
+ *
+ * `findings` is written empty on insert and left alone on re-pitch. There was
+ * no probe here, so there is no evidence for "Write it again" to re-compose
+ * from, and that button refuses such a draft with "nothing specific enough
+ * left to say" rather than inventing an observation about a site nobody
+ * looked at. Edit and Send work as normal.
+ *
+ * In `auto` mode the sweep sends any drafted row inside the cap and window
+ * with no further owner action, so a caller in that mode is putting an email
+ * in motion, not just a row. Callers surface the mode for that reason.
+ */
+export async function upsertProspectDraft(
+  businessId: string,
+  input: DraftUpsertInput,
+  deps: OutreachSweepDeps = {}
+): Promise<DraftUpsertResult> {
+  const subject = input.subject.trim();
+  const text = input.paragraphs.trim();
+  if (!subject || !text) return { ok: false, reason: "empty_text" };
+  if (subject.length > MAX_EDITED_SUBJECT_CHARS || text.length > MAX_EDITED_BODY_CHARS) {
+    return { ok: false, reason: "too_long" };
+  }
+  const domain = draftDomainFor(input.domain, input.email);
+  if (!domain) {
+    return {
+      ok: false,
+      reason: "invalid_domain",
+      detail: "pass the prospect's own website domain; a shared mail host cannot identify a business"
+    };
+  }
+
+  const r = await resolveDeps(deps);
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { ok: false, reason: "not_configured" };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) {
+    return {
+      ok: false,
+      reason: resolved.blockedBy === "tier" ? "tier_blocked" : "not_configured",
+      detail: resolved.missing
+    };
+  }
+
+  // Lowercased like the probe writes it, so the address-axis unique index
+  // (on lower(email)) and findProspectByEmail's equality read agree.
+  const email = input.email.trim().toLowerCase();
+  const paragraphs = splitParagraphs(text);
+  const phone = input.phone?.trim() ?? "";
+  const website = input.website?.trim() ?? "";
+  const vertical = input.vertical?.trim() ?? "";
+  const city = input.city.trim();
+  const pitchFor = (prospectId: string) => ({
+    pitch_subject: subject,
+    pitch_paragraphs: paragraphs.join("\n\n"),
+    pitch_body: assembleBody(
+      resolved.tenant,
+      paragraphs,
+      buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospectId)
+    )
+  });
+
+  // The id is minted here because the unsubscribe link has to name it and
+  // the link is part of the body being written. One write, no read-back.
+  const id = randomUUID();
+  const inserted = await insertDraftedProspect(
+    {
+      id,
+      business_id: businessId,
+      domain,
+      business_name: input.businessName.trim(),
+      email,
+      // Null rather than blank when the caller had no number, so "has a
+      // phone" stays a single question downstream (the flow hand-off gates
+      // contact filing on it).
+      phone: phone || null,
+      website: website || null,
+      vertical,
+      city,
+      findings: [],
+      ...pitchFor(id),
+      drafted_at: r.now.toISOString()
+    },
+    r.db
+  );
+  if (inserted) return { ok: true, prospect: inserted, created: true, mode: settings.mode };
+
+  // The insert lost to one of the two unique keys. Find out which row, and
+  // whether both keys agree on it, before writing anything over it.
+  const [byDomain, byEmail] = await Promise.all([
+    findProspectByDomain(businessId, domain, r.db),
+    findProspectByEmail(businessId, email, r.db)
+  ]);
+  const existing = byDomain ?? byEmail;
+  if (!existing) {
+    // The colliding row vanished between the insert and this read (a cascade
+    // delete, an erasure). The caller can simply try again.
+    return { ok: false, reason: "duplicate", detail: "the ledger changed underneath, retry" };
+  }
+  if (byDomain && byEmail && byDomain.id !== byEmail.id) {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${domain} and ${email} already belong to two different prospects`
+    };
+  }
+  if (!REPITCHABLE_STATUSES.has(existing.status)) {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${existing.domain} is already ${existing.status}`
+    };
+  }
+  // A re-pitch replaces the pitch and the two fields every call carries, and
+  // refreshes an optional field ONLY when the caller supplied it. A row the
+  // sweep discovered through Places already knows the prospect's phone, and
+  // that phone is what lets the outreach flow file them as a contact after
+  // the send; a connector that did not know it must not blank it.
+  const patch = {
+    business_name: input.businessName.trim(),
+    email,
+    ...(phone ? { phone } : {}),
+    ...(website ? { website } : {}),
+    ...(vertical ? { vertical } : {}),
+    ...(city ? { city } : {}),
+    ...pitchFor(existing.id),
+    status: "drafted" as const,
+    status_detail: null,
+    drafted_at: r.now.toISOString()
+  };
+  // Guarded on the status just read, like every other ledger transition: the
+  // sweep can send a drafted row, or probe and retire a discovered one, in
+  // the time between that read and this write, and losing the claim means
+  // the row moved on purpose. The address key is checked again by the write
+  // itself: the read above can miss an address that lands on another row in
+  // the same instant, and that is a refusal, not a crash.
+  const outcome = await tryTransitionProspect(businessId, existing.id, existing.status, patch, r.db);
+  if (outcome === "conflict") {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${email} already belongs to another prospect`
+    };
+  }
+  if (outcome === "stale") {
+    return { ok: false, reason: "duplicate", detail: `${existing.domain} changed while being updated` };
+  }
+  return {
+    ok: true,
+    prospect: { ...existing, ...patch, updated_at: r.now.toISOString() },
+    created: false,
+    mode: settings.mode
+  };
 }
 
 /**

@@ -24,9 +24,11 @@ import {
   countProspectsSentSince,
   countProspectsToRewrite,
   existingProspectDomains,
+  findProspectByDomain,
   findProspectByEmail,
   getOutreachSettings,
   getProspect,
+  insertDraftedProspect,
   insertProspects,
   listActiveOutreachSettings,
   listProspectOutcomes,
@@ -41,6 +43,7 @@ import {
   patchProspect,
   skipProspectsInVertical,
   transitionProspect,
+  tryTransitionProspect,
   upsertOutreachSettings
 } from "@/lib/outreach/db";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
@@ -197,6 +200,100 @@ describe("insertProspects", () => {
     await expect(
       insertProspects([row], makeDb(chain({ data: null, error: { message: "ins" } })))
     ).rejects.toThrow(/ins/);
+  });
+});
+
+describe("insertDraftedProspect", () => {
+  const row = {
+    id: PROSPECT,
+    business_id: BIZ,
+    domain: "acme.com",
+    business_name: "Acme",
+    email: "info@acme.com",
+    phone: null,
+    website: null,
+    vertical: "",
+    city: "Tempe AZ",
+    findings: [],
+    pitch_subject: "Acme: hello",
+    pitch_paragraphs: "Hi Acme,",
+    pitch_body: "Hi Acme,\n\nfooter\n",
+    drafted_at: "2026-09-05T00:00:00Z"
+  };
+
+  it("inserts ONE row already at drafted and returns it", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: { ...row, status: "drafted" }, error: null });
+    expect(await insertDraftedProspect(row, makeDb(c))).toMatchObject({ id: PROSPECT, status: "drafted" });
+    // Straight to drafted: a row that passed through `discovered` would be
+    // probed by the sweep and overwritten or retired before the owner saw it.
+    expect(c.insert).toHaveBeenCalledWith({ ...row, status: "drafted", status_detail: null });
+    expect(c.select).toHaveBeenCalled();
+
+    const d = chain();
+    d.single.mockResolvedValue({ data: { ...row, status: "drafted" }, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(d));
+    expect(await insertDraftedProspect(row)).toMatchObject({ id: PROSPECT });
+  });
+
+  it("reports a unique violation as null and throws on anything else", async () => {
+    // Both suppression axes surface as the same code: the (business, domain)
+    // constraint and the partial index on lower(email).
+    const dup = chain();
+    dup.single.mockResolvedValue({ data: null, error: { code: PG_UNIQUE_VIOLATION, message: "dup" } });
+    expect(await insertDraftedProspect(row, makeDb(dup))).toBeNull();
+
+    const bad = chain();
+    bad.single.mockResolvedValue({ data: null, error: { code: "42P01", message: "no table" } });
+    await expect(insertDraftedProspect(row, makeDb(bad))).rejects.toThrow(
+      /insertDraftedProspect: no table/
+    );
+  });
+});
+
+describe("findProspectByDomain", () => {
+  it("reads the row for one domain with equality, through both clients, and throws on error", async () => {
+    const c = singleChain({ data: { id: PROSPECT, domain: "acme.com" }, error: null });
+    expect(await findProspectByDomain(BIZ, "acme.com", makeDb(c))).toMatchObject({ id: PROSPECT });
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("domain", "acme.com");
+
+    defaultClientSpy.mockReturnValue(makeDb(singleChain({ data: null, error: null })));
+    expect(await findProspectByDomain(BIZ, "acme.com")).toBeNull();
+
+    await expect(
+      findProspectByDomain(BIZ, "acme.com", makeDb(singleChain({ data: null, error: { message: "boom" } })))
+    ).rejects.toThrow(/findProspectByDomain: boom/);
+  });
+});
+
+describe("tryTransitionProspect", () => {
+  const patch = { email: "info@acme.com", status: "drafted" as const };
+
+  it("reports moved, stale, or conflict instead of throwing on the address key", async () => {
+    const moved = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch, makeDb(moved))).toBe("moved");
+    expect(moved.update).toHaveBeenCalledWith(expect.objectContaining(patch));
+    expect(moved.eq).toHaveBeenCalledWith("status", "discovered");
+
+    expect(
+      await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch, makeDb(chain({ data: [], error: null })))
+    ).toBe("stale");
+
+    defaultClientSpy.mockReturnValue(
+      makeDb(chain({ data: null, error: { code: PG_UNIQUE_VIOLATION, message: "dup" } }))
+    );
+    expect(await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch)).toBe("conflict");
+
+    await expect(
+      tryTransitionProspect(
+        BIZ,
+        PROSPECT,
+        "discovered",
+        patch,
+        makeDb(chain({ data: null, error: { code: "42P01", message: "no table" } }))
+      )
+    ).rejects.toThrow(/tryTransitionProspect: no table/);
   });
 });
 

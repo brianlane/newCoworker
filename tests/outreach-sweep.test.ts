@@ -21,10 +21,12 @@ vi.mock("@/lib/db/system-logs", () => ({
 }));
 
 import {
+  draftDomainFor,
   editProspectDraft,
   MAX_EDITED_BODY_CHARS,
   MAX_EDITED_SUBJECT_CHARS,
   processOutreachSweep,
+  upsertProspectDraft,
   recordOutreachEmailLog,
   regenerateProspectDraft,
   REWRITE_BATCH_SIZE,
@@ -190,6 +192,10 @@ function stubLedger(over: Record<string, unknown> = {}) {
     listProspectsToRewrite: vi.fn(async () => []),
     countProspectsToRewrite: vi.fn(async () => 0),
     countProspectsByStatus: vi.fn(async () => 0),
+    insertDraftedProspect: vi.fn(async (row: unknown) => ({ ...prospect(), ...(row as object) })),
+    findProspectByDomain: vi.fn(async () => null),
+    findProspectByEmail: vi.fn(async () => null),
+    tryTransitionProspect: vi.fn(async () => "moved" as const),
     ...over
   };
   for (const [name, impl] of Object.entries(defaults)) {
@@ -1656,6 +1662,393 @@ describe("sendProspectNow (the owner pressed Send in manual mode)", () => {
     expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
       ok: false,
       reason: "send_failed"
+    });
+  });
+});
+
+describe("draftDomainFor (the suppression key for a draft that arrived without a Places hit)", () => {
+  it("prefers the named domain, accepting a bare host or a URL, and normalizes it", () => {
+    expect(draftDomainFor("AcmeHVAC.com", "info@other.com")).toBe("acmehvac.com");
+    expect(draftDomainFor("https://www.acmehvac.com/contact?x=1", "info@other.com")).toBe(
+      "acmehvac.com"
+    );
+    expect(draftDomainFor("  ", "info@acmehvac.com")).toBe("acmehvac.com");
+  });
+
+  it("falls back to the address's host", () => {
+    expect(draftDomainFor(undefined, "Info@AcmeHVAC.com")).toBe("acmehvac.com");
+  });
+
+  it("refuses a shared mail host, inferred or named, and anything that is not a domain", () => {
+    // Filing gmail.com would claim the ledger slot for every later
+    // Gmail-hosted prospect of the tenant, so the address alone is not enough.
+    expect(draftDomainFor(undefined, "bob@gmail.com")).toBeNull();
+    expect(draftDomainFor("gmail.com", "bob@gmail.com")).toBeNull();
+    // Matched on the brand label, so the country variants are caught too
+    // (Bugbot, PR #1803): yahoo.co.uk is exactly as shared as yahoo.com.
+    for (const host of ["yahoo.co.uk", "hotmail.fr", "outlook.com.br", "live.de", "btinternet.com"]) {
+      expect(draftDomainFor(undefined, `bob@${host}`), host).toBeNull();
+    }
+    // A business whose domain merely CONTAINS a brand label is not shared.
+    expect(draftDomainFor(undefined, "info@gmailrepairs.com")).toBe("gmailrepairs.com");
+    expect(draftDomainFor(undefined, "not-an-email")).toBeNull();
+    expect(draftDomainFor(undefined, "")).toBeNull();
+    expect(draftDomainFor("localhost", "a@b")).toBeNull();
+  });
+});
+
+describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
+  const input = {
+    businessName: " Wolfgangs Cooling ",
+    email: " Andrea.Martinez@TurnpointServices.com ",
+    city: " Tempe AZ ",
+    subject: " Wolfgangs Cooling: the customers who would rather text ",
+    paragraphs: "Hi Wolfgangs Cooling,\n\n\n  I was looking you up in Tempe AZ.  \n\nWorth a quick look?\n"
+  };
+
+  function createLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      ...over
+    });
+  }
+
+  it("writes one drafted row with the footer assembled around the caller's paragraphs", async () => {
+    const ledger = createLedger();
+    const deps = baseDeps();
+    const result = await upsertProspectDraft(BIZ, input, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.mode).toBe("manual");
+    expect(result.created).toBe(true);
+
+    const insert = ledger.insertDraftedProspect as ReturnType<typeof vi.fn>;
+    expect(insert).toHaveBeenCalledTimes(1);
+    const [row, client] = insert.mock.calls[0];
+    // Written through the injected client, the same one every other phase uses.
+    expect(client).toBe((deps as { client: unknown }).client);
+    expect(row).toMatchObject({
+      business_id: BIZ,
+      domain: "turnpointservices.com",
+      business_name: "Wolfgangs Cooling",
+      // Lowercased like the probe writes it, so the lower(email) unique index
+      // and findProspectByEmail's equality read agree.
+      email: "andrea.martinez@turnpointservices.com",
+      phone: null,
+      website: null,
+      vertical: "",
+      city: "Tempe AZ",
+      // No probe ran, so there is no evidence: Write it again refuses honestly.
+      findings: [],
+      pitch_subject: "Wolfgangs Cooling: the customers who would rather text",
+      pitch_paragraphs:
+        "Hi Wolfgangs Cooling,\n\nI was looking you up in Tempe AZ.\n\nWorth a quick look?",
+      drafted_at: MONDAY_MORNING.toISOString()
+    });
+    // The id is minted before the write so the unsubscribe link can name it.
+    expect(row.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(row.pitch_body).toContain(`p=${row.id}`);
+    expect(row.pitch_body.startsWith("Hi Wolfgangs Cooling,\n\nI was looking you up")).toBe(true);
+    expect(row.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
+    expect(row.pitch_body).toContain("/api/outreach/unsubscribe?");
+    expect(row.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+    // The insert goes straight to drafted (that is insertDraftedProspect's
+    // contract); nothing else in the ledger is touched.
+    expect(ledger.insertProspects).not.toHaveBeenCalled();
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    expect(ledger.patchProspect).not.toHaveBeenCalled();
+    expect(result.prospect.id).toBe(row.id);
+  });
+
+  it("carries the optional identity fields through, and the named domain wins", async () => {
+    const ledger = createLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "auto" }))
+    });
+    const result = await upsertProspectDraft(
+      BIZ,
+      {
+        ...input,
+        domain: "www.wolfgangscooling.com",
+        vertical: " hvac ",
+        website: " https://wolfgangscooling.com ",
+        phone: " (480) 555-0100 "
+      },
+      baseDeps()
+    );
+    expect(result.ok && result.mode).toBe("auto");
+    const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(row).toMatchObject({
+      domain: "wolfgangscooling.com",
+      vertical: "hvac",
+      website: "https://wolfgangscooling.com",
+      phone: "(480) 555-0100"
+    });
+  });
+
+  it("stores blank optional fields as null, never as empty strings", async () => {
+    // "Has a phone" must stay a single question downstream: the flow hand-off
+    // gates filing on the phone, and a blank would sail through as truthy.
+    const ledger = createLedger();
+    await upsertProspectDraft(BIZ, { ...input, phone: "  ", website: "" }, baseDeps());
+    const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(row.phone).toBeNull();
+    expect(row.website).toBeNull();
+  });
+
+  it("refuses empty or oversized text before reading anything", async () => {
+    const ledger = createLedger();
+    expect(await upsertProspectDraft(BIZ, { ...input, subject: "  " }, baseDeps())).toEqual({
+      ok: false,
+      reason: "empty_text"
+    });
+    expect(await upsertProspectDraft(BIZ, { ...input, paragraphs: "\n\n" }, baseDeps())).toEqual({
+      ok: false,
+      reason: "empty_text"
+    });
+    expect(
+      await upsertProspectDraft(
+        BIZ,
+        { ...input, subject: "s".repeat(MAX_EDITED_SUBJECT_CHARS + 1) },
+        baseDeps()
+      )
+    ).toEqual({ ok: false, reason: "too_long" });
+    expect(
+      await upsertProspectDraft(
+        BIZ,
+        { ...input, paragraphs: "x".repeat(MAX_EDITED_BODY_CHARS + 1) },
+        baseDeps()
+      )
+    ).toEqual({ ok: false, reason: "too_long" });
+    expect(ledger.getOutreachSettings).not.toHaveBeenCalled();
+    expect(ledger.insertDraftedProspect).not.toHaveBeenCalled();
+  });
+
+  it("refuses an address whose host cannot identify the business", async () => {
+    const ledger = createLedger();
+    const result = await upsertProspectDraft(BIZ, { ...input, email: "bob@gmail.com" }, baseDeps());
+    expect(result).toMatchObject({ ok: false, reason: "invalid_domain" });
+    expect(result.ok === false && result.detail).toMatch(/shared mail host/);
+    expect(ledger.insertDraftedProspect).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unconfigured or downgraded tenant, and says which", async () => {
+    createLedger({ getOutreachSettings: vi.fn(async () => null) });
+    expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured"
+    });
+
+    createLedger();
+    expect(
+      await upsertProspectDraft(
+        BIZ,
+        input,
+        baseDeps({
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "Starter Co",
+            timezone: "America/Phoenix",
+            tier: "starter"
+          }))
+        })
+      )
+    ).toEqual({
+      ok: false,
+      reason: "tier_blocked",
+      detail: "prospecting requires the Standard plan"
+    });
+
+    const ledger = createLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", value_prop: "" }))
+    });
+    expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured",
+      detail: "no value proposition configured"
+    });
+    expect(ledger.insertDraftedProspect).not.toHaveBeenCalled();
+  });
+
+  describe("when the insert loses to a row already on the ledger", () => {
+    const existingId = "33333333-3333-4333-8333-333333333333";
+    function collided(over: Record<string, unknown> = {}) {
+      return createLedger({
+        insertDraftedProspect: vi.fn(async () => null),
+        ...over
+      });
+    }
+
+    it("re-pitches a waiting draft in place, guarded on it still being a draft", async () => {
+      // An agent re-running its prospecting pass refreshes its drafts instead
+      // of being told they exist. The identity fields come along, the footer
+      // is re-assembled around the new paragraphs with the EXISTING row's
+      // unsubscribe link, and findings are left alone (still no probe).
+      const waiting = prospect({
+        id: existingId,
+        domain: "turnpointservices.com",
+        status: "drafted",
+        pitch_subject: "old subject",
+        pitch_paragraphs: "old body",
+        city: "Phoenix"
+      });
+      const ledger = collided({
+        findProspectByDomain: vi.fn(async () => waiting),
+        findProspectByEmail: vi.fn(async () => waiting)
+      });
+      const result = await upsertProspectDraft(BIZ, input, baseDeps());
+      expect(result.ok && result.created).toBe(false);
+      if (!result.ok) throw new Error("unreachable");
+      expect(result.mode).toBe("manual");
+      const transition = ledger.tryTransitionProspect as ReturnType<typeof vi.fn>;
+      expect(transition).toHaveBeenCalledTimes(1);
+      const [, id, fromStatus, patch] = transition.mock.calls[0];
+      expect(id).toBe(existingId);
+      expect(fromStatus).toBe("drafted");
+      expect(patch).toMatchObject({
+        business_name: "Wolfgangs Cooling",
+        email: "andrea.martinez@turnpointservices.com",
+        city: "Tempe AZ",
+        pitch_subject: "Wolfgangs Cooling: the customers who would rather text",
+        pitch_paragraphs:
+          "Hi Wolfgangs Cooling,\n\nI was looking you up in Tempe AZ.\n\nWorth a quick look?",
+        status: "drafted",
+        status_detail: null,
+        drafted_at: MONDAY_MORNING.toISOString()
+      });
+      expect(patch).not.toHaveProperty("findings");
+      expect(patch.pitch_body).toContain(`p=${existingId}`);
+      expect(patch.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+      expect(result.prospect).toMatchObject({ id: existingId, city: "Tempe AZ", status: "drafted" });
+      // The plain (throwing) transition is never used for a write that
+      // carries the address key.
+      expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    });
+
+    it("keeps the stored phone, website, and vertical when the caller did not supply them", async () => {
+      // A Places-discovered row already knows the prospect's phone, and that
+      // phone is what lets the outreach flow file them as a contact after the
+      // send. A connector re-pitching without one must not blank it (Bugbot,
+      // PR #1803). The same holds for the city when the caller sent none.
+      const found = prospect({
+        id: existingId,
+        status: "discovered",
+        email: null,
+        phone: "(602) 555-0100",
+        website: "https://acmehvac.com",
+        vertical: "hvac",
+        city: "Phoenix"
+      });
+      const ledger = collided({ findProspectByDomain: vi.fn(async () => found) });
+      await upsertProspectDraft(BIZ, { ...input, city: "" }, baseDeps());
+      const [, , , patch] = (ledger.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+      for (const key of ["phone", "website", "vertical", "city"]) {
+        expect(patch, key).not.toHaveProperty(key);
+      }
+      // And when the caller DID supply them, they win.
+      collided({ findProspectByDomain: vi.fn(async () => found) });
+      const ledger2 = stubLedger({
+        getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+        insertDraftedProspect: vi.fn(async () => null),
+        findProspectByDomain: vi.fn(async () => found)
+      });
+      await upsertProspectDraft(
+        BIZ,
+        { ...input, phone: "(480) 555-0199", website: "https://new.example", vertical: "plumbing" },
+        baseDeps()
+      );
+      const [, , , patch2] = (ledger2.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(patch2).toMatchObject({
+        phone: "(480) 555-0199",
+        website: "https://new.example",
+        vertical: "plumbing",
+        city: "Tempe AZ"
+      });
+    });
+
+    it("also claims a discovered row the sweep has not written to yet", async () => {
+      // Discovered means the sweep found the domain and would probe it next.
+      // The agent's pitch wins the row the same way the sweep's would: a
+      // guarded transition from the status just read.
+      const found = prospect({ id: existingId, status: "discovered", email: null, pitch_body: null });
+      const ledger = collided({ findProspectByDomain: vi.fn(async () => found) });
+      const result = await upsertProspectDraft(BIZ, input, baseDeps());
+      expect(result.ok && result.created).toBe(false);
+      const [, , fromStatus] = (ledger.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fromStatus).toBe("discovered");
+    });
+
+    it("finds the row by address when the domain is new to the ledger", async () => {
+      const byEmail = prospect({ id: existingId, domain: "other.com", status: "drafted" });
+      const ledger = collided({ findProspectByEmail: vi.fn(async () => byEmail) });
+      expect((await upsertProspectDraft(BIZ, input, baseDeps())).ok).toBe(true);
+      expect((ledger.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe(existingId);
+    });
+
+    it("never writes over a prospect that is past the draft stage, and names the status", async () => {
+      // The ledger doing its job: sent, replied, skipped, unsubscribed, and
+      // failed are things that happened, and a re-pitch would be a second
+      // cold email to somebody who already heard from us or said stop.
+      for (const status of ["sent", "replied", "booked", "unsubscribed", "skipped", "failed"] as const) {
+        const ledger = collided({
+          findProspectByDomain: vi.fn(async () => prospect({ id: existingId, domain: "acmehvac.com", status }))
+        });
+        expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+          ok: false,
+          reason: "duplicate",
+          detail: `acmehvac.com is already ${status}`
+        });
+        expect(ledger.tryTransitionProspect).not.toHaveBeenCalled();
+      }
+    });
+
+    it("refuses when the domain and the address belong to two different prospects", async () => {
+      const ledger = collided({
+        findProspectByDomain: vi.fn(async () => prospect({ id: existingId, status: "drafted" })),
+        findProspectByEmail: vi.fn(async () =>
+          prospect({ id: "44444444-4444-4444-8444-444444444444", status: "drafted" })
+        )
+      });
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "turnpointservices.com and andrea.martinez@turnpointservices.com already belong to two different prospects"
+      });
+      expect(ledger.tryTransitionProspect).not.toHaveBeenCalled();
+    });
+
+    it("reports the ledger changing underneath: a vanished row, a claim lost mid-write, or an address taken mid-write", async () => {
+      collided();
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "the ledger changed underneath, retry"
+      });
+
+      // The sweep sent the draft (or probed and retired the discovered row)
+      // between the read and the write; the guarded transition matches no
+      // row and the pitch is dropped rather than written over a sent mail.
+      collided({
+        findProspectByDomain: vi.fn(async () => prospect({ id: existingId, domain: "acmehvac.com", status: "drafted" })),
+        tryTransitionProspect: vi.fn(async () => "stale" as const)
+      });
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "acmehvac.com changed while being updated"
+      });
+
+      // Another row of the business took the address between the read and
+      // the write. The unique index refuses the update, and that is a
+      // refusal to report, not a 500 (Bugbot, PR #1803).
+      collided({
+        findProspectByDomain: vi.fn(async () => prospect({ id: existingId, domain: "acmehvac.com", status: "drafted" })),
+        tryTransitionProspect: vi.fn(async () => "conflict" as const)
+      });
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "andrea.martinez@turnpointservices.com already belongs to another prospect"
+      });
     });
   });
 });
