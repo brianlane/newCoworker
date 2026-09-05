@@ -75,6 +75,7 @@ import {
   listProspectsToRewrite,
   patchProspect,
   transitionProspect,
+  tryTransitionProspect,
   upsertOutreachSettings,
   type OutreachProspectRow,
   type OutreachProspectStatus,
@@ -1295,50 +1296,100 @@ export async function editProspectDraft(
 }
 
 /**
- * Mail hosts shared by the public. An address on one of these says nothing
- * about which business it belongs to, so it cannot stand in for the
+ * Brand labels of mail hosts shared by the public, matched on the FIRST label
+ * of the host so the country variants come along (`yahoo.co.uk`,
+ * `hotmail.fr`, `outlook.com.br`, `live.de`). An address on one of these says
+ * nothing about which business it belongs to, so it cannot stand in for the
  * prospect's domain: the ledger keys suppression on (business, domain), and
- * filing "gmail.com" would block every later Gmail-hosted prospect of the
- * same tenant as a duplicate.
+ * filing `yahoo.co.uk` would block every later Yahoo-hosted prospect of the
+ * same tenant as a duplicate. A denylist rather than an MX lookup, because a
+ * connector call must not wait on DNS, and the misses are cheap: the caller
+ * is told to pass the prospect's own domain.
  */
-export const SHARED_MAIL_HOSTS: ReadonlySet<string> = new Set([
-  "gmail.com",
-  "googlemail.com",
-  "yahoo.com",
-  "ymail.com",
-  "hotmail.com",
-  "outlook.com",
-  "live.com",
-  "msn.com",
-  "aol.com",
-  "icloud.com",
-  "me.com",
-  "mac.com",
-  "protonmail.com",
-  "proton.me",
-  "comcast.net",
-  "att.net",
-  "sbcglobal.net",
-  "cox.net",
-  "verizon.net",
-  "mail.com",
-  "zoho.com"
+const SHARED_MAIL_BRANDS: ReadonlySet<string> = new Set([
+  "gmail",
+  "googlemail",
+  "yahoo",
+  "ymail",
+  "rocketmail",
+  "hotmail",
+  "outlook",
+  "live",
+  "msn",
+  "aol",
+  "icloud",
+  "me",
+  "mac",
+  "protonmail",
+  "proton",
+  "pm",
+  "gmx",
+  "yandex",
+  "mail",
+  "zoho",
+  "fastmail",
+  "hey",
+  "tutanota",
+  "tuta",
+  "hushmail",
+  "qq",
+  "163",
+  "126",
+  "comcast",
+  "att",
+  "sbcglobal",
+  "bellsouth",
+  "cox",
+  "verizon",
+  "charter",
+  "earthlink",
+  "juno",
+  "optonline",
+  "frontier",
+  "windstream",
+  "centurylink",
+  "btinternet",
+  "sky",
+  "virginmedia",
+  "ntlworld",
+  "talktalk",
+  "bigpond",
+  "optusnet",
+  "shaw",
+  "rogers",
+  "sympatico",
+  "telus",
+  "t-online",
+  "web",
+  "freenet",
+  "orange",
+  "wanadoo",
+  "laposte",
+  "libero",
+  "virgilio",
+  "seznam",
+  "bluewin",
+  "rediffmail"
 ]);
+
+function isSharedMailHost(domain: string): boolean {
+  return SHARED_MAIL_BRANDS.has(domain.split(".")[0]);
+}
 
 /**
  * The suppression key for a draft that arrives without a Places hit: the
  * domain the caller named, else the address's own host. Accepts a bare host
  * or a full URL, and returns null when neither yields a real domain, or when
- * the host was inferred from an address on a shared mail provider (see
- * SHARED_MAIL_HOSTS). An explicitly named shared host is still refused for
- * the same reason: it would claim the ledger slot for every prospect on it.
+ * the host is a shared mail provider (see SHARED_MAIL_BRANDS). An explicitly
+ * named shared host is refused for the same reason as an inferred one: it
+ * would claim the ledger slot for every prospect on it.
  */
 export function draftDomainFor(explicitDomain: string | undefined, email: string): string | null {
   const named = explicitDomain?.trim() ?? "";
   const raw = named || email.trim().split("@")[1] || "";
   if (!raw) return null;
   const domain = normalizeDomain(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
-  if (!domain || SHARED_MAIL_HOSTS.has(domain)) return null;
+  if (!domain || isSharedMailHost(domain)) return null;
   return domain;
 }
 
@@ -1456,14 +1507,10 @@ export async function upsertProspectDraft(
   // (on lower(email)) and findProspectByEmail's equality read agree.
   const email = input.email.trim().toLowerCase();
   const paragraphs = splitParagraphs(text);
-  const identity = {
-    business_name: input.businessName.trim(),
-    email,
-    phone: input.phone?.trim() || null,
-    website: input.website?.trim() || null,
-    vertical: input.vertical?.trim() ?? "",
-    city: input.city.trim()
-  };
+  const phone = input.phone?.trim() ?? "";
+  const website = input.website?.trim() ?? "";
+  const vertical = input.vertical?.trim() ?? "";
+  const city = input.city.trim();
   const pitchFor = (prospectId: string) => ({
     pitch_subject: subject,
     pitch_paragraphs: paragraphs.join("\n\n"),
@@ -1482,7 +1529,15 @@ export async function upsertProspectDraft(
       id,
       business_id: businessId,
       domain,
-      ...identity,
+      business_name: input.businessName.trim(),
+      email,
+      // Null rather than blank when the caller had no number, so "has a
+      // phone" stays a single question downstream (the flow hand-off gates
+      // contact filing on it).
+      phone: phone || null,
+      website: website || null,
+      vertical,
+      city,
       findings: [],
       ...pitchFor(id),
       drafted_at: r.now.toISOString()
@@ -1517,19 +1572,38 @@ export async function upsertProspectDraft(
       detail: `${existing.domain} is already ${existing.status}`
     };
   }
-  // Guarded on the status just read, like every other ledger transition: the
-  // sweep can send a drafted row, or probe and retire a discovered one, in
-  // the time between that read and this write, and losing the claim means
-  // the row moved on purpose.
+  // A re-pitch replaces the pitch and the two fields every call carries, and
+  // refreshes an optional field ONLY when the caller supplied it. A row the
+  // sweep discovered through Places already knows the prospect's phone, and
+  // that phone is what lets the outreach flow file them as a contact after
+  // the send; a connector that did not know it must not blank it.
   const patch = {
-    ...identity,
+    business_name: input.businessName.trim(),
+    email,
+    ...(phone ? { phone } : {}),
+    ...(website ? { website } : {}),
+    ...(vertical ? { vertical } : {}),
+    ...(city ? { city } : {}),
     ...pitchFor(existing.id),
     status: "drafted" as const,
     status_detail: null,
     drafted_at: r.now.toISOString()
   };
-  const moved = await transitionProspect(businessId, existing.id, existing.status, patch, r.db);
-  if (!moved) {
+  // Guarded on the status just read, like every other ledger transition: the
+  // sweep can send a drafted row, or probe and retire a discovered one, in
+  // the time between that read and this write, and losing the claim means
+  // the row moved on purpose. The address key is checked again by the write
+  // itself: the read above can miss an address that lands on another row in
+  // the same instant, and that is a refusal, not a crash.
+  const outcome = await tryTransitionProspect(businessId, existing.id, existing.status, patch, r.db);
+  if (outcome === "conflict") {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${email} already belongs to another prospect`
+    };
+  }
+  if (outcome === "stale") {
     return { ok: false, reason: "duplicate", detail: `${existing.domain} changed while being updated` };
   }
   return {

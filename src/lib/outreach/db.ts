@@ -746,6 +746,39 @@ export async function transitionProspect(
 }
 
 /**
+ * `transitionProspect` for a patch that can lose to the address key.
+ *
+ * The plain transition throws on any error, which is right for the sweep's
+ * own status moves (they never touch `email`). A re-pitch DOES write the
+ * address, and the partial unique index on lower(email) can refuse it when
+ * another row of the business took that address between the caller's read
+ * and this write. That is a refusal to report, not a crash to log, so the
+ * unique violation comes back as `conflict`; `stale` is the ordinary lost
+ * claim (the row left `fromStatus`), and `moved` is success.
+ */
+export async function tryTransitionProspect(
+  businessId: string,
+  prospectId: string,
+  fromStatus: OutreachProspectStatus,
+  patch: OutreachProspectPatch,
+  client?: SupabaseClient
+): Promise<"moved" | "stale" | "conflict"> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("id", prospectId)
+    .eq("status", fromStatus)
+    .select("id");
+  if (error) {
+    if (error.code === PG_UNIQUE_VIOLATION) return "conflict";
+    throw new Error(`tryTransitionProspect: ${error.message}`);
+  }
+  return Array.isArray(data) && data.length > 0 ? "moved" : "stale";
+}
+
+/**
  * Claim today's discovery pass for a business, atomically.
  *
  * Discovery buys paid Places queries, so "have we already run today?" cannot be

@@ -43,6 +43,7 @@ import {
   patchProspect,
   skipProspectsInVertical,
   transitionProspect,
+  tryTransitionProspect,
   upsertOutreachSettings
 } from "@/lib/outreach/db";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
@@ -263,6 +264,36 @@ describe("findProspectByDomain", () => {
     await expect(
       findProspectByDomain(BIZ, "acme.com", makeDb(singleChain({ data: null, error: { message: "boom" } })))
     ).rejects.toThrow(/findProspectByDomain: boom/);
+  });
+});
+
+describe("tryTransitionProspect", () => {
+  const patch = { email: "info@acme.com", status: "drafted" as const };
+
+  it("reports moved, stale, or conflict instead of throwing on the address key", async () => {
+    const moved = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch, makeDb(moved))).toBe("moved");
+    expect(moved.update).toHaveBeenCalledWith(expect.objectContaining(patch));
+    expect(moved.eq).toHaveBeenCalledWith("status", "discovered");
+
+    expect(
+      await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch, makeDb(chain({ data: [], error: null })))
+    ).toBe("stale");
+
+    defaultClientSpy.mockReturnValue(
+      makeDb(chain({ data: null, error: { code: PG_UNIQUE_VIOLATION, message: "dup" } }))
+    );
+    expect(await tryTransitionProspect(BIZ, PROSPECT, "discovered", patch)).toBe("conflict");
+
+    await expect(
+      tryTransitionProspect(
+        BIZ,
+        PROSPECT,
+        "discovered",
+        patch,
+        makeDb(chain({ data: null, error: { code: "42P01", message: "no table" } }))
+      )
+    ).rejects.toThrow(/tryTransitionProspect: no table/);
   });
 });
 

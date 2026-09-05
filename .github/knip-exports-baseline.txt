@@ -1151,6 +1151,9 @@ src/lib/mcp/tools/flows.ts :: updateFlowTool
 src/lib/mcp/tools/flows.ts :: validateFlowDefinition
 src/lib/mcp/tools/notifications.ts :: getNotificationPreferencesTool
 src/lib/mcp/tools/notifications.ts :: updateNotificationPreferencesTool
+src/lib/mcp/tools/outreach-drafts.ts :: listOutreachQueueTool
+src/lib/mcp/tools/outreach-drafts.ts :: updateOutreachDraftTool
+src/lib/mcp/tools/outreach-drafts.ts :: upsertOutreachProspectTool
 src/lib/mcp/tools/read.ts :: getBusinessTool
 src/lib/mcp/tools/read.ts :: getContactTool
 src/lib/mcp/tools/read.ts :: getSmsThreadTool
@@ -1340,7 +1343,6 @@ src/lib/outreach/compose.ts :: emailSignature
 src/lib/outreach/discover.ts :: PLACES_RESULTS_PER_QUERY
 src/lib/outreach/discover.ts :: PLATFORM_HOSTS
 src/lib/outreach/discover.ts :: isPlatformHosted
-src/lib/outreach/discover.ts :: normalizeDomain
 src/lib/outreach/engagement.ts :: BOOKING_LOOKUP_LIMIT
 src/lib/outreach/engagement.ts :: hasAdvancedPastContacted
 src/lib/outreach/engagement.ts :: prospectContactKey
@@ -1364,6 +1366,7 @@ src/lib/outreach/sweep.ts :: NUDGE_BATCH
 src/lib/outreach/sweep.ts :: NUDGE_STALE_AFTER_DAYS
 src/lib/outreach/sweep.ts :: REWRITE_BATCH_SIZE
 src/lib/outreach/sweep.ts :: SEND_NOW_BATCH
+src/lib/outreach/sweep.ts :: draftDomainFor
 src/lib/outreach/sweep.ts :: recordOutreachEmailLog
 src/lib/ovh/provision.ts :: ProvisionOvhVpsInput
 src/lib/ovh/provision.ts :: ovhCartOsValue
