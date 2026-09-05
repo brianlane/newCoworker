@@ -17,6 +17,11 @@ import {
 } from "@/lib/email/delivery";
 import { formatEmailDeliveryFailedLogMessage } from "@/lib/email/delivery-failure-log";
 import { retireProspectsOnBounce } from "@/lib/outreach/bounce";
+import {
+  isCustomerFacingEmailSource,
+  notifyContactEmailBounce,
+  type ContactEmailBounceResult
+} from "@/lib/notifications/contact-email-bounce-notify";
 
 /**
  * Reject anything larger before parsing. Resend payloads are a few KB; this
@@ -240,15 +245,26 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
 
   const retiredCount = await maybeRetireOutreachPitch(event, result.businessId);
   if (isEmailDeliveryFailure(event.status)) {
+    // Who is this failure FOR? A bounced email the coworker sent to a
+    // contact is the tenant's to act on (the lead typed the address; only
+    // they can reach the person another way), so it is alerted to the owner
+    // and recorded here at `warn`: still in the log, off the admin System
+    // Errors card, which is for what HQ can act on. A bounced OWNER alert,
+    // an outreach pitch, or anything we could not hand to the tenant stays
+    // `error`, because then the action is ours.
+    const tenantAlert = await maybeAlertTenant(event, result.send);
+    const handedOff =
+      tenantAlert?.outcome === "alerted" || tenantAlert?.outcome === "alerted_earlier";
     await recordSystemLog({
       businessId: result.businessId,
-      level: "error",
+      level: handedOff ? "warn" : "error",
       source: "email",
       event: "email_delivery_failed",
       message: formatEmailDeliveryFailedLogMessage({
         status: event.status,
         to: event.to,
-        retiredCount
+        retiredCount,
+        ownerAlerted: handedOff
       }),
       payload: {
         status: event.status,
@@ -258,14 +274,43 @@ export async function processResendDeliveryEvent(event: ResendDeliveryEvent): Pr
         errorCode: event.errorCode,
         errorMessage: event.errorMessage,
         outreachRetired: retiredCount,
+        emailLogSource: result.send?.source ?? null,
         // Flagged so an operator reading the feed knows this receipt was
         // matched heuristically (recipient + subject in a recent window)
         // rather than by provider id.
-        ...(attributedByRecipient ? { attributedBy: "recipient_subject" } : {})
+        ...(attributedByRecipient ? { attributedBy: "recipient_subject" } : {}),
+        ...(tenantAlert
+          ? { ownerAlert: tenantAlert.outcome, contactE164: tenantAlert.contactE164 }
+          : {})
       }
     });
   }
   return true;
+}
+
+/**
+ * Page the tenant about a customer-facing send that failed. Null when the
+ * matched send is not one the tenant should hear about (an owner alert, an
+ * outreach pitch, a row with no recipient), so the caller can tell "not
+ * applicable" from "tried and could not deliver". Never throws.
+ */
+async function maybeAlertTenant(
+  event: ResendDeliveryEvent,
+  send: Awaited<ReturnType<typeof applyEmailDeliveryStatus>>["send"]
+): Promise<ContactEmailBounceResult | null> {
+  if (!send || !isCustomerFacingEmailSource(send.source)) return null;
+  const address = send.to ?? event.to;
+  if (!address) return null;
+  return notifyContactEmailBounce({
+    businessId: send.businessId,
+    emailLogId: send.id,
+    address,
+    subject: send.subject ?? event.subject,
+    status: event.status,
+    errorCode: event.errorCode,
+    runId: send.runId,
+    flowId: send.flowId
+  });
 }
 
 /**
@@ -313,7 +358,10 @@ async function maybeRetireOutreachPitch(
  */
 async function attributeFailureByRecipient(
   event: ResendDeliveryEvent
-): Promise<{ outcome: "applied" | "stale"; businessId: string | null } | null> {
+): Promise<
+  | (Awaited<ReturnType<typeof applyEmailDeliveryStatus>> & { outcome: "applied" | "stale" })
+  | null
+> {
   if (!event.to || !event.subject) return null;
   try {
     const fallback = await applyEmailDeliveryStatusByRecipient({
@@ -325,7 +373,7 @@ async function attributeFailureByRecipient(
       timestamp: event.occurredAt
     });
     if (fallback.outcome === "not_found") return null;
-    return { outcome: fallback.outcome, businessId: fallback.businessId };
+    return { ...fallback, outcome: fallback.outcome };
   } catch (err) {
     logger.warn("resend delivery recipient fallback failed", {
       providerMessageId: event.providerMessageId,

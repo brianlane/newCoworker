@@ -128,13 +128,56 @@ export type ApplyEmailDeliveryInput = {
   timestamp?: string | null;
 };
 
-export type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
+type ApplyEmailDeliveryOutcome = "applied" | "stale" | "not_found";
+
+/**
+ * What the receipt landed on, handed back so the webhook can decide WHO a
+ * failure is for. `source` is the load-bearing field: a bounced owner alert
+ * (`notification`) is HQ's problem, a bounced booking confirmation to a lead
+ * (`tenant_mailbox_outbound`) is the tenant's, and until this was returned
+ * the webhook could not tell the two apart.
+ */
+type EmailDeliveryMatchedSend = {
+  id: string;
+  businessId: string;
+  source: string | null;
+  to: string | null;
+  subject: string | null;
+  runId: string | null;
+  flowId: string | null;
+};
+
+export type ApplyEmailDeliveryResult = {
+  outcome: ApplyEmailDeliveryOutcome;
+  businessId: string | null;
+  /** The matched row, on `applied` and `stale`; null on `not_found`. */
+  send: EmailDeliveryMatchedSend | null;
+};
 
 type MatchedEmailLogRow = {
   id: string;
   business_id: string;
   delivery_status: EmailDeliveryStatus | null;
+  source?: string | null;
+  to_email?: string | null;
+  subject?: string | null;
+  run_id?: string | null;
+  flow_id?: string | null;
 };
+
+const MATCH_COLUMNS = "id, business_id, delivery_status, source, to_email, subject, run_id, flow_id";
+
+function describeSend(row: MatchedEmailLogRow): EmailDeliveryMatchedSend {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    source: row.source ?? null,
+    to: row.to_email ?? null,
+    subject: row.subject ?? null,
+    runId: row.run_id ?? null,
+    flowId: row.flow_id ?? null
+  };
+}
 
 type ReceiptDetail = {
   status: EmailDeliveryStatus;
@@ -154,12 +197,13 @@ async function writeDeliveryStatus(
   row: MatchedEmailLogRow,
   input: ReceiptDetail,
   label: string
-): Promise<{ outcome: "applied" | "stale"; businessId: string }> {
+): Promise<ApplyEmailDeliveryResult & { outcome: "applied" | "stale"; businessId: string }> {
+  const send = describeSend(row);
   // Fast path only: skips a pointless write. It is NOT what makes the
   // ordering safe, because the row can change between this read and the
   // update below. The predicate on the update is what actually enforces it.
   if (!emailDeliveryOutranks(input.status, row.delivery_status)) {
-    return { outcome: "stale", businessId: row.business_id };
+    return { outcome: "stale", businessId: row.business_id, send };
   }
 
   // Resend fires sent/delivered within milliseconds, and separate webhook
@@ -197,7 +241,8 @@ async function writeDeliveryStatus(
   if (error) throw new Error(`${label}: ${error.message}`);
   return {
     outcome: (updated ?? []).length > 0 ? "applied" : "stale",
-    businessId: row.business_id
+    businessId: row.business_id,
+    send
   };
 }
 
@@ -219,7 +264,7 @@ async function writeDeliveryStatus(
 export async function applyEmailDeliveryStatus(
   input: ApplyEmailDeliveryInput,
   client?: SupabaseClient
-): Promise<{ outcome: ApplyEmailDeliveryOutcome; businessId: string | null }> {
+): Promise<ApplyEmailDeliveryResult> {
   const db = client ?? (await createSupabaseServiceClient());
   // Newest match, NOT maybeSingle. provider_message_id looks unique and is
   // not: a scan of live rows on 2026-08-26 found 7 duplicated ids in a
@@ -234,14 +279,14 @@ export async function applyEmailDeliveryStatus(
   // the observed duplication.
   const { data: matches, error: readError } = await db
     .from("email_log")
-    .select("id, business_id, delivery_status")
+    .select(MATCH_COLUMNS)
     .eq("provider_message_id", input.providerMessageId)
     .eq("direction", "outbound")
     .order("created_at", { ascending: false })
     .limit(1);
   if (readError) throw new Error(`applyEmailDeliveryStatus: ${readError.message}`);
   const existing = (matches ?? [])[0];
-  if (!existing) return { outcome: "not_found", businessId: null };
+  if (!existing) return { outcome: "not_found", businessId: null, send: null };
   return writeDeliveryStatus(
     db,
     existing as MatchedEmailLogRow,
@@ -262,7 +307,7 @@ export async function applyEmailDeliveryStatus(
 const EMAIL_RECEIPT_RECIPIENT_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
 
 /** Escape `%`, `_`, and `\` so an address is an exact ILIKE match, not a pattern. */
-function escapeIlike(value: string): string {
+export function escapeIlike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
@@ -290,12 +335,12 @@ export type ApplyEmailDeliveryByRecipientInput = {
 export async function applyEmailDeliveryStatusByRecipient(
   input: ApplyEmailDeliveryByRecipientInput,
   client?: SupabaseClient
-): Promise<{ outcome: ApplyEmailDeliveryOutcome; businessId: string | null }> {
+): Promise<ApplyEmailDeliveryResult> {
   const db = client ?? (await createSupabaseServiceClient());
   const cutoff = new Date(Date.now() - EMAIL_RECEIPT_RECIPIENT_WINDOW_MS).toISOString();
   const { data: matches, error: readError } = await db
     .from("email_log")
-    .select("id, business_id, delivery_status")
+    .select(MATCH_COLUMNS)
     // ILIKE with a fully escaped pattern: addresses are matched
     // case-insensitively but never treated as wildcards (an `_` in a real
     // localpart must not match a different character).
@@ -309,7 +354,7 @@ export async function applyEmailDeliveryStatusByRecipient(
     throw new Error(`applyEmailDeliveryStatusByRecipient: ${readError.message}`);
   }
   const existing = (matches ?? [])[0];
-  if (!existing) return { outcome: "not_found", businessId: null };
+  if (!existing) return { outcome: "not_found", businessId: null, send: null };
   return writeDeliveryStatus(
     db,
     existing as MatchedEmailLogRow,

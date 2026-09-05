@@ -67,6 +67,29 @@ describe("formatEmailDeliveryFailedLogMessage", () => {
     );
   });
 
+  it("says the tenant was told when a customer-facing send bounced", () => {
+    // The row then reads as handled on the admin feed: the person who can
+    // reach the contact another way has been alerted, HQ has no action.
+    expect(
+      formatEmailDeliveryFailedLogMessage({
+        status: "bounced",
+        to: "lead@example.com",
+        retiredCount: 0,
+        ownerAlerted: true
+      })
+    ).toBe(
+      "Email was not delivered (bounced) to lead@example.com. The account owner was alerted; nothing for HQ to do."
+    );
+    expect(
+      formatEmailDeliveryFailedLogMessage({
+        status: "bounced",
+        to: "lead@example.com",
+        retiredCount: 0,
+        ownerAlerted: false
+      })
+    ).toBe("Email was not delivered (bounced) to lead@example.com.");
+  });
+
   it("can retire an outreach pitch even when email_log did not match", () => {
     expect(
       formatEmailDeliveryFailedLogMessage({

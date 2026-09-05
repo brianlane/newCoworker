@@ -4722,8 +4722,13 @@ email), and sends whose caller logged no provider id.
   outranks both so no late receipt can mask it; `opened` / `clicked` are
   deliberately absent (engagement, not delivery, and they need tracking
   pixels we do not set). A failure raises `system_logs` (`source: email`,
-  `event: email_delivery_failed`), which surfaces on the admin System
-  Errors view.
+  `event: email_delivery_failed`). Its level follows who can act: a bounced
+  email the coworker sent to a CONTACT pages the tenant
+  (`notifyContactEmailBounce`, kind `contact_email_bounce`, contact resolved
+  phone-first, alternate address from the contact record) and logs at
+  `warn`; a bounced owner alert, an outreach pitch, an unattributed failure,
+  or a page that could not be delivered stays `error` and surfaces on the
+  admin System Errors view. Details in `docs/EMAIL-DELIVERABILITY.md`.
 - **`provider_message_id` is NOT unique** (live data shows duplicated
   Gmail-style hex ids from the owner-mailbox send paths), so the lookup
   index is non-unique and keyed on the id alone: a receipt arrives carrying

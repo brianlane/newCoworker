@@ -335,6 +335,32 @@ How the pieces fit:
   skipped" on SMS/WhatsApp is the system behaving correctly, and a reader
   who sees only email + dashboard landing for James is looking at the whole
   working set, not at an outage.
+- **A lead can book with a dead email, and until 2026-09-04 nobody here was
+  told.** 2026-09-03 03:16 UTC: a "VF Media | High Intent v2" lead arrived
+  with a personal address and a working +1 302 mobile, and booked on Liz's
+  Calendly within three minutes using a DIFFERENT work address whose mailbox
+  does not exist (the domain is real, on Google Workspace; Google refused the
+  localpart, a hard bounce, Resend code `Permanent`). The VFM booking flow did
+  everything right: tagged the contact, texted the confirmation with the join
+  link (delivered), emailed the confirmation to the booking address (bounced
+  two seconds later), and parked until T-120. Calendly's OWN confirmation and
+  calendar invite went to the same dead address, so the lead's only record of
+  the Sep 10 call is our text. The bounce surfaced exactly once: as
+  `email_delivery_failed` at `error` on the admin System Errors card, which
+  James never sees. His working phone and his form email were on the contact
+  record the whole time. The same personal-on-the-form, work-at-booking
+  pattern is the identity-mismatch section below (4 of 37 August bookings).
+  Fixed platform-wide: the Resend webhook now pages the tenant about a bounced
+  customer-facing email (`notifyContactEmailBounce`, kind
+  `contact_email_bounce`, category `system`, which matters here because James
+  has the `leads` category OFF), naming the phone and the other address, and
+  the admin row drops to `warn` once he has been told. This case was
+  backfilled with `alert-bounced-contact-email.ts` (One-shots below). Two
+  things to know when reading it here: the roster is still James alone (Liz
+  was never added; `apply-vfm-team.ts` has not run), so a VFM lead's alert
+  routes to James as the solo owner, not to Liz; and his SMS leg is the dead
+  handset described above, so the alert reaches him by email and dashboard
+  only, which is the whole channel map for this tenant.
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free
@@ -429,6 +455,13 @@ customer threads (which are customer-initiated and therefore unbilled) keep
 working, and his alerts continue by email and dashboard. Re-enable from
 Dashboard > Settings > Notifications if he ever fixes billing or messages the
 business number, and confirm with `npx tsx debug/whatsapp-delivery-report.ts`.
+
+Bounced lead email backfill 2026-09-04: `alert-bounced-contact-email.ts`
+(generic) replays a pre-fix bounce through the live tenant alert. Applied here
+for the Sep 3 VFM booking confirmation above (`--business <id> --since 7d`),
+so James received the `contact_email_bounce` alert naming the lead's phone
+and form email. Idempotent: a row that already has its notification is
+reported as already alerted.
 
 Vantage Flow Media rollout: `apply-vfm-brand.ts` (vault sections + sync),
 `apply-vfm-team.ts` (Liz on the roster + `lead_auto_assign`),

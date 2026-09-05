@@ -141,6 +141,22 @@ export function notificationLink(n: NotificationLike): NotificationLink {
   if (kind === "email_coworker_handoff") {
     return { href: "/dashboard/emails", label: "Open Emails" };
   }
+
+  // A bounced email to a contact: land on the person (phone and any other
+  // address live there), matching the email and push CTA. The generic
+  // contactE164 branch would open their text thread instead. Payload key is
+  // `to_e164` because that is what the per-contact throttle already stamps;
+  // contactE164 is accepted too so a future producer cannot miss.
+  if (kind === "contact_email_bounce") {
+    const bounceE164 = readE164(p, "to_e164") ?? readE164(p, "contactE164");
+    if (bounceE164) {
+      return {
+        href: `/dashboard/customers/${encodeURIComponent(bounceE164)}`,
+        label: "Open contact"
+      };
+    }
+    return { href: "/dashboard/emails", label: "Open Emails" };
+  }
   if (
     kind === "byon_port" ||
     kind === "byon_activation" ||

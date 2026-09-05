@@ -20,7 +20,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBookingOwnerAlert,
-  formatAttendeePhone,
   type BookingOwnerAlertInput
 } from "@/lib/email/templates/booking-owner-alert";
 
@@ -37,13 +36,17 @@ function input(over: Partial<BookingOwnerAlertInput> = {}): BookingOwnerAlertInp
   };
 }
 
-describe("formatAttendeePhone", () => {
+describe("buildBookingOwnerAlert: phone display", () => {
   it("renders a US number readably and leaves other formats alone", () => {
-    expect(formatAttendeePhone("+12187702372")).toBe("(218) 770-2372");
+    expect(buildBookingOwnerAlert(input()).body).toContain("(218) 770-2372");
     // Mexico and other international numbers stay E.164 rather than being
     // forced into a US shape.
-    expect(formatAttendeePhone("+525512345678")).toBe("+525512345678");
-    expect(formatAttendeePhone("not a phone")).toBe("not a phone");
+    expect(buildBookingOwnerAlert(input({ attendeePhone: "+525512345678" })).body).toContain(
+      "+525512345678"
+    );
+    expect(buildBookingOwnerAlert(input({ attendeePhone: "not a phone" })).body).toContain(
+      "not a phone"
+    );
   });
 });
 

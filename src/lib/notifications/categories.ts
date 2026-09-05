@@ -22,6 +22,10 @@ export function resolveNotificationCategory(kind: string): NotificationCategory 
     case "byon_port":
     case "calendar_connection_broken":
     case "meta_connection_broken":
+    // A bounced email to a contact is a delivery fault, not a lead event: an
+    // owner who muted "leads" to cut chatter (KYP has) still needs to hear
+    // that the coworker could not reach someone.
+    case "contact_email_bounce":
       return "system";
     default:
       return "general";

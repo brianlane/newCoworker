@@ -18,6 +18,10 @@ describe("resolveNotificationCategory", () => {
   it("maps platform events to system", () => {
     expect(resolveNotificationCategory("byon_port")).toBe("system");
     expect(resolveNotificationCategory("calendar_connection_broken")).toBe("system");
+    // A bounced email to a contact is a delivery fault, not a lead event: an
+    // owner who muted "leads" to cut chatter still needs to hear that the
+    // coworker could not reach someone (KYP has leads off, system on).
+    expect(resolveNotificationCategory("contact_email_bounce")).toBe("system");
   });
 
   it("defaults unknown/future kinds to the ungated general category", () => {
