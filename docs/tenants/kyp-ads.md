@@ -12,7 +12,7 @@ written incident review. Calendly is the center of gravity here.
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
-| Roster | James Lee (`+1` Montreal mobile `+1514…`, `james@kypads.com` on the row since 2026-08-28, when `repoint-roster-member-phone.ts` moved it off the `+852` number). **He reads NEITHER number: he carries no Canadian SIM, and our long codes cannot reach `+852` at all, so email and the dashboard are his only live channels.** Texts to the roster row now succeed silently instead of erroring, so absence of `alert_delivery_failed` here is not health; see the +852 sharp edge below. Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
+| Roster | James Lee (`+1` Montreal mobile `+1514…`, `james@kypads.com` on the row since 2026-08-28, when `repoint-roster-member-phone.ts` moved it off the `+852` number). **He reads NEITHER number: he carries no Canadian SIM, and our long codes cannot reach `+852` at all, so email and the dashboard are his only live channels** (re-confirmed by Brian 2026-09-05; WhatsApp owner alerts have been muted since 2026-08-31). Texts to the roster row now succeed silently instead of erroring, so absence of `alert_delivery_failed` here is not health; see the +852 sharp edge below for the full channel map. Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
 
 Build spec: [PRDs/white-glove-build-kyp-ads.md](../../PRDs/white-glove-build-kyp-ads.md).
 Incident review: [docs/INCIDENT-2026-07-KYP-ONBOARDING.md](../INCIDENT-2026-07-KYP-ONBOARDING.md).
@@ -292,6 +292,27 @@ How the pieces fit:
   and the liveness sweep stop counting delivery that did not happen. The
   channel map for James is unchanged by any of this: email and dashboard,
   nothing else.
+  **Status 2026-09-05, the durable channel map (Brian confirmed).** This is
+  the 2026-08-28 correction and the 2026-08-31 mute restated as one map, not
+  new policy. James's working owner-alert channels are **email
+  (`james@kypads.com`) + dashboard, only.** Per channel: SMS to his `+1514…`
+  Montreal mobile is carrier-delivered and read by nobody (no Canadian SIM);
+  SMS to `+852` cannot be originated by our long codes at all (Telnyx ticket
+  #557577); WhatsApp owner alerts are muted (`whatsapp_urgent = false` since
+  Aug 31, Meta billing 131042, which he has said he is not fixing). Live
+  evidence, read from `notifications` for this tenant Sep 1-5: urgent alerts
+  `sent` on dashboard (19 of 19) and email (18 of 19), WhatsApp `skipped` on
+  all 19 (`whatsapp_urgent_disabled`), SMS split 10 `sent` / 9 `skipped`.
+  The Sep 5 alerts are `owner_notify_fallback` rows: the lead flow's
+  notify_owner step has no forwarding number to text
+  (`business_telnyx_settings.forward_to_e164` is empty here, so
+  `fallbackReason: no_phone`), the SMS leg records `skipped` /
+  `sms_fallback_source`, WhatsApp `skipped`, and email + dashboard `sent`.
+  The 10 SMS `sent` rows are `sms_customer_reply` pages to the `+1514…`
+  handset, which is the silent-handset case above, not reach. So "mostly
+  skipped" on SMS/WhatsApp is the system behaving correctly, and a reader
+  who sees only email + dashboard landing for James is looking at the whole
+  working set, not at an outage.
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free
