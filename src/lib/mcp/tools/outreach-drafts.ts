@@ -1,6 +1,6 @@
 /**
- * Marketing outreach draft tools: the review queue on Dashboard → Marketing
- * ("Drafts to review"), reachable from a connector.
+ * Outreach queue tools: the review queue on Dashboard → Marketing ("Drafts to
+ * review"), reachable from a connector.
  *
  * Why these exist. An outbound prospecting agent running in Claude, ChatGPT,
  * or Grok used to land its pitches as Gmail drafts, and Gmail is the wrong
@@ -33,7 +33,7 @@ import { z } from "zod";
 import { McpToolError, requireMcpBusinessRole, resolveMcpBusinessId } from "@/lib/mcp/auth";
 import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import { rateLimit } from "@/lib/rate-limit";
-import type { DraftCreateResult, DraftUpdateResult } from "@/lib/outreach/sweep";
+import type { DraftUpsertResult, DraftUpdateResult } from "@/lib/outreach/sweep";
 
 const businessIdField = z
   .string()
@@ -70,7 +70,7 @@ const paragraphsField = z
  * Owner-readable reasons, kept in step with the dashboard route's copy so a
  * refusal reads the same whichever surface asked.
  */
-const CREATE_FAILURE: Record<Extract<DraftCreateResult, { ok: false }>["reason"], string> = {
+const UPSERT_FAILURE: Record<Extract<DraftUpsertResult, { ok: false }>["reason"], string> = {
   not_configured:
     "Finish setting up Prospecting first (Dashboard → Marketing: offer, footer address, mailbox).",
   tier_blocked: "Prospecting requires the Standard plan or higher.",
@@ -79,7 +79,7 @@ const CREATE_FAILURE: Record<Extract<DraftCreateResult, { ok: false }>["reason"]
   invalid_domain:
     "Could not work out the prospect's domain. Pass `domain` as their website's host (for example acmehvac.com).",
   duplicate:
-    "This business's outreach ledger already has a prospect for that domain or email address (it may have been contacted, skipped, or unsubscribed), so a second draft is refused: nobody is cold-emailed twice. Use list_marketing_drafts to find it."
+    "This business's outreach ledger already has a prospect for that domain or email address that is past the draft stage (sent, replied, skipped, or unsubscribed), so it is not re-pitched: nobody is cold-emailed twice."
 };
 
 const UPDATE_FAILURE: Record<Extract<DraftUpdateResult, { ok: false }>["reason"], string> = {
@@ -104,7 +104,7 @@ const draftShape = z.object({
   /**
    * The editable middle. Null on a draft written before paragraphs were
    * stored separately: it can be skipped or regenerated on the dashboard but
-   * not edited by subject alone, so update_marketing_draft needs paragraphs.
+   * not edited by subject alone, so update_outreach_draft needs paragraphs.
    */
   paragraphs: z.string().nullable(),
   status: z.string(),
@@ -146,9 +146,9 @@ function takeWriteSlot(businessId: string): void {
   }
 }
 
-export const listMarketingDraftsTool = defineMcpTool({
-  name: "list_marketing_drafts",
-  title: "List outreach drafts to review",
+export const listOutreachQueueTool = defineMcpTool({
+  name: "list_outreach_queue",
+  title: "List the outreach review queue",
   annotations: TOOL_BEHAVIOR.readLocal,
   outputSchema: z.object({
     /** off = the sweep ignores this business; manual = drafts wait; auto = drafts are SENT. */
@@ -187,15 +187,17 @@ export const listMarketingDraftsTool = defineMcpTool({
   }
 });
 
-export const createMarketingDraftTool = defineMcpTool({
-  name: "create_marketing_draft",
-  title: "Add an outreach draft to review",
-  // Not writeLocal: in auto mode the sweep sends a drafted row to the
-  // prospect's inbox inside the cap and window with no further human action,
-  // so this call can put a cold email in motion. Additive: it only ever adds
-  // a row, and a duplicate is refused rather than overwritten.
-  annotations: TOOL_BEHAVIOR.writeExternal,
+export const upsertOutreachProspectTool = defineMcpTool({
+  name: "upsert_outreach_prospect",
+  title: "Add or re-pitch an outreach prospect",
+  // Destructive because a prospect already in the queue (or discovered but
+  // not yet drafted) has its subject, paragraphs, and identity fields
+  // REPLACED. Open-world because in auto mode the sweep sends a drafted row
+  // to the prospect's inbox inside the cap and window with no further human
+  // action, so this call can put a cold email in motion.
+  annotations: TOOL_BEHAVIOR.mutateExternal,
   outputSchema: z.object({
+    /** False when an existing pre-send prospect was re-pitched instead of added. */
     created: z.boolean(),
     draft_id: z.string(),
     mode: z.enum(["off", "manual", "auto"]),
@@ -205,7 +207,7 @@ export const createMarketingDraftTool = defineMcpTool({
     assembled_body: z.string().nullable()
   }),
   description:
-    "Add a cold-outreach draft to Dashboard → Marketing (Drafts to review) for the owner to send, instead of a Gmail draft. Supply the prospect (name, email, city) and the email's subject and body PARAGRAPHS only: the booking link, sign-off, unsubscribe link, and postal address are appended automatically at save and send, and links stay clean. One draft per prospect domain and per email address; a repeat is refused. In auto prospecting mode the draft is sent by the sweep without further review, so check list_marketing_drafts.mode first.",
+    "Add a cold-outreach prospect and its draft to Dashboard → Marketing (Drafts to review) for the owner to send, instead of a Gmail draft. Supply the prospect (name, email, city) and the email's subject and body PARAGRAPHS only: the booking link, sign-off, unsubscribe link, and postal address are appended automatically at save and send, and links stay clean. Upsert on the prospect's domain and email: a new prospect is added; one already waiting in the queue (or discovered but not yet drafted) has its draft and details replaced; one already sent, replied, skipped, or unsubscribed is refused. In auto prospecting mode the draft is sent by the sweep without further review, so check list_outreach_queue.mode first.",
   schema: {
     business_id: businessIdField,
     business_name: z.string().trim().min(1).max(200).describe("The prospect business's name."),
@@ -251,8 +253,8 @@ export const createMarketingDraftTool = defineMcpTool({
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
     await requireMcpBusinessRole(auth, businessId, "manage_settings");
     takeWriteSlot(businessId);
-    const { createProspectDraft } = await import("@/lib/outreach/sweep");
-    const result = await createProspectDraft(businessId, {
+    const { upsertProspectDraft } = await import("@/lib/outreach/sweep");
+    const result = await upsertProspectDraft(businessId, {
       businessName: args.business_name,
       email: args.email,
       city: args.city ?? "",
@@ -266,12 +268,12 @@ export const createMarketingDraftTool = defineMcpTool({
     if (!result.ok) {
       throw new McpToolError(
         result.detail
-          ? `${CREATE_FAILURE[result.reason]} (${result.detail})`
-          : CREATE_FAILURE[result.reason]
+          ? `${UPSERT_FAILURE[result.reason]} (${result.detail})`
+          : UPSERT_FAILURE[result.reason]
       );
     }
     return {
-      created: true,
+      created: result.created,
       draft_id: result.prospect.id,
       mode: result.mode,
       subject: result.prospect.pitch_subject,
@@ -281,8 +283,8 @@ export const createMarketingDraftTool = defineMcpTool({
   }
 });
 
-export const updateMarketingDraftTool = defineMcpTool({
-  name: "update_marketing_draft",
+export const updateOutreachDraftTool = defineMcpTool({
+  name: "update_outreach_draft",
   title: "Edit or skip an outreach draft",
   // Replaces the stored subject/paragraphs, or retires the draft: destructive
   // by the spec's meaning. Nothing leaves the system on this call.
@@ -298,7 +300,7 @@ export const updateMarketingDraftTool = defineMcpTool({
     "Change a waiting outreach draft on Dashboard → Marketing: a new subject and/or new body paragraphs (same as the dashboard's Save draft; the sign-off and compliance footer are re-appended automatically), or skip=true to retire it (same as the dashboard's Skip: the prospect is never rediscovered). Only a draft that has not been sent can be changed.",
   schema: {
     business_id: businessIdField,
-    draft_id: z.string().uuid().describe("The draft_id from list_marketing_drafts."),
+    draft_id: z.string().uuid().describe("The draft_id from list_outreach_queue or upsert_outreach_prospect."),
     subject: subjectField.optional(),
     paragraphs: paragraphsField.optional().describe(
       "Replacement body paragraphs (editable middle only). Required for a draft whose paragraphs are null."
@@ -367,8 +369,8 @@ export const updateMarketingDraftTool = defineMcpTool({
   }
 });
 
-export const marketingDraftTools = [
-  listMarketingDraftsTool,
-  createMarketingDraftTool,
-  updateMarketingDraftTool
+export const outreachDraftTools = [
+  listOutreachQueueTool,
+  upsertOutreachProspectTool,
+  updateOutreachDraftTool
 ];

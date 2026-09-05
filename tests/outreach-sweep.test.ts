@@ -21,13 +21,13 @@ vi.mock("@/lib/db/system-logs", () => ({
 }));
 
 import {
-  createProspectDraft,
   draftDomainFor,
   editProspectDraft,
   MAX_EDITED_BODY_CHARS,
   MAX_EDITED_SUBJECT_CHARS,
   processOutreachSweep,
   SHARED_MAIL_HOSTS,
+  upsertProspectDraft,
   recordOutreachEmailLog,
   regenerateProspectDraft,
   REWRITE_BATCH_SIZE,
@@ -194,6 +194,8 @@ function stubLedger(over: Record<string, unknown> = {}) {
     countProspectsToRewrite: vi.fn(async () => 0),
     countProspectsByStatus: vi.fn(async () => 0),
     insertDraftedProspect: vi.fn(async (row: unknown) => ({ ...prospect(), ...(row as object) })),
+    findProspectByDomain: vi.fn(async () => null),
+    findProspectByEmail: vi.fn(async () => null),
     ...over
   };
   for (const [name, impl] of Object.entries(defaults)) {
@@ -1689,7 +1691,7 @@ describe("draftDomainFor (the suppression key for a draft that arrived without a
   });
 });
 
-describe("createProspectDraft (a connector handed us a written pitch)", () => {
+describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
   const input = {
     businessName: " Wolfgangs Cooling ",
     email: " Andrea.Martinez@TurnpointServices.com ",
@@ -1708,10 +1710,11 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
   it("writes one drafted row with the footer assembled around the caller's paragraphs", async () => {
     const ledger = createLedger();
     const deps = baseDeps();
-    const result = await createProspectDraft(BIZ, input, deps);
+    const result = await upsertProspectDraft(BIZ, input, deps);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     expect(result.mode).toBe("manual");
+    expect(result.created).toBe(true);
 
     const insert = ledger.insertDraftedProspect as ReturnType<typeof vi.fn>;
     expect(insert).toHaveBeenCalledTimes(1);
@@ -1755,7 +1758,7 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
     const ledger = createLedger({
       getOutreachSettings: vi.fn(async () => settings({ mode: "auto" }))
     });
-    const result = await createProspectDraft(
+    const result = await upsertProspectDraft(
       BIZ,
       {
         ...input,
@@ -1780,7 +1783,7 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
     // "Has a phone" must stay a single question downstream: the flow hand-off
     // gates filing on the phone, and a blank would sail through as truthy.
     const ledger = createLedger();
-    await createProspectDraft(BIZ, { ...input, phone: "  ", website: "" }, baseDeps());
+    await upsertProspectDraft(BIZ, { ...input, phone: "  ", website: "" }, baseDeps());
     const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(row.phone).toBeNull();
     expect(row.website).toBeNull();
@@ -1788,23 +1791,23 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
 
   it("refuses empty or oversized text before reading anything", async () => {
     const ledger = createLedger();
-    expect(await createProspectDraft(BIZ, { ...input, subject: "  " }, baseDeps())).toEqual({
+    expect(await upsertProspectDraft(BIZ, { ...input, subject: "  " }, baseDeps())).toEqual({
       ok: false,
       reason: "empty_text"
     });
-    expect(await createProspectDraft(BIZ, { ...input, paragraphs: "\n\n" }, baseDeps())).toEqual({
+    expect(await upsertProspectDraft(BIZ, { ...input, paragraphs: "\n\n" }, baseDeps())).toEqual({
       ok: false,
       reason: "empty_text"
     });
     expect(
-      await createProspectDraft(
+      await upsertProspectDraft(
         BIZ,
         { ...input, subject: "s".repeat(MAX_EDITED_SUBJECT_CHARS + 1) },
         baseDeps()
       )
     ).toEqual({ ok: false, reason: "too_long" });
     expect(
-      await createProspectDraft(
+      await upsertProspectDraft(
         BIZ,
         { ...input, paragraphs: "x".repeat(MAX_EDITED_BODY_CHARS + 1) },
         baseDeps()
@@ -1816,7 +1819,7 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
 
   it("refuses an address whose host cannot identify the business", async () => {
     const ledger = createLedger();
-    const result = await createProspectDraft(BIZ, { ...input, email: "bob@gmail.com" }, baseDeps());
+    const result = await upsertProspectDraft(BIZ, { ...input, email: "bob@gmail.com" }, baseDeps());
     expect(result).toMatchObject({ ok: false, reason: "invalid_domain" });
     expect(result.ok === false && result.detail).toMatch(/shared mail host/);
     expect(ledger.insertDraftedProspect).not.toHaveBeenCalled();
@@ -1824,14 +1827,14 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
 
   it("refuses an unconfigured or downgraded tenant, and says which", async () => {
     createLedger({ getOutreachSettings: vi.fn(async () => null) });
-    expect(await createProspectDraft(BIZ, input, baseDeps())).toEqual({
+    expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
       ok: false,
       reason: "not_configured"
     });
 
     createLedger();
     expect(
-      await createProspectDraft(
+      await upsertProspectDraft(
         BIZ,
         input,
         baseDeps({
@@ -1852,7 +1855,7 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
     const ledger = createLedger({
       getOutreachSettings: vi.fn(async () => settings({ mode: "manual", value_prop: "" }))
     });
-    expect(await createProspectDraft(BIZ, input, baseDeps())).toEqual({
+    expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
       ok: false,
       reason: "not_configured",
       detail: "no value proposition configured"
@@ -1860,14 +1863,129 @@ describe("createProspectDraft (a connector handed us a written pitch)", () => {
     expect(ledger.insertDraftedProspect).not.toHaveBeenCalled();
   });
 
-  it("reports a duplicate when either suppression axis refuses the row", async () => {
-    // The ledger doing its job: a domain or address already on file means
-    // this prospect was contacted, skipped, or opted out, and a second draft
-    // would be a second cold email.
-    createLedger({ insertDraftedProspect: vi.fn(async () => null) });
-    expect(await createProspectDraft(BIZ, input, baseDeps())).toEqual({
-      ok: false,
-      reason: "duplicate"
+  describe("when the insert loses to a row already on the ledger", () => {
+    const existingId = "33333333-3333-4333-8333-333333333333";
+    function collided(over: Record<string, unknown> = {}) {
+      return createLedger({
+        insertDraftedProspect: vi.fn(async () => null),
+        ...over
+      });
+    }
+
+    it("re-pitches a waiting draft in place, guarded on it still being a draft", async () => {
+      // An agent re-running its prospecting pass refreshes its drafts instead
+      // of being told they exist. The identity fields come along, the footer
+      // is re-assembled around the new paragraphs with the EXISTING row's
+      // unsubscribe link, and findings are left alone (still no probe).
+      const waiting = prospect({
+        id: existingId,
+        domain: "turnpointservices.com",
+        status: "drafted",
+        pitch_subject: "old subject",
+        pitch_paragraphs: "old body",
+        city: "Phoenix"
+      });
+      const ledger = collided({
+        findProspectByDomain: vi.fn(async () => waiting),
+        findProspectByEmail: vi.fn(async () => waiting)
+      });
+      const result = await upsertProspectDraft(BIZ, input, baseDeps());
+      expect(result.ok && result.created).toBe(false);
+      if (!result.ok) throw new Error("unreachable");
+      expect(result.mode).toBe("manual");
+      const transition = ledger.transitionProspect as ReturnType<typeof vi.fn>;
+      expect(transition).toHaveBeenCalledTimes(1);
+      const [, id, fromStatus, patch] = transition.mock.calls[0];
+      expect(id).toBe(existingId);
+      expect(fromStatus).toBe("drafted");
+      expect(patch).toMatchObject({
+        business_name: "Wolfgangs Cooling",
+        email: "andrea.martinez@turnpointservices.com",
+        city: "Tempe AZ",
+        pitch_subject: "Wolfgangs Cooling: the customers who would rather text",
+        pitch_paragraphs:
+          "Hi Wolfgangs Cooling,\n\nI was looking you up in Tempe AZ.\n\nWorth a quick look?",
+        status: "drafted",
+        status_detail: null,
+        drafted_at: MONDAY_MORNING.toISOString()
+      });
+      expect(patch).not.toHaveProperty("findings");
+      expect(patch.pitch_body).toContain(`p=${existingId}`);
+      expect(patch.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+      expect(result.prospect).toMatchObject({ id: existingId, city: "Tempe AZ", status: "drafted" });
+    });
+
+    it("also claims a discovered row the sweep has not written to yet", async () => {
+      // Discovered means the sweep found the domain and would probe it next.
+      // The agent's pitch wins the row the same way the sweep's would: a
+      // guarded transition from the status just read.
+      const found = prospect({ id: existingId, status: "discovered", email: null, pitch_body: null });
+      const ledger = collided({ findProspectByDomain: vi.fn(async () => found) });
+      const result = await upsertProspectDraft(BIZ, input, baseDeps());
+      expect(result.ok && result.created).toBe(false);
+      const [, , fromStatus] = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fromStatus).toBe("discovered");
+    });
+
+    it("finds the row by address when the domain is new to the ledger", async () => {
+      const byEmail = prospect({ id: existingId, domain: "other.com", status: "drafted" });
+      const ledger = collided({ findProspectByEmail: vi.fn(async () => byEmail) });
+      expect((await upsertProspectDraft(BIZ, input, baseDeps())).ok).toBe(true);
+      expect((ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe(existingId);
+    });
+
+    it("never writes over a prospect that is past the draft stage, and names the status", async () => {
+      // The ledger doing its job: sent, replied, skipped, unsubscribed, and
+      // failed are things that happened, and a re-pitch would be a second
+      // cold email to somebody who already heard from us or said stop.
+      for (const status of ["sent", "replied", "booked", "unsubscribed", "skipped", "failed"] as const) {
+        const ledger = collided({
+          findProspectByDomain: vi.fn(async () => prospect({ id: existingId, domain: "acmehvac.com", status }))
+        });
+        expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+          ok: false,
+          reason: "duplicate",
+          detail: `acmehvac.com is already ${status}`
+        });
+        expect(ledger.transitionProspect).not.toHaveBeenCalled();
+      }
+    });
+
+    it("refuses when the domain and the address belong to two different prospects", async () => {
+      const ledger = collided({
+        findProspectByDomain: vi.fn(async () => prospect({ id: existingId, status: "drafted" })),
+        findProspectByEmail: vi.fn(async () =>
+          prospect({ id: "44444444-4444-4444-8444-444444444444", status: "drafted" })
+        )
+      });
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "turnpointservices.com and andrea.martinez@turnpointservices.com already belong to two different prospects"
+      });
+      expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    });
+
+    it("reports the ledger changing underneath: a vanished row, or a claim lost mid-write", async () => {
+      collided();
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "the ledger changed underneath, retry"
+      });
+
+      // The sweep sent the draft (or probed and retired the discovered row)
+      // between the read and the write; the guarded transition matches no
+      // row and the pitch is dropped rather than written over a sent mail.
+      collided({
+        findProspectByDomain: vi.fn(async () => prospect({ id: existingId, domain: "acmehvac.com", status: "drafted" })),
+        transitionProspect: vi.fn(async () => false)
+      });
+      expect(await upsertProspectDraft(BIZ, input, baseDeps())).toEqual({
+        ok: false,
+        reason: "duplicate",
+        detail: "acmehvac.com changed while being updated"
+      });
     });
   });
 });

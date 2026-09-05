@@ -61,6 +61,8 @@ import {
   countProspectsToRewrite,
   listProspectsContactedSince,
   existingProspectDomains,
+  findProspectByDomain,
+  findProspectByEmail,
   getOutreachSettings,
   getProspect,
   insertDraftedProspect,
@@ -75,6 +77,7 @@ import {
   transitionProspect,
   upsertOutreachSettings,
   type OutreachProspectRow,
+  type OutreachProspectStatus,
   type OutreachSettingsRow
 } from "./db";
 import {
@@ -1339,7 +1342,7 @@ export function draftDomainFor(explicitDomain: string | undefined, email: string
   return domain;
 }
 
-export type DraftCreateInput = {
+export type DraftUpsertInput = {
   businessName: string;
   email: string;
   city: string;
@@ -1353,10 +1356,12 @@ export type DraftCreateInput = {
   phone?: string;
 };
 
-export type DraftCreateResult =
+export type DraftUpsertResult =
   | {
       ok: true;
       prospect: OutreachProspectRow;
+      /** False when an existing pre-send row was re-pitched instead. */
+      created: boolean;
       /** The mode the row now sits under: in `auto` the sweep will send it. */
       mode: OutreachSettingsRow["mode"];
     }
@@ -1373,6 +1378,15 @@ export type DraftCreateResult =
     };
 
 /**
+ * Statuses an upsert may write over. Both are BEFORE the send: `discovered`
+ * is a domain the sweep found and has not written to yet, `drafted` is a
+ * pitch waiting on the owner. Everything later is a thing that happened (a
+ * mail in someone's inbox, a reply, an opt-out, a deliberate skip), and the
+ * ledger exists so none of those is ever pitched again.
+ */
+const REPITCHABLE_STATUSES: ReadonlySet<OutreachProspectStatus> = new Set(["discovered", "drafted"]);
+
+/**
  * File a draft somebody else wrote: an owner's connector (Claude, ChatGPT,
  * Grok over /api/mcp) handing us a prospect and a pitch, instead of the sweep
  * discovering one. The row lands in the same review queue, through the same
@@ -1386,20 +1400,31 @@ export type DraftCreateResult =
  * carry the compliance footer in model output, where it can be dropped or
  * reworded, and a Gmail draft wraps every link in a tracking redirect.
  *
- * `findings` is written empty. There was no probe, so there is no evidence
- * for "Write it again" to re-compose from, and that button refuses such a
- * draft with "nothing specific enough left to say" rather than inventing an
- * observation about a site nobody looked at. Edit and Send work as normal.
+ * UPSERT, on the ledger's own keys. A new domain inserts a row straight at
+ * `drafted`. A domain or address that already has a row still before the
+ * send (REPITCHABLE_STATUSES) has that row re-pitched in place, so an agent
+ * that re-runs its prospecting pass refreshes its drafts instead of being
+ * told they exist. Any other status is refused as a duplicate, with the
+ * status named: a sent, replied, unsubscribed, skipped, or failed prospect is
+ * never written to again. So is a pair of prospects where the address and
+ * the domain point at two different rows, because "re-pitch" has no single
+ * answer there.
+ *
+ * `findings` is written empty on insert and left alone on re-pitch. There was
+ * no probe here, so there is no evidence for "Write it again" to re-compose
+ * from, and that button refuses such a draft with "nothing specific enough
+ * left to say" rather than inventing an observation about a site nobody
+ * looked at. Edit and Send work as normal.
  *
  * In `auto` mode the sweep sends any drafted row inside the cap and window
  * with no further owner action, so a caller in that mode is putting an email
  * in motion, not just a row. Callers surface the mode for that reason.
  */
-export async function createProspectDraft(
+export async function upsertProspectDraft(
   businessId: string,
-  input: DraftCreateInput,
+  input: DraftUpsertInput,
   deps: OutreachSweepDeps = {}
-): Promise<DraftCreateResult> {
+): Promise<DraftUpsertResult> {
   const subject = input.subject.trim();
   const text = input.paragraphs.trim();
   if (!subject || !text) return { ok: false, reason: "empty_text" };
@@ -1427,34 +1452,92 @@ export async function createProspectDraft(
     };
   }
 
+  // Lowercased like the probe writes it, so the address-axis unique index
+  // (on lower(email)) and findProspectByEmail's equality read agree.
+  const email = input.email.trim().toLowerCase();
+  const paragraphs = splitParagraphs(text);
+  const identity = {
+    business_name: input.businessName.trim(),
+    email,
+    phone: input.phone?.trim() || null,
+    website: input.website?.trim() || null,
+    vertical: input.vertical?.trim() ?? "",
+    city: input.city.trim()
+  };
+  const pitchFor = (prospectId: string) => ({
+    pitch_subject: subject,
+    pitch_paragraphs: paragraphs.join("\n\n"),
+    pitch_body: assembleBody(
+      resolved.tenant,
+      paragraphs,
+      buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospectId)
+    )
+  });
+
   // The id is minted here because the unsubscribe link has to name it and
   // the link is part of the body being written. One write, no read-back.
   const id = randomUUID();
-  const unsubscribeUrl = buildOutreachUnsubscribeUrl(r.appUrl, businessId, id);
-  const paragraphs = splitParagraphs(text);
-  const row = await insertDraftedProspect(
+  const inserted = await insertDraftedProspect(
     {
       id,
       business_id: businessId,
       domain,
-      business_name: input.businessName.trim(),
-      // Lowercased like the probe writes it, so the address-axis unique index
-      // (on lower(email)) and findProspectByEmail's equality read agree.
-      email: input.email.trim().toLowerCase(),
-      phone: input.phone?.trim() || null,
-      website: input.website?.trim() || null,
-      vertical: input.vertical?.trim() ?? "",
-      city: input.city.trim(),
+      ...identity,
       findings: [],
-      pitch_subject: subject,
-      pitch_paragraphs: paragraphs.join("\n\n"),
-      pitch_body: assembleBody(resolved.tenant, paragraphs, unsubscribeUrl),
+      ...pitchFor(id),
       drafted_at: r.now.toISOString()
     },
     r.db
   );
-  if (!row) return { ok: false, reason: "duplicate" };
-  return { ok: true, prospect: row, mode: settings.mode };
+  if (inserted) return { ok: true, prospect: inserted, created: true, mode: settings.mode };
+
+  // The insert lost to one of the two unique keys. Find out which row, and
+  // whether both keys agree on it, before writing anything over it.
+  const [byDomain, byEmail] = await Promise.all([
+    findProspectByDomain(businessId, domain, r.db),
+    findProspectByEmail(businessId, email, r.db)
+  ]);
+  const existing = byDomain ?? byEmail;
+  if (!existing) {
+    // The colliding row vanished between the insert and this read (a cascade
+    // delete, an erasure). The caller can simply try again.
+    return { ok: false, reason: "duplicate", detail: "the ledger changed underneath, retry" };
+  }
+  if (byDomain && byEmail && byDomain.id !== byEmail.id) {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${domain} and ${email} already belong to two different prospects`
+    };
+  }
+  if (!REPITCHABLE_STATUSES.has(existing.status)) {
+    return {
+      ok: false,
+      reason: "duplicate",
+      detail: `${existing.domain} is already ${existing.status}`
+    };
+  }
+  // Guarded on the status just read, like every other ledger transition: the
+  // sweep can send a drafted row, or probe and retire a discovered one, in
+  // the time between that read and this write, and losing the claim means
+  // the row moved on purpose.
+  const patch = {
+    ...identity,
+    ...pitchFor(existing.id),
+    status: "drafted" as const,
+    status_detail: null,
+    drafted_at: r.now.toISOString()
+  };
+  const moved = await transitionProspect(businessId, existing.id, existing.status, patch, r.db);
+  if (!moved) {
+    return { ok: false, reason: "duplicate", detail: `${existing.domain} changed while being updated` };
+  }
+  return {
+    ok: true,
+    prospect: { ...existing, ...patch, updated_at: r.now.toISOString() },
+    created: false,
+    mode: settings.mode
+  };
 }
 
 /**

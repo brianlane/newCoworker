@@ -1098,14 +1098,15 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   authoring vocabulary), agent CRUD (tier-capped), `send_whatsapp` (same
   window/template policy as every other WhatsApp surface), employee
   list/create/update, notification-preference get/update, custom-table
-  CRUD (create/list/get-rows/update/delete/restore), and Marketing outreach
-  drafts (`list_marketing_drafts` / `create_marketing_draft` /
-  `update_marketing_draft`: a prospecting agent lands pitches in Dashboard →
+  CRUD (create/list/get-rows/update/delete/restore), and the outreach queue
+  (`list_outreach_queue` / `upsert_outreach_prospect` /
+  `update_outreach_draft`: a prospecting agent lands pitches in Dashboard →
   Marketing → Drafts to review instead of Gmail drafts, whose API wraps every
   link in a google.com/url tracking redirect; the caller supplies the editable
   paragraphs only and `assembleBody` appends the CTA, signature, unsubscribe
-  link, and postal address, the same path as the dashboard's Save draft;
-  Send stays on the dashboard).
+  link, and postal address, the same path as the dashboard's Save draft; the
+  upsert re-pitches a prospect still before the send and refuses one already
+  sent, replied, skipped, or unsubscribed; Send stays on the dashboard).
   [src/lib/mcp/registry.ts](src/lib/mcp/registry.ts) (`allMcpTools`) is the
   authoritative inventory.
 - Owner self-serve tools (added Aug 2026, the one-shot ask classes):

@@ -24,6 +24,7 @@ import {
   countProspectsSentSince,
   countProspectsToRewrite,
   existingProspectDomains,
+  findProspectByDomain,
   findProspectByEmail,
   getOutreachSettings,
   getProspect,
@@ -246,6 +247,22 @@ describe("insertDraftedProspect", () => {
     await expect(insertDraftedProspect(row, makeDb(bad))).rejects.toThrow(
       /insertDraftedProspect: no table/
     );
+  });
+});
+
+describe("findProspectByDomain", () => {
+  it("reads the row for one domain with equality, through both clients, and throws on error", async () => {
+    const c = singleChain({ data: { id: PROSPECT, domain: "acme.com" }, error: null });
+    expect(await findProspectByDomain(BIZ, "acme.com", makeDb(c))).toMatchObject({ id: PROSPECT });
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("domain", "acme.com");
+
+    defaultClientSpy.mockReturnValue(makeDb(singleChain({ data: null, error: null })));
+    expect(await findProspectByDomain(BIZ, "acme.com")).toBeNull();
+
+    await expect(
+      findProspectByDomain(BIZ, "acme.com", makeDb(singleChain({ data: null, error: { message: "boom" } })))
+    ).rejects.toThrow(/findProspectByDomain: boom/);
   });
 });
 

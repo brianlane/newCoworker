@@ -78,12 +78,12 @@ describe("allMcpTools", () => {
         "list_flow_versions",
         "restore_flow_version",
         "update_notification_preferences",
-        // Marketing outreach drafts (Dashboard → Marketing → Drafts to
-        // review), so a prospecting agent lands pitches in the reviewed
-        // queue instead of Gmail drafts.
-        "list_marketing_drafts",
-        "create_marketing_draft",
-        "update_marketing_draft"
+        // Outreach queue (Dashboard → Marketing → Drafts to review), so a
+        // prospecting agent lands pitches in the reviewed queue instead of
+        // Gmail drafts.
+        "list_outreach_queue",
+        "upsert_outreach_prospect",
+        "update_outreach_draft"
       ].sort()
     );
   });

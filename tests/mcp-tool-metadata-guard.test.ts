@@ -113,7 +113,10 @@ describe("MCP tool metadata", () => {
       "trigger_flow",
       "run_flow",
       "create_contact",
-      "update_contact"
+      "update_contact",
+      // Writes a row, but in auto prospecting mode the sweep sends that row
+      // to a stranger's inbox with no further human press.
+      "upsert_outreach_prospect"
     ];
     for (const name of OPEN_WORLD) {
       const tool = allMcpTools.find((t) => t.name === name);

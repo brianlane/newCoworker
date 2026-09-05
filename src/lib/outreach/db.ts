@@ -534,6 +534,28 @@ export async function getProspect(
 }
 
 /**
+ * The ledger row for one domain, if any: the domain axis of suppression,
+ * looked up when an insert has just lost to it and the caller needs to know
+ * what it collided with. Domains are stored lowercased and bare
+ * (normalizeDomain), so equality on the normalized needle is exact.
+ */
+export async function findProspectByDomain(
+  businessId: string,
+  domain: string,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .eq("domain", domain)
+    .maybeSingle();
+  if (error) throw new Error(`findProspectByDomain: ${error.message}`);
+  return (data as OutreachProspectRow | null) ?? null;
+}
+
+/**
  * The prospect this address belongs to, if any. Used when a reply or an
  * unsubscribe arrives and all we know is who sent it.
  *
@@ -656,6 +678,7 @@ export type OutreachProspectPatch = Partial<
     | "phone"
     | "website"
     | "vertical"
+    | "city"
     | "findings"
     | "pitch_subject"
     | "pitch_paragraphs"

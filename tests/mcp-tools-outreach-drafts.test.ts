@@ -1,6 +1,6 @@
 /**
- * Marketing outreach draft tools (src/lib/mcp/tools/marketing-drafts.ts):
- * the Drafts to review queue reachable from a connector.
+ * Outreach queue tools (src/lib/mcp/tools/outreach-drafts.ts): the Drafts to
+ * review queue reachable from a connector.
  *
  * The contract under test: the caller supplies PARAGRAPHS and the footer is
  * appended by the same code the dashboard uses (so the tools call the shared
@@ -28,7 +28,7 @@ vi.mock("@/lib/outreach/db", () => ({
 }));
 vi.mock("@/lib/outreach/owner", () => ({ skipProspect: vi.fn() }));
 vi.mock("@/lib/outreach/sweep", () => ({
-  createProspectDraft: vi.fn(),
+  upsertProspectDraft: vi.fn(),
   editProspectDraft: vi.fn()
 }));
 
@@ -41,13 +41,13 @@ import {
   listProspectsByStatus
 } from "@/lib/outreach/db";
 import { skipProspect } from "@/lib/outreach/owner";
-import { createProspectDraft, editProspectDraft } from "@/lib/outreach/sweep";
+import { editProspectDraft, upsertProspectDraft } from "@/lib/outreach/sweep";
 import {
-  createMarketingDraftTool,
-  listMarketingDraftsTool,
-  marketingDraftTools,
-  updateMarketingDraftTool
-} from "@/lib/mcp/tools/marketing-drafts";
+  listOutreachQueueTool,
+  outreachDraftTools,
+  updateOutreachDraftTool,
+  upsertOutreachProspectTool
+} from "@/lib/mcp/tools/outreach-drafts";
 import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
@@ -106,18 +106,18 @@ beforeEach(() => {
 });
 
 describe("the module exports the three tools", () => {
-  it("in list, create, update order", () => {
-    expect(marketingDraftTools.map((t) => t.name)).toEqual([
-      "list_marketing_drafts",
-      "create_marketing_draft",
-      "update_marketing_draft"
+  it("in list, upsert, update order", () => {
+    expect(outreachDraftTools.map((t) => t.name)).toEqual([
+      "list_outreach_queue",
+      "upsert_outreach_prospect",
+      "update_outreach_draft"
     ]);
   });
 });
 
-describe("list_marketing_drafts", () => {
+describe("list_outreach_queue", () => {
   it("returns the review queue in the panel's shape, without the assembled footer", async () => {
-    const result = (await runTool(listMarketingDraftsTool, {}, AUTH)) as {
+    const result = (await runTool(listOutreachQueueTool, {}, AUTH)) as {
       mode: string;
       waiting: number;
       drafts: Array<Record<string, unknown>>;
@@ -152,27 +152,28 @@ describe("list_marketing_drafts", () => {
     vi.mocked(getOutreachSettings).mockResolvedValue(null);
     vi.mocked(listProspectsByStatus).mockResolvedValue([]);
     vi.mocked(countProspectsByStatus).mockResolvedValue(0);
-    const result = await runTool(listMarketingDraftsTool, { limit: 5 }, AUTH);
+    const result = await runTool(listOutreachQueueTool, { limit: 5 }, AUTH);
     expect(listProspectsByStatus).toHaveBeenCalledWith("biz-1", ["drafted"], 5);
     expect(result).toEqual({ mode: "off", waiting: 0, drafts: [] });
   });
 
   it("passes an explicit business_id through and role-checks it", async () => {
-    await runTool(listMarketingDraftsTool, { business_id: "biz-9" }, AUTH);
+    await runTool(listOutreachQueueTool, { business_id: "biz-9" }, AUTH);
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-9", "manage_settings");
     expect(listProspectsByStatus).toHaveBeenCalledWith("biz-9", ["drafted"], 25);
   });
 });
 
-describe("create_marketing_draft", () => {
-  it("files the draft through the shared create path and reports the assembled email", async () => {
-    vi.mocked(createProspectDraft).mockResolvedValue({
+describe("upsert_outreach_prospect", () => {
+  it("files the draft through the shared upsert path and reports the assembled email", async () => {
+    vi.mocked(upsertProspectDraft).mockResolvedValue({
       ok: true,
       prospect: row() as never,
+      created: true,
       mode: "manual"
     });
     const result = await runTool(
-      createMarketingDraftTool,
+      upsertOutreachProspectTool,
       {
         ...CREATE_ARGS,
         domain: "wolfgangscooling.com",
@@ -189,7 +190,7 @@ describe("create_marketing_draft", () => {
     });
     // The tool never touches the ledger itself: everything goes through the
     // same function the sweep's drafting phase shares its assembly with.
-    expect(createProspectDraft).toHaveBeenCalledWith("biz-1", {
+    expect(upsertProspectDraft).toHaveBeenCalledWith("biz-1", {
       businessName: CREATE_ARGS.business_name,
       email: CREATE_ARGS.email,
       city: "Tempe AZ",
@@ -210,16 +211,21 @@ describe("create_marketing_draft", () => {
     });
   });
 
-  it("defaults city to blank and leaves the optional fields undefined", async () => {
-    vi.mocked(createProspectDraft).mockResolvedValue({
+  it("reports a re-pitch as created:false, defaults city to blank, and leaves the optional fields undefined", async () => {
+    vi.mocked(upsertProspectDraft).mockResolvedValue({
       ok: true,
       prospect: row({ city: "" }) as never,
+      created: false,
       mode: "auto"
     });
     const { city: _city, ...noCity } = CREATE_ARGS;
     void _city;
-    const result = (await runTool(createMarketingDraftTool, noCity, AUTH)) as { mode: string };
-    expect(createProspectDraft).toHaveBeenCalledWith(
+    const result = (await runTool(upsertOutreachProspectTool, noCity, AUTH)) as {
+      mode: string;
+      created: boolean;
+    };
+    expect(result.created).toBe(false);
+    expect(upsertProspectDraft).toHaveBeenCalledWith(
       "biz-1",
       expect.objectContaining({
         city: "",
@@ -234,45 +240,45 @@ describe("create_marketing_draft", () => {
     expect(result.mode).toBe("auto");
   });
 
-  it("surfaces every create refusal as an owner-readable error, with the detail", async () => {
+  it("surfaces every upsert refusal as an owner-readable error, with the detail", async () => {
     const cases: Array<[string, RegExp]> = [
       ["not_configured", /Finish setting up Prospecting/],
       ["tier_blocked", /Standard plan/],
       ["empty_text", /subject line and something to say/],
       ["too_long", /longer than a cold email/],
       ["invalid_domain", /Pass `domain`/],
-      ["duplicate", /nobody is cold-emailed twice/]
+      ["duplicate", /not re-pitched: nobody is cold-emailed twice/]
     ];
     for (const [reason, pattern] of cases) {
-      vi.mocked(createProspectDraft).mockResolvedValue({ ok: false, reason } as never);
-      await expect(runTool(createMarketingDraftTool, CREATE_ARGS, AUTH)).rejects.toThrow(pattern);
+      vi.mocked(upsertProspectDraft).mockResolvedValue({ ok: false, reason } as never);
+      await expect(runTool(upsertOutreachProspectTool, CREATE_ARGS, AUTH)).rejects.toThrow(pattern);
     }
-    vi.mocked(createProspectDraft).mockResolvedValue({
+    vi.mocked(upsertProspectDraft).mockResolvedValue({
       ok: false,
       reason: "not_configured",
       detail: "no postal address configured"
     });
-    await expect(runTool(createMarketingDraftTool, CREATE_ARGS, AUTH)).rejects.toThrow(
+    await expect(runTool(upsertOutreachProspectTool, CREATE_ARGS, AUTH)).rejects.toThrow(
       /Finish setting up Prospecting.*\(no postal address configured\)/
     );
   });
 
   it("refuses when rate limited, before anything is written", async () => {
     vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 30, remaining: 0, reset: 0 });
-    await expect(runTool(createMarketingDraftTool, CREATE_ARGS, AUTH)).rejects.toBeInstanceOf(
+    await expect(runTool(upsertOutreachProspectTool, CREATE_ARGS, AUTH)).rejects.toBeInstanceOf(
       McpToolError
     );
-    expect(createProspectDraft).not.toHaveBeenCalled();
+    expect(upsertProspectDraft).not.toHaveBeenCalled();
   });
 
   it("requires manage_settings, the dashboard outreach routes' bar", async () => {
     vi.mocked(requireMcpBusinessRole).mockRejectedValueOnce(new McpToolError("nope"));
-    await expect(runTool(createMarketingDraftTool, CREATE_ARGS, AUTH)).rejects.toThrow("nope");
-    expect(createProspectDraft).not.toHaveBeenCalled();
+    await expect(runTool(upsertOutreachProspectTool, CREATE_ARGS, AUTH)).rejects.toThrow("nope");
+    expect(upsertProspectDraft).not.toHaveBeenCalled();
   });
 });
 
-describe("update_marketing_draft", () => {
+describe("update_outreach_draft", () => {
   const EDITED = {
     pitch_subject: "New subject",
     pitch_paragraphs: "New body.",
@@ -282,7 +288,7 @@ describe("update_marketing_draft", () => {
   it("edits subject and paragraphs together, like the dashboard's Save draft", async () => {
     vi.mocked(editProspectDraft).mockResolvedValue({ ok: true, prospect: EDITED });
     const result = await runTool(
-      updateMarketingDraftTool,
+      updateOutreachDraftTool,
       { draft_id: DRAFT_ID, subject: "New subject", paragraphs: "New body." },
       AUTH
     );
@@ -303,13 +309,13 @@ describe("update_marketing_draft", () => {
 
   it("fills the field the caller left out from the stored draft", async () => {
     vi.mocked(editProspectDraft).mockResolvedValue({ ok: true, prospect: EDITED });
-    await runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "Only subject" }, AUTH);
+    await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "Only subject" }, AUTH);
     expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
       subject: "Only subject",
       paragraphs: row().pitch_paragraphs
     });
 
-    await runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, paragraphs: "Only body." }, AUTH);
+    await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, paragraphs: "Only body." }, AUTH);
     expect(editProspectDraft).toHaveBeenLastCalledWith("biz-1", DRAFT_ID, {
       subject: row().pitch_subject,
       paragraphs: "Only body."
@@ -325,7 +331,7 @@ describe("update_marketing_draft", () => {
     );
     vi.mocked(editProspectDraft).mockResolvedValue({ ok: false, reason: "empty_text" });
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
     ).rejects.toThrow(/subject line and something to say/);
     expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
       subject: "s",
@@ -333,7 +339,7 @@ describe("update_marketing_draft", () => {
     });
     // And the mirror case: new paragraphs on a row with no stored subject.
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, paragraphs: "p" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, paragraphs: "p" }, AUTH)
     ).rejects.toThrow(/subject line and something to say/);
     expect(editProspectDraft).toHaveBeenLastCalledWith("biz-1", DRAFT_ID, {
       subject: "",
@@ -343,7 +349,7 @@ describe("update_marketing_draft", () => {
 
   it("skips through the dashboard's own skipProspect and reports a stale queue", async () => {
     vi.mocked(skipProspect).mockResolvedValue(true);
-    const result = await runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH);
+    const result = await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH);
     expect(skipProspect).toHaveBeenCalledWith("biz-1", DRAFT_ID);
     expect(result).toEqual({
       draft_id: DRAFT_ID,
@@ -358,19 +364,19 @@ describe("update_marketing_draft", () => {
     // rather than answered with a cheerful success.
     vi.mocked(skipProspect).mockResolvedValue(false);
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH)
     ).rejects.toThrow(/already been sent or skipped/);
   });
 
   it("refuses an empty update, and skip combined with an edit", async () => {
-    await expect(runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID }, AUTH)).rejects.toThrow(
+    await expect(runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID }, AUTH)).rejects.toThrow(
       /Nothing to update/
     );
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, skip: false }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: false }, AUTH)
     ).rejects.toThrow(/Nothing to update/);
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, skip: true, subject: "s" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: true, subject: "s" }, AUTH)
     ).rejects.toThrow(/not both/);
     expect(rateLimit).not.toHaveBeenCalled();
     expect(skipProspect).not.toHaveBeenCalled();
@@ -380,12 +386,12 @@ describe("update_marketing_draft", () => {
   it("refuses a draft that is gone or no longer a draft before calling the edit path", async () => {
     vi.mocked(getProspect).mockResolvedValue(null);
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
     ).rejects.toThrow(/no longer in the list/);
 
     vi.mocked(getProspect).mockResolvedValue(row({ status: "sent" }) as never);
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
     ).rejects.toThrow(/already been sent or skipped/);
     expect(editProspectDraft).not.toHaveBeenCalled();
   });
@@ -403,7 +409,7 @@ describe("update_marketing_draft", () => {
     for (const [reason, pattern] of cases) {
       vi.mocked(editProspectDraft).mockResolvedValue({ ok: false, reason } as never);
       await expect(
-        runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
+        runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
       ).rejects.toThrow(pattern);
     }
     vi.mocked(editProspectDraft).mockResolvedValue({
@@ -412,14 +418,14 @@ describe("update_marketing_draft", () => {
       detail: "prospecting requires the Standard plan"
     });
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "s" }, AUTH)
     ).rejects.toThrow(/Standard plan.*\(prospecting requires the Standard plan\)/);
   });
 
   it("refuses when rate limited, before any write", async () => {
     vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 30, remaining: 0, reset: 0 });
     await expect(
-      runTool(updateMarketingDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH)
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: true }, AUTH)
     ).rejects.toBeInstanceOf(McpToolError);
     expect(skipProspect).not.toHaveBeenCalled();
     expect(getProspect).not.toHaveBeenCalled();
