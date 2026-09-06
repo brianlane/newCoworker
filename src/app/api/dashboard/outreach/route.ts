@@ -45,7 +45,9 @@ const saveSchema = z.object({
   /** A workspace_oauth_connections id, or "" for whichever mailbox is connected. */
   fromConnectionId: z.union([z.literal(""), z.string().uuid()]).default(""),
   /** A booking_meeting_types id, or "" to link the page and let them choose. */
-  bookingMeetingTypeId: z.union([z.literal(""), z.string().uuid()]).default("")
+  bookingMeetingTypeId: z.union([z.literal(""), z.string().uuid()]).default(""),
+  /** Whether the FIRST email carries the booking link. Off by default: it asks for a reply. */
+  bookingLinkOnFirstTouch: z.boolean().default(false)
 });
 
 export async function GET(request: Request) {

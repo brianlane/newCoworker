@@ -17,6 +17,14 @@
  * booking link, no unsubscribe line, no address: those are added for them
  * and cannot be supplied, edited, or deleted here.
  *
+ * The one appended line a caller may DECIDE about is the CTA. The first
+ * email ends on a reply ask unless the tenant switched the booking link on
+ * for first touch (`outreach_settings.booking_link_on_first_touch`, off by
+ * default since Sep 2026: a stranger asked to pick a calendar slot before
+ * they have answered once tends not to answer at all). `include_booking_link`
+ * on the two write tools overrides that per draft, and the list tool reports
+ * the tenant default so an agent knows what a draft will get without asking.
+ *
  * Role bar is `manage_settings`, mirroring the dashboard outreach routes:
  * cold email leaves in the business's name, so it sits with the roster and
  * profile writes rather than the looser `operate_messages`.
@@ -66,6 +74,13 @@ const paragraphsField = z
     "The editable body ONLY: greeting, observation, offer, ask, separated by blank lines. Do NOT include a sign-off, signature, booking link, unsubscribe line, or postal address; those are appended automatically and cannot be supplied here."
   );
 
+const includeBookingLinkField = z
+  .boolean()
+  .optional()
+  .describe(
+    "Whether THIS draft's closing line carries the business's booking/calendar link. Leave it out to follow the business default (list_outreach_queue.booking_link_on_first_touch, normally false: the first email ends with a soft ask to reply and the automatic follow-up carries the link). Pass true only when this prospect should be offered the calendar in their first email, for example a warm lead or a second touch you are writing yourself. The sign-off, unsubscribe link, and postal address are appended regardless."
+  );
+
 /**
  * Owner-readable reasons, kept in step with the dashboard route's copy so a
  * refusal reads the same whichever surface asked.
@@ -107,6 +122,8 @@ const draftShape = z.object({
    * not edited by subject alone, so update_outreach_draft needs paragraphs.
    */
   paragraphs: z.string().nullable(),
+  /** This draft's own say over the booking link. Null follows the business default. */
+  include_booking_link: z.boolean().nullable(),
   status: z.string(),
   drafted_at: z.string().nullable()
 });
@@ -120,6 +137,7 @@ type QueueRow = {
   vertical: string;
   pitch_subject: string | null;
   pitch_paragraphs: string | null;
+  include_booking_link: boolean | null;
   status: string;
   drafted_at: string | null;
 };
@@ -134,6 +152,7 @@ function toDraft(row: QueueRow): z.infer<typeof draftShape> {
     vertical: row.vertical,
     subject: row.pitch_subject,
     paragraphs: row.pitch_paragraphs,
+    include_booking_link: row.include_booking_link,
     status: row.status,
     drafted_at: row.drafted_at
   };
@@ -153,11 +172,13 @@ export const listOutreachQueueTool = defineMcpTool({
   outputSchema: z.object({
     /** off = the sweep ignores this business; manual = drafts wait; auto = drafts are SENT. */
     mode: z.enum(["off", "manual", "auto"]),
+    /** The business default for the first email's closing line; a draft's include_booking_link overrides it. */
+    booking_link_on_first_touch: z.boolean(),
     waiting: z.number(),
     drafts: z.array(draftShape)
   }),
   description:
-    "List the cold-outreach drafts waiting for review on Dashboard → Marketing (Drafts to review): prospect name, email, city, subject, and the editable body paragraphs (without the auto-appended sign-off and compliance footer). Also reports the prospecting mode: in auto mode drafts are sent by the sweep without a human pressing Send.",
+    "List the cold-outreach drafts waiting for review on Dashboard → Marketing (Drafts to review): prospect name, email, city, subject, the editable body paragraphs (without the auto-appended sign-off and compliance footer), and each draft's include_booking_link override. Also reports the prospecting mode (in auto mode drafts are sent by the sweep without a human pressing Send) and booking_link_on_first_touch, the business default for whether a first email's closing line carries the booking link (normally false: the first email asks for a reply and the follow-up carries the link).",
   schema: {
     business_id: businessIdField,
     limit: z
@@ -181,6 +202,7 @@ export const listOutreachQueueTool = defineMcpTool({
     ]);
     return {
       mode: settings?.mode ?? "off",
+      booking_link_on_first_touch: settings?.booking_link_on_first_touch ?? false,
       waiting,
       drafts: rows.map(toDraft)
     };
@@ -203,11 +225,12 @@ export const upsertOutreachProspectTool = defineMcpTool({
     mode: z.enum(["off", "manual", "auto"]),
     subject: z.string().nullable(),
     paragraphs: z.string().nullable(),
+    include_booking_link: z.boolean().nullable(),
     /** The email as it will be sent: paragraphs plus the appended CTA, signature, and footer. */
     assembled_body: z.string().nullable()
   }),
   description:
-    "Add a cold-outreach prospect and its draft to Dashboard → Marketing (Drafts to review) for the owner to send, instead of a Gmail draft. Supply the prospect (name, email, city) and the email's subject and body PARAGRAPHS only: the booking link, sign-off, unsubscribe link, and postal address are appended automatically at save and send, and links stay clean. Upsert on the prospect's domain and email: a new prospect is added; one already waiting in the queue (or discovered but not yet drafted) has its draft and details replaced; one already sent, replied, skipped, or unsubscribed is refused. In auto prospecting mode the draft is sent by the sweep without further review, so check list_outreach_queue.mode first.",
+    "Add a cold-outreach prospect and its draft to Dashboard → Marketing (Drafts to review) for the owner to send, instead of a Gmail draft. Supply the prospect (name, email, city) and the email's subject and body PARAGRAPHS only: the closing line, sign-off, unsubscribe link, and postal address are appended automatically at save and send, and links stay clean. By default the closing line is a soft ask to reply and does NOT carry the booking link (the follow-up does); pass include_booking_link=true to offer the calendar in this prospect's first email. Upsert on the prospect's domain and email: a new prospect is added; one already waiting in the queue (or discovered but not yet drafted) has its draft and details replaced; one already sent, replied, skipped, or unsubscribed is refused. In auto prospecting mode the draft is sent by the sweep without further review, so check list_outreach_queue.mode first.",
   schema: {
     business_id: businessIdField,
     business_name: z.string().trim().min(1).max(200).describe("The prospect business's name."),
@@ -247,7 +270,8 @@ export const upsertOutreachProspectTool = defineMcpTool({
       .optional()
       .describe(
         "The prospect's phone, if known. After a send, the outreach automation files the prospect as a contact by phone; without one they are emailed but not filed."
-      )
+      ),
+    include_booking_link: includeBookingLinkField
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -263,7 +287,8 @@ export const upsertOutreachProspectTool = defineMcpTool({
       domain: args.domain,
       vertical: args.vertical,
       website: args.website,
-      phone: args.phone
+      phone: args.phone,
+      includeBookingLink: args.include_booking_link
     });
     if (!result.ok) {
       throw new McpToolError(
@@ -278,6 +303,7 @@ export const upsertOutreachProspectTool = defineMcpTool({
       mode: result.mode,
       subject: result.prospect.pitch_subject,
       paragraphs: result.prospect.pitch_paragraphs,
+      include_booking_link: result.prospect.include_booking_link,
       assembled_body: result.prospect.pitch_body
     };
   }
@@ -294,16 +320,20 @@ export const updateOutreachDraftTool = defineMcpTool({
     status: z.enum(["edited", "skipped"]),
     subject: z.string().nullable(),
     paragraphs: z.string().nullable(),
+    include_booking_link: z.boolean().nullable(),
     assembled_body: z.string().nullable()
   }),
   description:
-    "Change a waiting outreach draft on Dashboard → Marketing: a new subject and/or new body paragraphs (same as the dashboard's Save draft; the sign-off and compliance footer are re-appended automatically), or skip=true to retire it (same as the dashboard's Skip: the prospect is never rediscovered). Only a draft that has not been sent can be changed.",
+    "Change a waiting outreach draft on Dashboard → Marketing: a new subject and/or new body paragraphs (same as the dashboard's Save draft; the closing line, sign-off, and compliance footer are re-appended automatically), and/or include_booking_link to add or remove the booking link from this draft's closing line (for example true once a prospect has replied and should be offered the calendar); or skip=true to retire it (same as the dashboard's Skip: the prospect is never rediscovered). Only a draft that has not been sent can be changed.",
   schema: {
     business_id: businessIdField,
     draft_id: z.string().uuid().describe("The draft_id from list_outreach_queue or upsert_outreach_prospect."),
     subject: subjectField.optional(),
     paragraphs: paragraphsField.optional().describe(
       "Replacement body paragraphs (editable middle only). Required for a draft whose paragraphs are null."
+    ),
+    include_booking_link: includeBookingLinkField.describe(
+      "true puts the booking link in this draft's closing line, false takes it out; leave it out to keep what the draft already has. Can be sent alone: the stored subject and paragraphs are kept and the email is re-assembled."
     ),
     skip: z
       .boolean()
@@ -315,12 +345,17 @@ export const updateOutreachDraftTool = defineMcpTool({
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
     await requireMcpBusinessRole(auth, businessId, "manage_settings");
-    const editing = args.subject !== undefined || args.paragraphs !== undefined;
+    const editing =
+      args.subject !== undefined ||
+      args.paragraphs !== undefined ||
+      args.include_booking_link !== undefined;
     if (args.skip && editing) {
       throw new McpToolError("Pass either skip=true or new text, not both.");
     }
     if (!args.skip && !editing) {
-      throw new McpToolError("Nothing to update: pass subject, paragraphs, or skip=true.");
+      throw new McpToolError(
+        "Nothing to update: pass subject, paragraphs, include_booking_link, or skip=true."
+      );
     }
     takeWriteSlot(businessId);
 
@@ -335,6 +370,7 @@ export const updateOutreachDraftTool = defineMcpTool({
         status: "skipped" as const,
         subject: null,
         paragraphs: null,
+        include_booking_link: null,
         assembled_body: null
       };
     }
@@ -347,10 +383,13 @@ export const updateOutreachDraftTool = defineMcpTool({
     if (!current) throw new McpToolError(UPDATE_FAILURE.not_found);
     if (current.status !== "drafted") throw new McpToolError(UPDATE_FAILURE.not_drafted);
 
+    // The booking-link flag rides through as given: undefined leaves the
+    // row's own override alone, which is editProspectDraft's contract too.
     const { editProspectDraft } = await import("@/lib/outreach/sweep");
     const result = await editProspectDraft(businessId, args.draft_id, {
       subject: args.subject ?? current.pitch_subject ?? "",
-      paragraphs: args.paragraphs ?? current.pitch_paragraphs ?? ""
+      paragraphs: args.paragraphs ?? current.pitch_paragraphs ?? "",
+      includeBookingLink: args.include_booking_link
     });
     if (!result.ok) {
       throw new McpToolError(
@@ -364,6 +403,7 @@ export const updateOutreachDraftTool = defineMcpTool({
       status: "edited" as const,
       subject: result.prospect.pitch_subject,
       paragraphs: result.prospect.pitch_paragraphs,
+      include_booking_link: result.prospect.include_booking_link,
       assembled_body: result.prospect.pitch_body
     };
   }

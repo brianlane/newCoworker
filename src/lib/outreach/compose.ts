@@ -13,6 +13,11 @@
  * concatenated deterministically around whatever comes back. A model cannot
  * drop, reword, or "improve" a legal requirement it is never shown.
  *
+ * The one line below the paragraphs that IS a choice is the CTA. The first
+ * email ends on a reply ask unless the tenant switched the booking link on
+ * for first touch (or a draft was marked for it); the follow-up carries the
+ * link whenever the tenant has one. The sign-off and the footer never vary.
+ *
  * The pitch is tenant-aware: what the business does and what it is asking for
  * come from the tenant's own settings and profile, so the same machinery sells
  * an AI coworker for our HQ tenant and something else entirely for the next
@@ -40,6 +45,14 @@ export type PitchTenant = {
   website: string | null;
   /** Where the reader is asked to book time, when the tenant has a page. */
   bookingUrl: string | null;
+  /**
+   * Whether the FIRST email carries `bookingUrl` as its CTA
+   * (`outreach_settings.booking_link_on_first_touch`). Off, the first email
+   * ends on a reply ask and the link waits for the follow-up: asking a
+   * stranger to pick a calendar slot before they have answered once is what
+   * Outbound Prospecting read as the reason cold pitches drew no replies.
+   */
+  bookingLinkOnFirstTouch: boolean;
   /** Who signs the mail. Falls back to the business name. */
   senderName: string | null;
   /**
@@ -166,13 +179,14 @@ function firstName(prospectName: string): string {
 export function composePitch(
   tenant: PitchTenant,
   prospect: PitchProspect,
-  unsubscribeUrl: string
+  unsubscribeUrl: string,
+  options: AssembleOptions = {}
 ): ComposedPitch | null {
   const lead = leadFinding(prospect.findings);
   if (!lead || !(lead.code in OBSERVATION_BY_FINDING)) return null;
   const subject = `${firstName(prospect.businessName)}: ${SUBJECT_BY_FINDING[lead.code]}`;
   const paragraphs = pitchParagraphs(tenant, prospect, lead);
-  return { subject, body: assembleBody(tenant, paragraphs, unsubscribeUrl) };
+  return { subject, body: assembleBody(tenant, paragraphs, unsubscribeUrl, options) };
 }
 
 /**
@@ -230,18 +244,39 @@ export function emailSignature(input: {
     .join("\n");
 }
 
+export type AssembleOptions = {
+  /**
+   * Whether the CTA line carries the booking link. Left out, the tenant's
+   * first-touch default decides (`bookingLinkOnFirstTouch`); a boolean is a
+   * per-email decision that wins over it: `true` for the follow-up nudge, and
+   * whatever `outreach_prospects.include_booking_link` holds for a draft a
+   * connector or owner decided about. Never produces a link the tenant does
+   * not have: with no `bookingUrl` the reply ask is the only CTA there is.
+   */
+  bookingLink?: boolean | null;
+};
+
+/** The CTA line: the booking link when this email is allowed one, else a reply ask. */
+export function callToAction(tenant: PitchTenant, options: AssembleOptions = {}): string {
+  const wanted = options.bookingLink ?? tenant.bookingLinkOnFirstTouch;
+  return tenant.bookingUrl && wanted
+    ? `You can grab a time here: ${tenant.bookingUrl}`
+    : "Just reply if you want to hear more.";
+}
+
 /**
- * Body assembly: paragraphs, then the sign-off, then the compliance footer.
- * Everything below the paragraphs is generated here and only here.
+ * Body assembly: paragraphs, then the CTA, then the sign-off, then the
+ * compliance footer. Everything below the paragraphs is generated here and
+ * only here. The sign-off, unsubscribe link, and postal address ride every
+ * email; only the CTA line is a choice (see AssembleOptions).
  */
 export function assembleBody(
   tenant: PitchTenant,
   paragraphs: string[],
-  unsubscribeUrl: string
+  unsubscribeUrl: string,
+  options: AssembleOptions = {}
 ): string {
-  const cta = tenant.bookingUrl
-    ? `You can grab a time here: ${tenant.bookingUrl}`
-    : "Just reply if you want to hear more.";
+  const cta = callToAction(tenant, options);
   const signature = emailSignature({
     senderName: tenant.senderName,
     businessName: tenant.name,

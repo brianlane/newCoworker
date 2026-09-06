@@ -1105,8 +1105,11 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   link in a google.com/url tracking redirect; the caller supplies the editable
   paragraphs only and `assembleBody` appends the CTA, signature, unsubscribe
   link, and postal address, the same path as the dashboard's Save draft; the
-  upsert re-pitches a prospect still before the send and refuses one already
-  sent, replied, skipped, or unsubscribed; Send stays on the dashboard).
+  CTA is a reply ask by default and `include_booking_link` on either write
+  tool puts the booking link into that one draft, see "The first email asks;
+  the follow-up books" under Prospecting; the upsert re-pitches a prospect
+  still before the send and refuses one already sent, replied, skipped, or
+  unsubscribed; Send stays on the dashboard).
   [src/lib/mcp/registry.ts](src/lib/mcp/registry.ts) (`allMcpTools`) is the
   authoritative inventory.
 - Owner self-serve tools (added Aug 2026, the one-shot ask classes):
@@ -2392,6 +2395,59 @@ only lands when the whole loop finishes. The count in the confirm, the help
 line and the disabled state come from ONE value (`min(allowance, waiting)`),
 because three places deriving "how many" separately is how the help line came
 to promise a full allowance over a shorter queue.
+
+### The first email asks; the follow-up books
+
+Every first pitch used to close with the booking link ("You can grab a time
+here: ..."). Outbound Prospecting's read of HQ's zero-reply run (Sep 2026) is
+that this line was the problem: a stranger who has read one paragraph about
+missed calls is being asked to open a calendar and commit to a slot, and the
+easy answer to that is none. So the link on the FIRST email is now a choice,
+and the choice defaults to off.
+
+**`outreach_settings.booking_link_on_first_touch`** (panel checkbox "Put the
+booking link in the first email", `bookingLinkOnFirstTouch` on the settings
+PUT) is the tenant default. Off, `assembleBody` closes the first email with
+"Just reply if you want to hear more." and the link appears nowhere in it; on,
+it restores the old CTA. **The sign-off, the unsubscribe link, and the postal
+address ride every email either way**: the toggle moves exactly one line, and
+`tests/outreach-compose.test.ts` pins the footer as byte-identical across the
+two settings.
+
+**The follow-up nudge always carries the link** when the tenant has one. By
+the time it goes out the prospect has heard from us once and not said no, so
+offering a time is a next step rather than an opening demand. That is the
+"later touch" the link waits for; `nudgeForBusiness` passes `bookingLink:
+true` explicitly and `callToAction` still refuses to invent a link for a tenant
+without one.
+
+**`outreach_prospects.include_booking_link`** is the per-draft override: null
+follows the tenant default, a boolean is a decision made for this one
+prospect. The connector tools take it as `include_booking_link` on
+`upsert_outreach_prospect` (opt one warm prospect in under a tenant whose
+default is off) and on `update_outreach_draft` (add or remove the link on a
+waiting draft, on its own or beside new text; the case to reach for is a
+prospect who replied and should now be offered the calendar). It is STORED
+beside the body, so Save draft (which passes nothing and keeps the row's
+mark), Write it again, and a connector re-pitch that says nothing about it
+all re-assemble to the same answer instead of quietly reverting to the
+default. `list_outreach_queue` reports the tenant default and each draft's
+override so an agent knows what a draft will get without asking.
+
+To enable the link on later touches or after a reply: leave the tenant default
+off, and either let the nudge carry it (nothing to do) or flip the one draft
+with `update_outreach_draft { draft_id, include_booking_link: true }`. To go
+back to link-first for every email, tick the panel checkbox and save.
+
+**Drafts already assembled keep their stored body.** `pitch_body` is written
+at draft time and sent verbatim, so changing the setting does not touch the
+queue. `scripts/oneshot/reassemble-outreach-drafts.ts --business <uuid>`
+re-runs the assembly on every waiting draft through `editProspectDraft`,
+keeping the subject and paragraphs exactly as stored and rebuilding only the
+lines below them; run it after the merge for a tenant whose queue was written
+under the old rule (HQ had 21 such drafts, in auto mode). Write it again is
+not a substitute here: it re-composes from findings, replaces owner edits, and
+refuses connector-filed drafts.
 
 ### Which meeting the cold email offers
 

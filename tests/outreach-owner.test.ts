@@ -110,6 +110,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
     send_window_end_hour: 11,
     from_connection_id: null,
     booking_meeting_type_id: null,
+    booking_link_on_first_touch: false,
     postal_address: "1 Example Plaza",
     value_prop: "We answer every call.",
     sender_name: "Brian",
@@ -124,6 +125,7 @@ function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSetting
   return {
     fromConnectionId: "",
     bookingMeetingTypeId: "",
+    bookingLinkOnFirstTouch: false,
     mode: "auto",
     searchTerms: ["hvac"],
     cities: ["Phoenix"],
@@ -533,7 +535,9 @@ describe("defaultProspectingSettings", () => {
       fromConnectionId: "",
       // Empty links the booking page and lets them choose, which is what the
       // CTA did before a meeting could be named.
-      bookingMeetingTypeId: ""
+      bookingMeetingTypeId: "",
+      // Off: the first email asks for a reply; the follow-up carries the link.
+      bookingLinkOnFirstTouch: false
     });
   });
 });
@@ -746,6 +750,35 @@ describe("which meeting the outreach CTA offers", () => {
     expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
       BIZ,
       expect.objectContaining({ booking_meeting_type_id: null }),
+      expect.anything()
+    );
+  });
+
+  it("writes whether the first email carries the booking link, and defaults it off", async () => {
+    // The zero-reply fix: off by default, so a new tenant's first email ends
+    // on a reply ask. The panel's checkbox is the only thing that turns it on,
+    // and turning outreach OFF still records the choice for when it returns.
+    expect(defaultProspectingSettings().bookingLinkOnFirstTouch).toBe(false);
+    await saveProspectingSettings(BIZ, input(), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_link_on_first_touch: false }),
+      expect.anything()
+    );
+    await saveProspectingSettings(BIZ, input({ bookingLinkOnFirstTouch: true }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_link_on_first_touch: true }),
+      expect.anything()
+    );
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", bookingLinkOnFirstTouch: true }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ mode: "off", booking_link_on_first_touch: true }),
       expect.anything()
     );
   });

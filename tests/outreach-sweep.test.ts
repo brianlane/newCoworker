@@ -58,6 +58,7 @@ function settings(over: Partial<OutreachSettingsRow> = {}): OutreachSettingsRow 
     send_window_end_hour: 11,
     from_connection_id: null,
     booking_meeting_type_id: null,
+    booking_link_on_first_touch: false,
     postal_address: "1 Example Plaza, Phoenix AZ",
     postal_address_exempt: false,
     value_prop: "We answer every call and text for you.",
@@ -87,6 +88,7 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     pitch_subject: "Acme HVAC: booking a job without the phone tag",
     pitch_paragraphs: "Hi Acme HVAC,\n\nbody",
     pitch_body: "Hi Acme HVAC,\n\nbody\n\nunsubscribe",
+    include_booking_link: null,
     status: "drafted",
     status_detail: null,
     contact_id: null,
@@ -568,6 +570,28 @@ describe("phase 2: drafting", () => {
     expect(draft.pitch_paragraphs).toContain("Hi Acme HVAC,");
     expect(draft.pitch_paragraphs).not.toContain("unsubscribe");
     expect(draft.pitch_body).toContain(draft.pitch_paragraphs);
+  });
+
+  it("ends the first email on a reply ask by default, and offers the calendar only when the tenant switched it on", async () => {
+    // The zero-reply fix: the tenant HAS a booking link (baseDeps resolves
+    // one), and the first email still does not carry it unless
+    // booking_link_on_first_touch says so. The footer is untouched either way.
+    const quiet = draftLedger();
+    await processOutreachSweep(baseDeps());
+    const first = (quiet.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(first.pitch_body).toContain("Just reply if you want to hear more.");
+    expect(first.pitch_body).not.toContain("grab a time");
+    expect(first.pitch_body).not.toContain("/book/hq");
+    expect(first.pitch_body).toContain("/api/outreach/unsubscribe?");
+    expect(first.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+
+    const linked = draftLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ booking_link_on_first_touch: true })])
+    });
+    await processOutreachSweep(baseDeps());
+    const withLink = (linked.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(withLink.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
+    expect(withLink.pitch_body).not.toContain("Just reply");
   });
 
   it("falls back to the business profile address when none was typed in", async () => {
@@ -1297,6 +1321,27 @@ describe("phase 4: the single nudge", () => {
     expect(args.bodyText).toContain("I wrote last week");
   });
 
+  it("carries the booking link even though the first email did not", async () => {
+    // The tenant default is off (settings() above), so the FIRST email asked
+    // for a reply. The follow-up is the later touch where the link belongs:
+    // the prospect has heard from us once and not said no.
+    nudgeLedger();
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
+    const args = send.mock.calls[0][1] as { bodyText: string };
+    expect(args.bodyText).toContain("You can grab a time here: https://app.example.com/book/hq");
+    expect(args.bodyText).not.toContain("Just reply");
+
+    // And still never a link the tenant does not have.
+    nudgeLedger();
+    const noLink = baseDeps({ schedulingLinkImpl: vi.fn(async () => null) });
+    await processOutreachSweep(noLink);
+    const plain = (noLink as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+      .mock.calls[0][1] as { bodyText: string };
+    expect(plain.bodyText).toContain("Just reply if you want to hear more.");
+  });
+
   it("asks only for prospects inside the patience window", async () => {
     const ledger = nudgeLedger();
     await processOutreachSweep(baseDeps());
@@ -1749,7 +1794,11 @@ describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
     expect(row.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(row.pitch_body).toContain(`p=${row.id}`);
     expect(row.pitch_body.startsWith("Hi Wolfgangs Cooling,\n\nI was looking you up")).toBe(true);
-    expect(row.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
+    // The tenant default (off) decides the CTA when the caller said nothing:
+    // a soft reply ask, no calendar, and no decision recorded on the row.
+    expect(row.pitch_body).toContain("Just reply if you want to hear more.");
+    expect(row.pitch_body).not.toContain("grab a time");
+    expect(row.include_booking_link).toBeNull();
     expect(row.pitch_body).toContain("/api/outreach/unsubscribe?");
     expect(row.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
     // The insert goes straight to drafted (that is insertDraftedProspect's
@@ -1793,6 +1842,55 @@ describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
     const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(row.phone).toBeNull();
     expect(row.website).toBeNull();
+  });
+
+  it("puts the booking link in this one draft when the caller asks, and records that it did", async () => {
+    // Tenant default off; the connector opts this prospect in. The decision
+    // is stored beside the body so a later edit or rewrite re-assembles to
+    // the same answer instead of reverting to the default.
+    const ledger = createLedger();
+    const result = await upsertProspectDraft(BIZ, { ...input, includeBookingLink: true }, baseDeps());
+    const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(row.include_booking_link).toBe(true);
+    expect(row.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
+    expect(row.pitch_body).not.toContain("Just reply");
+    expect(result.ok && result.prospect.include_booking_link).toBe(true);
+
+    // The other direction too: an explicit false under a tenant whose default
+    // is ON keeps the calendar out of this one email.
+    const linkedTenant = createLedger({
+      getOutreachSettings: vi.fn(async () =>
+        settings({ mode: "manual", booking_link_on_first_touch: true })
+      )
+    });
+    await upsertProspectDraft(BIZ, { ...input, includeBookingLink: false }, baseDeps());
+    const [plain] = (linkedTenant.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(plain.include_booking_link).toBe(false);
+    expect(plain.pitch_body).toContain("Just reply if you want to hear more.");
+  });
+
+  it("a re-pitch keeps the row's booking-link decision unless the caller supplies one", async () => {
+    const existing = prospect({
+      status: "drafted",
+      domain: "turnpointservices.com",
+      include_booking_link: true
+    });
+    const ledger = createLedger({
+      insertDraftedProspect: vi.fn(async () => null),
+      findProspectByDomain: vi.fn(async () => existing),
+      findProspectByEmail: vi.fn(async () => existing)
+    });
+    // Unsaid means unchanged, like the phone and the website.
+    await upsertProspectDraft(BIZ, input, baseDeps());
+    const kept = (ledger.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(kept.include_booking_link).toBe(true);
+    expect(kept.pitch_body).toContain("grab a time");
+
+    // Said, it replaces the stored decision and the body follows.
+    await upsertProspectDraft(BIZ, { ...input, includeBookingLink: false }, baseDeps());
+    const changed = (ledger.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[1][3];
+    expect(changed.include_booking_link).toBe(false);
+    expect(changed.pitch_body).toContain("Just reply if you want to hear more.");
   });
 
   it("refuses empty or oversized text before reading anything", async () => {
@@ -2081,6 +2179,57 @@ describe("editProspectDraft and regenerateProspectDraft (the owner reworked a dr
     expect(patch.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
     // Guarded on it still being a draft, exactly like Send and Skip.
     expect((ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe("drafted");
+    // No decision about the link was made, so none is recorded and the tenant
+    // default (off) decides the CTA.
+    expect(patch.include_booking_link).toBeNull();
+    expect(patch.pitch_body).toContain("Just reply if you want to hear more.");
+    expect(result.ok && result.prospect.include_booking_link).toBeNull();
+  });
+
+  it("keeps the draft's own booking-link decision unless the edit says otherwise", async () => {
+    // A connector marked this draft for the link. The dashboard's Save draft
+    // passes no flag, and must not quietly undo that mark by re-saving text.
+    const marked = draftLedger({
+      getProspect: vi.fn(async () => prospect({ include_booking_link: true }))
+    });
+    await editProspectDraft(BIZ, prospect().id, { subject: "s", paragraphs: "Hi." }, baseDeps());
+    const kept = (marked.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(kept.include_booking_link).toBe(true);
+    expect(kept.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
+
+    // An explicit false takes the link out and records the decision.
+    await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "s", paragraphs: "Hi.", includeBookingLink: false },
+      baseDeps()
+    );
+    const removed = (marked.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[1][3];
+    expect(removed.include_booking_link).toBe(false);
+    expect(removed.pitch_body).not.toContain("grab a time");
+
+    // An explicit null hands the draft back to the tenant default.
+    await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "s", paragraphs: "Hi.", includeBookingLink: null },
+      baseDeps()
+    );
+    const reset = (marked.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[2][3];
+    expect(reset.include_booking_link).toBeNull();
+    expect(reset.pitch_body).toContain("Just reply if you want to hear more.");
+
+    // And true on a row that had no decision adds the link.
+    const unmarked = draftLedger();
+    await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "s", paragraphs: "Hi.", includeBookingLink: true },
+      baseDeps()
+    );
+    const added = (unmarked.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(added.include_booking_link).toBe(true);
+    expect(added.pitch_body).toContain("grab a time");
   });
 
   it("normalizes ragged spacing into paragraphs", async () => {
@@ -2235,6 +2384,22 @@ describe("editProspectDraft and regenerateProspectDraft (the owner reworked a dr
     expect((polishImpl.mock.calls[0] as unknown as [string, string[]])[1].join("\n")).not.toContain(
       "unsubscribe"
     );
+    // No decision on the row, so the tenant default (off) decides the CTA.
+    expect(patch.include_booking_link).toBeNull();
+    expect(patch.pitch_body).toContain("Just reply if you want to hear more.");
+  });
+
+  it("rewrites the words, not the booking-link decision", async () => {
+    // "Again" is about the wording. A draft marked for the link keeps the
+    // link through a rewrite, under a tenant whose default is off.
+    const ledger = draftLedger({
+      getProspect: vi.fn(async () => prospect({ include_booking_link: true }))
+    });
+    const result = await regenerateProspectDraft(BIZ, prospect().id, baseDeps());
+    expect(result.ok).toBe(true);
+    const patch = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(patch.include_booking_link).toBe(true);
+    expect(patch.pitch_body).toContain("You can grab a time here: https://app.example.com/book/hq");
   });
 
   it("refuses to rewrite a draft with nothing checkable left to say", async () => {

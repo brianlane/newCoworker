@@ -285,6 +285,7 @@ async function resolveTenant(
       valueProp,
       website: (business as { website_url?: string | null }).website_url?.trim() || null,
       bookingUrl: link?.url ?? null,
+      bookingLinkOnFirstTouch: settings.booking_link_on_first_touch,
       senderName: settings.sender_name?.trim() || null,
       postalAddress
     },
@@ -682,6 +683,10 @@ async function nudgeForBusiness(
       settings.business_id,
       prospect.id
     );
+    // The follow-up is where the booking link belongs, whatever the tenant
+    // chose for the first email: the prospect has heard from us once and not
+    // said no, so offering a time is no longer a stranger asking for a slot.
+    // Still only when the tenant HAS a link; callToAction never invents one.
     const body = assembleBody(
       tenant,
       [
@@ -689,7 +694,8 @@ async function nudgeForBusiness(
         "I wrote last week about what I noticed when I looked you up. If it is not useful, no problem at all and I will leave it there.",
         "If it is, I am happy to walk you through it."
       ],
-      unsubscribeUrl
+      unsubscribeUrl,
+      { bookingLink: true }
     );
     // The nudge rides the ORIGINAL subject so it reads as the same conversation.
     const sent = await deliverPitch(settings, tenant, prospect, r, {
@@ -1197,7 +1203,15 @@ export const MAX_EDITED_SUBJECT_CHARS = 200;
 export const MAX_EDITED_BODY_CHARS = 4000;
 
 export type DraftUpdateResult =
-  | { ok: true; prospect: { pitch_subject: string; pitch_paragraphs: string; pitch_body: string } }
+  | {
+      ok: true;
+      prospect: {
+        pitch_subject: string;
+        pitch_paragraphs: string;
+        pitch_body: string;
+        include_booking_link: boolean | null;
+      };
+    }
   | {
       ok: false;
       reason:
@@ -1266,11 +1280,17 @@ async function loadDraftContext(
  * Guarded on the prospect still being a draft, like Send and Skip beside it:
  * the review queue can be minutes stale, and an unguarded write would rewrite
  * the stored copy of a pitch the sweep has already sent.
+ *
+ * `includeBookingLink` is the draft's own say over the CTA line. Left
+ * undefined (the dashboard's Save draft passes nothing), the row keeps
+ * whatever override it already holds, so re-saving the wording cannot
+ * silently flip a decision a connector made; a boolean writes a new one, and
+ * null hands the draft back to the tenant default.
  */
 export async function editProspectDraft(
   businessId: string,
   prospectId: string,
-  edit: { subject: string; paragraphs: string },
+  edit: { subject: string; paragraphs: string; includeBookingLink?: boolean | null },
   deps: OutreachSweepDeps = {}
 ): Promise<DraftUpdateResult> {
   const subject = edit.subject.trim();
@@ -1285,10 +1305,17 @@ export async function editProspectDraft(
   if ("failure" in context) return context.failure;
 
   const paragraphs = splitParagraphs(text);
+  const includeBookingLink =
+    edit.includeBookingLink === undefined
+      ? context.prospect.include_booking_link
+      : edit.includeBookingLink;
   const patch = {
     pitch_subject: subject,
     pitch_paragraphs: paragraphs.join("\n\n"),
-    pitch_body: assembleBody(context.tenant, paragraphs, context.unsubscribeUrl)
+    pitch_body: assembleBody(context.tenant, paragraphs, context.unsubscribeUrl, {
+      bookingLink: includeBookingLink
+    }),
+    include_booking_link: includeBookingLink
   };
   const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
   if (!saved) return { ok: false, reason: "not_drafted" };
@@ -1405,6 +1432,12 @@ export type DraftUpsertInput = {
   vertical?: string;
   website?: string;
   phone?: string;
+  /**
+   * Whether THIS draft's CTA carries the booking link. Undefined follows the
+   * tenant's first-touch default (and, on a re-pitch, keeps the row's own
+   * override); a boolean is stored on the row as `include_booking_link`.
+   */
+  includeBookingLink?: boolean;
 };
 
 export type DraftUpsertResult =
@@ -1511,14 +1544,19 @@ export async function upsertProspectDraft(
   const website = input.website?.trim() ?? "";
   const vertical = input.vertical?.trim() ?? "";
   const city = input.city.trim();
-  const pitchFor = (prospectId: string) => ({
+  // The CTA decision travels with the body it produced: whatever assembled
+  // this pitch is what the row records, so a later edit or rewrite re-assembles
+  // to the same answer instead of quietly reverting to the tenant default.
+  const pitchFor = (prospectId: string, includeBookingLink: boolean | null) => ({
     pitch_subject: subject,
     pitch_paragraphs: paragraphs.join("\n\n"),
     pitch_body: assembleBody(
       resolved.tenant,
       paragraphs,
-      buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospectId)
-    )
+      buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospectId),
+      { bookingLink: includeBookingLink }
+    ),
+    include_booking_link: includeBookingLink
   });
 
   // The id is minted here because the unsubscribe link has to name it and
@@ -1539,7 +1577,7 @@ export async function upsertProspectDraft(
       vertical,
       city,
       findings: [],
-      ...pitchFor(id),
+      ...pitchFor(id, input.includeBookingLink ?? null),
       drafted_at: r.now.toISOString()
     },
     r.db
@@ -1576,7 +1614,8 @@ export async function upsertProspectDraft(
   // refreshes an optional field ONLY when the caller supplied it. A row the
   // sweep discovered through Places already knows the prospect's phone, and
   // that phone is what lets the outreach flow file them as a contact after
-  // the send; a connector that did not know it must not blank it.
+  // the send; a connector that did not know it must not blank it. The
+  // booking-link override follows the same rule: unsaid means unchanged.
   const patch = {
     business_name: input.businessName.trim(),
     email,
@@ -1584,7 +1623,7 @@ export async function upsertProspectDraft(
     ...(website ? { website } : {}),
     ...(vertical ? { vertical } : {}),
     ...(city ? { city } : {}),
-    ...pitchFor(existing.id),
+    ...pitchFor(existing.id, input.includeBookingLink ?? existing.include_booking_link),
     status: "drafted" as const,
     status_detail: null,
     drafted_at: r.now.toISOString()
@@ -1667,10 +1706,15 @@ async function rewriteOneDraft(
   };
   const lead = leadFinding(findings) as { code: string; detail: string };
   const polished = await r.polish(businessId, pitchParagraphs(tenant, pitchProspect, lead));
+  // "Again" means the wording, not the CTA decision: a draft marked for (or
+  // against) the booking link keeps that mark through a rewrite.
   const patch = {
     pitch_subject: deterministic.subject,
     pitch_paragraphs: polished.join("\n\n"),
-    pitch_body: assembleBody(tenant, polished, unsubscribeUrl)
+    pitch_body: assembleBody(tenant, polished, unsubscribeUrl, {
+      bookingLink: prospect.include_booking_link
+    }),
+    include_booking_link: prospect.include_booking_link
   };
   const saved = await transitionProspect(businessId, prospect.id, "drafted", patch, r.db);
   if (!saved) return { ok: false, reason: "not_drafted" };
