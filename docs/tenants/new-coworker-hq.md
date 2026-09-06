@@ -162,8 +162,8 @@ visitor actually books.
 
 ## One-shots
 
-**First-touch booking link switched off; waiting drafts to re-assemble
-(2026-09-06, PR pending):** the product change Outbound Prospecting and Brian
+**First-touch booking link switched off; waiting drafts re-assembled
+(2026-09-06, PR #1804):** the product change Outbound Prospecting and Brian
 approved as the zero-reply fix. `outreach_settings.booking_link_on_first_touch`
 ships `false` by default (migration `20260906033938`), so from the merge on,
 every first pitch closes with "Just reply if you want to hear more." instead
@@ -176,12 +176,14 @@ pinned to the discovery call, sending from the HQ Gmail through the owner
 mailbox, not the contact@ alias). At the time of the change 21 drafts were waiting, all 21
 with the booking line baked into `pitch_body`, 10 of them connector-filed (no
 findings, so Write it again refuses them). Those go out as stored in auto mode
-unless re-assembled: **post-merge, run
-`reassemble-outreach-drafts.ts --business 8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`
-(dry run, then `--apply`)**, which keeps every stored subject and paragraph and
-rebuilds only the closing line and footer through `editProspectDraft`. Not
-yet applied when this entry was written; the applied_oneshots ledger is the
-source of truth.
+unless re-assembled: `reassemble-outreach-drafts.ts --business
+8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d --apply` was run right after the #1804
+deploy went green (2026-09-06 04:35 UTC, one ledger row). It keeps every
+stored subject and paragraph and rebuilds only the closing line and footer
+through `editProspectDraft`. Verified in SQL afterwards: 21 drafted, 0 with
+"grab a time here", 21 with "Just reply if you want to hear more.", 21 with
+the unsubscribe link, 21 with their first paragraph intact; a second `--apply`
+reported 21 already current. No send happened in between (weekend, no window).
 
 **Hostinger billing id stamped on the synthetic subscription (2026-08-31):**
 `reconcile-subscription-hostinger-links.ts --apply` copied
