@@ -250,6 +250,11 @@ export type ProspectingSettingsInput = {
   fromConnectionId: string;
   /** Meeting the CTA links to. Empty links the page and lets them choose. */
   bookingMeetingTypeId: string;
+  /**
+   * Whether the FIRST email carries the booking link. Off, it ends on a reply
+   * ask and the follow-up carries the link instead; see assembleBody.
+   */
+  bookingLinkOnFirstTouch: boolean;
 };
 
 export class ProspectingSettingsError extends Error {}
@@ -378,7 +383,8 @@ export async function saveProspectingSettings(
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null,
       from_connection_id: fromConnectionId || null,
-      booking_meeting_type_id: bookingMeetingTypeId
+      booking_meeting_type_id: bookingMeetingTypeId,
+      booking_link_on_first_touch: input.bookingLinkOnFirstTouch
     },
     db
   );
@@ -473,6 +479,7 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     valueProp: "",
     senderName: "",
     fromConnectionId: "",
-    bookingMeetingTypeId: ""
+    bookingMeetingTypeId: "",
+    bookingLinkOnFirstTouch: false
   };
 }

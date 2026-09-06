@@ -4,7 +4,7 @@ description: "MCP outreach queue tools write into the Marketing review queue thr
 metadata:
   node_type: memory
   type: project
-  modified: 2026-09-05T05:50:00.000Z
+  modified: 2026-09-06T04:00:00.000Z
 ---
 
 Connector clients (Claude, ChatGPT, Grok on `/api/mcp`) land outbound
@@ -22,6 +22,18 @@ What to know before touching it:
   `editProspectDraft` (`src/lib/outreach/sweep.ts`) run `assembleBody`, so
   the CTA, signature, unsubscribe link, and postal address are appended in
   code. Never add a tool arg for the footer.
+- **The CTA is the one appended line a caller may decide about.** Since Sep
+  2026 the first email closes on "Just reply if you want to hear more." by
+  default (`outreach_settings.booking_link_on_first_touch = false`, panel
+  checkbox "Put the booking link in the first email"); the day-5 nudge always
+  carries the link. `include_booking_link` on `upsert_outreach_prospect` and
+  `update_outreach_draft` overrides per draft and is STORED on the row
+  (`outreach_prospects.include_booking_link`, null = tenant default), so Save
+  draft, Write it again, and a re-pitch that says nothing keep it.
+  `list_outreach_queue` reports the tenant default and each row's override.
+  `pitch_body` is assembled at draft time and sent verbatim, so flipping the
+  setting does NOT touch waiting drafts: `reassemble-outreach-drafts.ts
+  --business <uuid>` rebuilds them (HQ had 21 in auto mode at the change).
 - **Upsert means re-pitch, never re-send.** A new domain inserts. A row the
   domain or email already belongs to is re-pitched in place ONLY while it is
   `discovered` or `drafted` (`REPITCHABLE_STATUSES`); sent, replied, booked,

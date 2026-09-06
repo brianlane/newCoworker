@@ -3074,7 +3074,8 @@
         "draftBody": "Lo que dice el correo",
         "wholeEmail": "El correo completo, tal como se enviará",
         "fromMailbox": "Enviar desde",
-        "bookingMeeting": "Qué reunión ofrece el correo"
+        "bookingMeeting": "Qué reunión ofrece el correo",
+        "bookingLinkFirstTouch": "Incluir el enlace de reserva en el primer correo"
       },
       "placeholders": {
         "searchTerms": "plomero, técnico de aire acondicionado, techador",
@@ -3121,7 +3122,7 @@
       "rewriteAllConfirm": "¿Reescribir los {count} borradores en espera? Se reemplaza todo lo que hayas editado a mano.",
       "rewriteAllProgress": "Escribiéndolos de nuevo: {done} de {total}.",
       "rewroteAll": "Se reescribieron {count} borradores. Léelos antes de enviarlos.",
-      "wholeEmailHelp": "La despedida, el enlace, la línea para darse de baja y la dirección se añaden solos. Solo el cuadro de arriba es tuyo para editar.",
+      "wholeEmailHelp": "La frase de cierre, la despedida, la línea para darse de baja y la dirección se añaden solos. Solo el cuadro de arriba es tuyo para editar.",
       "wholeEmailStale": "Aquí sigue el borrador guardado. Guarda tus cambios para verlos aquí.",
       "skipVerticalConfirm": "¿Detener el contacto con todos los {vertical}? Se omiten {count} prospectos a los que aún no se les ha escrito. No se toca nada que ya se haya enviado.",
       "skippedVertical": "Se omitieron {count} prospectos de {vertical}. No se tocó nada que ya se hubiera enviado.",
@@ -3134,6 +3135,7 @@
       "bookingMeetingOption": "{name} ({minutes} min)",
       "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte.",
       "bookingMeetingGoneOption": "La reunión que elegiste (ya no está disponible)",
+      "bookingLinkFirstTouchHelp": "Apagado, el primer correo termina con una simple invitación a responder, y el seguimiento lleva el enlace de reserva. Encendido, cada primer correo ofrece el calendario de entrada. Pedirle a un desconocido que elija una hora antes de que haya respondido una vez suele costar respuestas. Los borradores que ya están en espera conservan el texto con el que se escribieron.",
       "sendAllHelp": "Envía {count} hoy y se detiene. El límite diario es lo que protege la reputación de tu correo, así que esto lo respeta.",
       "sendAllCapSpent": "El límite de hoy ya se usó. El resto sale en la próxima pasada, o sube Correos por día arriba y guarda.",
       "sendAllConfirm": "¿Enviar {count} de tus {waiting} borradores en espera ahora? Es todo lo que permite el límite de hoy. Salen de inmediato, no en tu franja habitual de la mañana.",

@@ -35,6 +35,9 @@ const TENANT: PitchTenant = {
   valueProp: "We give small businesses an AI coworker that answers every call and text.",
   website: "https://www.newcoworker.com",
   bookingUrl: "https://www.newcoworker.com/book/hq",
+  // On in the fixture so the existing assertions keep exercising the link;
+  // the default-off behaviour has its own tests under assembleBody.
+  bookingLinkOnFirstTouch: true,
   senderName: "Brian",
   postalAddress: "New Coworker, 1 Example Plaza, Phoenix AZ 85001"
 };
@@ -209,6 +212,55 @@ describe("assembleBody", () => {
     );
     expect(body).toContain("Just reply if you want to hear more.");
     expect(body).toContain(UNSUB);
+  });
+
+  it("asks for a reply on first touch unless the tenant switched the link on, keeping the footer", () => {
+    // The zero-reply fix (Sep 2026): a stranger asked to pick a calendar slot
+    // in the first email tends not to answer at all. With the tenant flag off
+    // the CTA is a soft ask and the link is nowhere in the mail, while the
+    // sign-off, unsubscribe line, and postal address ride exactly as before.
+    const off = assembleBody({ ...TENANT, bookingLinkOnFirstTouch: false }, ["Hi Acme,", "True."], UNSUB);
+    expect(off).toContain("Just reply if you want to hear more.");
+    expect(off).not.toContain(TENANT.bookingUrl as string);
+    expect(off).not.toContain("grab a time");
+    expect(off).toContain(`Brian\n${TENANT.name}\n${TENANT.website}`);
+    expect(off).toContain(UNSUB);
+    expect(off).toContain(TENANT.postalAddress);
+
+    const on = assembleBody({ ...TENANT, bookingLinkOnFirstTouch: true }, ["Hi Acme,", "True."], UNSUB);
+    expect(on).toContain(`You can grab a time here: ${TENANT.bookingUrl}`);
+    expect(on).not.toContain("Just reply");
+    // Same footer both ways: the toggle moves ONE line.
+    expect(on.split("\n\n").slice(-2)).toEqual(off.split("\n\n").slice(-2));
+  });
+
+  it("lets a per-email decision override the tenant default in both directions", () => {
+    const tenantOff = { ...TENANT, bookingLinkOnFirstTouch: false };
+    expect(
+      assembleBody(tenantOff, ["Hi Acme,"], UNSUB, { bookingLink: true })
+    ).toContain(TENANT.bookingUrl as string);
+    expect(
+      assembleBody({ ...TENANT, bookingLinkOnFirstTouch: true }, ["Hi Acme,"], UNSUB, {
+        bookingLink: false
+      })
+    ).toContain("Just reply if you want to hear more.");
+    // Null is "no decision": the tenant default stands.
+    expect(assembleBody(tenantOff, ["Hi Acme,"], UNSUB, { bookingLink: null })).toContain(
+      "Just reply if you want to hear more."
+    );
+    // And no decision can conjure a link the tenant does not have.
+    expect(
+      assembleBody({ ...TENANT, bookingUrl: null }, ["Hi Acme,"], UNSUB, { bookingLink: true })
+    ).toContain("Just reply if you want to hear more.");
+  });
+
+  it("composePitch threads the same option through to the deterministic body", () => {
+    const tenantOff = { ...TENANT, bookingLinkOnFirstTouch: false };
+    const prospect = { businessName: "Acme", city: "", findings: [BOOKING_FINDING] };
+    expect(composePitch(tenantOff, prospect, UNSUB)?.body).not.toContain("grab a time");
+    expect(composePitch(tenantOff, prospect, UNSUB, { bookingLink: true })?.body).toContain(
+      "grab a time"
+    );
   });
 
   it("prints the unsubscribe line alone when the tenant has no address at all", () => {

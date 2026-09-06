@@ -71,7 +71,8 @@ function row(over: Record<string, unknown> = {}) {
     pitch_subject: "Wolfgangs Cooling, Heating & Plumbing: the customers who would rather text",
     pitch_paragraphs: "Hi Wolfgangs Cooling, Heating & Plumbing,\n\nI was looking you up in Tempe AZ.",
     pitch_body:
-      "Hi Wolfgangs Cooling, Heating & Plumbing,\n\nI was looking you up in Tempe AZ.\n\nYou can grab a time here: https://www.example.com/book/hq/discovery-call\n\nSam\nExample Co\n\nYou can unsubscribe here: https://x/api/outreach/unsubscribe?p=1\n1 Example Plaza\n",
+      "Hi Wolfgangs Cooling, Heating & Plumbing,\n\nI was looking you up in Tempe AZ.\n\nJust reply if you want to hear more.\n\nSam\nExample Co\n\nYou can unsubscribe here: https://x/api/outreach/unsubscribe?p=1\n1 Example Plaza\n",
+    include_booking_link: null,
     status: "drafted",
     status_detail: null,
     contact_id: null,
@@ -99,7 +100,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(requireMcpBusinessRole).mockResolvedValue("owner");
   vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 30, remaining: 29, reset: 0 });
-  vi.mocked(getOutreachSettings).mockResolvedValue({ mode: "manual" } as never);
+  vi.mocked(getOutreachSettings).mockResolvedValue({
+    mode: "manual",
+    booking_link_on_first_touch: false
+  } as never);
   vi.mocked(listProspectsByStatus).mockResolvedValue([row() as never]);
   vi.mocked(countProspectsByStatus).mockResolvedValue(11);
   vi.mocked(getProspect).mockResolvedValue(row() as never);
@@ -119,6 +123,7 @@ describe("list_outreach_queue", () => {
   it("returns the review queue in the panel's shape, without the assembled footer", async () => {
     const result = (await runTool(listOutreachQueueTool, {}, AUTH)) as {
       mode: string;
+      booking_link_on_first_touch: boolean;
       waiting: number;
       drafts: Array<Record<string, unknown>>;
     };
@@ -127,6 +132,9 @@ describe("list_outreach_queue", () => {
     expect(listProspectsByStatus).toHaveBeenCalledWith("biz-1", ["drafted"], 25);
     expect(countProspectsByStatus).toHaveBeenCalledWith("biz-1", "drafted");
     expect(result.mode).toBe("manual");
+    // The business default for the first email's closing line, so an agent
+    // knows what a draft gets without passing include_booking_link.
+    expect(result.booking_link_on_first_touch).toBe(false);
     expect(result.waiting).toBe(11);
     expect(result.drafts).toEqual([
       {
@@ -138,6 +146,7 @@ describe("list_outreach_queue", () => {
         vertical: "hvac",
         subject: "Wolfgangs Cooling, Heating & Plumbing: the customers who would rather text",
         paragraphs: "Hi Wolfgangs Cooling, Heating & Plumbing,\n\nI was looking you up in Tempe AZ.",
+        include_booking_link: null,
         status: "drafted",
         drafted_at: "2026-09-05T04:00:00Z"
       }
@@ -154,7 +163,30 @@ describe("list_outreach_queue", () => {
     vi.mocked(countProspectsByStatus).mockResolvedValue(0);
     const result = await runTool(listOutreachQueueTool, { limit: 5 }, AUTH);
     expect(listProspectsByStatus).toHaveBeenCalledWith("biz-1", ["drafted"], 5);
-    expect(result).toEqual({ mode: "off", waiting: 0, drafts: [] });
+    expect(result).toEqual({
+      mode: "off",
+      booking_link_on_first_touch: false,
+      waiting: 0,
+      drafts: []
+    });
+  });
+
+  it("reports the business default as true when the owner switched the first-touch link on", async () => {
+    vi.mocked(getOutreachSettings).mockResolvedValue({
+      mode: "auto",
+      booking_link_on_first_touch: true
+    } as never);
+    vi.mocked(listProspectsByStatus).mockResolvedValue([
+      row({ include_booking_link: false }) as never
+    ]);
+    const result = (await runTool(listOutreachQueueTool, {}, AUTH)) as {
+      booking_link_on_first_touch: boolean;
+      drafts: Array<{ include_booking_link: boolean | null }>;
+    };
+    expect(result.booking_link_on_first_touch).toBe(true);
+    // A draft's own decision is reported beside it, so the agent can see this
+    // one opted OUT under a tenant whose default is on.
+    expect(result.drafts[0].include_booking_link).toBe(false);
   });
 
   it("passes an explicit business_id through and role-checks it", async () => {
@@ -199,7 +231,8 @@ describe("upsert_outreach_prospect", () => {
       domain: "wolfgangscooling.com",
       vertical: "hvac",
       website: "https://wolfgangscooling.com",
-      phone: "(480) 555-0100"
+      phone: "(480) 555-0100",
+      includeBookingLink: undefined
     });
     expect(result).toEqual({
       created: true,
@@ -207,8 +240,34 @@ describe("upsert_outreach_prospect", () => {
       mode: "manual",
       subject: row().pitch_subject,
       paragraphs: row().pitch_paragraphs,
+      include_booking_link: null,
       assembled_body: row().pitch_body
     });
+  });
+
+  it("passes include_booking_link through and reports what the row recorded", async () => {
+    // The flag is the one appended line a caller may decide about. It goes to
+    // the shared upsert (which assembles and stores it), never to the body.
+    vi.mocked(upsertProspectDraft).mockResolvedValue({
+      ok: true,
+      prospect: row({
+        include_booking_link: true,
+        pitch_body: "Hi,\n\nYou can grab a time here: https://www.example.com/book/hq\n\nSam\n\nunsub\n"
+      }) as never,
+      created: true,
+      mode: "manual"
+    });
+    const result = (await runTool(
+      upsertOutreachProspectTool,
+      { ...CREATE_ARGS, include_booking_link: true },
+      AUTH
+    )) as { include_booking_link: boolean | null; assembled_body: string };
+    expect(upsertProspectDraft).toHaveBeenCalledWith(
+      "biz-1",
+      expect.objectContaining({ includeBookingLink: true })
+    );
+    expect(result.include_booking_link).toBe(true);
+    expect(result.assembled_body).toContain("grab a time");
   });
 
   it("reports a re-pitch as created:false, defaults city to blank, and leaves the optional fields undefined", async () => {
@@ -232,7 +291,8 @@ describe("upsert_outreach_prospect", () => {
         domain: undefined,
         vertical: undefined,
         website: undefined,
-        phone: undefined
+        phone: undefined,
+        includeBookingLink: undefined
       })
     );
     // Auto mode is reported, because the sweep will send this without a
@@ -282,7 +342,8 @@ describe("update_outreach_draft", () => {
   const EDITED = {
     pitch_subject: "New subject",
     pitch_paragraphs: "New body.",
-    pitch_body: "New body.\n\nYou can grab a time here: https://x\n\nBrian\n\nunsubscribe\n"
+    pitch_body: "New body.\n\nJust reply if you want to hear more.\n\nBrian\n\nunsubscribe\n",
+    include_booking_link: null
   };
 
   it("edits subject and paragraphs together, like the dashboard's Save draft", async () => {
@@ -293,15 +354,18 @@ describe("update_outreach_draft", () => {
       AUTH
     );
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_settings");
+    // No flag passed means the row's own booking-link decision is left alone.
     expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
       subject: "New subject",
-      paragraphs: "New body."
+      paragraphs: "New body.",
+      includeBookingLink: undefined
     });
     expect(result).toEqual({
       draft_id: DRAFT_ID,
       status: "edited",
       subject: "New subject",
       paragraphs: "New body.",
+      include_booking_link: null,
       assembled_body: EDITED.pitch_body
     });
     expect(skipProspect).not.toHaveBeenCalled();
@@ -312,14 +376,53 @@ describe("update_outreach_draft", () => {
     await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, subject: "Only subject" }, AUTH);
     expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
       subject: "Only subject",
-      paragraphs: row().pitch_paragraphs
+      paragraphs: row().pitch_paragraphs,
+      includeBookingLink: undefined
     });
 
     await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, paragraphs: "Only body." }, AUTH);
     expect(editProspectDraft).toHaveBeenLastCalledWith("biz-1", DRAFT_ID, {
       subject: row().pitch_subject,
-      paragraphs: "Only body."
+      paragraphs: "Only body.",
+      includeBookingLink: undefined
     });
+  });
+
+  it("adds or removes the booking link on its own, keeping the stored text", async () => {
+    // The use case Outbound Prospecting asked for: a prospect replied, so
+    // their waiting draft should now offer the calendar. One flag, no rewrite.
+    vi.mocked(editProspectDraft).mockResolvedValue({
+      ok: true,
+      prospect: {
+        ...EDITED,
+        pitch_body: "New body.\n\nYou can grab a time here: https://x\n\nBrian\n\nunsubscribe\n",
+        include_booking_link: true
+      }
+    });
+    const result = (await runTool(
+      updateOutreachDraftTool,
+      { draft_id: DRAFT_ID, include_booking_link: true },
+      AUTH
+    )) as { include_booking_link: boolean | null; assembled_body: string; status: string };
+    expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
+      subject: row().pitch_subject,
+      paragraphs: row().pitch_paragraphs,
+      includeBookingLink: true
+    });
+    expect(result.status).toBe("edited");
+    expect(result.include_booking_link).toBe(true);
+    expect(result.assembled_body).toContain("grab a time");
+
+    await runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, include_booking_link: false }, AUTH);
+    expect(editProspectDraft).toHaveBeenLastCalledWith(
+      "biz-1",
+      DRAFT_ID,
+      expect.objectContaining({ includeBookingLink: false })
+    );
+    // It counts as an edit, so it cannot ride along with skip.
+    await expect(
+      runTool(updateOutreachDraftTool, { draft_id: DRAFT_ID, skip: true, include_booking_link: true }, AUTH)
+    ).rejects.toThrow(/not both/);
   });
 
   it("hands a legacy draft's null text to the edit path as blank, so it refuses honestly", async () => {
@@ -335,7 +438,8 @@ describe("update_outreach_draft", () => {
     ).rejects.toThrow(/subject line and something to say/);
     expect(editProspectDraft).toHaveBeenCalledWith("biz-1", DRAFT_ID, {
       subject: "s",
-      paragraphs: ""
+      paragraphs: "",
+      includeBookingLink: undefined
     });
     // And the mirror case: new paragraphs on a row with no stored subject.
     await expect(
@@ -343,7 +447,8 @@ describe("update_outreach_draft", () => {
     ).rejects.toThrow(/subject line and something to say/);
     expect(editProspectDraft).toHaveBeenLastCalledWith("biz-1", DRAFT_ID, {
       subject: "",
-      paragraphs: "p"
+      paragraphs: "p",
+      includeBookingLink: undefined
     });
   });
 
@@ -356,6 +461,7 @@ describe("update_outreach_draft", () => {
       status: "skipped",
       subject: null,
       paragraphs: null,
+      include_booking_link: null,
       assembled_body: null
     });
     expect(editProspectDraft).not.toHaveBeenCalled();

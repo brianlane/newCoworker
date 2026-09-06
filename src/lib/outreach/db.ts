@@ -48,6 +48,12 @@ export type OutreachSettingsRow = {
   /** Meeting the CTA links to. Null links the page and lets them choose. */
   booking_meeting_type_id: string | null;
   /**
+   * Whether the FIRST email carries the booking link as its CTA. Off (the
+   * default) it ends on a reply ask; the follow-up carries the link either
+   * way. A draft's own `include_booking_link` overrides this per prospect.
+   */
+  booking_link_on_first_touch: boolean;
+  /**
    * CAN-SPAM postal address. The DB refuses a non-off mode without one unless
    * `postal_address_exempt` is set, in which case the footer falls back to the
    * business profile address.
@@ -87,6 +93,13 @@ export type OutreachProspectRow = {
    */
   pitch_paragraphs: string | null;
   pitch_body: string | null;
+  /**
+   * Per-draft override of the tenant's `booking_link_on_first_touch`. Null
+   * follows the tenant default; a boolean is a decision made for this one
+   * prospect (by a connector, or a later owner surface) and survives edits
+   * and "Write it again", which re-assemble the body from it.
+   */
+  include_booking_link: boolean | null;
   status: OutreachProspectStatus;
   status_detail: string | null;
   contact_id: string | null;
@@ -133,6 +146,7 @@ export type OutreachSettingsPatch = Partial<
     | "send_window_end_hour"
     | "from_connection_id"
     | "booking_meeting_type_id"
+    | "booking_link_on_first_touch"
     | "postal_address"
     | "postal_address_exempt"
     | "value_prop"
@@ -241,6 +255,7 @@ export type DraftedProspectInsert = Pick<
   | "pitch_subject"
   | "pitch_paragraphs"
   | "pitch_body"
+  | "include_booking_link"
   | "drafted_at"
 >;
 
@@ -683,6 +698,7 @@ export type OutreachProspectPatch = Partial<
     | "pitch_subject"
     | "pitch_paragraphs"
     | "pitch_body"
+    | "include_booking_link"
     | "status"
     | "status_detail"
     | "contact_id"

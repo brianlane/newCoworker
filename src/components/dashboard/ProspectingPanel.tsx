@@ -38,6 +38,7 @@ type Settings = {
   sender_name: string | null;
   from_connection_id: string | null;
   booking_meeting_type_id: string | null;
+  booking_link_on_first_touch: boolean;
 };
 
 type Funnel = {
@@ -110,7 +111,8 @@ const DEFAULTS: Settings = {
   value_prop: null,
   sender_name: null,
   from_connection_id: null,
-  booking_meeting_type_id: null
+  booking_meeting_type_id: null,
+  booking_link_on_first_touch: false
 };
 
 export function ProspectingPanel({ businessId }: { businessId: string }) {
@@ -245,7 +247,8 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
           valueProp: form.value_prop ?? "",
           senderName: form.sender_name ?? "",
           fromConnectionId: form.from_connection_id ?? "",
-          bookingMeetingTypeId: form.booking_meeting_type_id ?? ""
+          bookingMeetingTypeId: form.booking_meeting_type_id ?? "",
+          bookingLinkOnFirstTouch: form.booking_link_on_first_touch
         })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
@@ -753,6 +756,27 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             <p className="mt-1 text-xs text-parchment/50">{t("bookingMeetingHelp")}</p>
           </div>
         ) : null}
+        {/* Whether the FIRST email offers the calendar at all. Off by default:
+            asking a stranger to pick a slot before they have replied once is
+            what was costing replies, so the first email ends on a reply ask
+            and the follow-up carries the link. Always shown, unlike the two
+            pickers above, because the decision exists for every tenant with a
+            booking page and there is no "only one option" case to hide. */}
+        <div className="flex items-start gap-2 sm:col-span-2">
+          <input
+            id="prospecting-booking-link"
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-signal-teal"
+            checked={form.booking_link_on_first_touch}
+            onChange={(e) => edit({ booking_link_on_first_touch: e.target.checked })}
+          />
+          <div>
+            <label className="text-sm text-parchment" htmlFor="prospecting-booking-link">
+              {t("fields.bookingLinkFirstTouch")}
+            </label>
+            <p className="mt-1 text-xs text-parchment/50">{t("bookingLinkFirstTouchHelp")}</p>
+          </div>
+        </div>
         {/* Only worth a control when there is a real choice: one connected
             mailbox needs no picker, and none is a blocker rather than a
             preference. Counted on the CONNECTED entries, not the list length:

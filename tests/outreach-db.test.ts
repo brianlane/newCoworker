@@ -218,6 +218,7 @@ describe("insertDraftedProspect", () => {
     pitch_subject: "Acme: hello",
     pitch_paragraphs: "Hi Acme,",
     pitch_body: "Hi Acme,\n\nfooter\n",
+    include_booking_link: null,
     drafted_at: "2026-09-05T00:00:00Z"
   };
 
