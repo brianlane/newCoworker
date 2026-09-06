@@ -35,8 +35,11 @@ the summary.
   own product: Places discovery across Phoenix-metro trades (12 paid queries
   a day on the Enterprise budget, double the Standard 6), a pitch built
   from what each prospect's site is missing, sent from HQ's connected mailbox.
-  Configured by `configure-hq-prospecting.ts` in **manual mode**, so drafts
-  wait on a human until the copy earns automatic sending. See the README's
+  Configured by `configure-hq-prospecting.ts` in **manual mode**; Brian has
+  since flipped it to **auto** from the Marketing page (verified live
+  2026-09-06: mode `auto`, cap 12, 135 sent). Since Sep 2026 the first email
+  ends on a reply ask and only the follow-up carries the booking link
+  (README, "The first email asks; the follow-up books"). See the README's
   Prospecting section.
 - **Tenant zero for the Slack integration** (Aug 10 2026). Connected to the
   "New Coworker" workspace (team `T0BP5MBN1AR`, bot `U0BQ77AUR24`), alert
@@ -159,6 +162,27 @@ visitor actually books.
 
 ## One-shots
 
+**First-touch booking link switched off; waiting drafts to re-assemble
+(2026-09-06, PR pending):** the product change Outbound Prospecting and Brian
+approved as the zero-reply fix. `outreach_settings.booking_link_on_first_touch`
+ships `false` by default (migration `20260906033938`), so from the merge on,
+every first pitch closes with "Just reply if you want to hear more." instead
+of the discovery-call link; the day-5 nudge still carries the link, and a
+connector can opt a single draft in with `include_booking_link: true` on
+`upsert_outreach_prospect` / `update_outreach_draft`. HQ is the only tenant
+with outreach on (mode is now **auto**, not the manual mode
+`configure-hq-prospecting.ts` left it in; 135 sent, `booking_meeting_type_id`
+pinned to the discovery call, sending from the HQ Gmail through the owner
+mailbox, not the contact@ alias). At the time of the change 21 drafts were waiting, all 21
+with the booking line baked into `pitch_body`, 10 of them connector-filed (no
+findings, so Write it again refuses them). Those go out as stored in auto mode
+unless re-assembled: **post-merge, run
+`reassemble-outreach-drafts.ts --business 8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`
+(dry run, then `--apply`)**, which keeps every stored subject and paragraph and
+rebuilds only the closing line and footer through `editProspectDraft`. Not
+yet applied when this entry was written; the applied_oneshots ledger is the
+source of truth.
+
 **Hostinger billing id stamped on the synthetic subscription (2026-08-31):**
 `reconcile-subscription-hostinger-links.ts --apply` copied
 `16BcBrVOTACBI8WdU` from inventory onto HQ's live `subscriptions` row so
@@ -239,7 +263,9 @@ instructions because a `run_agent` step never sees `bookingLinkPromptLine`),
 `enable-hq-booking-page.ts`,
 `patch-hq-booking-offer.ts`, `sync-hq-booking-copy.ts`,
 `fix-hq-placeholder-contact-names.ts`, `set-hq-digest-prefs.ts`,
-`configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`.
+`configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`,
+`reassemble-outreach-drafts.ts` (generic, takes `--business`; listed here
+because HQ is the tenant whose waiting drafts it exists to rebuild).
 
 **Order matters for the two follow-up flows.** Their live SMS bodies are the
 product of three scripts layered in sequence, so re-running an earlier one
