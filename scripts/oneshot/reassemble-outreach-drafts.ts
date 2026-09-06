@@ -77,6 +77,18 @@ if (!settings) {
   console.error(`business ${BUSINESS_ID} has no outreach_settings row; nothing to re-assemble`);
   process.exit(1);
 }
+// Before migration 20260906033938 lands the column is simply absent from the
+// row, and `editProspectDraft` would then fail on the write of
+// `include_booking_link`. Say so instead of half-applying.
+const migrated = typeof settings.booking_link_on_first_touch === "boolean";
+if (!migrated) {
+  console.error(
+    "outreach_settings.booking_link_on_first_touch is missing: migration " +
+      "20260906033938 has not been applied to this database yet. Dry run continues; " +
+      "--apply refuses until the deploy has landed."
+  );
+  if (APPLY) process.exit(1);
+}
 
 /** Every waiting draft. The ledger scan bound is generous next to any real queue. */
 const drafted = await listProspectsByStatus(BUSINESS_ID, ["drafted"], 1000, db as never);
@@ -86,7 +98,9 @@ const REPLY_LINE = "Just reply if you want to hear more.";
 
 console.log(
   `${APPLY ? "APPLY" : "DRY RUN"}: ${drafted.length} waiting draft(s) for business ${BUSINESS_ID}\n` +
-    `  tenant default booking_link_on_first_touch = ${settings.booking_link_on_first_touch}\n`
+    `  tenant default booking_link_on_first_touch = ${
+      migrated ? settings.booking_link_on_first_touch : "(column not migrated yet; will be false)"
+    }\n`
 );
 
 let rewritten = 0;
@@ -106,13 +120,16 @@ for (const row of drafted) {
   }
   const body = row.pitch_body ?? "";
   const hasLink = body.includes(BOOKING_LINE);
-  const wantsLink = row.include_booking_link ?? settings.booking_link_on_first_touch;
+  // `?? null` on both reads: before the migration the columns are absent
+  // (undefined), and the dry run should still describe the post-deploy result.
+  const rowOverride = row.include_booking_link ?? null;
+  const wantsLink = rowOverride ?? settings.booking_link_on_first_touch ?? false;
   // A tenant with no booking link at all already prints the reply ask; the
   // apply below is still exact (it re-runs the real assembly), this is only
   // the dry run's best statement of what will change.
   const cta = hasLink ? "booking link" : body.includes(REPLY_LINE) ? "reply ask" : "unknown";
   const target = wantsLink ? "booking link" : "reply ask";
-  const override = row.include_booking_link === null ? "tenant default" : `row override ${row.include_booking_link}`;
+  const override = rowOverride === null ? "tenant default" : `row override ${rowOverride}`;
 
   if (!APPLY) {
     const change = cta === target ? "current" : `would rewrite (${cta} -> ${target})`;
