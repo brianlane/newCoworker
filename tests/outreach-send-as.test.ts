@@ -3,10 +3,11 @@
  * dashboard save and the HQ one-shot, and mirrored by the DB check
  * `outreach_settings_send_as_email_shape`. The three have to agree on what
  * counts as one address, so the cases here are the cases the SQL regex has to
- * accept and refuse too.
+ * accept and refuse too; tests/worker-integration/outreach-send-as-column.itest.ts
+ * runs the refusals against the real constraint.
  */
 import { describe, expect, it } from "vitest";
-import { normalizeSendAsEmail, SEND_AS_EMAIL_SHAPE } from "@/lib/outreach/send-as";
+import { normalizeSendAsEmail } from "@/lib/outreach/send-as";
 
 describe("normalizeSendAsEmail", () => {
   it("lowercases and trims one address", () => {
@@ -36,11 +37,5 @@ describe("normalizeSendAsEmail", () => {
     ]) {
       expect(normalizeSendAsEmail(bad), bad).toBe("invalid");
     }
-  });
-
-  it("is the same shape the migration's check constraint enforces", () => {
-    // The SQL regex is a POSIX rendering of this one; keeping the JS source
-    // pinned here makes a drift between the two a visible diff in review.
-    expect(SEND_AS_EMAIL_SHAPE.source).toBe('^[^\\s@<>,;"]+@[^\\s@<>,;"]+\\.[^\\s@<>,;"]+$');
   });
 });

@@ -15,7 +15,7 @@
  * (`outreach_settings_send_as_email_shape`) so the readable refusal is what the
  * owner sees, never the constraint violation behind it.
  */
-export const SEND_AS_EMAIL_SHAPE = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
+const SEND_AS_EMAIL_SHAPE = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
 
 /**
  * The send-as address as stored: trimmed and lowercased, null for blank, and
