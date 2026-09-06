@@ -982,7 +982,7 @@ contact up with it; `from_matches` lines up from the other side instead, with
 
 ## One-shots
 
-**`amy-clever-example-offers.ts` (Sep 6 2026):** stops the AI quoting Clever's
+**`amy-clever-example-offers.ts` (applied Sep 6 2026):** stops the AI quoting Clever's
 "Example only" cash-offer placeholders as this seller's real offers. Call
 `5339954d` (2026-09-06) and call `60a64ddd` (2026-08-20) both said
 "the offers on your file are 375k and 395k". PR #1726 treated that as the

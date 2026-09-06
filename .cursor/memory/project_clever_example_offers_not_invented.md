@@ -30,7 +30,7 @@ $625k -> $550k/$580k, $1M -> $880k/$930k). Only 3 calls voiced the figures
 (one on Aug 20, two on Sep 6). Team texts from the
 spoke-check flow also carried the samples.
 
-**What shipped (option 1, Sep 6 2026):** drop the interpolated amounts from
+**What shipped (option 1, applied Sep 6 2026):** drop the interpolated amounts from
 the spoken pitch; harden `CASH_OFFERS_FIELD` so the example module answers
 'none listed'; one-shot `amy-clever-example-offers.ts` applies both to the
 live Clever Accept and spoke-check flows. The sweep splits `briefed_amount`
