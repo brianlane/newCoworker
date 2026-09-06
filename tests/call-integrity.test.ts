@@ -766,12 +766,13 @@ describe("amountsFromCallBrief", () => {
         context_note: "Estimated value: $425,000",
         notify_e164: "+16025551212"
       },
-      voicemail: { script: "Give us a call back at 602-695-1142. Thanks." },
+      voicemail: { script: "We listed around $410,000. Give us a call back at 602-695-1142. Thanks." },
       reach_targets: { pre_sms_body: "Property worth $999,000" }
     });
     expect(amounts.has(375_000)).toBe(true);
     expect(amounts.has(395_000)).toBe(true);
     expect(amounts.has(425_000)).toBe(true);
+    expect(amounts.has(410_000)).toBe(true);
     // The teammate SMS is not fed to the model, so its figure is not briefed.
     expect(amounts.has(999_000)).toBe(false);
   });
