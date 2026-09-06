@@ -2418,7 +2418,7 @@ two settings.
 the time it goes out the prospect has heard from us once and not said no, so
 offering a time is a next step rather than an opening demand. That is the
 "later touch" the link waits for; `nudgeForBusiness` passes `bookingLink:
-true` explicitly and `callToAction` still refuses to invent a link for a tenant
+true` explicitly and the CTA line still refuses to invent a link for a tenant
 without one.
 
 **`outreach_prospects.include_booking_link`** is the per-draft override: null

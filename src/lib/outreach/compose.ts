@@ -257,7 +257,7 @@ export type AssembleOptions = {
 };
 
 /** The CTA line: the booking link when this email is allowed one, else a reply ask. */
-export function callToAction(tenant: PitchTenant, options: AssembleOptions = {}): string {
+function callToAction(tenant: PitchTenant, options: AssembleOptions): string {
   const wanted = options.bookingLink ?? tenant.bookingLinkOnFirstTouch;
   return tenant.bookingUrl && wanted
     ? `You can grab a time here: ${tenant.bookingUrl}`

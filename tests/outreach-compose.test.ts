@@ -18,7 +18,6 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({
 
 import {
   assembleBody,
-  callToAction,
   composePitch,
   isPitchable,
   leadFinding,
@@ -253,10 +252,6 @@ describe("assembleBody", () => {
     expect(
       assembleBody({ ...TENANT, bookingUrl: null }, ["Hi Acme,"], UNSUB, { bookingLink: true })
     ).toContain("Just reply if you want to hear more.");
-    expect(callToAction(tenantOff)).toBe("Just reply if you want to hear more.");
-    expect(callToAction(tenantOff, { bookingLink: true })).toBe(
-      `You can grab a time here: ${TENANT.bookingUrl}`
-    );
   });
 
   it("composePitch threads the same option through to the deterministic body", () => {
