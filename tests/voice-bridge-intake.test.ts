@@ -1173,18 +1173,14 @@ describe("voice personas never invent a contact detail", () => {
 });
 
 /**
- * The money-figure rule (call 60a64ddd, 2026-08-20).
+ * The money-figure rule (calls 60a64ddd 2026-08-20 and 5339954d 2026-09-06).
  *
- * Calling Luis Castillo about 6826 W Pierson St, the AI said "the offers on
- * your file are 375k and 395k". The real offers were $320,097, $342,000 and
- * $325,000 and they arrived four minutes AFTER the call. At the moment it
- * spoke, the AI held a referral text reading "Est. home value: $425,000.00"
- * and no offers at all.
- *
- * Same honest limit as the block above: these pin the DEPLOYED strings, and
- * the detector in _shared/call_integrity.ts is what actually catches a
- * recurrence, because #1612 proved a prompt rule alone does not close this
- * class.
+ * The AI said "the offers on your file are 375k and 395k". Those figures
+ * came from the pitch interpolating `{{vars.cash_offers}}`, which had
+ * copied Clever's Example only module, not from the model inventing them.
+ * The prompt line still ships because a true invention remains possible;
+ * the detector in `_shared/call_integrity.ts` now splits `briefed_amount`
+ * (check the flow) from `invented_amount` (the model guessed).
  */
 describe("voice personas never invent a money figure", () => {
   it("bans the attributed figure and says what to do instead", () => {

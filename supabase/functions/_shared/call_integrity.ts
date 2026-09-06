@@ -37,17 +37,18 @@
  *   audit to notice. See `isAcceptPrompt` for why the signature is the LAST
  *   caller turn rather than a repeat count.
  *
- *   `invented_amount` (call 60a64ddd, 2026-08-20, Amy Laidlaw). Calling a
- *   Clever seller lead, the AI said "the offers on your file are 375k and
- *   395k". The only offers ever sent for that lead were $320,097, $342,000
- *   and $325,000, and they arrived four minutes AFTER the call ended. At the
- *   moment it spoke, the AI held one referral text reading "Est. home value:
- *   $425,000.00" and no offers at all, so both figures were invented, and
- *   both were tens of thousands high. NO_INVENTED_CONTACT_LINE deliberately
- *   scoped itself to details "a person will ACT on, by dialling or writing to
- *   them", excluding prices as "legitimate and frequent". This call is the
- *   counter-example: a seller acts on a number like that by deciding whether
- *   to list, and unlike a wrong phone number it never fails visibly.
+ *   `invented_amount` / `briefed_amount` (calls 60a64ddd 2026-08-20 and
+ *   5339954d 2026-09-06, Amy Laidlaw). Calling a Clever seller lead, the AI
+ *   said "the offers on your file are 375k and 395k". PR #1726 treated that
+ *   as the model inventing a figure. It was not: the pitch template
+ *   interpolated `{{vars.cash_offers}}`, and the page read that fills that
+ *   var copied Clever's "Example only" comparison module (ZoomCasa $375k,
+ *   QuickBuy $395k, labeled placeholders not based on this property). The
+ *   real offers ($320,097 / $342,000 / $325,000 on the Aug 20 lead) arrived
+ *   by text four minutes after the call. `briefed_amount` is the honest
+ *   finding when the figure WAS in the call brief: the flow handed it a
+ *   number, check the flow. `invented_amount` stays the finding when the
+ *   figure came from neither the caller nor the brief.
  *
  *   `invented_contact_number` (calls 68ca8cdb 2026-08-26 and 5b335fc8
  *   2026-08-27, again Amy Laidlaw). Ad-libbing a voicemail sign-off, the
@@ -75,7 +76,8 @@ export type CallIntegrityKind =
   | "talked_to_recording"
   | "invented_contact_number"
   | "gate_never_cleared"
-  | "invented_amount";
+  | "invented_amount"
+  | "briefed_amount";
 
 export type CallIntegrityFinding = {
   kind: CallIntegrityKind;
@@ -256,6 +258,43 @@ export function callerAmounts(turns: readonly IntegrityTurn[]): Set<number> {
   return out;
 }
 
+/**
+ * Amounts written into the materials this call briefed the model with.
+ *
+ * Reads only the surfaces the voice bridge actually feeds the model: the
+ * intake persona, the known-details context note, and the authored voicemail
+ * script. The rest of `voice_handoff_sessions.context` (reach-target SMS,
+ * flow-run markers, AMD stamps) is never shown to the model, so numbers that
+ * live only there would be a false "briefed" finding.
+ *
+ * Used to split `invented_amount` from `briefed_amount`, never to silence a
+ * finding. A figure in the brief that the caller did not say is still
+ * reported; the phrase just names the flow instead of the model.
+ */
+export function amountsFromCallBrief(context: unknown): Set<number> {
+  const out = new Set<number>();
+  if (!context || typeof context !== "object") return out;
+  const rec = context as Record<string, unknown>;
+  const takeover = rec.ai_takeover;
+  if (takeover && typeof takeover === "object") {
+    const t = takeover as Record<string, unknown>;
+    if (typeof t.persona === "string") {
+      for (const v of spokenAmounts(t.persona)) out.add(v);
+    }
+    if (typeof t.context_note === "string") {
+      for (const v of spokenAmounts(t.context_note)) out.add(v);
+    }
+  }
+  const voicemail = rec.voicemail;
+  if (voicemail && typeof voicemail === "object") {
+    const script = (voicemail as Record<string, unknown>).script;
+    if (typeof script === "string") {
+      for (const v of spokenAmounts(script)) out.add(v);
+    }
+  }
+  return out;
+}
+
 export function hasRoleLeak(text: string): boolean {
   return ROLE_TOKEN_LEAK.test(text);
 }
@@ -383,8 +422,12 @@ function isHeardAssistant(turn: IntegrityTurn): boolean {
  *
  * `allowedAmounts` switches the invented-amount rule on, and follows the same
  * fail-toward-silence contract as `allowedNumbers`: omitted, the rule does
- * not run. Callers build it with `callerAmounts`, optionally widened with
- * whatever written material the call was briefed from.
+ * not run. Callers build it with `callerAmounts`. Pass `briefedAmounts`
+ * (from `amountsFromCallBrief`) alongside it so a figure the flow itself
+ * handed the model is reported as `briefed_amount` ("came from the call
+ * brief, check the flow") rather than as the model inventing one. Omitted,
+ * every unsourced figure stays `invented_amount`, which is the pre-2026-09-06
+ * behaviour and the wrong diagnosis for the Clever example-module calls.
  *
  * `allowedNumbers` switches the invented-number rule on: it is the
  * business's legitimate set (see `collectAllowedNumbers`) PLUS the numbers
@@ -399,6 +442,12 @@ export function detectCallIntegrity(
     minAssistantTurns?: number;
     allowedNumbers?: ReadonlySet<string>;
     allowedAmounts?: ReadonlySet<number>;
+    /**
+     * Amounts written into this call's persona, context note, or voicemail
+     * script. Used only to SPLIT invented vs briefed; never to silence a
+     * finding. See `amountsFromCallBrief`.
+     */
+    briefedAmounts?: ReadonlySet<number>;
   } = {}
 ): CallIntegrityFinding[] {
   const findings: CallIntegrityFinding[] = [];
@@ -438,12 +487,23 @@ export function detectCallIntegrity(
       for (const v of spokenAmounts(text)) {
         if (amountIsSourced(v, opts.allowedAmounts) || flagged.has(v)) continue;
         flagged.add(v);
-        findings.push({
-          kind: "invented_amount",
-          detail:
-            `said $${v.toLocaleString("en-US")}, which nothing on this call supplied: ` +
-            `"${clipEvidenceQuote(text, 140)}"`
-        });
+        const fromBrief =
+          opts.briefedAmounts !== undefined && amountIsSourced(v, opts.briefedAmounts);
+        findings.push(
+          fromBrief
+            ? {
+                kind: "briefed_amount",
+                detail:
+                  `said $${v.toLocaleString("en-US")}, which came from the call brief, check the flow: ` +
+                  `"${clipEvidenceQuote(text, 140)}"`
+              }
+            : {
+                kind: "invented_amount",
+                detail:
+                  `said $${v.toLocaleString("en-US")}, which nothing on this call supplied: ` +
+                  `"${clipEvidenceQuote(text, 140)}"`
+              }
+        );
       }
     }
   }
@@ -560,7 +620,7 @@ export function clipAlertDetail(detail: string, maxChars: number = ALERT_DETAIL_
  * as the AI chatting to a machine is worse than no alert.
  *
  * A `switch` rather than an if-chain so the compiler, not a reviewer, is what
- * catches the next kind: TypeScript proves the union exhaustive, and a sixth
+ * catches the next kind: TypeScript proves the union exhaustive, and a new
  * member fails to build here instead of silently inheriting somebody else's
  * sentence.
  */
@@ -572,6 +632,8 @@ export function kindPhrase(kind: CallIntegrityKind): string {
       return "gave out a number it does not own";
     case "invented_amount":
       return "quoted a figure nothing gave it";
+    case "briefed_amount":
+      return "quoted a figure from the call brief, check the flow";
     // The one finding that is NOT the model misbehaving: on the incident call
     // it stayed correctly silent. So the phrase names the lost referral
     // rather than an act of disobedience.

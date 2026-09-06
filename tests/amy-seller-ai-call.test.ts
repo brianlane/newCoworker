@@ -6,6 +6,10 @@ import {
   BEST_TIME_CAPTURE_FIELD,
   CALL_WINDOW,
   CASH_OFFERS_FIELD,
+  NEVER_QUOTE_CASH_OFFERS,
+  NEW_CLEVER_OFFERS_CLAUSE,
+  OLD_CASH_OFFERS_FIELD_DESCRIPTION,
+  OLD_CLEVER_OFFERS_CLAUSE,
   PITCH_CLEVER,
   PITCH_CONTEXT,
   PITCH_REFERRAL_EXCHANGE,
@@ -14,6 +18,7 @@ import {
   hasSellerCallLadder,
   nextStepsLine,
   removeBestTimeCaptureField,
+  rewriteCleverPitchPersona,
   upgradeCallsToReachLadder,
   withAiCallLines,
   type Ref
@@ -363,9 +368,10 @@ describe("addSellerCallLadder (ReferralExchange shape)", () => {
 });
 
 describe("Amy's approved scripts", () => {
-  it("only Clever carries the cash-offer angle", () => {
+  it("only Clever carries the cash-offer angle, and never interpolates a dollar amount", () => {
     expect(PITCH_CLEVER).toContain("cash offer");
-    expect(PITCH_CLEVER).toContain("{{vars.cash_offers}}");
+    expect(PITCH_CLEVER).not.toContain("{{vars.cash_offers}}");
+    expect(PITCH_CLEVER).toContain("Never quote a cash-offer dollar amount");
     expect(PITCH_REFERRAL_EXCHANGE).not.toContain("cash offer");
     expect(PITCH_REFERRAL_EXCHANGE).toContain("{{vars.web_source}}");
   });
@@ -384,6 +390,8 @@ describe("Amy's approved scripts", () => {
       PITCH_CLEVER,
       PITCH_REFERRAL_EXCHANGE,
       PITCH_CONTEXT,
+      NEVER_QUOTE_CASH_OFFERS,
+      CASH_OFFERS_FIELD.description,
       nextStepsLine(),
       withAiCallLines("x\nReply 1 now")
     ]) {
@@ -393,22 +401,64 @@ describe("Amy's approved scripts", () => {
 });
 
 describe("addCashOffersField", () => {
-  it("appends the spoke-check's verbatim field once", () => {
+  it("appends the shared field once, and refreshes a stale description", () => {
     const def = cleverBase() as unknown as AiFlowDefinition;
     expect(addCashOffersField(def)).toBe(true);
     const read = (def.steps as Record<string, unknown>[])[1] as {
       fields: { name: string; description: string }[];
     };
     const field = read.fields.find((f) => f.name === "cash_offers");
-    // Verbatim from the live spoke-check flow: identical wording means
-    // identical extraction behavior on the same page.
     expect(field?.description).toBe(CASH_OFFERS_FIELD.description);
+    expect(CASH_OFFERS_FIELD.description).toContain("Example only");
+    expect(CASH_OFFERS_FIELD.description).toContain("none listed");
+    // browse_extract field descriptions are capped at 300 by the flow schema.
+    expect(CASH_OFFERS_FIELD.description.length).toBeLessThanOrEqual(300);
+    expect(PITCH_CLEVER.length).toBeLessThanOrEqual(2000);
     expect(addCashOffersField(def)).toBe(false);
+    field!.description = OLD_CASH_OFFERS_FIELD_DESCRIPTION;
+    expect(addCashOffersField(def)).toBe(true);
+    expect(field!.description).toBe(CASH_OFFERS_FIELD.description);
   });
 
   it("refuses a flow with no read_details step", () => {
     const def = { version: 1, trigger: { channel: "manual" }, steps: [] } as unknown as AiFlowDefinition;
     expect(() => addCashOffersField(def)).toThrow(/read_details step not found/);
+  });
+
+  it("refuses a read_details with no fields array", () => {
+    const def = {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "read_details", type: "browse_extract" }]
+    } as unknown as AiFlowDefinition;
+    expect(() => addCashOffersField(def)).toThrow(/no fields array/);
+  });
+});
+
+describe("rewriteCleverPitchPersona", () => {
+  it("rewrites the live interpolated pitch onto the current wording, then no-ops", () => {
+    const live =
+      "0. " +
+      OLD_CLEVER_OFFERS_CLAUSE +
+      " Acknowledge it, then make the case plainly: listing the home almost always nets more than a quick cash sale, and we will show you the numbers rather than ask you to take our word for it.";
+    const rewritten = rewriteCleverPitchPersona(live);
+    expect(rewritten).toContain(NEW_CLEVER_OFFERS_CLAUSE);
+    expect(rewritten).not.toContain("{{vars.cash_offers}}");
+    expect(rewritten).toContain(NEVER_QUOTE_CASH_OFFERS);
+    expect(rewriteCleverPitchPersona(rewritten)).toBe(rewritten);
+    expect(rewriteCleverPitchPersona(PITCH_CLEVER)).toBe(PITCH_CLEVER);
+  });
+
+  it("still adds the never-quote line when the offers clause is already gone", () => {
+    const half = "Clever offered you a cash offer program. Please continue.";
+    const next = rewriteCleverPitchPersona(half);
+    expect(next).toContain(NEVER_QUOTE_CASH_OFFERS);
+    expect(next.startsWith(half)).toBe(true);
+  });
+
+  it("leaves a persona that never mentioned the cash-offer program alone", () => {
+    const other = "You are calling about their visit to the website.";
+    expect(rewriteCleverPitchPersona(other)).toBe(other);
   });
 });
 

@@ -8,6 +8,7 @@
  * See the seed script header for the full flow narrative.
  */
 import type { FlowStep } from "../../src/lib/ai-flows/schema.ts";
+import { CASH_OFFERS_FIELD } from "./amy-seller-ai-call-definition.ts";
 
 export type SpokeCheckOptions = {
   /** Roster member the spoke check pins to and calls transfer to. */
@@ -137,10 +138,8 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
               "including street, city, state, and ZIP code"
           },
           {
-            name: "cash_offers",
-            description:
-              'The cash offer amount(s) shown on the lead page (e.g. "$412,000" or ' +
-              "\"$400,000 - $425,000\"), or 'none listed' when no cash offer is shown"
+            name: CASH_OFFERS_FIELD.name,
+            description: CASH_OFFERS_FIELD.description
           }
         ]
       },

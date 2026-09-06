@@ -982,6 +982,28 @@ contact up with it; `from_matches` lines up from the other side instead, with
 
 ## One-shots
 
+**`amy-clever-example-offers.ts` (Sep 6 2026):** stops the AI quoting Clever's
+"Example only" cash-offer placeholders as this seller's real offers. Call
+`5339954d` (2026-09-06) and call `60a64ddd` (2026-08-20) both said
+"the offers on your file are 375k and 395k". PR #1726 treated that as the
+model inventing a figure. The rendered persona for both calls already
+contained those amounts: the pitch interpolated `{{vars.cash_offers}}`, and
+the `browse_extract` that fills that var copied Clever's sample ZoomCasa
+$375k / QuickBuy $395k module, labeled "placeholders and are not based on
+this property". Real offers arrive later by text. Measured: 21 of 93 page
+reads since Aug 7 2026 returned those samples (they scale with estimated
+value: $425k pages get $375k/$395k, $625k pages get $550k/$580k).
+
+The one-shot drops the interpolated amounts from the spoken pitch on
+Clever Lead - Accept and hardens the `cash_offers` extraction on that flow
+and on "Clever - Spoke Check & Weekly Call Follow-Up" so team texts stop
+carrying fake numbers. No step added or removed. Builders:
+`amy-seller-ai-call-definition.ts` (`PITCH_CLEVER`, `CASH_OFFERS_FIELD`) and
+`clever-spoke-check-definition.ts` (imports the same field). The daily
+call-integrity sweep now reports a briefed-but-unconfirmed figure as
+"quoted a figure from the call brief, check the flow" rather than as the
+model inventing one.
+
 **`amy-shorten-offer-templates.ts` (applied Aug 29 2026):** shortens
 every `route_to_team` offer template on the eight enabled flows so an unclaimed
 lead costs fewer billed SMS segments, without dropping a fact. Written while
@@ -1560,8 +1582,13 @@ new code. Read the rest of this paragraph as the DESIGN, not as production.
 On Clever, where it did land, the AI owns FIRST contact: it dials the seller
 within a minute of the lead landing (skipping $1M+ leads, which stay with
 Amy), pitches the listing with Amy's approved script (the Clever variant
-carries the cash-offer angle and a new `cash_offers` extraction field copied
-verbatim from the spoke check; ReferralExchange does not), then the flow
+carries the cash-offer angle WITHOUT quoting dollar amounts: Clever's
+referral page shows an "Example only" comparison module, not this seller's
+real offers, and interpolating `{{vars.cash_offers}}` is how $375k/$395k
+were read aloud as fact on calls 60a64ddd and 5339954d; see
+`amy-clever-example-offers.ts`. The `cash_offers` extraction field is
+shared with the spoke check and answers 'none listed' for that module;
+ReferralExchange does not pitch cash offers), then the flow
 continues to the unchanged `route_to_team` chain so Dave still owns the
 follow-up. Misses redial at +2h and next morning at 08:30, both inside
 08:30-21:00 Phoenix with `outside: "skip"` so an overnight lead never parks

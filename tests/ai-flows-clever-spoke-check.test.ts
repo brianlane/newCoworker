@@ -72,6 +72,16 @@ describe("buildSpokeCheckDefinition", () => {
     }
   });
 
+  it("the cash_offers field names the Example only module so it cannot be copied as this seller's offers", () => {
+    const def = parseAiFlowDefinition(buildSpokeCheckDefinition(OPTS)) as AiFlowDefinition;
+    const read = def.steps.find((s) => s.id === "read_page") as
+      | { fields?: Array<{ name: string; description: string }> }
+      | undefined;
+    const field = read?.fields?.find((f) => f.name === "cash_offers");
+    expect(field?.description).toContain("Example only");
+    expect(field?.description).toContain("none listed");
+  });
+
   it("pins the spoke check to the agent with the 1/2 reply mechanic", () => {
     const def = parseAiFlowDefinition(buildSpokeCheckDefinition(OPTS)) as AiFlowDefinition;
     const route = def.steps.find((s) => s.type === "route_to_team");
