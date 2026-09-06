@@ -109,6 +109,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
     send_window_start_hour: 8,
     send_window_end_hour: 11,
     from_connection_id: null,
+    send_as_email: null,
     booking_meeting_type_id: null,
     booking_link_on_first_touch: false,
     postal_address: "1 Example Plaza",
@@ -124,6 +125,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
 function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSettingsInput {
   return {
     fromConnectionId: "",
+    sendAsEmail: "",
     bookingMeetingTypeId: "",
     bookingLinkOnFirstTouch: false,
     mode: "auto",
@@ -533,6 +535,9 @@ describe("defaultProspectingSettings", () => {
       // Empty means "whichever mailbox is connected", which is what the sweep
       // did before there was a choice to make.
       fromConnectionId: "",
+      // Empty lets the provider pick the sending identity, as every send did
+      // before an alias could be named.
+      sendAsEmail: "",
       // Empty links the booking page and lets them choose, which is what the
       // CTA did before a meeting could be named.
       bookingMeetingTypeId: "",
@@ -650,6 +655,69 @@ describe("the mailbox cold email leaves from", () => {
       expect.objectContaining({ from_connection_id: null }),
       expect.anything()
     );
+  });
+});
+
+describe("which address the outreach leaves as", () => {
+  /**
+   * The alias is checked for SHAPE only. Whether the mailbox may send as it is
+   * the provider's knowledge (Gmail's verified alias list), which nothing in
+   * our data exposes, so the send path reports that per send. What this layer
+   * owes the owner is a readable refusal of something that is not one address,
+   * in front of the DB check constraint that would refuse it unreadably.
+   */
+  it("stores a normalised alias, and null for blank", async () => {
+    await saveProspectingSettings(BIZ, input({ sendAsEmail: "  Team@Acme.TEST " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ send_as_email: "team@acme.test" }),
+      expect.anything()
+    );
+
+    await saveProspectingSettings(BIZ, input({ sendAsEmail: "   " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ send_as_email: null }),
+      expect.anything()
+    );
+  });
+
+  it("refuses anything that is not shaped like one address while on", async () => {
+    for (const bad of [
+      "Brian <team@acme.test>",
+      "team@acme.test, sales@acme.test",
+      "team@acme",
+      "not an email",
+      "team@acme.test;x"
+    ]) {
+      await expect(
+        saveProspectingSettings(BIZ, input({ sendAsEmail: bad }), {} as never)
+      ).rejects.toThrow(/single email address/);
+    }
+  });
+
+  it("never lets a bad alias block the kill switch: off stores null instead", async () => {
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", sendAsEmail: "Brian <team@acme.test>" }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ mode: "off", send_as_email: null }),
+      expect.anything()
+    );
+    // A GOOD alias survives turning off, so switching back on keeps it.
+    await saveProspectingSettings(BIZ, input({ mode: "off", sendAsEmail: "team@acme.test" }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ mode: "off", send_as_email: "team@acme.test" }),
+      expect.anything()
+    );
+  });
+
+  it("defaults to no alias", () => {
+    expect(defaultProspectingSettings().sendAsEmail).toBe("");
   });
 });
 

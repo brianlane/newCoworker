@@ -250,6 +250,154 @@ describe("sendFromMailboxConnection", () => {
   });
 });
 
+describe("send-as override", () => {
+  /**
+   * The raw MIME carried no From header, so Gmail stamped the account's
+   * default identity on every send. A mailbox that signs in as one account
+   * and corresponds from a verified alias on its own domain needs the alias
+   * on the wire, as From (what the recipient sees) and Reply-To (where their
+   * answer goes). Unset, the encoder must stay byte-for-byte what it was.
+   */
+  const GOOGLE = { provider: "google" as const, providerConfigKey: "gmail", connectionId: "cx" };
+  const MICROSOFT = {
+    provider: "microsoft" as const,
+    providerConfigKey: "outlook",
+    connectionId: "cx"
+  };
+
+  function decodeRaw(): string {
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
+    const raw = (call[2] as { data: { raw: string } }).data.raw;
+    return Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+  }
+
+  it("Gmail: puts the alias in From and Reply-To, and reports it as the sending address", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { id: "g-1", threadId: "t-1" }
+    } as never);
+    const out = await sendFromMailboxConnection(BIZ, GOOGLE, {
+      ...ARGS,
+      sendAs: "team@biz.com"
+    });
+    const mime = decodeRaw();
+    const headers = mime.split("\r\n\r\n")[0].split("\r\n");
+    // The bare address, not "Name <address>": Gmail applies the alias's own
+    // configured display name, so the owner's Gmail settings stay in charge
+    // of what the name reads.
+    expect(headers).toContain("From: team@biz.com");
+    expect(headers).toContain("Reply-To: team@biz.com");
+    expect(headers).toContain("To: lead@example.com");
+    expect(headers).toContain("Subject: Hello");
+    // email_log records what was on the wire, which is the alias, not the
+    // account the connection metadata names. This closes the account-vs-alias
+    // gap that made every outreach row say the personal address.
+    expect(out).toMatchObject({ ok: true, fromEmail: "team@biz.com" });
+  });
+
+  it("Gmail: no override means no From or Reply-To header, exactly as before", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
+    await sendFromMailboxConnection(BIZ, GOOGLE, ARGS);
+    const mime = decodeRaw();
+    expect(mime).not.toMatch(/^From:/m);
+    expect(mime).not.toMatch(/^Reply-To:/m);
+    // The header block still opens on To, so an unchanged caller's MIME is
+    // unchanged.
+    expect(mime.startsWith("To: lead@example.com\r\n")).toBe(true);
+  });
+
+  it("treats a blank or whitespace override as unset", async () => {
+    for (const sendAs of ["", "   ", null, undefined]) {
+      vi.clearAllMocks();
+      vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+        metadata: { provider_account_email: "owner@biz.com" }
+      } as never);
+      vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
+      const out = await sendFromMailboxConnection(BIZ, GOOGLE, { ...ARGS, sendAs });
+      expect(decodeRaw()).not.toMatch(/^From:/m);
+      // Falls through to the connection's own address, as it always did.
+      expect(out).toMatchObject({ ok: true, fromEmail: "owner@biz.com" });
+    }
+  });
+
+  it("Gmail: trims the override before it reaches a header", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
+    const out = await sendFromMailboxConnection(BIZ, GOOGLE, {
+      ...ARGS,
+      sendAs: "  team@biz.com  "
+    });
+    expect(decodeRaw()).toContain("From: team@biz.com\r\n");
+    expect(out).toMatchObject({ ok: true, fromEmail: "team@biz.com" });
+  });
+
+  it("Gmail: the alias headers sit alongside Cc, threading, and HTML, none displaced", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { id: "g-1", threadId: "t-9" }
+    } as never);
+    await sendFromMailboxConnection(BIZ, GOOGLE, {
+      ...ARGS,
+      sendAs: "team@biz.com",
+      ccEmails: ["cc@example.com"],
+      bodyHtml: "<p>Hi there</p>",
+      thread: { threadId: "t-9", inReplyToMessageRef: "<m@x>" }
+    });
+    const mime = decodeRaw();
+    expect(mime).toContain("From: team@biz.com\r\n");
+    expect(mime).toContain("Cc: cc@example.com\r\n");
+    expect(mime).toContain("In-Reply-To: <m@x>\r\n");
+    expect(mime).toContain("Content-Type: multipart/alternative;");
+  });
+
+  it("Gmail: the override wins over the connection address, and a legacy row still reports it", async () => {
+    // A connection with no address in its metadata used to yield null; with an
+    // override the wire From is known regardless, so that is what is reported.
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({ metadata: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
+    const out = await sendFromMailboxConnection(BIZ, GOOGLE, { ...ARGS, sendAs: "team@biz.com" });
+    expect(out).toMatchObject({ ok: true, fromEmail: "team@biz.com" });
+  });
+
+  it("Graph: a fresh send carries from and replyTo; without the override neither key exists", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    const out = await sendFromMailboxConnection(BIZ, MICROSOFT, { ...ARGS, sendAs: "team@biz.com" });
+    const message = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
+      data: { message: Record<string, unknown> };
+    }).data.message;
+    expect(message.from).toEqual({ emailAddress: { address: "team@biz.com" } });
+    expect(message.replyTo).toEqual([{ emailAddress: { address: "team@biz.com" } }]);
+    expect(out).toMatchObject({ ok: true, provider: "microsoft", fromEmail: "team@biz.com" });
+
+    vi.clearAllMocks();
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+      metadata: { provider_account_email: "owner@biz.com" }
+    } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, ARGS);
+    const plain = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
+      data: { message: Record<string, unknown> };
+    }).data.message;
+    // Absent, not null or undefined-valued: the payload is what it was before
+    // the option existed.
+    expect(plain).not.toHaveProperty("from");
+    expect(plain).not.toHaveProperty("replyTo");
+  });
+
+  it("Graph: a threaded reply carries the override on its message override too", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, {
+      ...ARGS,
+      sendAs: "team@biz.com",
+      thread: { providerMessageId: "gid", threadId: "conv" }
+    });
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
+      data: { message?: Record<string, unknown> };
+    }).data;
+    expect(data.message).toMatchObject({
+      from: { emailAddress: { address: "team@biz.com" } },
+      replyTo: [{ emailAddress: { address: "team@biz.com" } }]
+    });
+  });
+});
+
 describe("threaded replies", () => {
   const GOOGLE = { provider: "google" as const, providerConfigKey: "gmail", connectionId: "cx" };
   const MICROSOFT = {

@@ -53,6 +53,24 @@ export type OwnerMailboxSendArgs = {
     inReplyToMessageRef?: string | null;
     providerMessageId?: string | null;
   };
+  /**
+   * Send AS this address instead of whatever the mailbox defaults to.
+   *
+   * Without it the raw MIME carries no From header and Gmail stamps the
+   * account's default identity (the OAuth primary, or the mailbox's default
+   * send-as alias), and Graph uses the signed-in account. A tenant whose
+   * mailbox signs in as one account but corresponds from a verified alias on
+   * their own domain needs the alias on the wire: it is the address the
+   * recipient sees and, as Reply-To, the one their answer goes to.
+   *
+   * The address must already be one the mailbox may send as (Gmail "Send mail
+   * as", verified; Exchange "Send As"). Nothing here checks that: Gmail
+   * silently rewrites an unrecognised From back to the primary, and Graph
+   * refuses the send, and both are the provider's call to make. Replies still
+   * have to reach the connected mailbox for thread ownership to work, which is
+   * a routing fact about the alias, not something this flag can arrange.
+   */
+  sendAs?: string | null;
 };
 
 export type OwnerMailboxSendResult =
@@ -67,18 +85,41 @@ export type OwnerMailboxSendResult =
        */
       threadId: string | null;
       /**
-       * The address the mail went out from, resolved from the connection's
-       * metadata (see connectionEmail). Null for legacy connections whose
-       * metadata carries no address. Callers logging to email_log must store
-       * this so the dashboard can show WHO sent the mail instead of a dash.
+       * The address the mail went out from: the `sendAs` override when one was
+       * given (that is the From on the wire), else the connection's own
+       * address from its metadata (see connectionEmail). Null for legacy
+       * connections whose metadata carries no address. Callers logging to
+       * email_log must store this so the dashboard can show WHO sent the mail
+       * instead of a dash.
        */
       fromEmail: string | null;
     }
   | { ok: false; detail: "email_not_connected" };
 
+/**
+ * The send-as override, normalised for the wire: trimmed, or null when blank.
+ * One place, so the MIME encoder, the Graph payloads, and the reported
+ * `fromEmail` cannot disagree about whether an override was in force.
+ */
+function sendAsAddress(args: OwnerMailboxSendArgs): string | null {
+  const address = args.sendAs?.trim();
+  return address ? address : null;
+}
+
 function encodeRfc2822(args: OwnerMailboxSendArgs): string {
   const allTo = [args.toEmail, ...(args.additionalToEmails ?? [])];
-  const lines = [`To: ${allTo.join(", ")}`];
+  const lines: string[] = [];
+  const sendAs = sendAsAddress(args);
+  if (sendAs) {
+    // Gmail sends as whichever verified alias the From header names, and
+    // stamps its default identity when the header is absent. The bare address
+    // rather than "Name <address>": Gmail applies the alias's own configured
+    // display name, so the owner's Gmail settings stay the one place that
+    // name is decided. Reply-To carries the same address so a client that
+    // ignores From for replies still answers the alias.
+    lines.push(`From: ${sendAs}`, `Reply-To: ${sendAs}`);
+  }
+  lines.push(`To: ${allTo.join(", ")}`);
   // Gmail's send API honors Cc and Bcc headers in the raw MIME and strips the
   // Bcc header from the delivered/stored message, so bcc stays hidden.
   if (args.ccEmails && args.ccEmails.length > 0) {
@@ -133,6 +174,20 @@ function toGraphRecipients(addresses: string[]) {
 }
 
 /**
+ * Graph's half of the send-as override: `from` is the address the message is
+ * sent as (Exchange enforces Send As permission on it), `replyTo` where answers
+ * go. Empty when there is no override, so an untouched payload stays
+ * byte-identical to before the option existed.
+ */
+function graphSenderOverride(sendAs: string | null) {
+  if (!sendAs) return {};
+  return {
+    from: { emailAddress: { address: sendAs } },
+    replyTo: toGraphRecipients([sendAs])
+  };
+}
+
+/**
  * Returns `email_not_connected` when there is no usable Nango email
  * connection. Upstream provider failures THROW (callers map them to their
  * own error contract, the tool adapters return `email_send_failed`).
@@ -173,7 +228,10 @@ export async function sendFromMailboxConnection(
     conn.connectionId
   );
   if (!row) return { ok: false, detail: "email_not_connected" };
-  const fromEmail = connectionEmail(row.metadata);
+  // The override IS the wire From when present, so it is what gets reported
+  // and logged; the connection's account address is the answer otherwise.
+  const sendAs = sendAsAddress(args);
+  const fromEmail = sendAs ?? connectionEmail(row.metadata);
 
   if (conn.provider === "google") {
     const raw = encodeRfc2822(args);
@@ -226,7 +284,8 @@ export async function sendFromMailboxConnection(
             ...(extraTo.length > 0
               ? { toRecipients: toGraphRecipients([args.toEmail, ...extraTo]) }
               : {}),
-            ...(html ? { body: { contentType: "HTML", content: html } } : {})
+            ...(html ? { body: { contentType: "HTML", content: html } } : {}),
+            ...graphSenderOverride(sendAs)
           };
           return {
             comment: html ? "" : args.bodyText,
@@ -259,7 +318,8 @@ export async function sendFromMailboxConnection(
             : {}),
           ...(args.bccEmails && args.bccEmails.length > 0
             ? { bccRecipients: toGraphRecipients(args.bccEmails) }
-            : {})
+            : {}),
+          ...graphSenderOverride(sendAs)
         },
         saveToSentItems: true
       }

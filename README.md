@@ -2553,6 +2553,49 @@ between checking and sending, it cannot close it, and a mailbox disconnected
 inside that window must still fail rather than quietly send from the default
 address.
 
+### Which address the cold email carries (send-as)
+
+Which mailbox sends and which address the mail carries are two different
+choices. The raw-MIME encoder (`encodeRfc2822` in
+`src/lib/email/owner-mailbox.ts`) historically set no `From:` header, so Gmail
+stamped the account's default identity on every send: the OAuth primary, or
+whichever send-as alias the owner had made default. A mailbox that signs in as
+one account and corresponds from a verified alias on the tenant's own domain
+(HQ: a personal Google account with `team@` on the product domain under "Send
+mail as") had no way to say which address a cold email should show.
+
+**`outreach_settings.send_as_email`** (panel field "Send as (optional)", shown
+whenever a mailbox is connected) is that choice. Set, the outreach send passes
+it to `sendFromOwnerMailbox` / `sendFromMailboxConnection` as `sendAs`, and the
+send path puts it in `From:` and `Reply-To:` on the Gmail raw send (a bare
+address, so Gmail applies the alias's own configured display name) and in
+`message.from` / `message.replyTo` on a Graph `sendMail` or `/reply`. It rides
+BOTH mailbox paths, Automatic and a pinned `from_connection_id`, because
+missing one would make the setting appear to work for a one-mailbox tenant and
+silently stop the day a second mailbox is pinned. Null, the default for every
+tenant, produces exactly the pre-change MIME: no From header, provider default.
+
+The send result's `fromEmail` reports the override when one was in force, so
+`email_log.from_email` records what the recipient saw rather than the account
+the connection metadata names (the account-vs-alias gap in
+`.cursor/memory/project_hq_gmail_sendas_resend_relay.md`).
+
+Two things the setting deliberately does not do. It does not verify the alias:
+Gmail's send-as list and Exchange's Send As grants are not exposed to us, so
+the save checks SHAPE only (`normalizeSendAsEmail` in
+`src/lib/outreach/send-as.ts`, one address, no display name, no list, mirrored
+by the DB check `outreach_settings_send_as_email_shape`), and a wrong address
+fails at the provider with the reason in the ledger (Gmail rewrites an unknown
+From back to the primary; Graph refuses with `ErrorSendAsDenied`). And it does
+not arrange for replies to arrive: `Reply-To` names the alias, so the alias has
+to be routed into the connected mailbox for the email coworker's owned-thread
+reply detection to see the answer. HQ's is (Cloudflare routes the domain into
+the Gmail); a tenant whose alias lands elsewhere would send fine and never see
+replies, which the panel's help text says out loud. A bad value never blocks
+the kill switch: turning outreach off with an unparseable alias stores null,
+the same split the mailbox pin uses. `scripts/oneshot/set-hq-outreach-send-as.ts`
+sets HQ's, ledgered.
+
 ### Calling off a whole kind of business
 
 Removing a trade from "Kinds of business to look for" only stops the NEXT
