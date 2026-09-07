@@ -34,7 +34,8 @@ the summary.
 - **Tenant zero for Prospecting.** Our own outbound outreach runs through our
   own product: Places discovery across Phoenix-metro trades (12 paid queries
   a day on the Enterprise budget, double the Standard 6), a pitch built
-  from what each prospect's site is missing, sent from HQ's connected mailbox.
+  from what each prospect's site is missing, sent from HQ's connected Gmail
+  as `team@` on the product domain (`outreach_settings.send_as_email`, #1806).
   Configured by `configure-hq-prospecting.ts` in **manual mode**; Brian has
   since flipped it to **auto** from the Marketing page (verified live
   2026-09-06: mode `auto`, cap 12, 135 sent). Since Sep 2026 the first email
@@ -175,11 +176,14 @@ email coworker's reply detection keeps working. `set-hq-outreach-send-as.ts`
 writes the alias onto HQ's row only (dry-run by default, `--apply` to write,
 `--send-as <address>` for another alias, `--clear` to go back to the provider
 default; refuses without an existing settings row; idempotent, reads the write
-back, ledger-recorded). **Run it after the merge** (`set -a && source .env &&
-set +a && npx tsx scripts/oneshot/set-hq-outreach-send-as.ts --apply`), then
-check the From line on the next pitch in Gmail Sent. The same value can be set
-from Dashboard, Marketing, "Send as (optional)"; the one-shot exists so the
-change is ledgered. Side effect worth knowing: `email_log.from_email` for
+back, ledger-recorded). **Applied 2026-09-07** after the #1806 push-to-main
+run went green (Vercel Deploy success on `09e91300`):
+`set-hq-outreach-send-as.ts --apply` wrote `team@` onto HQ's
+`outreach_settings.send_as_email` (was null; mode `auto`, mailbox Automatic).
+A second run the same minute reported "Nothing to do". The next pitch the
+sweep sends will carry `From:` / `Reply-To:` `team@`; check that line in
+Gmail Sent. The same value can be set from Dashboard, Marketing, "Send as
+(optional)"; the one-shot exists so the change is ledgered. Side effect worth knowing: `email_log.from_email` for
 outreach rows now records the alias (the wire From) instead of the account
 address, which closes the account-vs-alias gap noted in
 `.cursor/memory/project_hq_gmail_sendas_resend_relay.md`. That memory also
@@ -197,8 +201,8 @@ connector can opt a single draft in with `include_booking_link: true` on
 `upsert_outreach_prospect` / `update_outreach_draft`. HQ is the only tenant
 with outreach on (mode is now **auto**, not the manual mode
 `configure-hq-prospecting.ts` left it in; 135 sent, `booking_meeting_type_id`
-pinned to the discovery call, sending from the HQ Gmail through the owner
-mailbox, not the contact@ alias). At the time of the change 21 drafts were waiting, all 21
+pinned to the discovery call, sending from the HQ Gmail as `team@` since
+#1806, not the personal Google account and not the contact@ alias). At the time of the change 21 drafts were waiting, all 21
 with the booking line baked into `pitch_body`, 10 of them connector-filed (no
 findings, so Write it again refuses them). Those go out as stored in auto mode
 unless re-assembled: `reassemble-outreach-drafts.ts --business
