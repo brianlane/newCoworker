@@ -7,6 +7,10 @@ import {
   pollReachOutcome,
   readReachAmd,
   readReachOutcome,
+  reachDialTimeoutSecs,
+  REACH_AMD_CLEAR_MS,
+  REACH_BRIDGE_MARGIN_SECS,
+  REACH_OUTCOME_GRACE_MS,
   runReachLadder,
   type ReachLadderConfig,
   type ReachTelnyxDeps
@@ -33,6 +37,9 @@ const CONFIG: ReachLadderConfig = {
   connectionId: "conn-1",
   fromE164: "+16232633832"
 };
+
+/** Instant polls: production grace is 6s and would make timeout tests wait that long. */
+const FAST_POLL = { pollMs: 1, sleep: async () => undefined as void, graceMs: 0 };
 
 /**
  * A supabase stub whose session CONTEXT is scripted per read (last repeats).
@@ -207,7 +214,7 @@ describe("runReachLadder", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: true, connectedName: "Dave Lane", bLeg: "b-leg-1" });
     expect(calls.sms).toEqual(["+16025245719"]);
@@ -235,7 +242,7 @@ describe("runReachLadder", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: true, connectedName: "Amy Laidlaw", bLeg: "b-leg-2" });
     // Dave's leg was torn down before Amy's phone rang: without this, a
@@ -255,7 +262,7 @@ describe("runReachLadder", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: false, detail: "nobody_answered" });
     expect(calls.hangup).toEqual(["b-leg-1", "b-leg-2"]);
@@ -275,7 +282,7 @@ describe("runReachLadder", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: true, connectedName: "Amy Laidlaw", bLeg: "b-leg-2" });
     // Nothing to hang up for a leg that never existed.
@@ -300,7 +307,7 @@ describe("runReachLadder", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: true, connectedName: "Amy Laidlaw", bLeg: "b-leg-2" });
     // Dave answered but could not be joined: he was released rather than
@@ -311,16 +318,16 @@ describe("runReachLadder", () => {
   it("a dial-window timeout with no stamp still advances (client-state tagged per attempt)", async () => {
     const { telnyx, calls } = deps();
     const supa = reachSession([null]);
-    const shortConfig = { ...CONFIG, ringSeconds: 5, targets: [CONFIG.targets[0]!] };
+    const shortConfig = { ...CONFIG, ringSeconds: 0, targets: [CONFIG.targets[0]!] };
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: shortConfig,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result).toEqual({ ok: false, detail: "nobody_answered" });
     const dialOpts = calls.dial[0] as { clientState?: string; timeoutSecs?: number };
-    expect(dialOpts.timeoutSecs).toBe(5);
+    expect(dialOpts.timeoutSecs).toBe(reachDialTimeoutSecs(0));
     expect(parseReachClientState(dialOpts.clientState)).toEqual({
       businessId: BIZ,
       aLegCallControlId: A_LEG,
@@ -346,7 +353,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined },
+      poll: FAST_POLL,
       telemetry: (type, payload) => events.push({ type, payload })
     });
     // Nobody was rung, so the result must NOT read as the team ignoring the
@@ -393,7 +400,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     // Amy's phone really rang and rang out; Dave was never rung. One phone
     // ringing makes "nobody answered" the truthful summary, and only the
@@ -418,7 +425,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result.ok).toBe(true);
     expect(sequence).toEqual(["dial", "sms"]);
@@ -432,7 +439,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined },
+      poll: FAST_POLL,
       telemetry: (type) => events.push(type)
     });
     expect(result.ok).toBe(true);
@@ -446,7 +453,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(out.ok).toBe(false);
   });
@@ -468,7 +475,7 @@ describe("runReachLadder: AMD clearance", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     const dialOpts = calls.dial[0] as { answeringMachineDetection?: string };
     expect(dialOpts.answeringMachineDetection).toBe("premium");
@@ -492,7 +499,7 @@ describe("runReachLadder: AMD clearance", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined },
+      poll: FAST_POLL,
       telemetry: (type, payload) => events.push({ type, payload })
     });
     expect(result).toEqual({ ok: false, detail: "nobody_answered" });
@@ -510,7 +517,7 @@ describe("runReachLadder: AMD clearance", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined, capMs: 5 }
+      poll: { ...FAST_POLL, capMs: 5 }
     });
     expect(result).toEqual({ ok: true, connectedName: "Dave Lane", bLeg: "b-leg-1" });
     expect(calls.bridge).toHaveLength(1);
@@ -583,7 +590,7 @@ describe("runReachLadder: reach_bridged stamp", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result.ok).toBe(true);
     expect(order).toEqual(["stamp", "bridge"]);
@@ -613,7 +620,7 @@ describe("runReachLadder: reach_bridged stamp", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(result.ok).toBe(true);
     // Stamp for attempt 0, cleared when its bridge failed, stamped again for
@@ -640,8 +647,149 @@ describe("runReachLadder: reach_bridged stamp", () => {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
       config: CONFIG,
-      poll: { pollMs: 1, sleep: async () => undefined }
+      poll: FAST_POLL
     });
     expect(supa.rpcCalls).toEqual([]);
+  });
+});
+
+describe("readReachOutcome: leg-scoped stamps", () => {
+  it("ignores a same-attempt stamp from a different B leg", async () => {
+    // The Sep 6 hangup: ladder 1 wrote attempt 2 no_answer; later ladders
+    // dialed Amy, read that stamp, and hung up her ringing phone in ~1s.
+    const supa = reachSession([
+      { reach: { attempt: 2, status: "no_answer", b_leg: "ladder-1-leg" } }
+    ]);
+    expect(await readReachOutcome(supa, A_LEG, 2, "our-leg")).toBeNull();
+  });
+
+  it("accepts a same-attempt stamp whose b_leg matches the dialed leg", async () => {
+    const supa = reachSession([
+      { reach: { attempt: 2, status: "answered", b_leg: "our-leg" } }
+    ]);
+    expect(await readReachOutcome(supa, A_LEG, 2, "our-leg")).toEqual({
+      status: "answered",
+      bLeg: "our-leg"
+    });
+  });
+
+  it("treats an empty b_leg as matching so a legacy stamp still counts", async () => {
+    const supa = reachSession([{ reach: { attempt: 2, status: "no_answer" } }]);
+    expect(await readReachOutcome(supa, A_LEG, 2, "our-leg")).toEqual({
+      status: "no_answer",
+      bLeg: "our-leg"
+    });
+  });
+
+  it("a sibling no_answer does not hang up the dialed leg: the ladder keeps polling", async () => {
+    const { telnyx, calls } = deps();
+    const supa = reachSession([
+      { reach: { attempt: 0, status: "no_answer", b_leg: "sibling-leg" } },
+      answeredHuman(0, "b-leg-1")
+    ]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: FAST_POLL
+    });
+    expect(result).toEqual({ ok: true, connectedName: "Dave Lane", bLeg: "b-leg-1" });
+    expect(calls.hangup).toEqual([]);
+    expect(calls.bridge).toHaveLength(1);
+  });
+});
+
+describe("readReachAmd: leg-scoped stamps", () => {
+  it("ignores a same-attempt verdict from a different B leg", async () => {
+    const supa = reachSession([
+      { reach_amd: { attempt: 0, verdict: "machine", b_leg: "other-leg" } }
+    ]);
+    expect(await readReachAmd(supa, A_LEG, 0, "our-leg")).toBeNull();
+  });
+
+  it("accepts a matching b_leg and a legacy stamp with none", async () => {
+    expect(
+      await readReachAmd(
+        reachSession([{ reach_amd: { attempt: 0, verdict: "human", b_leg: "our-leg" } }]),
+        A_LEG,
+        0,
+        "our-leg"
+      )
+    ).toBe("human");
+    expect(
+      await readReachAmd(
+        reachSession([{ reach_amd: { attempt: 0, verdict: "machine" } }]),
+        A_LEG,
+        0,
+        "our-leg"
+      )
+    ).toBe("machine");
+  });
+});
+
+describe("runReachLadder: abort when the caller is gone", () => {
+  it("hangs up the in-flight B leg and returns caller_gone", async () => {
+    const ac = new AbortController();
+    const { telnyx, calls } = deps();
+    const supa = reachSession([null]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      signal: ac.signal,
+      poll: {
+        pollMs: 1,
+        graceMs: 50,
+        sleep: async () => {
+          ac.abort();
+        }
+      }
+    });
+    expect(result).toEqual({ ok: false, detail: "caller_gone" });
+    expect(calls.dial).toHaveLength(1);
+    expect(calls.hangup).toEqual(["b-leg-1"]);
+    expect(calls.bridge).toEqual([]);
+  });
+
+  it("returns caller_gone before dialing when already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const { telnyx, calls } = deps();
+    const result = await runReachLadder(reachSession([null]), telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      signal: ac.signal,
+      poll: FAST_POLL
+    });
+    expect(result).toEqual({ ok: false, detail: "caller_gone" });
+    expect(calls.dial).toEqual([]);
+  });
+});
+
+describe("pollReachOutcome: final read after the deadline", () => {
+  it("catches a late answered that lands after the ring window", async () => {
+    // ringSeconds 0 + grace 0: the while loop never runs, then the final
+    // read sees the stamp that would have been dropped by returning
+    // no_answer at the deadline.
+    const supa = reachSession([
+      { reach: { attempt: 0, status: "answered", b_leg: "b-1" } }
+    ]);
+    const out = await pollReachOutcome(supa, A_LEG, 0, 0, {
+      pollMs: 1,
+      sleep: async () => undefined,
+      graceMs: 0,
+      expectedBLeg: "b-1"
+    });
+    expect(out).toEqual({ status: "answered", bLeg: "b-1" });
+  });
+});
+
+describe("reachDialTimeoutSecs", () => {
+  it("outlives the ring poll by AMD-clear plus the bridge margin", () => {
+    expect(REACH_OUTCOME_GRACE_MS).toBe(6000);
+    expect(REACH_BRIDGE_MARGIN_SECS).toBe(5);
+    expect(reachDialTimeoutSecs(20)).toBe(20 + Math.ceil(REACH_AMD_CLEAR_MS / 1000) + 5);
+    expect(reachDialTimeoutSecs(20)).toBe(28);
   });
 });
