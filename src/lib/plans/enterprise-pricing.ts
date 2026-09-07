@@ -70,7 +70,7 @@ export const ENTERPRISE_UNIT_COSTS = {
    * in here, because folding it in would silently bill Zone 1 termination
    * twice. See src/lib/plans/voice-zone-rates.ts.
    */
-  voiceTelnyxCentsPerMinute: 0.9,
+  voiceTelnyxCentsPerMinute: 1.03,
   /** Gemini Live realtime audio. */
   voiceGeminiCentsPerMinute: 2.25,
   /** Telnyx DID rental per number per month ($1.00 DID + $0.10 SMS MRC). */
