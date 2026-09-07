@@ -1963,7 +1963,7 @@ function main(): void {
         const reachConfig = intakeReachConfig;
         transfer = {
           toE164: reachConfig.targets[0]!.e164,
-          execute: async ({ reason }) => {
+          execute: async ({ reason, signal }) => {
             if (!telnyxApiKey) {
               console.warn("voice-bridge: reach requested but TELNYX_API_KEY missing");
               return { ok: false, detail: "transfer not configured" };
@@ -1993,7 +1993,8 @@ function main(): void {
                 // B-leg dial refusals become queryable telemetry_events rows
                 // instead of stdout-only lines (a Telnyx capacity 403 on
                 // every rung used to read as "nobody answered").
-                telemetry: recordDiag
+                telemetry: recordDiag,
+                signal
               }
             );
             if (!result.ok) {
@@ -2002,6 +2003,9 @@ function main(): void {
                 reason: reason ?? "",
                 detail: result.detail
               });
+              if (result.detail === "caller_gone") {
+                return { ok: false, detail: "caller_gone" };
+              }
               if (result.detail === "dials_refused") {
                 // Every dial was refused before a phone rang (for example a
                 // carrier channel-limit 403 on each rung): nobody was rung
@@ -2016,8 +2020,14 @@ function main(): void {
               // The honest failure the persona's script depends on: the
               // model tells the caller nobody could pick up right now and
               // that the team has been texted (pre-alerts went out with
-              // each dial that actually rang).
-              return { ok: false, detail: "nobody answered; the team was texted the heads-up" };
+              // each dial that actually rang). The do-not-retry sentence
+              // is what the 2026-09-06 burst lacked: the model called this
+              // tool eight times on one seller call.
+              return {
+                ok: false,
+                detail:
+                  "nobody answered; the team was texted the heads-up. Do not call this tool again on this call; close out honestly, someone will call back"
+              };
             }
             console.log("voice-bridge: reach ladder bridged", {
               callControlId,

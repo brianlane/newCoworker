@@ -332,3 +332,16 @@ describe("record_reach_outcome mirrors the rule", () => {
     expect(sql).toContain("return v_rows > 0");
   });
 });
+
+describe("handleReachAmd stamps b_leg so the reader can ignore a sibling verdict", () => {
+  const src = readFileSync(
+    join(__dirname, "../supabase/functions/telnyx-voice-call-end/index.ts"),
+    "utf8"
+  );
+
+  it("writes attempt, verdict, and the B-leg id together", () => {
+    expect(src).toContain(
+      "reach_amd: { attempt: reach.attempt, verdict, b_leg: bLegCallControlId }"
+    );
+  });
+});
