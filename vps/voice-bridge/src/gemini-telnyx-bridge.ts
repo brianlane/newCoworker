@@ -1497,9 +1497,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       muted_chunks: diag.mutedChunks,
       suppressed_numbers: numberGuard ? numberGuard.suppressedNumbers().length : 0
     });
+    // Abort even when Gemini onclose already set `ended`. The Live session
+    // often closes before the Telnyx socket; gating abort on `!ended` left
+    // the reach ladder ringing the team after the caller was gone (Bugbot
+    // on PR #1810; Amy Laidlaw 2026-09-06, 13 dials after hangup).
+    abortTransfer();
     if (!ended) {
       ended = true;
-      abortTransfer();
       clearTimers();
       try {
         session.sendRealtimeInput({ audioStreamEnd: true });
@@ -1985,6 +1989,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           send_trail: sendTrail.slice(-16).join(",")
         });
         ended = true;
+        abortTransfer();
         clearTimers();
         // Kick the recorder finalize as soon as the Live session closes.
         // `teardown` (called from ws.on("close")) will do the same, both paths

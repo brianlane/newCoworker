@@ -786,10 +786,15 @@ describe("pollReachOutcome: final read after the deadline", () => {
 });
 
 describe("reachDialTimeoutSecs", () => {
-  it("outlives the ring poll by AMD-clear plus the bridge margin", () => {
+  it("outlives ring + poll grace + AMD-clear + the bridge margin", () => {
     expect(REACH_OUTCOME_GRACE_MS).toBe(6000);
     expect(REACH_BRIDGE_MARGIN_SECS).toBe(5);
-    expect(reachDialTimeoutSecs(20)).toBe(20 + Math.ceil(REACH_AMD_CLEAR_MS / 1000) + 5);
-    expect(reachDialTimeoutSecs(20)).toBe(28);
+    expect(reachDialTimeoutSecs(20)).toBe(
+      20 +
+        Math.ceil(REACH_OUTCOME_GRACE_MS / 1000) +
+        Math.ceil(REACH_AMD_CLEAR_MS / 1000) +
+        REACH_BRIDGE_MARGIN_SECS
+    );
+    expect(reachDialTimeoutSecs(20)).toBe(34);
   });
 });

@@ -185,7 +185,7 @@ export async function runReachLadder(
       connectionId: config.connectionId,
       to: target.e164,
       from: config.fromE164,
-      // Telnyx timeout must outlive the poll window plus AMD-clear plus a
+      // Telnyx timeout must outlive ring + poll-grace + AMD-clear + a
       // bridge margin: setting it equal to ringSeconds tore down a
       // just-answered B leg at the same second the teammate picked up
       // (Amy Laidlaw, 2026-08-20, 1-second connect then nobody_answered).
@@ -347,9 +347,21 @@ export const REACH_BRIDGE_MARGIN_SECS = 5;
  */
 export const REACH_OUTCOME_GRACE_MS = 6000;
 
-/** Telnyx `timeout_secs` for a reach B-leg dial. */
+/**
+ * Telnyx `timeout_secs` for a reach B-leg dial. Must outlive the poll window
+ * (ringSeconds + grace) PLUS AMD-clear PLUS the bridge margin: an answer
+ * whose stamp lands in the grace still needs a live leg through AMD-clear
+ * and the bridge command. Omitting grace left a 26s poll against a 28s
+ * Telnyx timeout, so a second-26 pickup died during the 3s AMD wait
+ * (Bugbot on PR #1810, same class as Amy Laidlaw 2026-08-20).
+ */
 export function reachDialTimeoutSecs(ringSeconds: number): number {
-  return ringSeconds + Math.ceil(REACH_AMD_CLEAR_MS / 1000) + REACH_BRIDGE_MARGIN_SECS;
+  return (
+    ringSeconds +
+    Math.ceil(REACH_OUTCOME_GRACE_MS / 1000) +
+    Math.ceil(REACH_AMD_CLEAR_MS / 1000) +
+    REACH_BRIDGE_MARGIN_SECS
+  );
 }
 
 /** True when the caller's session has already ended. */

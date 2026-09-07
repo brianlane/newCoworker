@@ -117,6 +117,18 @@ describe("the bridge latches in_flight before the async transfer dispatch", () =
     expect(handler).toContain("signal: transferAbort.signal");
     expect(src).toContain("abortTransfer()");
   });
+
+  it("aborts the ladder even when Gemini onclose already set ended", () => {
+    // Gemini Live often closes before the Telnyx socket. onclose sets
+    // `ended = true`; teardown used to skip abort inside `if (!ended)` and
+    // keep dialing the team after the caller hung up.
+    const onclose = src.slice(src.indexOf("onclose: (e?: CloseEvent)"));
+    expect(onclose).toContain("abortTransfer()");
+    const teardown = src.slice(src.indexOf("gemini-bridge: teardown summary"));
+    const endedGate = teardown.indexOf("if (!ended)");
+    expect(endedGate).toBeGreaterThan(-1);
+    expect(teardown.slice(0, endedGate)).toContain("abortTransfer()");
+  });
 });
 
 describe("the reach execute closure maps ladder details for the model", () => {
