@@ -1579,6 +1579,23 @@ the AI already did (`actions_taken`), how the call went
 sentence generated from the same constants as the sleeps so copy and
 behavior cannot drift apart.
 
+**Reach-ladder hangups (Sep 6 2026, Miguel Angel Carmona).** Amy's call
+history showed 7 missed + 1 one-second connect from `+16028053377` in two
+minutes. One Clever seller call (`v3:nP1c3dTy...`, 20:14:53Z) asked to be
+transferred. The model called `transfer_to_owner` eight times. Each call
+started a fresh reach ladder on the same A-leg (no in-flight guard). Later
+ladders read ladder 1's `{attempt: 2, status: no_answer}` stamp as their
+own Amy rung and hung up her ringing phone about a second after it started.
+25 B-leg dials, 13 voicemail connects (Gabby/Jason, AMD machine hangup),
+~24 pre-alert texts, 13 more team dials after Miguel hung up at 20:16:49.
+The 8/20 "1 second" pickup is a different bug: she answered at second 20
+of a 20s `timeout_secs`, Telnyx tore the B-leg down, the ladder fail-opened
+to bridge a dead leg and reported nobody_answered. Platform fix: one ladder
+per call, leg-scoped outcome stamps, abort on teardown, dial
+`timeout_secs = ringSeconds + AMD-clear + 5s`. Raising Amy's 20s ring
+window is still a tenant one-shot if she wants more time to pick up; the
+8/20 answer was at second 19-20.
+
 Voicemails (Aug 11 2026): `amy-voicemail-scripts.ts` gives all 13
 `place_ai_call` rungs a `voicemailTemplate`, so a lead who never picks up now
 hears from us instead of only being texted. Before PR #1297 the engine hung up
