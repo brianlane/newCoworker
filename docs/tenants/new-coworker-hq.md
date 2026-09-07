@@ -162,6 +162,31 @@ visitor actually books.
 
 ## One-shots
 
+**Cold outreach leaves as team@ (2026-09-06, send-as override):**
+`outreach_settings.send_as_email` is new (migration `20260906155828`): when
+set, every outreach pitch and follow-up nudge carries that address as its
+`From:` and `Reply-To:` on the Gmail raw send (`message.from` / `replyTo` on
+Graph). Null, the default for every tenant, keeps the old behavior: no From
+header, so the provider stamps its own default identity. HQ's connected Gmail
+signs in as the personal Google account and has `team@` on the product domain
+VERIFIED under Send mail as, and Cloudflare routes the whole domain into that
+same Gmail, so replies to `team@` still land on the owned thread and the
+email coworker's reply detection keeps working. `set-hq-outreach-send-as.ts`
+writes the alias onto HQ's row only (dry-run by default, `--apply` to write,
+`--send-as <address>` for another alias, `--clear` to go back to the provider
+default; refuses without an existing settings row; idempotent, reads the write
+back, ledger-recorded). **Run it after the merge** (`set -a && source .env &&
+set +a && npx tsx scripts/oneshot/set-hq-outreach-send-as.ts --apply`), then
+check the From line on the next pitch in Gmail Sent. The same value can be set
+from Dashboard, Marketing, "Send as (optional)"; the one-shot exists so the
+change is ledgered. Side effect worth knowing: `email_log.from_email` for
+outreach rows now records the alias (the wire From) instead of the account
+address, which closes the account-vs-alias gap noted in
+`.cursor/memory/project_hq_gmail_sendas_resend_relay.md`. That memory also
+records that HQ's `team@` send-as is relayed through `smtp.resend.com`, so a
+pitch sent as `team@` is delivered by our Resend account, exactly as the
+default-alias sends already were.
+
 **First-touch booking link switched off; waiting drafts re-assembled
 (2026-09-06, PR #1804):** the product change Outbound Prospecting and Brian
 approved as the zero-reply fix. `outreach_settings.booking_link_on_first_touch`
@@ -266,6 +291,7 @@ instructions because a `run_agent` step never sees `bookingLinkPromptLine`),
 `patch-hq-booking-offer.ts`, `sync-hq-booking-copy.ts`,
 `fix-hq-placeholder-contact-names.ts`, `set-hq-digest-prefs.ts`,
 `configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`,
+`set-hq-outreach-send-as.ts`,
 `reassemble-outreach-drafts.ts` (generic, takes `--business`; listed here
 because HQ is the tenant whose waiting drafts it exists to rebuild).
 

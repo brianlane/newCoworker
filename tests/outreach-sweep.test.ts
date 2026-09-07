@@ -57,6 +57,7 @@ function settings(over: Partial<OutreachSettingsRow> = {}): OutreachSettingsRow 
     send_window_start_hour: 8,
     send_window_end_hour: 11,
     from_connection_id: null,
+    send_as_email: null,
     booking_meeting_type_id: null,
     booking_link_on_first_touch: false,
     postal_address: "1 Example Plaza, Phoenix AZ",
@@ -807,7 +808,9 @@ describe("phase 3: sending", () => {
     expect(send).toHaveBeenCalledWith(BIZ, {
       toEmail: "info@acmehvac.com",
       subject: prospect().pitch_subject,
-      bodyText: prospect().pitch_body
+      bodyText: prospect().pitch_body,
+      // No alias configured: an explicit null, so the mailbox default applies.
+      sendAs: null
     });
     const flow = (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> })
       .processFlowEventImpl;
@@ -1062,6 +1065,79 @@ describe("phase 3: sending", () => {
     expect(
       (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
     ).not.toHaveBeenCalled();
+  });
+
+  it("sends as the configured alias, through the default mailbox and a pinned one alike", async () => {
+    // Which mailbox sends and which address it sends as are separate choices,
+    // so the alias has to reach the provider whichever way the mailbox was
+    // resolved. Missing it on one path would make the setting appear to work
+    // for a one-mailbox tenant and silently stop the day a second is pinned.
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ send_as_email: "team@acmehq.com" })
+      ])
+    });
+    const viaDefault = baseDeps();
+    await processOutreachSweep(viaDefault);
+    expect(
+      (viaDefault as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).toHaveBeenCalledWith(BIZ, expect.objectContaining({ sendAs: "team@acmehq.com" }));
+
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ from_connection_id: "conn-row", send_as_email: "team@acmehq.com" })
+      ])
+    });
+    const viaPin = baseDeps();
+    await processOutreachSweep(viaPin);
+    expect(
+      (viaPin as unknown as { sendFromConnectionImpl: ReturnType<typeof vi.fn> })
+        .sendFromConnectionImpl
+    ).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ connectionId: "nango-conn" }),
+      expect.objectContaining({ sendAs: "team@acmehq.com" })
+    );
+  });
+
+  it("passes no alias when none is configured, so the provider default is untouched", async () => {
+    // Null and whitespace both mean "not set". The send path receives an
+    // explicit null rather than the raw column, so a stray space in the row
+    // can never become a From header.
+    for (const stored of [null, "   "]) {
+      sendLedger({
+        listActiveOutreachSettings: vi.fn(async () => [settings({ send_as_email: stored })])
+      });
+      const deps = baseDeps();
+      await processOutreachSweep(deps);
+      expect(
+        (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+      ).toHaveBeenCalledWith(BIZ, expect.objectContaining({ sendAs: null }));
+    }
+  });
+
+  it("logs the alias as the sending address once the provider reports it", async () => {
+    // The send result's fromEmail is the wire From, which with an alias IS the
+    // alias. email_log then says what the recipient saw instead of the account
+    // the connection metadata names.
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ send_as_email: "team@acmehq.com" })
+      ])
+    });
+    const deps = baseDeps({
+      sendEmailImpl: vi.fn(async (_biz: string, args: { sendAs?: string | null }) => ({
+        ok: true as const,
+        provider: "google" as const,
+        messageId: "msg-1",
+        threadId: "thread-1",
+        fromEmail: args.sendAs ?? "owner@acmehq.com"
+      }))
+    });
+    await processOutreachSweep(deps);
+    expect(
+      (deps as unknown as { recordEmailLogImpl: ReturnType<typeof vi.fn> }).recordEmailLogImpl
+    ).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ from: "team@acmehq.com" }));
   });
 
   it("stops the pass rather than sending from the wrong address when that mailbox is gone", async () => {

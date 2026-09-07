@@ -38,6 +38,7 @@ import {
   type OutreachSettingsRow
 } from "./db";
 import { summarizeFunnel, type OutreachFunnel, type VerticalFunnel } from "./stats";
+import { normalizeSendAsEmail } from "./send-as";
 import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { listOutreachSendFromOptions, type SendFromOption } from "@/lib/email/mailbox-options";
 
@@ -248,6 +249,12 @@ export type ProspectingSettingsInput = {
    * is connected", the behavior from before there was a choice.
    */
   fromConnectionId: string;
+  /**
+   * Verified send-as alias the email leaves from (From and Reply-To). Empty
+   * lets the provider pick, which is what every send did before there was a
+   * choice. See `outreach_settings.send_as_email`.
+   */
+  sendAsEmail: string;
   /** Meeting the CTA links to. Empty links the page and lets them choose. */
   bookingMeetingTypeId: string;
   /**
@@ -344,6 +351,20 @@ export async function saveProspectingSettings(
     }
   }
 
+  // The send-as alias is checked for SHAPE only. Whether the mailbox may
+  // actually send as it is the provider's knowledge (Gmail's verified alias
+  // list, Exchange's Send As grant), which no connection metadata exposes, so
+  // the send path reports that failure per send instead. Same split as the
+  // mailbox pin: switching on says so out loud, switching off drops a bad
+  // value to null rather than letting a typo block the kill switch.
+  const normalizedSendAs = normalizeSendAsEmail(input.sendAsEmail);
+  if (normalizedSendAs === "invalid" && strict) {
+    throw new ProspectingSettingsError(
+      "The send-as address has to be a single email address, like team@yourdomain.com."
+    );
+  }
+  const sendAsEmail = normalizedSendAs === "invalid" ? null : normalizedSendAs;
+
   // The chosen meeting, checked the same way and for a sharper reason: this
   // column carries a FOREIGN KEY, so an id deleted while the panel sat open
   // fails the upsert itself. Unchecked, that would break the one write this
@@ -383,6 +404,7 @@ export async function saveProspectingSettings(
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null,
       from_connection_id: fromConnectionId || null,
+      send_as_email: sendAsEmail,
       booking_meeting_type_id: bookingMeetingTypeId,
       booking_link_on_first_touch: input.bookingLinkOnFirstTouch
     },
@@ -479,6 +501,7 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     valueProp: "",
     senderName: "",
     fromConnectionId: "",
+    sendAsEmail: "",
     bookingMeetingTypeId: "",
     bookingLinkOnFirstTouch: false
   };

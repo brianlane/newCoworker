@@ -52,6 +52,14 @@ and the day-5 nudge will re-mail the same dead address). When auditing
 deliverability, remember Gmail send-as smtpMsa means "delivered by Resend",
 not "delivered by Google".
 
+**Send-as is now explicit (2026-09-06):** `outreach_settings.send_as_email`
+puts the alias in `From:`/`Reply-To:` on the raw send instead of leaving the
+identity to Gmail's default, and the send result's `fromEmail` reports that
+alias, so `email_log.from_email` for outreach rows says the wire From. It does
+NOT change the relay: `team@` is still an smtpMsa identity, so a pitch sent as
+`team@` is still delivered by our Resend account under an id we never see.
+HQ's row is set by `scripts/oneshot/set-hq-outreach-send-as.ts`.
+
 **Fixes shipped 2026-08-28:** the webhook now falls back to recipient +
 subject over a bounded 4-day window for unmatched FAILURES
 (`applyEmailDeliveryStatusByRecipient` in src/lib/email/delivery.ts), so
