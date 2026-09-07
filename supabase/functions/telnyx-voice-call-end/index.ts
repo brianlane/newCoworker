@@ -765,7 +765,7 @@ async function handleReachAmd(
   // here: verdicts for a torn-down leg classify as unknown and never land.
   const { error } = await supabase.rpc("voice_session_context_merge", {
     p_call_control_id: reach.aLegCallControlId,
-    p_patch: { reach_amd: { attempt: reach.attempt, verdict } }
+    p_patch: { reach_amd: { attempt: reach.attempt, verdict, b_leg: bLegCallControlId } }
   });
   if (error) {
     // The ladder's clearance cap still resolves the wait; losing the stamp

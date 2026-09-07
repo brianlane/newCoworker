@@ -113,8 +113,12 @@ export type ReachLadderResult =
        *     (for example a Telnyx channel-limit 403 on each rung). Nobody
        *     was rung and no pre-alert was sent, so the model must not claim
        *     the team ignored the call (2026-08-16 incident review).
+       *   - "caller_gone": the A-leg session ended (teardown or end_call)
+       *     while this ladder was still ringing. Stop dialing; there is
+       *     nobody left to bridge to (Amy Laidlaw, 2026-09-06: 13 team
+       *     dials after the seller hung up).
        */
-      detail: "nobody_answered" | "dials_refused";
+      detail: "nobody_answered" | "dials_refused" | "caller_gone";
     };
 
 /**
@@ -152,22 +156,42 @@ export async function runReachLadder(
      * awaitReachAmdClearance (which additionally honors capMs; the outcome
      * poll ignores it).
      */
-    poll?: { pollMs?: number; sleep?: (ms: number) => Promise<void>; capMs?: number };
+    poll?: {
+      pollMs?: number;
+      sleep?: (ms: number) => Promise<void>;
+      capMs?: number;
+      graceMs?: number;
+    };
+    /**
+     * Aborted when the caller is gone (bridge teardown or end_call). Checked
+     * before each dial and inside both poll loops; the current B leg is hung
+     * up and the ladder returns caller_gone rather than ringing the rest of
+     * the team into an empty A leg.
+     */
+    signal?: AbortSignal;
   }
 ): Promise<ReachLadderResult> {
   const { businessId, aLegCallControlId, config } = args;
   const log = args.log ?? (() => undefined);
   const telemetry = args.telemetry ?? (() => undefined);
+  const signal = args.signal;
   let anyDialSucceeded = false;
   for (let attempt = 0; attempt < config.targets.length; attempt += 1) {
+    if (signal?.aborted) {
+      return { ok: false, detail: "caller_gone" };
+    }
     const target = config.targets[attempt]!;
     const dialRes = await telnyx.dial({
       connectionId: config.connectionId,
       to: target.e164,
       from: config.fromE164,
-      // Telnyx enforces the ring window server-side too, so a lost webhook
-      // still ends the attempt instead of ringing a phone forever.
-      timeoutSecs: config.ringSeconds,
+      // Telnyx timeout must outlive the poll window plus AMD-clear plus a
+      // bridge margin: setting it equal to ringSeconds tore down a
+      // just-answered B leg at the same second the teammate picked up
+      // (Amy Laidlaw, 2026-08-20, 1-second connect then nobody_answered).
+      // The poll still uses ringSeconds, so an unanswered phone is abandoned
+      // at the configured ring window and the next target is dialed.
+      timeoutSecs: reachDialTimeoutSecs(config.ringSeconds),
       // A teammate's voicemail ANSWERS the leg (a phone that is off reaches
       // it in a couple of seconds, inside any ring window), and an answer
       // alone would bridge the caller into the greeting. The verdict feeds
@@ -200,15 +224,21 @@ export async function runReachLadder(
         // Best-effort by contract.
       }
     }
+    const expectedBLeg = dialRes.callControlId;
+    const pollOpts = { ...(args.poll ?? {}), expectedBLeg, signal };
     const outcome = await pollReachOutcome(
       supabase,
       aLegCallControlId,
       attempt,
       config.ringSeconds,
-      args.poll ?? {}
+      pollOpts
     );
+    if (outcome.status === "aborted") {
+      await telnyx.hangup(expectedBLeg);
+      return { ok: false, detail: "caller_gone" };
+    }
     if (outcome.status === "answered") {
-      const bLeg = outcome.bLeg || dialRes.callControlId;
+      const bLeg = outcome.bLeg || expectedBLeg;
       // An answer is not yet a person. A phone that is off reaches carrier
       // voicemail in a couple of seconds, inside any ring window, and the
       // voicemail ANSWERS the leg, bridging on the answer alone put the
@@ -221,8 +251,12 @@ export async function runReachLadder(
         supabase,
         aLegCallControlId,
         attempt,
-        args.poll ?? {}
+        pollOpts
       );
+      if (clearance === "aborted") {
+        await telnyx.hangup(bLeg);
+        return { ok: false, detail: "caller_gone" };
+      }
       if (clearance === "machine") {
         log("reach: voicemail answered, next target", { attempt });
         telemetry("voice_reach_vm_skipped", { attempt, to: target.e164 });
@@ -230,6 +264,10 @@ export async function runReachLadder(
         // the belt for a hangup that failed, and a double hangup is a no-op.
         await telnyx.hangup(bLeg);
         continue;
+      }
+      if (signal?.aborted) {
+        await telnyx.hangup(bLeg);
+        return { ok: false, detail: "caller_gone" };
       }
       // Stamp "this attempt is being bridged" BEFORE issuing the bridge, so a
       // machine verdict landing AFTER the clearance cap failed open cannot
@@ -296,6 +334,30 @@ export async function runReachLadder(
 export const REACH_AMD_CLEAR_MS = Number(process.env.REACH_AMD_CLEAR_MS ?? 3000);
 
 /**
+ * Extra seconds Telnyx keeps an ANSWERED B leg up after the ring poll has
+ * given up, so AMD-clearance and the bridge command still have a live leg.
+ * Ring poll stays at ringSeconds; only the dial's timeout_secs grows.
+ */
+export const REACH_BRIDGE_MARGIN_SECS = 5;
+
+/**
+ * How long past the ring window `pollReachOutcome` keeps watching for a
+ * late `call.answered` webhook. The previous `2 * pollMs` (2s at default
+ * 1s polls) lost the race with Telnyx to the Edge function to the session row.
+ */
+export const REACH_OUTCOME_GRACE_MS = 6000;
+
+/** Telnyx `timeout_secs` for a reach B-leg dial. */
+export function reachDialTimeoutSecs(ringSeconds: number): number {
+  return ringSeconds + Math.ceil(REACH_AMD_CLEAR_MS / 1000) + REACH_BRIDGE_MARGIN_SECS;
+}
+
+/** True when the caller's session has already ended. */
+function reachAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+/**
  * The AMD verdict the webhook stamped for this attempt, or null while none
  * has landed. Attempt-checked like readReachOutcome, so a stale verdict from
  * a torn-down earlier leg can never gate the current one.
@@ -303,7 +365,8 @@ export const REACH_AMD_CLEAR_MS = Number(process.env.REACH_AMD_CLEAR_MS ?? 3000)
 export async function readReachAmd(
   supabase: SupabaseClient,
   aLegCallControlId: string,
-  attempt: number
+  attempt: number,
+  expectedBLeg?: string
 ): Promise<"human" | "machine" | null> {
   const { data, error } = await supabase
     .from("voice_handoff_sessions")
@@ -317,6 +380,11 @@ export async function readReachAmd(
   ) as Record<string, unknown> | null;
   if (!amd) return null;
   if (typeof amd.attempt !== "number" || amd.attempt !== attempt) return null;
+  const stampedBLeg = typeof amd.b_leg === "string" ? amd.b_leg : "";
+  // A non-empty b_leg from a DIFFERENT leg is a concurrent ladder's verdict
+  // (same attempt number, other phone). Empty is a legacy stamp, treated as
+  // matching so a box that has not yet been redeployed still clears.
+  if (expectedBLeg && stampedBLeg && stampedBLeg !== expectedBLeg) return null;
   return amd.verdict === "human" ? "human" : amd.verdict === "machine" ? "machine" : null;
 }
 
@@ -330,13 +398,20 @@ export async function awaitReachAmdClearance(
   supabase: SupabaseClient,
   aLegCallControlId: string,
   attempt: number,
-  opts: { pollMs?: number; sleep?: (ms: number) => Promise<void>; capMs?: number } = {}
-): Promise<"human" | "machine" | "timeout"> {
+  opts: {
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    capMs?: number;
+    expectedBLeg?: string;
+    signal?: AbortSignal;
+  } = {}
+): Promise<"human" | "machine" | "timeout" | "aborted"> {
   const pollMs = opts.pollMs ?? 250;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const deadline = Date.now() + (opts.capMs ?? REACH_AMD_CLEAR_MS);
   for (;;) {
-    const verdict = await readReachAmd(supabase, aLegCallControlId, attempt);
+    if (reachAborted(opts.signal)) return "aborted";
+    const verdict = await readReachAmd(supabase, aLegCallControlId, attempt, opts.expectedBLeg);
     if (verdict) return verdict;
     if (Date.now() >= deadline) return "timeout";
     await sleep(pollMs);
@@ -351,7 +426,8 @@ export async function awaitReachAmdClearance(
 export async function readReachOutcome(
   supabase: SupabaseClient,
   aLegCallControlId: string,
-  attempt: number
+  attempt: number,
+  expectedBLeg?: string
 ): Promise<{ status: "answered" | "no_answer"; bLeg: string } | null> {
   const { data, error } = await supabase
     .from("voice_handoff_sessions")
@@ -366,7 +442,13 @@ export async function readReachOutcome(
   if (typeof reach.attempt !== "number" || reach.attempt !== attempt) return null;
   const status = reach.status === "answered" ? "answered" : reach.status === "no_answer" ? "no_answer" : null;
   if (!status) return null;
-  return { status, bLeg: typeof reach.b_leg === "string" ? reach.b_leg : "" };
+  const stampedBLeg = typeof reach.b_leg === "string" ? reach.b_leg : "";
+  // Same-attempt stamp from a different B leg is a concurrent ladder's
+  // result (Amy Laidlaw, 2026-09-06: later ladders hung up her ringing
+  // phone after reading ladder 1's attempt-2 no_answer). Empty b_leg is a
+  // legacy stamp: treat as matching and fall back to the dialed id.
+  if (expectedBLeg && stampedBLeg && stampedBLeg !== expectedBLeg) return null;
+  return { status, bLeg: stampedBLeg || expectedBLeg || "" };
 }
 
 /**
@@ -380,18 +462,36 @@ export async function pollReachOutcome(
   aLegCallControlId: string,
   attempt: number,
   ringSeconds: number,
-  opts: { pollMs?: number; sleep?: (ms: number) => Promise<void> } = {}
-): Promise<{ status: "answered" | "no_answer"; bLeg: string }> {
+  opts: {
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    expectedBLeg?: string;
+    signal?: AbortSignal;
+    graceMs?: number;
+  } = {}
+): Promise<{ status: "answered" | "no_answer" | "aborted"; bLeg: string }> {
   const pollMs = opts.pollMs ?? 1000;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  // One extra poll interval of grace past the ring window: the webhook that
-  // says "no answer" fires when Telnyx gives up at timeout_secs, and cutting
-  // the poll at exactly that moment loses the race with our own dial timeout.
-  const deadline = Date.now() + ringSeconds * 1000 + 2 * pollMs;
+  const graceMs = opts.graceMs ?? REACH_OUTCOME_GRACE_MS;
+  // The webhook that says "answered" has to travel Telnyx to the Edge
+  // function to the session row.
+  // Cutting the poll at exactly timeout_secs lost the race with a pickup on
+  // the last second. Telnyx still enforces timeout_secs (now larger than this
+  // window); this deadline is only the lost-webhook backstop.
+  const deadline = Date.now() + ringSeconds * 1000 + graceMs;
   while (Date.now() < deadline) {
-    const outcome = await readReachOutcome(supabase, aLegCallControlId, attempt);
+    if (reachAborted(opts.signal)) return { status: "aborted", bLeg: "" };
+    const outcome = await readReachOutcome(
+      supabase,
+      aLegCallControlId,
+      attempt,
+      opts.expectedBLeg
+    );
     if (outcome) return outcome;
     await sleep(pollMs);
   }
+  if (reachAborted(opts.signal)) return { status: "aborted", bLeg: "" };
+  const last = await readReachOutcome(supabase, aLegCallControlId, attempt, opts.expectedBLeg);
+  if (last) return last;
   return { status: "no_answer", bLeg: "" };
 }
