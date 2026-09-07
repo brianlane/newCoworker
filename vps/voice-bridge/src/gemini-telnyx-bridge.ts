@@ -52,6 +52,7 @@ import {
   IVR_REFALLBACK_MS,
   type IvrPressSource
 } from "./ivr-gate-press.js";
+import { decideTransferStart } from "./transfer-gate.js";
 
 export { readLiveUsage, type GeminiLiveUsage };
 
@@ -171,8 +172,16 @@ const TOOL_TIMEOUT_MESSAGES: Record<string, string> = {
 export type TransferCapability = {
   /** E.164 destination (owner/staff cell). */
   toE164: string;
-  /** Called when the model invokes the transfer tool. Resolved value is echoed back to the model. */
-  execute: (args: { reason?: string }) => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * Called when the model invokes the transfer tool. Resolved value is echoed
+   * back to the model. `signal` is aborted on teardown and on `end_call` so a
+   * reach ladder stops dialing once the caller is gone. Receptionist and
+   * single-target flow transfers ignore it.
+   */
+  execute: (args: {
+    reason?: string;
+    signal?: AbortSignal;
+  }) => Promise<{ ok: boolean; detail?: string }>;
   /**
    * Detach the AI from the call after a SUCCESSFUL warm transfer: stop the
    * Telnyx media fork so the bridge stops injecting/hearing audio, while the
@@ -840,6 +849,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
+  // One ladder (or single-target transfer) in flight per call. Flipped
+  // SYNCHRONOUSLY in the tool-call loop before the async IIFE, so two
+  // transfer_to_owner calls in one Live batch cannot both start. See
+  // transfer-gate.ts (Amy Laidlaw, 2026-09-06).
+  let transferInFlight = false;
+  let transferAttemptCount = 0;
+  let transferLastExhaustedAtMs: number | null = null;
+  const transferAbort = new AbortController();
+  const abortTransfer = () => {
+    if (!transferAbort.signal.aborted) transferAbort.abort();
+  };
   /**
    * True from the moment a translator-armed transfer succeeds and the
    * interpreter cue lands. Suppresses the AI-led wind-down cues, drops the tool
@@ -1479,6 +1499,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     });
     if (!ended) {
       ended = true;
+      abortTransfer();
       clearTimers();
       try {
         session.sendRealtimeInput({ audioStreamEnd: true });
@@ -2293,13 +2314,30 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
       if (name === "transfer_to_owner" && opts.transfer) {
         const reason = typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
+        // Decide and latch BEFORE the async IIFE. The handler used to return
+        // immediately via `void (async () => execute())()`, so a second
+        // transfer_to_owner in the same Live batch (or a retry while the
+        // first ladder was still ringing) started another concurrent ladder.
+        const transferDecision = decideTransferStart({
+          inFlight: transferInFlight,
+          attemptCount: transferAttemptCount,
+          lastExhaustedAtMs: transferLastExhaustedAtMs,
+          nowMs: Date.now()
+        });
+        if (transferDecision.action === "deny") {
+          sendToolResponse(call.id, name, { ok: false, detail: transferDecision.detail });
+          emitDiag("voice_bridge_transfer_refused", { reason: transferDecision.reason });
+          continue;
+        }
+        transferInFlight = true;
+        transferAttemptCount += 1;
         // `execute` may throw on network-layer failures; catching here stops
         // the unhandled rejection from tearing down every active call on the
         // VPS under Node >= 15.
         void (async () => {
           let result: { ok: boolean; detail?: string };
           try {
-            result = await opts.transfer!.execute({ reason });
+            result = await opts.transfer!.execute({ reason, signal: transferAbort.signal });
           } catch (err) {
             console.error("gemini-bridge: transfer execute threw", err);
             result = {
@@ -2307,6 +2345,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
               detail: err instanceof Error ? `transfer error: ${err.message}` : "transfer error"
             };
           }
+          transferInFlight = false;
+          if (!result.ok) transferLastExhaustedAtMs = Date.now();
           sendToolResponse(call.id, name, {
             ok: result.ok,
             detail: result.detail ?? (result.ok ? "transfer initiated" : "transfer failed")
@@ -2682,6 +2722,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (!endCallRequested) {
           endCallRequested = true;
           endCallRequestedAtMs = Date.now();
+          abortTransfer();
           // Deliberately a STANDALONE timer, NOT pushed to `timers`. The PSTN
           // leg is still up during the goodbye grace, so the hangup MUST survive
           // a clearTimers() (which fires on Gemini Live `onclose` and on
