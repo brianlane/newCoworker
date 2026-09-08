@@ -96,6 +96,11 @@ describe("selectBroadcastTeam: the lead-type filter", () => {
     expect(out.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
   });
 
+  it("a both-type lead reaches Dave and Gabby, not Jason", () => {
+    const out = selectBroadcastTeam([row(), gabby, jason], "both");
+    expect(out.map((m) => m.name)).toEqual(["Dave Lane", "Gabrielle Mota"]);
+  });
+
   it("matches tags case- and whitespace-insensitively", () => {
     for (const tag of ["Seller", "  SELLER  "]) {
       expect(selectBroadcastTeam([row({ tags: ["  SeLLer " ] })], tag)).toHaveLength(1);

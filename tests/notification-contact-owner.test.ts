@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   CONTACT_SCOPED_TASK_TYPES,
   decideOwnerRedirect,
+  filterUnownedBroadcastTeam,
   resolveContactOwnerTarget,
   type OwnerContactRow,
   type OwnerMemberRow
 } from "../supabase/functions/_shared/contact_owner_target";
-
 /**
  * Who receives an urgent alert about one contact. The bug this fixes: a lead
  * Dave Lane had claimed texted asking for a callback, and all four
@@ -192,7 +192,10 @@ describe("resolveContactOwnerTarget", () => {
       "ai_flow_team_members",
       "business_telnyx_settings",
       "notification_preferences",
-      "businesses"
+      "businesses",
+      "ai_flow_runs",
+      "businesses",
+      "employee_time_off"
     ]);
   });
 
@@ -204,7 +207,14 @@ describe("resolveContactOwnerTarget", () => {
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
     expect(out.target).toBe("team_broadcast");
-    expect(tables).toEqual(["contacts", "ai_flow_runs", "ai_flow_team_members"]);
+    expect(tables).toEqual([
+      "contacts",
+      "ai_flow_runs",
+      "ai_flow_team_members",
+      "ai_flow_runs",
+      "businesses",
+      "employee_time_off"
+    ]);
   });
 
   it("narrows the broadcast to the teammates covering that lead type", async () => {
@@ -547,6 +557,283 @@ describe("routing telemetry", () => {
     // Telemetry must never be able to break an alert.
     const { db } = makeDb([{ data: owned }, { data: dave() }], "throws");
     expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("contact_owner");
+  });
+});
+
+const GABBY = "+14807202013";
+const jasonBuyer = roster({
+  id: "m2",
+  name: "Jason Lane",
+  phone_e164: JASON,
+  tags: ["buyer"]
+});
+const gabby = roster({
+  id: "m3",
+  name: "Gabrielle Mota",
+  phone_e164: GABBY,
+  tags: ["buyer", "seller", "both"]
+});
+const amyRoster = [
+  roster({ tags: ["buyer", "seller", "both"] }),
+  jasonBuyer
+];
+const amyTrio = [
+  roster({ tags: ["buyer", "seller", "both"] }),
+  gabby,
+  jasonBuyer
+];
+const unowned = { data: { id: "c1", owner_employee_id: null } };
+const availOk = [
+  { data: { timezone: "UTC" } },
+  { data: [] as unknown[] }
+];
+
+describe("resolveContactOwnerTarget: infer lead type when the caller omits it", () => {
+  it("a stored seller run excludes Jason even with no leadTag argument", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyTrio },
+      { data: [{ context: { vars: { lead_phone: LEAD, lead_type: "seller" } } }] },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane", "Gabrielle Mota"]);
+  });
+
+  it("a both-type run reaches Dave and Gabby, not Jason", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyTrio },
+      { data: [{ context: { vars: { lead_type: "both" } } }] },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane", "Gabrielle Mota"]);
+  });
+
+  it("reads lead_type off the contact note when no run established one", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null, pinned_md: "auto_first_contact; lead_type: seller" } },
+      noPark,
+      { data: amyRoster },
+      { data: [] },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("fail-safes to everyone when stored types disagree", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null, pinned_md: "lead_type: seller" } },
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_phone: LEAD, lead_type: "buyer" } } }] },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+
+  it("skips the run lookup when the caller already passed a tag", async () => {
+    const { db, tables } = makeDb([unowned, noPark, { data: amyRoster }, ...availOk]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD, "seller");
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+    expect(tables).toEqual([
+      "contacts",
+      "ai_flow_runs",
+      "ai_flow_team_members",
+      "businesses",
+      "employee_time_off"
+    ]);
+  });
+
+  it("fail-safes when the type lookup errors", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { error: { message: "runs down" } },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+
+  it("fail-safes when the type lookup throws", async () => {
+    const { db } = makeDb([unowned, noPark, { data: amyRoster }, { throws: true }, ...availOk]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+
+  it("fail-safes when the run lookup returns a non-array payload", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: { context: { vars: { lead_type: "seller" } } } },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+});
+
+describe("resolveContactOwnerTarget: unowned availability", () => {
+  it("drops a tagged teammate who is on time off, and falls to the owner if nobody remains", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { data: { timezone: "UTC" } },
+      {
+        data: [
+          {
+            member_id: "m1",
+            starts_on: "2000-01-01",
+            ends_on: "2099-12-31"
+          }
+        ]
+      }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("contact_unowned");
+    expect(out.team).toEqual([]);
+  });
+
+  it("still pages the tagged team when the time-off lookup errors", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { data: { timezone: "UTC" } },
+      { error: { message: "time off down" } }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("ignores a time-off row that does not cover today", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { data: { timezone: "UTC" } },
+      {
+        data: [
+          {
+            member_id: "m1",
+            starts_on: "1999-01-01",
+            ends_on: "1999-12-31"
+          }
+        ]
+      }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("UTC-and-nobody-out when the availability lookup throws", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { throws: true }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("UTC clock when the timezone row is missing, then still pages the tagged team", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { data: null },
+      { data: [] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("UTC clock when the timezone lookup errors, then still pages the tagged team", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { error: { message: "timezone down" } },
+      { data: [] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("UTC clock when the timezone column is null", async () => {
+    const { db } = makeDb([
+      unowned,
+      noPark,
+      { data: amyRoster },
+      { data: [{ context: { vars: { lead_type: "seller" } } }] },
+      { data: { timezone: null } },
+      { data: [] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+});
+
+describe("filterUnownedBroadcastTeam", () => {
+  const clock = { isoDate: "2026-09-07", weekday: "mon" as const, minutes: 10 * 60 };
+  const daveRow = roster({ tags: ["seller", "buyer", "both"] });
+  const jasonRow = jasonBuyer;
+
+  it("keeps the tagged set and drops people on time off", () => {
+    const out = filterUnownedBroadcastTeam(
+      [daveRow, jasonRow],
+      "seller",
+      new Set(["m1"]),
+      clock
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("drops a tagged teammate outside their weekly schedule", () => {
+    const morning = { ...clock, minutes: 8 * 60 };
+    const scheduled = roster({
+      tags: ["seller"],
+      weekly_schedule: { mon: [["09:00", "17:00"]] }
+    });
+    const out = filterUnownedBroadcastTeam([scheduled], "seller", new Set(), morning);
+    expect(out).toEqual([]);
+  });
+
+  it("does not fail-safe onto Jason when the tagged sellers are all unavailable", () => {
+    const out = filterUnownedBroadcastTeam(
+      [daveRow, jasonRow],
+      "seller",
+      new Set(["m1"]),
+      clock
+    );
+    expect(out.map((m) => m.phone)).toEqual([]);
+  });
+
+  it("leaves an untagged fail-safe audience in place when nobody is off", () => {
+    const out = filterUnownedBroadcastTeam([daveRow, jasonRow], null, new Set(), clock);
+    expect(out.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+
+  it("returns empty when the roster itself is empty", () => {
+    const out = filterUnownedBroadcastTeam([], "seller", new Set(), clock);
+    expect(out).toEqual([]);
   });
 });
 

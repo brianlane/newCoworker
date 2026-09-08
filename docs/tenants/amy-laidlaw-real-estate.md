@@ -549,9 +549,18 @@ These are mistakes already made on this account. Do not remake them.
   team rung between the two: an unowned contact alerts every teammate carrying
   the lead-type tag, and only an EMPTY eligible set falls to the owner. The
   `notify_team` tool takes an optional `leadType` ("seller"/"buyer") to narrow
-  it. A contact that cannot be found at all still goes owner-direct, on
-  purpose: without a contact row there is no lead, and broadcasting on a
-  lookup miss is noise rather than rescue.
+  it; when the model omits that field the resolver infers the type from stored
+  `ai_flow_runs.context.vars.lead_type` and the contact note line
+  `lead_type: seller|buyer|both`, then drops anyone `filterRosterByAvailability`
+  would skip from a `team_broadcast` offer (time off covering today, outside
+  `weekly_schedule`). That is why Jason Lane (roster tag `buyer` only) no
+  longer gets seller `[Coworker] Follow up… Reply 1 to claim` texts: Joseph
+  Halloran / Fritzpatrick charles (Sep 2026) was a seller in the message body
+  while the audience stayed unfiltered because no call site passed a type.
+  Owned-lead pages stay flag-blind (stewardship). A contact that cannot be
+  found at all still goes owner-direct, on purpose: without a contact row
+  there is no lead, and broadcasting on a lookup miss is noise rather than
+  rescue.
 
 - **Under-$500K gating and the cadence tag are load-bearing TOGETHER.** The
   same lead exposed the other half. The under-500K gate correctly skipped the

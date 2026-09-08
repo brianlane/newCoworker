@@ -35,7 +35,15 @@ Load-bearing details that are easy to undo by accident:
   roster rows have a null email).
 - WhatsApp sits out a broadcast entirely: that leg is single recipient.
 - `contact_not_found` still goes owner-direct, on purpose.
-- `notify_team` gained an optional `leadType` ("seller"/"buyer").
+- `notify_team` gained an optional `leadType` ("seller"/"buyer"). The model
+  hint is secondary. When the field is omitted, `contact_owner_target`
+  infers the type from stored `ai_flow_runs` vars and the contact note
+  `lead_type: seller|buyer|both` (skip `route_lead_type` when it is `"none"`),
+  then applies `filterRosterByAvailability` in `team_broadcast` mode (time
+  off + weekly schedule) on the unowned rung only. Owned pages stay
+  flag-blind. An empty remainder after tag+availability falls to the
+  owner, never fail-safes onto someone who does not cover the type (Jason
+  Lane, buyer-only, Sep 2026 seller claim texts).
 
 **Trap:** the repo-root `npx tsc --noEmit` EXCLUDES `supabase/functions`, so
 edits to the worker or `_shared` can typecheck clean locally and fail the
