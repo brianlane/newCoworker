@@ -263,16 +263,24 @@ describe("scenario 1, L: 'look at david's texts' chains contact search into the 
       const threadRead = out.calls.find((c) => c.name === "get_sms_thread");
       expect(threadRead, `calls: ${JSON.stringify(out.calls)}`).toBeDefined();
 
-      const verdict: JudgeVerdict = await judgeReply(
-        "an assistant that just read the owner's real text thread with David (two outbound intros from Samantha, one inbound 'maybe thursday'), replying to the owner's complaint about repeated introductions",
-        out.finalText,
-        {
-          grounded_in_thread:
-            "Does the message discuss what is actually in the thread (the repeated Samantha introduction and/or David's reply) rather than generic advice with no reference to the messages?",
-          invents_messages:
-            "Does the message quote or attribute a PAST message body that is not in the thread (words nobody sent)? Weekdays/dates derived from the provided timestamps are false. A clearly labeled NEW draft or proposal for a future text is false."
-        }
-      );
+      let verdict: JudgeVerdict;
+      try {
+        verdict = await judgeReply(
+          "an assistant that just read the owner's real text thread with David (two outbound intros from Samantha, one inbound 'maybe thursday'), replying to the owner's complaint about repeated introductions",
+          out.finalText,
+          {
+            grounded_in_thread:
+              "Does the message discuss what is actually in the thread (the repeated Samantha introduction and/or David's reply) rather than generic advice with no reference to the messages?",
+            invents_messages:
+              "Does the message quote or attribute a PAST message body that is not in the thread (words nobody sent)? Weekdays/dates derived from the provided timestamps are false. A clearly labeled NEW draft or proposal for a future text is false."
+          }
+        );
+      } catch (err) {
+        // 2026-09-08 nightly: judgeReply threw on citation matching before
+        // this dump ran, so the live reply was only in the assertion diff.
+        console.error("live reply:", out.finalText);
+        throw err;
+      }
       if (!verdict.answers.grounded_in_thread || verdict.answers.invents_messages) {
         console.error("live reply:", out.finalText);
         console.error("judge verdict:", JSON.stringify(verdict));

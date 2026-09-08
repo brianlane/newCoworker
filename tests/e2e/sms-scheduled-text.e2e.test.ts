@@ -432,44 +432,60 @@ describe("scheduled reminder texts (R V replay, verbatim production lines)", () 
      * it queued onto the contact, and pinned notes ride the SMS preamble on
      * every later turn (contacts.pinned_md, buildCustomerPreambleForEdge).
      * So the model does not need to remember the promise, it reads it.
+     *
+     * RETRY, and why this block carries it (2026-09-08).
+     *
+     * Nightly run 34234123205 pass 2 failed here on Date.parse(sendAtIso)
+     * not finite. Generation lived in beforeAll, so vitest retry could
+     * not re-roll, and the assertion had no dump of args. Same absorber
+     * as the Sep 4 reminder-covered block: one in-test retry, dump reply
+     * and full tool args on the next miss.
      */
-    let calls: RecordedCall[] = [];
-
-    beforeAll(async () => {
-      const turn = await smsTurn(
-        systemPrompt([
-          "Customer profile:\nPinned notes:\n[2026-08-28 via text] Wants a text at " +
-            "Monday, August 31, 2026 at 6:30 PM EDT. Queued: \"Reminder: your call with " +
-            "James is in 30 minutes.\"",
-          "Booking status: upcoming call Tuesday, September 1, 2026 at 3:00 PM EDT " +
-            "(moved from Monday, August 31, 2026 at 7:00 PM EDT)."
-        ]),
-        BOOKED,
-        "I had to move the call to Tuesday at 3pm. Can you move that reminder too please",
-        (name, args) =>
-          name === "schedule_text"
-            ? {
-                ok: true,
-                data: {
-                  sendAtLocal: inBusinessTz(String(args.sendAtIso ?? new Date().toISOString())),
-                  replacedSendAtLocal: "Monday, August 31, 2026 at 6:30 PM EDT"
-                },
-                message: "Queued. Confirm the time back to them by quoting sendAtLocal exactly."
-              }
-            : { ok: true, data: {} }
-      );
-      calls = turn.calls;
-    }, 120_000);
-
-    it("moves the queued text to the new time instead of leaving it on the old one", () => {
-      const call = calls.find((c) => c.name === "schedule_text");
-      expect(call, `calls: ${JSON.stringify(calls.map((c) => c.name))}`).toBeTruthy();
-      expect(call?.args.phone).toBe(TEXTER);
-      const iso = String(call?.args.sendAtIso ?? "");
-      expect(Number.isFinite(Date.parse(iso))).toBe(true);
-      expect(inBusinessTz(iso)).toMatch(/Tuesday/);
-      expect(inBusinessTz(iso)).toMatch(/2:30\s?PM/);
-    });
+    it(
+      "moves the queued text to the new time instead of leaving it on the old one",
+      { retry: 1, timeout: 120_000 },
+      async () => {
+        const turn = await smsTurn(
+          systemPrompt([
+            "Customer profile:\nPinned notes:\n[2026-08-28 via text] Wants a text at " +
+              "Monday, August 31, 2026 at 6:30 PM EDT. Queued: \"Reminder: your call with " +
+              "James is in 30 minutes.\"",
+            "Booking status: upcoming call Tuesday, September 1, 2026 at 3:00 PM EDT " +
+              "(moved from Monday, August 31, 2026 at 7:00 PM EDT)."
+          ]),
+          BOOKED,
+          "I had to move the call to Tuesday at 3pm. Can you move that reminder too please",
+          (name, args) =>
+            name === "schedule_text"
+              ? {
+                  ok: true,
+                  data: {
+                    sendAtLocal: inBusinessTz(String(args.sendAtIso ?? new Date().toISOString())),
+                    replacedSendAtLocal: "Monday, August 31, 2026 at 6:30 PM EDT"
+                  },
+                  message: "Queued. Confirm the time back to them by quoting sendAtLocal exactly."
+                }
+              : { ok: true, data: {} }
+        );
+        const call = turn.calls.find((c) => c.name === "schedule_text");
+        const iso = String(call?.args.sendAtIso ?? "");
+        const dump = () => {
+          console.error("live reply:", turn.finalText);
+          console.error("calls:", JSON.stringify(turn.calls));
+        };
+        if (!call || call.args.phone !== TEXTER || !Number.isFinite(Date.parse(iso))) {
+          dump();
+        }
+        expect(call, `calls: ${JSON.stringify(turn.calls)}`).toBeTruthy();
+        expect(call?.args.phone, JSON.stringify(call?.args)).toBe(TEXTER);
+        expect(
+          Number.isFinite(Date.parse(iso)),
+          `sendAtIso=${iso} args=${JSON.stringify(call?.args)}`
+        ).toBe(true);
+        expect(inBusinessTz(iso), iso).toMatch(/Tuesday/);
+        expect(inBusinessTz(iso), iso).toMatch(/2:30\s?PM/);
+      }
+    );
   });
 
   describe("a third party the texter asks for", () => {
