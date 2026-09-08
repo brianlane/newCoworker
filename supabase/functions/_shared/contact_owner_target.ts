@@ -19,14 +19,18 @@
  * roster row with a phone, else the business owner. Every failure falls DOWN
  * the ladder, never out.
  *
- * Eligibility is `active` plus a phone, and is deliberately BLIND to the
- * four per-employee availability flags. Those govern lead DISTRIBUTION and
- * are enforced at the three lead-selection sites through
- * `filterRosterByAvailability`; this is stewardship of a lead already
- * claimed. `routing_enabled = false` means "stop offering me new leads", not
- * "don't tell me my own client is texting", and an urgent page must not be
- * silenced by a weekly schedule. Same reasoning the README gives for staff
- * hand-off sends staying flag-blind.
+ * Eligibility for an OWNED-lead page is `active` plus a phone, and is
+ * deliberately BLIND to the four per-employee availability flags. Those
+ * govern lead DISTRIBUTION and are enforced at the three lead-selection
+ * sites through `filterRosterByAvailability`; paging a teammate about a
+ * lead they already claimed is stewardship. `routing_enabled = false` means
+ * "stop offering me new leads", not "don't tell me my own client is
+ * texting", and that urgent page must not be silenced by a weekly schedule.
+ *
+ * An UNOWNED `team_broadcast` is distribution: it invites a claim. That rung
+ * infers the lead type from stored facts when the caller omitted it, then
+ * drops anyone `filterRosterByAvailability` would skip from a
+ * `team_broadcast` offer (time off, off-hours). Owned pages stay flag-blind.
  *
  * Shared by the Node dispatcher and the Deno notifications function, so both
  * pipelines route identically.
@@ -39,6 +43,12 @@ import {
   type BroadcastMember,
   type BroadcastMemberRow
 } from "./team_broadcast.ts";
+import {
+  filterRosterByAvailability,
+  localClock,
+  type LocalClock
+} from "./ai_flows/engine.ts";
+import { decideInferredLeadType, leadTypeFromRunContext, leadTypeFromText } from "./lead_type.ts";
 
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -232,9 +242,11 @@ export async function resolveContactOwnerTarget(
   businessId: string,
   contactE164: string | null | undefined,
   /**
-   * Lead type ("seller" / "buyer") used to narrow the unowned-lead broadcast
-   * to the teammates who cover it. Omitted, or a tag nobody carries, alerts
-   * every eligible member: the filter degrades to noise, never to silence.
+   * Lead type ("seller" / "buyer" / "both") used to narrow the unowned-lead
+   * broadcast to the teammates who cover it. Omitted: inferred from stored
+   * flow-run vars and the contact note. A tag nobody carries, or a type
+   * we could not infer, alerts every eligible member: the filter degrades
+   * to noise, never to silence.
    */
   leadTag?: string | null
 ): Promise<ContactOwnerTarget> {
@@ -257,7 +269,11 @@ export async function resolveContactOwnerTarget(
  * caller reads as "fall back to the owner". Losing the broadcast is
  * acceptable; losing the alert is not.
  */
-type ActiveRosterRow = BroadcastMemberRow & { email?: string | null };
+export type ActiveRosterRow = BroadcastMemberRow & {
+  email?: string | null;
+  weekly_schedule?: unknown;
+  preferred_windows?: unknown;
+};
 
 async function readActiveRoster(
   supabase: AnyClient,
@@ -266,7 +282,9 @@ async function readActiveRoster(
   try {
     const { data, error } = await supabase
       .from("ai_flow_team_members")
-      .select("id, name, phone_e164, email, team_broadcast_enabled, tags")
+      .select(
+        "id, name, phone_e164, email, team_broadcast_enabled, tags, weekly_schedule, preferred_windows"
+      )
       .eq("business_id", businessId)
       .eq("active", true);
     if (error) {
@@ -337,7 +355,7 @@ async function resolveVerdict(
   try {
     const { data: contactData, error: contactErr } = await supabase
       .from("contacts")
-      .select("id, owner_employee_id")
+      .select("id, owner_employee_id, pinned_md, customer_e164, alias_e164s")
       .eq("business_id", businessId)
       .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
       .maybeSingle();
@@ -345,7 +363,14 @@ async function resolveVerdict(
       console.error("contact_owner_target: contact lookup", contactErr);
       return TO_OWNER("lookup_failed");
     }
-    const contact = (contactData as OwnerContactRow | null) ?? null;
+    const contactRow = (contactData as (OwnerContactRow & {
+      pinned_md?: string | null;
+      customer_e164?: string | null;
+      alias_e164s?: unknown;
+    }) | null) ?? null;
+    const contact: OwnerContactRow | null = contactRow
+      ? { id: contactRow.id, owner_employee_id: contactRow.owner_employee_id }
+      : null;
     if (!contact?.owner_employee_id) {
       const verdict = decideOwnerRedirect(contact, null);
       // An UNOWNED contact goes to the tagged team before the owner. A
@@ -353,11 +378,12 @@ async function resolveVerdict(
       // behavior: without a contact row there is no lead to speak of, and
       // broadcasting to the whole team on a lookup miss is noise, not rescue.
       if (verdict.reason !== "contact_unowned") return verdict;
+      const identity = contactIdentityPhones(phone, contactRow);
       // Keep-for-owner window: a live $1M+ park on this phone means the
       // owner was told the team would not be offered it. Broadcasting a
       // claimable "Needs Human" alert here is how Gabby claimed Robert
       // Braid three minutes after Amy was told KEPT FOR YOU (2026-09-02).
-      const park = await findLiveOwnerDirectPark(supabase, businessId, phone);
+      const park = await findLiveOwnerDirectPark(supabase, businessId, identity);
       if (park === "error") return TO_OWNER("lookup_failed");
       if (park) return TO_OWNER("owner_direct_live");
       const roster = await readActiveRoster(supabase, businessId);
@@ -365,7 +391,12 @@ async function resolveVerdict(
       // broadcast to but the owner themselves, so skip the claim framing.
       const solo = await soloOwnerVerdict(supabase, businessId, roster);
       if (solo) return solo;
-      const team = selectBroadcastTeam(roster, leadTag);
+      const provided = (leadTag ?? "").trim();
+      const resolvedTag = provided
+        ? provided
+        : await inferLeadType(supabase, businessId, identity, contactRow?.pinned_md);
+      const { clock, offIds } = await readUnownedAvailability(supabase, businessId);
+      const team = filterUnownedBroadcastTeam(roster, resolvedTag, offIds, clock);
       return team.length > 0 ? TO_TEAM(team) : verdict;
     }
 
@@ -383,6 +414,135 @@ async function resolveVerdict(
   } catch (e) {
     console.error("contact_owner_target: lookup", e);
     return TO_OWNER("lookup_failed");
+  }
+}
+
+/**
+ * Tag filter first, then the same availability skip `route_to_team` uses
+ * for a team_broadcast offer. Time-off and off-hours drop a tagged
+ * teammate; an empty remainder falls through to the owner rather than
+ * fail-safing back onto someone who does not cover this type.
+ */
+export function filterUnownedBroadcastTeam(
+  roster: readonly ActiveRosterRow[],
+  leadTag: string | null | undefined,
+  offIds: ReadonlySet<string>,
+  clock: LocalClock
+): BroadcastMember[] {
+  const tagged = selectBroadcastTeam(roster, leadTag);
+  if (tagged.length === 0) return [];
+  const taggedIds = new Set(tagged.map((m) => m.id));
+  const taggedRows = roster.filter((row) => taggedIds.has(row.id));
+  const available = filterRosterByAvailability(taggedRows, offIds, clock, "team_broadcast");
+  const availableIds = new Set(available.map((row) => row.id));
+  return tagged.filter((m) => availableIds.has(m.id));
+}
+
+const LEAD_TYPE_RUN_SCAN = 20;
+
+/**
+ * The inbound number plus the contact's primary and aliases, de-duped.
+ * Flow runs store `vars.lead_phone` as the primary; a later text from an
+ * alias must still find that run (Bugbot, PR #1813).
+ */
+export function contactIdentityPhones(
+  inbound: string,
+  row: { customer_e164?: string | null; alias_e164s?: unknown } | null | undefined
+): string[] {
+  const out: string[] = [];
+  const add = (raw: string | null | undefined) => {
+    const n = normalizeE164((raw ?? "").trim() || undefined);
+    if (n) out.push(n);
+  };
+  add(inbound);
+  add(row?.customer_e164 ?? null);
+  const aliases = Array.isArray(row?.alias_e164s) ? row.alias_e164s : [];
+  for (const alias of aliases) {
+    if (typeof alias === "string") add(alias);
+  }
+  return [...new Set(out)];
+}
+
+function leadPhoneOrFilter(phones: readonly string[]): string {
+  return phones.map((p) => `context->vars->>lead_phone.eq.${p}`).join(",");
+}
+
+/**
+ * Stored type for this phone: contact note, then recent flow-run vars.
+ * Never throws. A down query degrades to whatever the note already said
+ * (or null), never to a guessed type.
+ */
+async function inferLeadType(
+  supabase: AnyClient,
+  businessId: string,
+  phones: readonly string[],
+  pinnedMd: string | null | undefined
+): Promise<string | null> {
+  const found = [leadTypeFromText(pinnedMd)];
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("id, context")
+      .eq("business_id", businessId)
+      .or(leadPhoneOrFilter(phones))
+      .order("updated_at", { ascending: false })
+      .limit(LEAD_TYPE_RUN_SCAN);
+    if (error) {
+      console.error("contact_owner_target: lead type lookup", error);
+      return decideInferredLeadType(found);
+    }
+    for (const row of Array.isArray(data) ? data : []) {
+      found.push(leadTypeFromRunContext((row as { context?: unknown }).context));
+    }
+  } catch (e) {
+    console.error("contact_owner_target: lead type lookup threw", e);
+  }
+  return decideInferredLeadType(found);
+}
+
+/**
+ * Business-local clock plus who is out today. Sequential on purpose: the
+ * unit fake client is a queue, and Promise.all would race its cursor.
+ * Either lookup failing degrades to UTC / nobody-out, never to silence.
+ */
+async function readUnownedAvailability(
+  supabase: AnyClient,
+  businessId: string
+): Promise<{ clock: LocalClock; offIds: Set<string> }> {
+  const utc = localClock(new Date(), "UTC");
+  try {
+    const tzRes = await supabase
+      .from("businesses")
+      .select("timezone")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tz =
+      tzRes.error || tzRes.data == null
+        ? null
+        : ((tzRes.data as { timezone?: string | null }).timezone ?? null);
+    const clock = localClock(new Date(), tz);
+    const offRes = await supabase
+      .from("employee_time_off")
+      .select("member_id, starts_on, ends_on")
+      .eq("business_id", businessId);
+    const offIds = new Set<string>();
+    if (!offRes.error && Array.isArray(offRes.data)) {
+      for (const row of offRes.data as {
+        member_id: string;
+        starts_on: string;
+        ends_on: string;
+      }[]) {
+        if (row.starts_on <= clock.isoDate && row.ends_on >= clock.isoDate) {
+          offIds.add(row.member_id);
+        }
+      }
+    } else if (offRes.error) {
+      console.error("contact_owner_target: time-off lookup", offRes.error);
+    }
+    return { clock, offIds };
+  } catch (e) {
+    console.error("contact_owner_target: availability lookup threw", e);
+    return { clock: utc, offIds: new Set() };
   }
 }
 
@@ -405,7 +565,7 @@ const OWNER_DIRECT_PARK_SCAN = 20;
 async function findLiveOwnerDirectPark(
   supabase: AnyClient,
   businessId: string,
-  phone: string
+  phones: readonly string[]
 ): Promise<boolean | "error"> {
   try {
     const { data, error } = await supabase
@@ -414,7 +574,7 @@ async function findLiveOwnerDirectPark(
       .eq("business_id", businessId)
       .in("status", ["awaiting_agent", "queued"])
       .eq("context->routing->>owner_direct", "true")
-      .eq("context->vars->>lead_phone", phone)
+      .or(leadPhoneOrFilter(phones))
       .order("updated_at", { ascending: false })
       .limit(OWNER_DIRECT_PARK_SCAN);
     if (error) {

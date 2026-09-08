@@ -244,4 +244,18 @@ describe("registry ↔ voice bridge parity", () => {
       ).toBe(true);
     }
   });
+
+  it("sms and voice notify_team declare optional leadType", () => {
+    const notify = seed.tools.find((t) => t.name === "notify_team");
+    expect(notify, "sms seed is missing notify_team").toBeTruthy();
+    const props =
+      ((notify?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties) ??
+      {};
+    expect(props.leadType, "sms notify_team is missing leadType").toBeTruthy();
+    const declText = fs.readFileSync(
+      path.join(process.cwd(), "vps/voice-bridge/src/tool-declarations.ts"),
+      "utf8"
+    );
+    expect(declText).toMatch(/leadType:\s*\{/);
+  });
 });

@@ -244,7 +244,9 @@ async function resolveTargets(
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
 
   // Contact-scoped alerts belong to whoever owns the lead. Never throws;
-  // every failure resolves back to the business owner.
+  // every failure resolves back to the business owner. Lead type is not
+  // passed here: the resolver infers seller/buyer/both from stored flow-run
+  // vars and the contact note, then applies the unowned availability filter.
   const routing = contactE164
     ? await resolveContactOwnerTarget(supa, businessId, contactE164)
     : null;

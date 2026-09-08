@@ -38,7 +38,13 @@ const argsSchema = z.object({
   /** Caller's name if known, so the owner knows who to get back to. */
   callerName: z.string().max(200).optional(),
   /** Caller's phone if the model collected one other than the ANI. */
-  callerPhone: z.string().max(32).optional()
+  callerPhone: z.string().max(32).optional(),
+  /**
+   * Whether this is a seller or a buyer, when the conversation makes it
+   * clear. Used only to narrow WHO hears about a lead nobody owns yet.
+   * Unset, or a value no teammate covers, alerts every eligible teammate.
+   */
+  leadType: z.enum(["seller", "buyer"]).optional()
 });
 
 export async function POST(request: Request) {
@@ -102,6 +108,7 @@ export async function POST(request: Request) {
         // This alert is ABOUT this caller, so it goes to whichever teammate
         // owns them, falling back to the business owner.
         contactE164: callerPhone,
+        leadTag: args.leadType ?? null,
         summary,
         kind: "voice_team_notify",
         payload: { logId, ...logPayload },

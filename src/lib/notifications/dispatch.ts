@@ -264,9 +264,10 @@ export type ResolvedTargets = {
  * When `contactE164` names the contact the alert is ABOUT, the resolved
  * phone (and the email, when the roster row has one) is redirected to the
  * teammate who owns that contact, see
- * supabase/functions/_shared/contact_owner_target.ts for the ladder and why
- * it ignores the per-employee availability flags. Business-level alerts pass
- * no contact and are unaffected.
+ * supabase/functions/_shared/contact_owner_target.ts for the ladder. Owned-lead
+ * pages stay blind to per-employee availability flags (stewardship). Unowned
+ * team broadcasts apply time off and weekly schedule after the lead-type
+ * filter. Business-level alerts pass no contact and are unaffected.
  *
  * Falls back gracefully on DB errors, we never want to silently drop an
  * urgent alert because preferences couldn't be read. The caller still gets

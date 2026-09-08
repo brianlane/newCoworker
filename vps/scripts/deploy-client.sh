@@ -1135,6 +1135,10 @@ WORKFLOW_JSON=$(jq -nc \
           customerPhone: {
             type: "string",
             description: "Customer phone if known (E.164 preferred)."
+          },
+          leadType: {
+            type: "string",
+            description: "seller or buyer when the conversation makes it clear. Narrows an unowned-lead alert to teammates who cover that type. Omit when unsure: the server infers from stored facts, and a wrong guess costs noise rather than a missed lead."
           }
         },
         required: ["message"]
