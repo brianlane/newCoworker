@@ -35,6 +35,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
 import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
 import {
+  amountsFromCallBrief,
+  callerAmounts,
   collectAllowedNumbers,
   detectCallIntegrity,
   spokenNumberForm,
@@ -68,6 +70,7 @@ type CallRow = {
   business_id: string;
   caller_e164: string | null;
   forwarded_to_e164: string | null;
+  call_control_id: string | null;
   started_at: string | null;
 };
 type Finding = {
@@ -155,7 +158,7 @@ async function main(): Promise<void> {
     (from, to) => {
       let q = db
         .from("voice_call_transcripts")
-        .select("id, business_id, caller_e164, forwarded_to_e164, started_at")
+        .select("id, business_id, call_control_id, caller_e164, forwarded_to_e164, started_at")
         // Terminal calls only, matching the sweep: a verdict taken mid-call
         // is unreliable, because an in-progress call can be sitting on an
         // IVR with a greeting or two behind it and complete normally.
@@ -209,7 +212,23 @@ async function main(): Promise<void> {
       }
     }
 
-    for (const finding of detectCallIntegrity(turns, allowedNumbers ? { allowedNumbers } : {})) {
+    let briefedAmounts = new Set<number>();
+    if (call.call_control_id) {
+      const { data: sess } = await db
+        .from("voice_handoff_sessions")
+        .select("context")
+        .eq("call_control_id", call.call_control_id)
+        .maybeSingle();
+      briefedAmounts = amountsFromCallBrief(
+        (sess as { context?: unknown } | null)?.context ?? null
+      );
+    }
+
+    for (const finding of detectCallIntegrity(turns, {
+      ...(allowedNumbers ? { allowedNumbers } : {}),
+      allowedAmounts: callerAmounts(turns),
+      briefedAmounts
+    })) {
       findings.push({ ...base, kind: finding.kind, detail: finding.detail });
     }
   }
@@ -228,7 +247,9 @@ async function main(): Promise<void> {
     console.log(
       `\n${findings.length} finding(s). A role_leak means the AI spoke the caller's side; ` +
         `talked_to_recording means it ran its script at a machine; invented_contact_number ` +
-        `means it spoke a phone number the business does not own. Read the full transcript ` +
+        `means it spoke a phone number the business does not own; invented_amount means a ` +
+        `figure came from neither the caller nor the brief; briefed_amount means the flow ` +
+        `handed it the figure, so check the flow. Read the full transcript ` +
         `before acting: these are prompt-adherence failures, not code failures.`
     );
   }

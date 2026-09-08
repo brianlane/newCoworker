@@ -21,6 +21,10 @@
  * SCRIPT CONTENT IS AMY'S, APPROVED 2026-08-06. Do not reword the pitch
  * without her: the four talking points, the Clever cash-offer angle, and the
  * "never ask when to call back" rule are her instructions, not style choices.
+ * Sep 6 2026 exception: mention the cash-offer program, but do not interpolate
+ * or speak dollar amounts. Clever's referral page only shows an Example only
+ * comparison module (placeholders, not this seller's offers). See
+ * `amy-clever-example-offers.ts`.
  */
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
 
@@ -101,6 +105,47 @@ const PITCH_RULES = [
   "- Keep it warm and brief. Do not use em dashes."
 ].join("\n");
 
+/**
+ * The spoken cash-offer sentence BEFORE 2026-09-06. Kept so the one-shot can
+ * find it in a live persona and rewrite it. Do not put this back: interpolating
+ * `{{vars.cash_offers}}` here is how Clever's "Example only" placeholders
+ * ($375k / $395k) were read aloud as this seller's real offers.
+ */
+export const OLD_CLEVER_OFFERS_CLAUSE =
+  "Clever offered you a cash offer program, and the offers on your file are {{vars.cash_offers}}.";
+
+/** Same sentence without a dollar amount. The AI acknowledges the program, never quotes a figure. */
+export const NEW_CLEVER_OFFERS_CLAUSE = "Clever offered you a cash offer program.";
+
+/**
+ * Belt on the pitch: even if a stale extraction still hands the model a
+ * placeholder pair, it is told not to speak dollar amounts for cash offers.
+ * Real offers arrive later by text (Clever Homeward Offers, 470-221-2279).
+ */
+export const NEVER_QUOTE_CASH_OFFERS =
+  "Never quote a cash-offer dollar amount on this call: those figures are not in your briefing, and a later text from Clever is where the real offers arrive.";
+
+/**
+ * Rewrite a live `personaTemplate` that still interpolates cash_offers onto
+ * the 2026-09-06 wording. Idempotent: a persona that is already current is
+ * returned unchanged.
+ */
+export function rewriteCleverPitchPersona(persona: string): string {
+  let next = persona.replaceAll(OLD_CLEVER_OFFERS_CLAUSE, NEW_CLEVER_OFFERS_CLAUSE);
+  if (next.includes("cash offer program") && !next.includes(NEVER_QUOTE_CASH_OFFERS)) {
+    const marker =
+      "we will show you the numbers rather than ask you to take our word for it.";
+    const idx = next.indexOf(marker);
+    if (idx >= 0) {
+      const at = idx + marker.length;
+      next = `${next.slice(0, at)} ${NEVER_QUOTE_CASH_OFFERS}${next.slice(at)}`;
+    } else {
+      next = `${next.trimEnd()}\n${NEVER_QUOTE_CASH_OFFERS}`;
+    }
+  }
+  return next;
+}
+
 /** Clever's variant. The cash-offer framing is Clever's own instruction to Amy. */
 export const PITCH_CLEVER = [
   "You are calling on behalf of the Amy Laidlaw Team with HomeSmart, a real estate team in the Phoenix area.",
@@ -109,7 +154,7 @@ export const PITCH_CLEVER = [
   "",
   "Then work through these points naturally, in your own warm voice:",
   "",
-  "0. Clever offered you a cash offer program, and the offers on your file are {{vars.cash_offers}}. Acknowledge it, then make the case plainly: listing the home almost always nets more than a quick cash sale, and we will show you the numbers rather than ask you to take our word for it.",
+  `0. ${NEW_CLEVER_OFFERS_CLAUSE} Acknowledge it, then make the case plainly: listing the home almost always nets more than a quick cash sale, and we will show you the numbers rather than ask you to take our word for it. ${NEVER_QUOTE_CASH_OFFERS}`,
   TALKING_POINTS,
   "",
   PITCH_RULES
@@ -451,26 +496,42 @@ export function addSellerCallLadder(
 }
 
 /**
- * The Clever pitch names the cash offer amounts, so `read_details` must
- * extract them. The description is copied VERBATIM from the spoke-check
- * flow's `read_page` step, which already reads the same page through the
- * same integration: identical wording means identical extraction behavior,
- * and this flow was burned once before by perturbing a live extraction
- * step (the phone_lead_type incident).
+ * Shared by Clever Lead - Accept (`read_details`) and the spoke-check
+ * (`read_page`). One description so the two extractors cannot drift.
+ *
+ * The 2026-08 wording ("amount(s) shown on the lead page") had the model
+ * copy Clever's "Example only" comparison module: sample ZoomCasa/QuickBuy
+ * figures that scale with estimated value ($375k/$395k on a $425k page)
+ * and are labeled "placeholders and are not based on this property". Real
+ * offers arrive later by text, never on this page. Measured: 21 of 93
+ * extractions since Aug 7 2026 returned those placeholders.
  */
 export const CASH_OFFERS_FIELD = {
   name: "cash_offers",
   description:
-    "The cash offer amount(s) shown on the lead page (e.g. \"$412,000\" or \"$400,000 - $425,000\"), or 'none listed' when no cash offer is shown"
+    "Cash offer amounts for THIS property as a comma-separated list. IGNORE the " +
+    'module labeled "Example only: Cash offer comparison": those ZoomCasa/QuickBuy ' +
+    "numbers are placeholders, not this seller's offers. If that is the only " +
+    'module, or no real offers appear, answer "none listed".'
 } as const;
 
-/** Add cash_offers to the Clever read_details step. False when present. */
+/** The pre-2026-09-06 wording, so the one-shot can recognize a stale field. */
+export const OLD_CASH_OFFERS_FIELD_DESCRIPTION =
+  'The cash offer amount(s) shown on the lead page (e.g. "$412,000" or ' +
+  "\"$400,000 - $425,000\"), or 'none listed' when no cash offer is shown";
+
+/** Add cash_offers to the Clever read_details step, or refresh a stale description. */
 export function addCashOffersField(def: Definition): boolean {
   const step = (def.steps as Record<string, unknown>[]).find((st) => st.id === "read_details");
   if (!step) throw new Error("read_details step not found; re-read the live flow before patching");
-  const fields = step.fields as { name: string }[] | undefined;
+  const fields = step.fields as { name: string; description?: string }[] | undefined;
   if (!Array.isArray(fields)) throw new Error("read_details has no fields array");
-  if (fields.some((f) => f.name === CASH_OFFERS_FIELD.name)) return false;
+  const existing = fields.find((f) => f.name === CASH_OFFERS_FIELD.name);
+  if (existing) {
+    if (existing.description === CASH_OFFERS_FIELD.description) return false;
+    existing.description = CASH_OFFERS_FIELD.description;
+    return true;
+  }
   fields.push({ ...CASH_OFFERS_FIELD });
   return true;
 }

@@ -33,7 +33,8 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
 - [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units since #1189; seed both usage columns in tests
 - [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432; SUPABASE_DB_URL is not in .env, export it from DIRECT_DATABASE_URL
-- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented
+- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented; Clever cash-offer amounts are NOT quoted (page shows Example only placeholders)
+- [Clever Example only cash offers](project_clever_example_offers_not_invented.md) - page placeholders were spoken as real offers; PR #1726 misdiagnosed as invention; option 1 dropped quoted amounts Sep 6 2026
 - [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
 - [Wait_for_reply does not mute the coworker](project_wait_for_reply_does_not_mute_coworker.md) - cadence waits skip nudges; suppressDefaultReply is what quiets auto-reply (KIN 2026-09-02)
