@@ -355,7 +355,7 @@ async function resolveVerdict(
   try {
     const { data: contactData, error: contactErr } = await supabase
       .from("contacts")
-      .select("id, owner_employee_id, pinned_md")
+      .select("id, owner_employee_id, pinned_md, customer_e164, alias_e164s")
       .eq("business_id", businessId)
       .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
       .maybeSingle();
@@ -363,7 +363,11 @@ async function resolveVerdict(
       console.error("contact_owner_target: contact lookup", contactErr);
       return TO_OWNER("lookup_failed");
     }
-    const contactRow = (contactData as (OwnerContactRow & { pinned_md?: string | null }) | null) ?? null;
+    const contactRow = (contactData as (OwnerContactRow & {
+      pinned_md?: string | null;
+      customer_e164?: string | null;
+      alias_e164s?: unknown;
+    }) | null) ?? null;
     const contact: OwnerContactRow | null = contactRow
       ? { id: contactRow.id, owner_employee_id: contactRow.owner_employee_id }
       : null;
@@ -374,11 +378,12 @@ async function resolveVerdict(
       // behavior: without a contact row there is no lead to speak of, and
       // broadcasting to the whole team on a lookup miss is noise, not rescue.
       if (verdict.reason !== "contact_unowned") return verdict;
+      const identity = contactIdentityPhones(phone, contactRow);
       // Keep-for-owner window: a live $1M+ park on this phone means the
       // owner was told the team would not be offered it. Broadcasting a
       // claimable "Needs Human" alert here is how Gabby claimed Robert
       // Braid three minutes after Amy was told KEPT FOR YOU (2026-09-02).
-      const park = await findLiveOwnerDirectPark(supabase, businessId, phone);
+      const park = await findLiveOwnerDirectPark(supabase, businessId, identity);
       if (park === "error") return TO_OWNER("lookup_failed");
       if (park) return TO_OWNER("owner_direct_live");
       const roster = await readActiveRoster(supabase, businessId);
@@ -389,7 +394,7 @@ async function resolveVerdict(
       const provided = (leadTag ?? "").trim();
       const resolvedTag = provided
         ? provided
-        : await inferLeadType(supabase, businessId, phone, contactRow?.pinned_md);
+        : await inferLeadType(supabase, businessId, identity, contactRow?.pinned_md);
       const { clock, offIds } = await readUnownedAvailability(supabase, businessId);
       const team = filterUnownedBroadcastTeam(roster, resolvedTag, offIds, clock);
       return team.length > 0 ? TO_TEAM(team) : verdict;
@@ -436,6 +441,33 @@ export function filterUnownedBroadcastTeam(
 const LEAD_TYPE_RUN_SCAN = 20;
 
 /**
+ * The inbound number plus the contact's primary and aliases, de-duped.
+ * Flow runs store `vars.lead_phone` as the primary; a later text from an
+ * alias must still find that run (Bugbot, PR #1813).
+ */
+export function contactIdentityPhones(
+  inbound: string,
+  row: { customer_e164?: string | null; alias_e164s?: unknown } | null | undefined
+): string[] {
+  const out: string[] = [];
+  const add = (raw: string | null | undefined) => {
+    const n = normalizeE164((raw ?? "").trim() || undefined);
+    if (n) out.push(n);
+  };
+  add(inbound);
+  add(row?.customer_e164 ?? null);
+  const aliases = Array.isArray(row?.alias_e164s) ? row.alias_e164s : [];
+  for (const alias of aliases) {
+    if (typeof alias === "string") add(alias);
+  }
+  return [...new Set(out)];
+}
+
+function leadPhoneOrFilter(phones: readonly string[]): string {
+  return phones.map((p) => `context->vars->>lead_phone.eq.${p}`).join(",");
+}
+
+/**
  * Stored type for this phone: contact note, then recent flow-run vars.
  * Never throws. A down query degrades to whatever the note already said
  * (or null), never to a guessed type.
@@ -443,7 +475,7 @@ const LEAD_TYPE_RUN_SCAN = 20;
 async function inferLeadType(
   supabase: AnyClient,
   businessId: string,
-  phone: string,
+  phones: readonly string[],
   pinnedMd: string | null | undefined
 ): Promise<string | null> {
   const found = [leadTypeFromText(pinnedMd)];
@@ -452,7 +484,7 @@ async function inferLeadType(
       .from("ai_flow_runs")
       .select("id, context")
       .eq("business_id", businessId)
-      .eq("context->vars->>lead_phone", phone)
+      .or(leadPhoneOrFilter(phones))
       .order("updated_at", { ascending: false })
       .limit(LEAD_TYPE_RUN_SCAN);
     if (error) {
@@ -533,7 +565,7 @@ const OWNER_DIRECT_PARK_SCAN = 20;
 async function findLiveOwnerDirectPark(
   supabase: AnyClient,
   businessId: string,
-  phone: string
+  phones: readonly string[]
 ): Promise<boolean | "error"> {
   try {
     const { data, error } = await supabase
@@ -542,7 +574,7 @@ async function findLiveOwnerDirectPark(
       .eq("business_id", businessId)
       .in("status", ["awaiting_agent", "queued"])
       .eq("context->routing->>owner_direct", "true")
-      .eq("context->vars->>lead_phone", phone)
+      .or(leadPhoneOrFilter(phones))
       .order("updated_at", { ascending: false })
       .limit(OWNER_DIRECT_PARK_SCAN);
     if (error) {

@@ -16,6 +16,7 @@ import { createFlow, seedBusiness, seedContact, serviceDb } from "./harness";
  */
 
 const LEAD = "+14165550194";
+const ALIAS = "+14165550195";
 const DAVE = "+14165550984";
 const GABBY = "+14165550985";
 const JASON = "+14165550986";
@@ -69,7 +70,7 @@ async function insertTypedRun(biz: string, leadType: string): Promise<void> {
   const { error } = await db.from("ai_flow_runs").insert({
     flow_id: flowId,
     business_id: biz,
-    status: "completed",
+    status: "done",
     context: { vars: { lead_phone: LEAD, lead_type: leadType } }
   });
   if (error) throw new Error(`insertTypedRun: ${error.message}`);
@@ -117,6 +118,17 @@ describe("unowned lead alert audience (real JSON-path filter)", () => {
     await seedContact(db, biz, LEAD, { pinned_md: "auto_first_contact; lead_type: seller" });
 
     const out = await resolveContactOwnerTarget(db, biz, LEAD);
+    expect(out.target).toBe("team_broadcast");
+    expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, GABBY].sort());
+  });
+
+  it("a seller run on the primary still matches a text from an alias", async () => {
+    const biz = await seedBusiness(db, "IT unowned alert seller alias");
+    await seedAmyLikeRoster(biz);
+    await seedContact(db, biz, LEAD, { alias_e164s: [ALIAS] });
+    await insertTypedRun(biz, "seller");
+
+    const out = await resolveContactOwnerTarget(db, biz, ALIAS);
     expect(out.target).toBe("team_broadcast");
     expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, GABBY].sort());
   });

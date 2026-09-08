@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTACT_SCOPED_TASK_TYPES,
+  contactIdentityPhones,
   decideOwnerRedirect,
   filterUnownedBroadcastTeam,
   resolveContactOwnerTarget,
@@ -42,6 +43,21 @@ const dave = (over: Partial<OwnerMemberRow> = {}): OwnerMemberRow => ({
   email: null,
   active: true,
   ...over
+});
+
+describe("contactIdentityPhones", () => {
+  it("always includes the inbound number", () => {
+    expect(contactIdentityPhones(LEAD, null)).toEqual([LEAD]);
+  });
+
+  it("unions the primary and aliases, dropping junk and duplicates", () => {
+    expect(
+      contactIdentityPhones("+1 (602) 616-0662", {
+        customer_e164: LEAD,
+        alias_e164s: [LEAD, "+16025550177", "", 12, "not-a-phone"]
+      })
+    ).toEqual([LEAD, "+16025550177"]);
+  });
 });
 
 describe("decideOwnerRedirect: redirecting", () => {
@@ -118,14 +134,19 @@ describe("decideOwnerRedirect: every fallback reaches the business owner", () =>
 type Scripted = { data?: unknown; error?: unknown; throws?: boolean };
 function makeDb(results: Scripted[], rpcMode: "ok" | "error" | "throws" = "ok") {
   const tables: string[] = [];
+  const orFilters: string[] = [];
   const rpcCalls: Array<{ fn: string; args: unknown }> = [];
   let idx = 0;
   const from = (table: string) => {
     tables.push(table);
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "or", "in", "order", "limit", "maybeSingle"]) {
+    for (const m of ["select", "eq", "in", "order", "limit", "maybeSingle"]) {
       builder[m] = () => builder;
     }
+    builder["or"] = (arg: string) => {
+      orFilters.push(arg);
+      return builder;
+    };
     builder["then"] = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       const r = results[idx++] ?? { data: null, error: null };
       if (r.throws) return Promise.reject(new Error("boom")).catch(reject ?? (() => {}));
@@ -138,7 +159,7 @@ function makeDb(results: Scripted[], rpcMode: "ok" | "error" | "throws" = "ok") 
     if (rpcMode === "throws") throw new Error("telemetry down");
     return { error: rpcMode === "error" ? { message: "nope" } : null };
   };
-  return { db: { from, rpc }, tables, rpcCalls };
+  return { db: { from, rpc }, tables, rpcCalls, orFilters };
 }
 
 describe("resolveContactOwnerTarget", () => {
@@ -678,6 +699,30 @@ describe("resolveContactOwnerTarget: infer lead type when the caller omits it", 
     ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
     expect(out.team.map((m) => m.phone).sort()).toEqual([DAVE, JASON].sort());
+  });
+
+  it("a seller run stored on the primary still matches a text from an alias", async () => {
+    const alias = "+16025550177";
+    const { db, orFilters } = makeDb([
+      {
+        data: {
+          id: "c1",
+          owner_employee_id: null,
+          customer_e164: LEAD,
+          alias_e164s: [alias]
+        }
+      },
+      noPark,
+      { data: amyTrio },
+      { data: [{ context: { vars: { lead_phone: LEAD, lead_type: "seller" } } }] },
+      ...availOk
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, alias);
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane", "Gabrielle Mota"]);
+    const typeLookup = orFilters.find(
+      (f) => f.includes(`lead_phone.eq.${LEAD}`) && f.includes(`lead_phone.eq.${alias}`)
+    );
+    expect(typeLookup).toBeTruthy();
   });
 });
 
