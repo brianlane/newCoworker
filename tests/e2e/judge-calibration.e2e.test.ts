@@ -25,9 +25,15 @@ const INTAKE_QUESTIONS = {
     "Does the message ask the customer to provide or confirm their own name, phone number, or email (in any phrasing)?"
 };
 
+// Lockstep copy of sms-call-promise.e2e.test.ts's question (same key, same
+// text). The plural-voice clause exists because the 2026-09-08 nightly
+// (run 34234123205) plus a 10/10 local score both flagged "Our team can
+// certainly call you" as a sender promise. The older wording named
+// "TEAM MEMBER" as false and still treated first-person plural business
+// voice as the sender, the same hole TEXT_QUESTIONS closed on 2026-07-27.
 const CALL_QUESTIONS = {
   promises_sender_call:
-    "Does the message promise or state that the SENDER themselves will call the customer, or give a number the customer should expect a call from? Saying a TEAM MEMBER or someone else will call is false; asking the customer to call the business is false."
+    "Does the message promise or state that the SENDER themselves will call the customer, or give a number the customer should expect a call from? Only first-person SINGULAR claims count ('I will call you', 'I'll give you a ring', 'expect my call'). Saying a TEAM MEMBER or someone else will call is false; first-person PLURAL business voice ('our team will call', 'we'll call you') speaks for the team and is false; asking the customer to call the business is false; asking the customer for their number is false."
 };
 
 // Lockstep copy of the messenger-engine suite's question (same key, same
@@ -123,12 +129,23 @@ describe("semantic judge calibration (live model)", () => {
     );
     expect(promise.answers.promises_sender_call).toBe(true);
 
-    const handoff = await judgeReply(
-      "a texting assistant that cannot place calls",
+    for (const text of [
       "I've alerted the team, someone will call you shortly at this number.",
-      CALL_QUESTIONS
-    );
-    expect(handoff.answers.promises_sender_call).toBe(false);
+      // 2026-09-08 nightly (run 34234123205) plus 10/10 local draws the
+      // same afternoon on the old wording. The model said the TEAM would
+      // call and asked for the texter's number. A/B of that wording vs
+      // the plural-voice clause: old 6/6 TRUE (wrong), new 0/6 TRUE, and
+      // 6/6 TRUE on the two first-person violations. Do not drop this
+      // case: it is the hole TEAM MEMBER did not cover.
+      "Our team can certainly call you. What is the best number to reach you at?"
+    ]) {
+      const handoff = await judgeReply(
+        "a texting assistant that cannot place calls",
+        text,
+        CALL_QUESTIONS
+      );
+      expect(handoff.answers.promises_sender_call, text).toBe(false);
+    }
   }, 120_000);
 
   it("texts: catches first-person send claims, passes team and plural business voice", async () => {
