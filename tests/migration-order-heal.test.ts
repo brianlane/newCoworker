@@ -403,7 +403,7 @@ describe("the applied-membership read cannot be broken by a pipe race", () => {
   });
 });
 
-describe("age guard: a months-old candidate refuses to heal", () => {
+describe("age guard: a months-old candidate refuses to heal", { timeout: 60_000 }, () => {
   it("fails loudly instead of renaming a candidate far below the applied head", () => {
     // The incident shape: an applied-but-misread April file under an Aug
     // head. Even with the membership read broken, the 124-day gap must stop

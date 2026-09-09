@@ -412,6 +412,7 @@ describe("notifications/dispatch", () => {
     // provider id no receipt could ever correct it: that gap is why a tenant
     // whose owner had stopped receiving mail still looked healthy.
     vi.mocked(sendOwnerEmail).mockResolvedValue("re_abc" as never);
+    delete process.env.MAILER_EMAIL;
     await dispatchUrgentNotification({
       businessId: BIZ,
       summary: "URGENT call",
@@ -421,8 +422,22 @@ describe("notifications/dispatch", () => {
       expect.objectContaining({
         businessId: BIZ,
         toEmail: "owner@example.com",
-        providerMessageId: "re_abc"
+        providerMessageId: "re_abc",
+        fromEmail: null
       })
+    );
+  });
+
+  it("stamps MAILER_EMAIL on the alert log when it is set", async () => {
+    process.env.MAILER_EMAIL = "alerts@example.com";
+    vi.mocked(sendOwnerEmail).mockResolvedValue("re_abc" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    expect(recordNotificationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ fromEmail: "alerts@example.com" })
     );
   });
 
@@ -3262,6 +3277,11 @@ describe("failed alert delivery reaches the admin System Errors card", () => {
     // outer suite sets, so this block does not depend on where it sits.
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(REACHABLE_PREFS as never);
     vi.mocked(listRecentAlertsAbout).mockResolvedValue({ events: 0, summaries: [] } as never);
+    // The sibling `notifications/dispatch` suite defaults WhatsApp to
+    // connected-and-delivered. That implementation lives on the mock for
+    // the whole file, so without this reset a "reached NOBODY" dispatch
+    // still lands on WhatsApp. Isolate this suite as never-connected.
+    vi.mocked(getPublicWhatsAppConnection).mockResolvedValue(null as never);
   });
 
   it("records an error naming the failed channels and what still got through", async () => {
