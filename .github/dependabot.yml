@@ -23,8 +23,25 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # vitest, @vitest/coverage-v8, and @vitest/ui peer an exact vitest
+      # version of each other. Separate major PRs (#1819, #1820, #1821)
+      # each failed `npm ci` with ERESOLVE because Dependabot shipped one
+      # package on 5 and left the other two on 4. This group has no
+      # update-types, so majors ride it too. Keep it first in `groups`
+      # so a package matching two groups is assigned here, and exclude
+      # these names from the catch-all below so a specificity quirk
+      # cannot steal the minor/patch half. Do NOT fold them back into
+      # the catch-all: that group drops majors, which is how the three
+      # PRs were born.
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
       minor-and-patch:
         update-types: ["minor", "patch"]
+        exclude-patterns:
+          - "vitest"
+          - "@vitest/*"
     ignore:
       # @napi-rs/wasm-runtime 1.2.0 peers @emnapi/core@^2.0.0-alpha.3 while
       # root optionalDependencies still pin @emnapi/core to the 1.x line, so
