@@ -15,7 +15,8 @@ import type { VpsSize } from "@/lib/vps/size";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
-  blendedVoiceTerminationRate
+  blendedVoiceTerminationRate,
+  type VoiceZoneDestination
 } from "@/lib/plans/voice-zone-rates";
 
 /** Hostinger monthly-SKU price per box size (we buy monthly regardless of the customer's term). */
@@ -59,16 +60,18 @@ export const ENTERPRISE_UNIT_COSTS = {
    * (call control, media streaming, recording never appear in
    * /v2/detail_records; see TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE).
    *
-   * THIS IS A ZONE 1 MINUTE. Telnyx prices termination per NPA-NXX, and
-   * both calibration months were traffic that never left the lower-48
-   * baseline: zone-matching all 104 outbound legs we had ever placed on
-   * 2026-08-28 put 100% of them in US Zone 1, at an effective 0.5333c/min
-   * of termination against the deck's 0.5c. So this figure is sound for
-   * lower-48 traffic and understates a rural list, where a "High Cost
-   * (Zone 5)" minute terminates at 7c. The gap is priced separately as a
-   * surcharge over baseline in estimateEnterpriseMonthlyCost, never folded
-   * in here, because folding it in would silently bill Zone 1 termination
-   * twice. See src/lib/plans/voice-zone-rates.ts.
+   * THIS IS A ZONE 1 MINUTE. Telnyx prices termination per Terminating
+   * LRN / NPA-NXX. Both calibration months were traffic that never left
+   * the lower-48 baseline on DIALED NPA: zone-matching all 104 outbound
+   * legs we had placed on 2026-08-28 put 100% of them in US Zone 1, at
+   * an effective 0.5333c/min of termination against the deck's 0.5c. Sep
+   * 2026 MDRs then showed dialed Zone 1 numbers billed as Zone 5 via LRN
+   * (Payson +19289512316 → LRN 9283630020). Do not raise this constant
+   * to absorb that mix; that was auto-cutover PR #1809, closed. The
+   * gap is priced separately as a surcharge over baseline in
+   * estimateEnterpriseMonthlyCost, never folded in here, because folding
+   * it in would silently bill Zone 1 termination twice. See
+   * src/lib/plans/voice-zone-rates.ts.
    */
   voiceTelnyxCentsPerMinute: 0.9,
   /** Gemini Live realtime audio. */
@@ -235,10 +238,14 @@ export type EnterpriseUsageAssumptions = {
    * high-cost-zone surcharge from the real destination mix instead of
    * assuming every minute is a lower-48 Zone 1 minute.
    *
-   * Optional on purpose: with no list the estimate is byte-for-byte what it
-   * was before the zone table existed, so no existing surface moves.
+   * Strings are DIALED numbers. Telnyx bills Terminating LRN when it has
+   * one, so a pasted contact list can understate ported high-cost rate
+   * centers (Payson +19289512316 is Zone 1 dialed, Zone 5 on LRN). Pass
+   * `{ dialed, lrn }` when an MDR is in hand. Optional on purpose: with
+   * no list the estimate is byte-for-byte what it was before the zone
+   * table existed, so no existing surface moves.
    */
-  voiceDestinations?: readonly (string | null | undefined)[];
+  voiceDestinations?: readonly VoiceZoneDestination[];
 };
 
 export type EnterpriseCostLineItem = {
@@ -279,19 +286,21 @@ export function estimateEnterpriseMonthlyCost(
   // HIGH-COST ZONE SURCHARGE, and why it is a surcharge rather than a
   // replacement for the termination component of `voice` above.
   //
-  // Telnyx prices termination per NPA-NXX, not per country: the US spread
-  // runs from 0.5c/min in the lower 48 to 7c in "High Cost (Zone 5)" and
-  // 18.1c in Zone 6, and those prefixes are overwhelmingly rural.
-  // `voiceTelnyxCentsPerMinute` (0.9) is a single blended figure
-  // back-calibrated from the June and July 2026 invoices. Measuring every
-  // outbound leg we had ever placed on 2026-08-28 showed all 104 of them
-  // landed in Zone 1, so that 0.9 already contains a Zone 1 termination
-  // rate. Adding a full zone rate on top would bill termination twice.
+  // Telnyx prices termination per Terminating LRN / NPA-NXX, not per
+  // country: the US spread runs from 0.5c/min in the lower 48 to 7c in
+  // "High Cost (Zone 5)" and 18.1c in Zone 6. `voiceTelnyxCentsPerMinute`
+  // (0.9) is a single blended figure back-calibrated from the June and
+  // July 2026 invoices. Measuring every outbound leg we had ever placed
+  // on 2026-08-28 (dialed NPA) showed all 104 of them landed in Zone 1,
+  // so that 0.9 already contains a Zone 1 termination rate. Adding a
+  // full zone rate on top would bill termination twice. Do not fold LRN
+  // mix into this constant (that is why auto-cutover PR #1809 closed).
   //
   // The INCREMENT above baseline is the part 0.9 cannot contain, and it is
   // additive with no double count. A tenant dialing only the lower 48 gets
   // exactly 0 here, which is why the line disappears rather than showing a
-  // rounded-to-zero surcharge.
+  // rounded-to-zero surcharge. When destinations carry an LRN, the blend
+  // follows that; dialed-only lists can understate.
   const zoneBlend = usage.voiceDestinations
     ? blendedVoiceTerminationRate(usage.voiceDestinations)
     : null;

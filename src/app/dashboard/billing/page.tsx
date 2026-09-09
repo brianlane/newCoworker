@@ -624,6 +624,7 @@ export default async function BillingPage(props: {
         ) : (
           <p className="text-xs text-parchment/50">{t("voiceBalancePending")}</p>
         )}
+        <p className="mt-4 text-[11px] text-parchment/50">{t("voiceAllowanceNote")}</p>
       </Card>
 
       <VoiceBonusPacks

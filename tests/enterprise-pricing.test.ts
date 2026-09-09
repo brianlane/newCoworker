@@ -94,6 +94,32 @@ describe("estimateEnterpriseMonthlyCost", () => {
     ).toContain("1 destination,");
   });
 
+  it("charges the Zone 5 increment, not the full rate, when LRN is Payson", () => {
+    // voiceTelnyxCentsPerMinute stays 0.9 (Zone 1 calibrated). The
+    // surcharge is 7c - 0.5c = 6.5c, never 7c on top of 0.9, and a
+    // dialed-only Payson number must not surcharge at all.
+    expect(ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute).toBe(0.9);
+    const dialedOnly = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500,
+      voiceDestinations: ["+19289512316"]
+    });
+    expect(dialedOnly.items.some((i) => i.label.startsWith("Voice high-cost zones"))).toBe(
+      false
+    );
+    const withLrn = estimateEnterpriseMonthlyCost({
+      vpsSize: "kvm2",
+      smsPerMonth: 100,
+      voiceMinutesPerMonth: 500,
+      voiceDestinations: [{ dialed: "+19289512316", lrn: "9283630020" }]
+    });
+    const surcharge = withLrn.items.find((i) => i.label.startsWith("Voice high-cost zones"));
+    expect(surcharge?.cents).toBe(500 * 6.5);
+    expect(surcharge?.label).toContain("7c/min");
+    expect(surcharge?.label).toContain("priciest US High Cost (Zone 5) at 7c");
+  });
+
   it("itemizes hosting + SMS + voice + DID and totals them", () => {
     const est = estimateEnterpriseMonthlyCost({
       vpsSize: "kvm8",

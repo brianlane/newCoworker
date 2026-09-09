@@ -36,6 +36,10 @@ import type {
   StripeFeeMonthlyInsert,
   TelnyxCostDailyInsert
 } from "@/lib/db/platform-costs";
+import {
+  telnyxTerminatingLrnFromFields,
+  voiceAllowanceWeight
+} from "@/lib/plans/voice-zone-rates";
 
 export const PLATFORM_COST_SYNC_STATUS_KEY = "platform_cost_sync_status";
 
@@ -138,6 +142,14 @@ export type StripeFeeTransaction = {
  */
 const STRIPE_CHARGE_TYPES = new Set(["charge", "payment"]);
 
+/** One MDR-derived LRN stamp, matched by call_control_id or call_leg_id. */
+export type VoiceSettlementLrnUpdate = {
+  callControlId: string | null;
+  callLegId: string | null;
+  terminatingLrn: string;
+  zoneWeight: number;
+};
+
 export type PlatformCostSyncDeps = {
   /** Null/empty skips the Telnyx side with a recorded error (mirrors pull-cost-data). */
   telnyxApiKey: string | null;
@@ -182,6 +194,15 @@ export type PlatformCostSyncDeps = {
   ) => Promise<void>;
   recordStatus: (status: PlatformCostSyncStatus) => Promise<void>;
   now?: Date;
+  /**
+   * Stamp Terminating LRN / zone weight onto matching voice_settlements
+   * after the sip-trunking MDR pull. Hangup webhooks usually omit LRN, so
+   * this is the honest fill path. Best-effort: a failure must not fail
+   * the cost sync. Optional so tests that only care about aggregates skip it.
+   */
+  applyVoiceSettlementLrns?: (
+    updates: VoiceSettlementLrnUpdate[]
+  ) => Promise<unknown>;
 };
 
 const usdToMicros = (usd: number): number => Math.round(usd * 1_000_000);
@@ -216,6 +237,40 @@ export function senderLabel(legs: readonly string[]): string | null {
     if (trimmed.length > 0) return trimmed.slice(0, SENDER_LABEL_MAX);
   }
   return null;
+}
+
+function mdrIdField(record: Record<string, unknown>, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = str(record[key]).trim();
+    if (value.length > 0) return value;
+  }
+  return null;
+}
+
+/**
+ * Extract LRN stamps from sip-trunking MDRs that we can honestly match
+ * to a settlement. Skip rows with no LRN, and skip rows with neither
+ * call_control_id nor call_leg_id rather than fuzzy-matching on cld+time.
+ */
+export function voiceSettlementLrnUpdatesFromMdrs(
+  records: readonly Record<string, unknown>[]
+): VoiceSettlementLrnUpdate[] {
+  const byKey = new Map<string, VoiceSettlementLrnUpdate>();
+  for (const record of records) {
+    const terminatingLrn = telnyxTerminatingLrnFromFields(record);
+    if (!terminatingLrn) continue;
+    const callControlId = mdrIdField(record, ["call_control_id"]);
+    const callLegId = mdrIdField(record, ["call_leg_id", "leg_id"]);
+    if (!callControlId && !callLegId) continue;
+    const key = callControlId ? `cc:${callControlId}` : `leg:${callLegId}`;
+    byKey.set(key, {
+      callControlId,
+      callLegId,
+      terminatingLrn,
+      zoneWeight: voiceAllowanceWeight(null, { lrn: terminatingLrn })
+    });
+  }
+  return [...byKey.values()];
 }
 
 /** UTC YYYY-MM-DD for "today minus `days`". */
@@ -614,6 +669,7 @@ export async function runPlatformCostSync(
       }
       const windowStartDay = windowStartDayUtc(now, RANGE_DAYS[range]);
       const rows: TelnyxCostDailyInsert[] = [];
+      const sipTrunkingRecords: Record<string, unknown>[] = [];
       for (const recordType of ["messaging", "sip-trunking"] as const) {
         const records = await fetchTelnyxDetailRecords({
           apiKey: deps.telnyxApiKey,
@@ -625,9 +681,19 @@ export async function runPlatformCostSync(
         rows.push(
           ...aggregateTelnyxRecords({ records, recordType, didToBusiness, windowStartDay })
         );
+        if (recordType === "sip-trunking") sipTrunkingRecords.push(...records);
       }
       await deps.replaceTelnyxCostWindow(windowStartDay, rows);
       telnyxRows = rows.length;
+      if (deps.applyVoiceSettlementLrns) {
+        try {
+          await deps.applyVoiceSettlementLrns(
+            voiceSettlementLrnUpdatesFromMdrs(sipTrunkingRecords)
+          );
+        } catch {
+          // Best-effort: LRN backfill must not fail the invoice-grade sync.
+        }
+      }
     } catch (err) {
       telnyxError = err instanceof Error ? err.message : String(err);
     }

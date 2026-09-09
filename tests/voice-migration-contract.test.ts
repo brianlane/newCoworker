@@ -573,3 +573,72 @@ describe("voice_outbound_dial_headroom migration (contract)", () => {
     expect(migration).toMatch(/is null\s+or/);
   });
 });
+
+const voiceAllowanceWeightMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260909221513_voice_allowance_zone_weight.sql"
+  ),
+  "utf8"
+);
+
+describe("voice allowance zone-weight settlement (contract)", () => {
+  it("stores LRN, call_leg_id, zone_weight (capped 1..20), and weighted seconds", () => {
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /add column if not exists terminating_lrn text/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /add column if not exists telnyx_call_leg_id text/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /add column if not exists zone_weight numeric not null default 1/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /add column if not exists weighted_billable_seconds integer/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /check \(zone_weight >= 1 and zone_weight <= 20\)/
+    );
+  });
+
+  it("keeps the never-answered 0-billable heal from 20260909214314", () => {
+    expect(voiceAllowanceWeightMigration).toMatch(/'never_answered', true/);
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /if r\.state = 'released'\s+and r\.ws_connected_at is null\s+and r\.answer_issued_at is null then/s
+    );
+  });
+
+  it("keeps the two-arg finalize signature and weights after the Telnyx minute ceil", () => {
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /create or replace function voice_try_finalize_settlement\(\s*p_call_control_id text,\s*p_allow_one_sided boolean default false/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /weighted_billable := round\(billable::numeric \* weight\)::int/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /committed_included_seconds = committed_included_seconds \+ commit_inc \+ extra/
+    );
+    expect(voiceAllowanceWeightMigration).not.toMatch(
+      /ceil\(elapsed \* /
+    );
+  });
+
+  it("reconciles extra weighted seconds so the 5-minute sweep cannot undo them", () => {
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /coalesce\(s\.weighted_billable_seconds, s\.billable_seconds\) - s\.billable_seconds/
+    );
+  });
+
+  it("grants the new apply RPC without dropping the two-arg finalize", () => {
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /grant execute on function voice_try_finalize_settlement\(text, boolean\) to service_role/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /grant execute on function voice_apply_settlement_lrn\(text, text, numeric\) to service_role/
+    );
+    expect(voiceAllowanceWeightMigration).toMatch(
+      /grant execute on function voice_reconcile_period_usage_row\(uuid, timestamptz\) to service_role/
+    );
+  });
+});
+

@@ -25,6 +25,22 @@
  * tenant-facing meter. The count of fallbacks is reported, because a number
  * built mostly from fallbacks is a weaker claim than one built from Telnyx's
  * own figure.
+ *
+ * LRN VS DIALED. Telnyx bills Global Voice Conversational by Terminating
+ * LRN / Term Prefix, not always by the dialed E.164 NPA-NXX. Amy Sep 2026
+ * MDR: dialed +19289512316 matches `1928` Zone 1 @ 0.5c, Terminating LRN
+ * 9283630020 matches `1928363` High Cost Zone 5 @ 7c. That false Zone 1
+ * signal is why auto-cutover PR #1809 (0.9 to 1.03) closed: list price
+ * did not change.
+ *
+ * `voice_settlements`, `voice_call_transcripts`, and `telnyx_cost_daily`
+ * do not store LRN today. This script discovers those column names on
+ * the live catalog at runtime and prefers them when present; when they
+ * are absent (today) HISTORY is dialed-NPA and can understate ported
+ * high-cost legs. `actuals` from `telnyx_cost_daily` already include
+ * whatever Telnyx billed, LRN and all, so a jump in effective c/min
+ * against an all-Zone-1 HISTORY is LRN mix, not a Zone 1 list-price
+ * cutover. Do not bump `voiceTelnyxCentsPerMinute` for that.
  */
 
 import { Client } from "pg";
@@ -33,6 +49,7 @@ import { loadEnv, sessionDbUrl } from "./_shared.ts";
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
   blendedVoiceTerminationRate,
+  telnyxTerminatingLrnFromFields,
   voiceZoneFor
 } from "../src/lib/plans/voice-zone-rates.ts";
 import { VOICE_RATE_DECK_SHA256 } from "../src/lib/plans/voice-zone-rates.generated.ts";
@@ -94,14 +111,53 @@ type LegRow = {
   telnyx_seconds: string | number;
   /** Our tenant-facing meter, the fallback when Telnyx reported nothing. */
   our_seconds: string | number;
+  [extra: string]: unknown;
 };
+
+/** Column names we would use for LRN if a table ever grew them. */
+const LRN_COLUMN_CANDIDATES = [
+  "terminating_lrn",
+  "term_lrn",
+  "lrn",
+  "term_prefix",
+  "terminating_prefix"
+] as const;
+
+async function discoverLrnColumns(
+  client: Client
+): Promise<{ table: string; column: string }[]> {
+  const { rows } = await client.query<{ table_name: string; column_name: string }>(
+    `select table_name, column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and table_name = any($1::text[])
+        and column_name = any($2::text[])`,
+    [
+      ["voice_settlements", "voice_call_transcripts", "telnyx_cost_daily"],
+      [...LRN_COLUMN_CANDIDATES]
+    ]
+  );
+  return rows.map((row) => ({ table: row.table_name, column: row.column_name }));
+}
 
 async function main(): Promise<void> {
   const client = await connect();
   let legRows: LegRow[];
   let costRows: { direction: string; billed_seconds: string; cost_micros: string }[];
   let contactRows: { customer_e164: string }[];
+  let lrnColumns: { table: string; column: string }[] = [];
   try {
+    lrnColumns = await discoverLrnColumns(client);
+    const settlementLrnSelect = lrnColumns
+      .filter((c) => c.table === "voice_settlements")
+      .map((c) => `s.${c.column}`)
+      .join(", ");
+    const transcriptLrnSelect = lrnColumns
+      .filter((c) => c.table === "voice_call_transcripts")
+      .map((c) => `t.${c.column}`)
+      .join(", ");
+    const extraSelect = [settlementLrnSelect, transcriptLrnSelect].filter(Boolean).join(", ");
+
     // One join, done in the database. `caller_e164` is the DESTINATION on an
     // outbound transcript (verified against voice_outbound_dial_log.to_e164),
     // and a forwarded leg dials a human, so both carry termination.
@@ -111,7 +167,9 @@ async function main(): Promise<void> {
                 t.caller_e164,
                 t.forwarded_to_e164,
                 coalesce(s.telnyx_reported_duration_seconds, 0) as telnyx_seconds,
-                coalesce(s.billable_seconds, 0)                 as our_seconds
+                coalesce(s.billable_seconds, 0)                 as our_seconds${
+                  extraSelect.length > 0 ? `,\n                ${extraSelect}` : ""
+                }
            from voice_call_transcripts t
            left join voice_settlements s on s.call_control_id = t.call_control_id`
       )
@@ -140,24 +198,33 @@ async function main(): Promise<void> {
   const byZone = new Map<string, { cents: number; legs: number; minutes: number }>();
   let fellBackToOurMeter = 0;
   let legCount = 0;
+  let legsMatchedOnLrn = 0;
+  let legsMatchedOnDialed = 0;
 
   for (const row of legRows) {
     // On an OUTBOUND transcript `caller_e164` holds the destination we
     // dialed, not our own DID (verified against voice_outbound_dial_log.to_e164).
-    // A forwarded leg dials a human, so it carries termination too.
-    const destinations = [
-      row.direction === "outbound" ? row.caller_e164 : null,
-      row.forwarded_to_e164
-    ].filter((value): value is string => Boolean(value));
+    // A forwarded leg dials a human, so it carries termination too. Stored
+    // LRN, when we have it, belongs to the outbound dest, not the transfer.
+    const storedLrn = telnyxTerminatingLrnFromFields(row);
+    const destinations: Array<{ dialed: string; lrn: string | null }> = [];
+    if (row.direction === "outbound" && row.caller_e164) {
+      destinations.push({ dialed: row.caller_e164, lrn: storedLrn });
+    }
+    if (row.forwarded_to_e164) {
+      destinations.push({ dialed: row.forwarded_to_e164, lrn: null });
+    }
 
     for (const destination of destinations) {
       const telnyxSeconds = Number(row.telnyx_seconds);
       const seconds = telnyxSeconds > 0 ? telnyxSeconds : Number(row.our_seconds);
       if (telnyxSeconds <= 0) fellBackToOurMeter += 1;
 
-      const zone = voiceZoneFor(destination);
+      const zone = voiceZoneFor(destination.dialed, { lrn: destination.lrn });
       if (!zone) continue;
       legCount += 1;
+      if (zone.matchedOn === "lrn") legsMatchedOnLrn += 1;
+      else legsMatchedOnDialed += 1;
       const key = `${zone.iso} ${zone.label}`;
       const bucket = byZone.get(key) ?? { cents: zone.centsPerMinute, legs: 0, minutes: 0 };
       bucket.legs += 1;
@@ -197,6 +264,17 @@ async function main(): Promise<void> {
       modeledCents: Math.round(modeledCents * 10_000) / 10_000,
       atBaselineCents: Math.round(baselineCents * 10_000) / 10_000,
       legsUsingOurMeterNotTelnyx: fellBackToOurMeter,
+      lrn: {
+        storedColumns: lrnColumns,
+        legsMatchedOnLrn,
+        legsMatchedOnDialed,
+        gap:
+          lrnColumns.length === 0
+            ? "No terminating_lrn / term_prefix column on voice_settlements, voice_call_transcripts, or telnyx_cost_daily. HISTORY is dialed-NPA and can understate LRN-ported high-cost legs (Payson +19289512316 billed Zone 5 via LRN 9283630020). actuals from telnyx_cost_daily already include LRN. Do not treat an actuals jump against all-Zone-1 HISTORY as a Zone 1 list-price cutover (PR #1809)."
+            : legsMatchedOnLrn === 0
+              ? "terminating_lrn exists on voice_settlements but no HISTORY leg matched on LRN. Hangup webhooks usually omit it; the sip-trunking MDR backfill is the fill path. Dialed-NPA HISTORY can still understate Payson-style Zone 5 legs."
+              : null
+      },
       byZone: Object.fromEntries(
         [...byZone.entries()].map(([zone, v]) => [
           zone,
@@ -248,6 +326,20 @@ async function main(): Promise<void> {
   console.log(
     `  ${fellBackToOurMeter} leg(s) used OUR meter because Telnyx reported no duration`
   );
+  if (lrnColumns.length === 0) {
+    console.log(
+      "  LRN: not stored in DB. HISTORY is dialed-NPA and can understate ported high-cost legs."
+    );
+    console.log(
+      "  actuals already include LRN. A c/min jump against all-Zone-1 HISTORY is mix, not list price (PR #1809)."
+    );
+  } else {
+    console.log(
+      `  LRN: ${legsMatchedOnLrn} leg(s) matched on stored LRN, ${legsMatchedOnDialed} on dialed (${lrnColumns
+        .map((c) => `${c.table}.${c.column}`)
+        .join(", ")})`
+    );
+  }
 
   console.log(
     `\nACTUALS: what Telnyx billed for outbound (telnyx_cost_daily${since ? `, since ${since}` : ""})`
