@@ -1,17 +1,30 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..");
 
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
+  VOICE_ALLOWANCE_WEIGHT_CAP,
   blendedVoiceTerminationRate,
   parseDestinationList,
+  telnyxTerminatingLrnFromFields,
+  voiceAllowanceWeight,
   voiceZoneFor
 } from "@/lib/plans/voice-zone-rates";
+import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
 import {
   VOICE_RATE_DECK_SHA256,
   VOICE_RATE_ZONES
 } from "@/lib/plans/voice-zone-rates.generated";
 
 describe("the generated deck itself", () => {
+  it("leaves the enterprise all-in constant at 0.9", () => {
+    expect(ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute).toBe(0.9);
+  });
   // Assert the PRODUCER, not a fixture: these numbers come off the real
   // deck Telnyx published for 2026-08-31, so a regeneration that silently
   // loses a zone (as an earlier `/^1\d+$/` prefix filter did, dropping both
@@ -157,7 +170,129 @@ describe("voiceZoneFor", () => {
   it("memoises the index across calls", () => {
     const first = voiceZoneFor("+16028384497");
     const second = voiceZoneFor("+16028384497");
-    expect(second).toEqual(first);
+    expect(first).toEqual(second);
+    expect(first?.matchedOn).toBe("dialed");
+  });
+});
+
+describe("LRN-preferred matching", () => {
+  it("charges Zone 5 when dialed is Zone 1 but LRN is Payson high-cost", () => {
+    // Amy Sep 2026 MDR: dialed +19289512316 (Payson AZ) is `1928` Zone 1
+    // @ 0.5c. Telnyx billed Terminating LRN 9283630020 as `1928363` High
+    // Cost Zone 5 @ 7c. Matching dialed-only is what made auto-cutover
+    // PR #1809 look like a Zone 1 list-price change; it was closed.
+    const dialed = voiceZoneFor("+19289512316");
+    expect(dialed).toMatchObject({
+      label: "United States 48 (Zone 1)",
+      centsPerMinute: 0.5,
+      matchedPrefix: "1928",
+      matchedOn: "dialed"
+    });
+    const billed = voiceZoneFor("+19289512316", { lrn: "9283630020" });
+    expect(billed).toMatchObject({
+      iso: "US",
+      label: "High Cost (Zone 5)",
+      centsPerMinute: 7,
+      matchedPrefix: "1928363",
+      matchedOn: "lrn"
+    });
+    expect(voiceZoneFor({ dialed: "+19289512316", lrn: "+19283630020" })).toEqual(
+      billed
+    );
+  });
+
+  it("accepts a Telnyx term prefix when that is all the MDR gives", () => {
+    const billed = voiceZoneFor("+19289512316", { lrn: "1928363" });
+    expect(billed?.label).toBe("High Cost (Zone 5)");
+    expect(billed?.matchedPrefix).toBe("1928363");
+    expect(billed?.matchedOn).toBe("lrn");
+  });
+
+  it("keeps dialed Zone 1 when no LRN is available", () => {
+    expect(voiceZoneFor("+19289512316")?.centsPerMinute).toBe(0.5);
+    expect(voiceZoneFor("+19289512316", { lrn: null })?.matchedOn).toBe("dialed");
+    expect(voiceZoneFor("+19289512316", { lrn: "" })?.matchedOn).toBe("dialed");
+    expect(voiceZoneFor("+19289512316", { lrn: "not-a-number" })?.matchedOn).toBe(
+      "dialed"
+    );
+    expect(voiceZoneFor({ dialed: "+19289512316" })?.matchedOn).toBe("dialed");
+    expect(voiceZoneFor()).toBeNull();
+  });
+
+  it("prices the 504 dialed-Zone-1 / LRN-Zone-4 pattern", () => {
+    // Same MDR pattern as Payson: +15044628344 is NPA 504 Zone 1 on the
+    // dialed number; a 504-401 LRN is High Cost Zone 4 @ 1c.
+    expect(voiceZoneFor("+15044628344")).toMatchObject({
+      label: "United States 48 (Zone 1)",
+      centsPerMinute: 0.5,
+      matchedPrefix: "1504",
+      matchedOn: "dialed"
+    });
+    expect(voiceZoneFor("+15044628344", { lrn: "5044010000" })).toMatchObject({
+      label: "High Cost (Zone 4)",
+      centsPerMinute: 1,
+      matchedPrefix: "1504401",
+      matchedOn: "lrn"
+    });
+  });
+
+  it("leaves Canada unchanged when the LRN already matches the dialed zone", () => {
+    const dialed = voiceZoneFor("+14165551234");
+    const withLrn = voiceZoneFor("+14165551234", { lrn: "4165551234" });
+    expect(dialed?.iso).toBe("CA");
+    expect(dialed?.label).not.toBe("N11");
+    expect(withLrn?.iso).toBe(dialed?.iso);
+    expect(withLrn?.label).toBe(dialed?.label);
+    expect(withLrn?.centsPerMinute).toBe(dialed?.centsPerMinute);
+    expect(withLrn?.matchedPrefix).toBe(dialed?.matchedPrefix);
+    expect(withLrn?.matchedOn).toBe("lrn");
+
+    const n11 = voiceZoneFor("+14163110000", { lrn: "4163110000" });
+    expect(n11?.iso).toBe("CA");
+    expect(n11?.label).toBe("N11");
+    expect(n11?.centsPerMinute).toBe(75);
+  });
+
+  it("prices LRN alone when no dialed number is supplied", () => {
+    expect(voiceZoneFor(null, { lrn: "9283630020" })?.label).toBe("High Cost (Zone 5)");
+    expect(voiceZoneFor({ lrn: "1928363" })?.centsPerMinute).toBe(7);
+  });
+
+  it("does not let a non-NANP LRN override a good dialed number", () => {
+    const zone = voiceZoneFor("+19289512316", { lrn: "+447700900123" });
+    expect(zone?.matchedOn).toBe("dialed");
+    expect(zone?.centsPerMinute).toBe(0.5);
+  });
+});
+
+describe("telnyxTerminatingLrnFromFields", () => {
+  it("reads portal CSV and API keys, first usable key wins", () => {
+    expect(telnyxTerminatingLrnFromFields(null)).toBeNull();
+    expect(telnyxTerminatingLrnFromFields({})).toBeNull();
+    expect(
+      telnyxTerminatingLrnFromFields({ "Terminating LRN": "9283630020" })
+    ).toBe("9283630020");
+    expect(telnyxTerminatingLrnFromFields({ terminating_lrn: "9283630020" })).toBe(
+      "9283630020"
+    );
+    expect(telnyxTerminatingLrnFromFields({ "Term Prefix": "1928363" })).toBe(
+      "1928363"
+    );
+    expect(
+      telnyxTerminatingLrnFromFields({
+        terminating_lrn: "9283630020",
+        "Term Prefix": "1928"
+      })
+    ).toBe("9283630020");
+    expect(
+      telnyxTerminatingLrnFromFields({ terminating_lrn: "  ", lrn: "5044010000" })
+    ).toBe("5044010000");
+    expect(telnyxTerminatingLrnFromFields({ terminating_lrn: 9283630020 })).toBe(
+      "9283630020"
+    );
+    expect(telnyxTerminatingLrnFromFields({ lrn: "+447700900123" })).toBeNull();
+    expect(telnyxTerminatingLrnFromFields({ lrn: Number.POSITIVE_INFINITY })).toBeNull();
+    expect(telnyxTerminatingLrnFromFields({ lrn: true })).toBeNull();
   });
 });
 
@@ -207,11 +342,25 @@ describe("blendedVoiceTerminationRate", () => {
     ]);
     expect(blend.centsPerMinute).toBe(0.875);
   });
+
+  it("prefers LRN on mixed destinations and keeps dialed-only strings cheap", () => {
+    const withLrn = blendedVoiceTerminationRate([
+      { dialed: "+19289512316", lrn: "9283630020" },
+      "+14805551234"
+    ]);
+    expect(withLrn.priced).toBe(2);
+    expect(withLrn.centsPerMinute).toBe(3.75);
+    expect(withLrn.priciestZone?.label).toBe("High Cost (Zone 5)");
+
+    const dialedOnly = blendedVoiceTerminationRate(["+19289512316", "+14805551234"]);
+    expect(dialedOnly.centsPerMinute).toBe(0.5);
+    expect(dialedOnly.priciestZone?.label).toBe("United States 48 (Zone 1)");
+  });
 });
 
 describe("a deck with no catch-all", () => {
   afterEach(() => {
-    vi.doUnmock("@/lib/plans/voice-zone-rates.generated");
+    vi.doUnmock("../supabase/functions/_shared/voice-zone-rates.generated.ts");
     vi.resetModules();
   });
 
@@ -221,7 +370,7 @@ describe("a deck with no catch-all", () => {
   // untested fallthrough is where a silent 0 would hide.
   it("returns null instead of inventing a rate", async () => {
     vi.resetModules();
-    vi.doMock("@/lib/plans/voice-zone-rates.generated", () => ({
+    vi.doMock("../supabase/functions/_shared/voice-zone-rates.generated.ts", () => ({
       VOICE_RATE_DECK_SHA256: "deadbeef",
       VOICE_RATE_ZONES: [
         {
@@ -234,11 +383,19 @@ describe("a deck with no catch-all", () => {
     }));
     // A fresh import gives a fresh module scope, so the memoised index is
     // rebuilt from the mock without needing a reset seam in production code.
-    const mod = await import("@/lib/plans/voice-zone-rates");
+    const mod = await import("../supabase/functions/_shared/voice_zone_rates");
 
     expect(mod.voiceZoneFor("+16025551234")?.matchedPrefix).toBe("1602");
+    expect(mod.voiceZoneFor("+16025551234")?.matchedOn).toBe("dialed");
     // 480 is absent and there is no catch-all behind it.
     expect(mod.voiceZoneFor("+14805551234")).toBeNull();
+    // A parseable LRN that misses the table must not fall back to dialed.
+    expect(mod.voiceZoneFor("+16025551234", { lrn: "14805551234" })).toBeNull();
+    expect(mod.voiceZoneFor("+14805551234", { lrn: "16025550000" })?.matchedOn).toBe(
+      "lrn"
+    );
+    // A parseable LRN that misses the table must not invent a weight.
+    expect(mod.voiceAllowanceWeight(null, { lrn: "14805551234" })).toBe(1);
   });
 });
 
@@ -297,3 +454,94 @@ describe("parseDestinationList", () => {
     expect(blend.priciestZone?.label).toBe("High Cost (Zone 5)");
   });
 });
+
+describe("voiceAllowanceWeight", () => {
+  it("is 1x for Zone 1 LRN, missing LRN, and dialed-only", () => {
+    expect(voiceAllowanceWeight(null, { lrn: "6028384497" })).toBe(1);
+    expect(voiceAllowanceWeight("+19289512316")).toBe(1);
+    expect(voiceAllowanceWeight("+19289512316", { lrn: null })).toBe(1);
+    expect(voiceAllowanceWeight("+19289512316", { lrn: "" })).toBe(1);
+    expect(voiceAllowanceWeight(null)).toBe(1);
+    expect(voiceAllowanceWeight("+19289512316", { lrn: "+447700900123" })).toBe(1);
+  });
+
+  it("is 14x for Payson Zone 5 LRN and 2x for Zone 4", () => {
+    expect(voiceAllowanceWeight("+19289512316", { lrn: "9283630020" })).toBe(14);
+    expect(voiceAllowanceWeight({ lrn: "1928363" })).toBe(14);
+    expect(voiceAllowanceWeight(null, { lrn: "5044010000" })).toBe(2);
+  });
+
+  it("does not stack a second ceil on the already-billed minute", () => {
+    // Settlement ceils 33s to 60 first. Weight multiplies that 60.
+    // ceil(33 * 14) = 462 would be the double-ceil bug.
+    const weight = voiceAllowanceWeight(null, { lrn: "9283630020" });
+    expect(Math.round(60 * weight)).toBe(840);
+    expect(Math.ceil(33 * weight)).toBe(462);
+  });
+
+  it("caps Zone 6 and Canada N11 so one misdial cannot wipe a month", () => {
+    expect(VOICE_ALLOWANCE_WEIGHT_CAP).toBe(20);
+    const n11 = voiceZoneFor("+14163110000", { lrn: "4163110000" });
+    expect(n11?.centsPerMinute).toBe(75);
+    expect(75 / NANP_BASELINE_CENTS_PER_MINUTE).toBe(150);
+    expect(voiceAllowanceWeight(null, { lrn: "4163110000" })).toBe(20);
+
+    const zone6 = VOICE_RATE_ZONES.find(
+      (z) => z.iso === "US" && z.label === "High Cost (Zone 6)"
+    );
+    expect(zone6).toBeDefined();
+    const prefix = zone6!.prefixes.split(" ").find((p) => p.length >= 7);
+    expect(prefix).toBeTruthy();
+    const raw = 18.1 / NANP_BASELINE_CENTS_PER_MINUTE;
+    expect(raw).toBeGreaterThan(VOICE_ALLOWANCE_WEIGHT_CAP);
+    expect(voiceAllowanceWeight(null, { lrn: prefix })).toBe(20);
+  });
+
+  it("treats toll-free 0c as 1x rather than free minutes", () => {
+    const tollFree = VOICE_RATE_ZONES.find((z) => z.label === "Toll Free");
+    const prefix = tollFree?.prefixes.split(" ")[0];
+    expect(prefix).toBeTruthy();
+    expect(voiceAllowanceWeight(null, { lrn: prefix })).toBe(1);
+  });
+});
+
+describe("edge lockstep copy", () => {
+  it("keeps the generated decks byte-identical", () => {
+    const src = readFileSync(
+      join(repoRoot, "src/lib/plans/voice-zone-rates.generated.ts"),
+      "utf8"
+    );
+    const edge = readFileSync(
+      join(repoRoot, "supabase/functions/_shared/voice-zone-rates.generated.ts"),
+      "utf8"
+    );
+    expect(edge).toBe(src);
+  });
+
+  it("agrees with src on LRN weight fixtures", async () => {
+    const edge = await import("../supabase/functions/_shared/voice_zone_rates");
+    const cases: Array<{ dialed?: string; lrn?: string | null }> = [
+      { dialed: "+19289512316" },
+      { dialed: "+19289512316", lrn: "9283630020" },
+      { lrn: "1928363" },
+      { dialed: "+15044628344", lrn: "5044010000" },
+      { lrn: "4163110000" },
+      { lrn: null },
+      { dialed: "+16028384497", lrn: "+447700900123" }
+    ];
+    for (const c of cases) {
+      expect(edge.voiceAllowanceWeight(c.dialed, { lrn: c.lrn })).toBe(
+        voiceAllowanceWeight(c.dialed, { lrn: c.lrn })
+      );
+      expect(edge.voiceZoneFor(c.dialed, { lrn: c.lrn })).toEqual(
+        voiceZoneFor(c.dialed, { lrn: c.lrn })
+      );
+      expect(edge.telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })).toBe(
+        telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })
+      );
+    }
+    expect(edge.VOICE_ALLOWANCE_WEIGHT_CAP).toBe(VOICE_ALLOWANCE_WEIGHT_CAP);
+    expect(edge.NANP_BASELINE_CENTS_PER_MINUTE).toBe(NANP_BASELINE_CENTS_PER_MINUTE);
+  });
+});
+

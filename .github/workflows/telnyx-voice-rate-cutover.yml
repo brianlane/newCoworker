@@ -183,7 +183,12 @@ jobs:
                 "Opened automatically by `.github/workflows/telnyx-voice-rate-cutover.yml`.",
                 "**Read the number before merging**: it is derived from whatever traffic",
                 "the fleet happened to place since the cutover, so a month with an unusual",
-                "destination mix moves it for a reason that is not a price change."
+                "destination mix moves it for a reason that is not a price change.",
+                "",
+                "If `history.byZone` is still all Zone 1 but `actuals.centsPerMinute` rose,",
+                "that is LRN / high-cost mix, not a Zone 1 list-price cutover. Amy Payson",
+                "`+19289512316` billed Zone 5 via Terminating LRN `9283630020` (PR #1809,",
+                "closed). Do not bump `voiceTelnyxCentsPerMinute` for that."
               ].join("\n")
             });
             core.info(`Opened #${pr.number}`);

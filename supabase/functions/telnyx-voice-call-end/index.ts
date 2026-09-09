@@ -75,6 +75,7 @@ import { systemLog } from "../_shared/system_log.ts";
 import { meterForwardedCallSeconds } from "../_shared/forwarded_call_meter.ts";
 import { parseCallDurationSeconds } from "../_shared/telnyx_call_duration.ts";
 import { isNeverAnsweredReservation } from "../_shared/voice_settlement.ts";
+import { settlementMeteringFromHangupPayload } from "../_shared/voice_settlement_lrn.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -2384,6 +2385,18 @@ serve(async (req: Request) => {
   };
   if (mergedReported != null) {
     settlementRow.telnyx_reported_duration_seconds = mergedReported;
+  }
+
+  // LRN from the payload only. Never treat payload.to / payload.from as
+  // LRN: those are the dialed identity, and guessing the NPA is how
+  // Payson +19289512316 would stay Zone 1 while Telnyx billed Zone 5.
+  const metering = settlementMeteringFromHangupPayload(payload);
+  if (metering.terminatingLrn) {
+    settlementRow.terminating_lrn = metering.terminatingLrn;
+    settlementRow.zone_weight = metering.zoneWeight;
+  }
+  if (metering.callLegId) {
+    settlementRow.telnyx_call_leg_id = metering.callLegId;
   }
 
   const { error: upsertErr } = await supabase.from("voice_settlements").upsert(settlementRow, {

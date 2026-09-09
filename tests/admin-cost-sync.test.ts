@@ -818,6 +818,85 @@ describe("runPlatformCostSync", () => {
     );
   });
 
+  it("stamps LRN weights from sip-trunking MDRs and swallows apply failures", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("record_type]=messaging")) {
+        return jsonResponse({ data: [] });
+      }
+      return jsonResponse({
+        data: [
+          {
+            started_at: "2026-07-10T02:00:00Z",
+            direction: "outbound",
+            cli: "+16025551234",
+            cld: "+19289512316",
+            terminating_lrn: "9283630020",
+            call_control_id: "cc-payson",
+            billed_sec: 60
+          }
+        ]
+      });
+    });
+    const applyVoiceSettlementLrns = vi.fn(async () => {
+      throw new Error("lrn apply exploded");
+    });
+    const deps = baseDeps({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      listTenantDids: vi.fn(async () => [{ businessId: "biz-1", e164: "+16025551234" }]),
+      applyVoiceSettlementLrns
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.ok).toBe(true);
+    expect(applyVoiceSettlementLrns).toHaveBeenCalledWith([
+      expect.objectContaining({
+        callControlId: "cc-payson",
+        terminatingLrn: "9283630020",
+        zoneWeight: 14
+      })
+    ]);
+  });
+
+  it("skips sip-trunking MDRs with no LRN or no matchable id, last write wins", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("record_type]=messaging")) {
+        return jsonResponse({ data: [] });
+      }
+      return jsonResponse({
+        data: [
+          { cld: "+19289512316", from: "+1602", billed_sec: 60 },
+          { terminating_lrn: "9283630020", billed_sec: 60 },
+          {
+            call_leg_id: "leg-1",
+            terminating_lrn: "5044010000",
+            billed_sec: 60
+          },
+          {
+            call_leg_id: "leg-1",
+            "Term Prefix": "1928363",
+            billed_sec: 60
+          }
+        ]
+      });
+    });
+    const applyVoiceSettlementLrns = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      applyVoiceSettlementLrns
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.ok).toBe(true);
+    expect(applyVoiceSettlementLrns).toHaveBeenCalledWith([
+      {
+        callControlId: null,
+        callLegId: "leg-1",
+        terminatingLrn: "1928363",
+        zoneWeight: 14
+      }
+    ]);
+  });
+
   it("widens the delete window for a 90-day backfill", async () => {
     const deps = baseDeps();
     const status = await runPlatformCostSync(deps, { telnyxRange: "last_90_days" });

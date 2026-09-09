@@ -17,6 +17,11 @@
  *
  *   npx tsx scripts/generate-voice-zone-rates.ts ~/Downloads/<deck>.csv
  *
+ * Writes the same table to `src/lib/plans/voice-zone-rates.generated.ts`
+ * (Next.js) and `supabase/functions/_shared/voice-zone-rates.generated.ts`
+ * (Deno hangup settlement). tests/voice-zone-rates.test.ts fails the PR
+ * if those two copies drift.
+ *
  * Only US and CA rows are kept. Everything else in the deck is real, but we
  * do not originate calls to it: international voice would need a separate
  * decision about whether to allow it at all, and inventing a rate table for
@@ -339,7 +344,13 @@ ${entries}
   }
 
   writeFileSync(OUTPUT_PATH, file);
+  const edgeOutputPath = path.resolve(
+    process.cwd(),
+    "supabase/functions/_shared/voice-zone-rates.generated.ts"
+  );
+  writeFileSync(edgeOutputPath, file);
   console.log(`wrote ${OUTPUT_PATH}`);
+  console.log(`wrote ${edgeOutputPath}`);
   console.log(`  verified ${emittedCount.toLocaleString("en-US")} prefixes round-trip`);
   console.log(`  deck    ${path.basename(deckPath)} (sha256 ${sha256.slice(0, 12)}...)`);
   console.log(`  zones   ${ordered.length}`);

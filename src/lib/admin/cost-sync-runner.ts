@@ -27,6 +27,7 @@ import {
   type StripeFeeTransaction,
   type TelnyxSyncRange
 } from "@/lib/admin/cost-sync";
+import { applyVoiceSettlementLrnUpdates } from "@/lib/db/voice-settlement-lrn";
 
 /**
  * Every balance transaction settled at or after `sinceUnix`, normalized to
@@ -90,7 +91,8 @@ export async function runProductionPlatformCostSync(options?: {
       listStripeCustomerBusinessIds,
       replaceStripeFeeWindow,
       recordStatus: (status) =>
-        upsertAdminPlatformSetting(PLATFORM_COST_SYNC_STATUS_KEY, status)
+        upsertAdminPlatformSetting(PLATFORM_COST_SYNC_STATUS_KEY, status),
+      applyVoiceSettlementLrns: applyVoiceSettlementLrnUpdates
     },
     { telnyxRange: options?.telnyxRange }
   );
