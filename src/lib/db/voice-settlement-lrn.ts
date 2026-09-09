@@ -7,7 +7,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { VoiceSettlementLrnUpdate } from "@/lib/admin/cost-sync";
-import { VOICE_ALLOWANCE_WEIGHT_CAP } from "@/lib/plans/voice-zone-rates";
+import { VOICE_ALLOWANCE_WEIGHT_STORE_MAX } from "@/lib/plans/voice-zone-rates";
 
 type SettlementLrnClient = {
   from: (table: string) => {
@@ -59,7 +59,7 @@ export async function applyVoiceSettlementLrnUpdates(
       p_call_control_id: callControlId,
       p_terminating_lrn: update.terminatingLrn,
       p_zone_weight: Math.min(
-        VOICE_ALLOWANCE_WEIGHT_CAP,
+        VOICE_ALLOWANCE_WEIGHT_STORE_MAX,
         Math.max(1, update.zoneWeight)
       )
     });

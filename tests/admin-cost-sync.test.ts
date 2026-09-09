@@ -857,6 +857,57 @@ describe("runPlatformCostSync", () => {
     ]);
   });
 
+  it("passes raw Zone 6 / N11 weights from sip-trunking MDRs, not the short-leg cap", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("record_type]=messaging")) {
+        return jsonResponse({ data: [] });
+      }
+      return jsonResponse({
+        data: [
+          {
+            started_at: "2026-07-10T02:00:00Z",
+            direction: "outbound",
+            cli: "+16025551234",
+            terminating_lrn: "1308286",
+            call_control_id: "cc-z6",
+            billed_sec: 120
+          },
+          {
+            started_at: "2026-07-10T03:00:00Z",
+            direction: "outbound",
+            cli: "+16025551234",
+            terminating_lrn: "4163110000",
+            call_control_id: "cc-n11",
+            billed_sec: 33
+          }
+        ]
+      });
+    });
+    const applyVoiceSettlementLrns = vi.fn(async () => ({ applied: 2, skipped: 0 }));
+    const deps = baseDeps({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      listTenantDids: vi.fn(async () => [{ businessId: "biz-1", e164: "+16025551234" }]),
+      applyVoiceSettlementLrns
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.ok).toBe(true);
+    expect(applyVoiceSettlementLrns).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          callControlId: "cc-z6",
+          terminatingLrn: "1308286",
+          zoneWeight: 36.2
+        }),
+        expect.objectContaining({
+          callControlId: "cc-n11",
+          terminatingLrn: "4163110000",
+          zoneWeight: 150
+        })
+      ])
+    );
+  });
+
   it("skips sip-trunking MDRs with no LRN or no matchable id, last write wins", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

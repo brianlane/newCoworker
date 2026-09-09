@@ -8,10 +8,14 @@ const repoRoot = join(__dirname, "..");
 
 import {
   NANP_BASELINE_CENTS_PER_MINUTE,
+  VOICE_ALLOWANCE_SHORT_LEG_SECONDS,
   VOICE_ALLOWANCE_WEIGHT_CAP,
+  VOICE_ALLOWANCE_WEIGHT_STORE_MAX,
+  applyVoiceAllowanceDurationCap,
   blendedVoiceTerminationRate,
   parseDestinationList,
   telnyxTerminatingLrnFromFields,
+  voiceAllowanceRawWeight,
   voiceAllowanceWeight,
   voiceZoneFor
 } from "@/lib/plans/voice-zone-rates";
@@ -463,6 +467,10 @@ describe("voiceAllowanceWeight", () => {
     expect(voiceAllowanceWeight("+19289512316", { lrn: "" })).toBe(1);
     expect(voiceAllowanceWeight(null)).toBe(1);
     expect(voiceAllowanceWeight("+19289512316", { lrn: "+447700900123" })).toBe(1);
+    expect(
+      voiceAllowanceWeight(null, { billableSeconds: 120 })
+    ).toBe(1);
+    expect(voiceAllowanceRawWeight(null, { lrn: null })).toBe(1);
   });
 
   it("is 14x for Payson Zone 5 LRN and 2x for Zone 4", () => {
@@ -479,12 +487,21 @@ describe("voiceAllowanceWeight", () => {
     expect(Math.ceil(33 * weight)).toBe(462);
   });
 
-  it("caps Zone 6 and Canada N11 so one misdial cannot wipe a month", () => {
+  it("caps Zone 6 and Canada N11 on a short billed minute, full raw when longer", () => {
     expect(VOICE_ALLOWANCE_WEIGHT_CAP).toBe(20);
+    expect(VOICE_ALLOWANCE_SHORT_LEG_SECONDS).toBe(60);
+    expect(VOICE_ALLOWANCE_WEIGHT_STORE_MAX).toBe(200);
     const n11 = voiceZoneFor("+14163110000", { lrn: "4163110000" });
     expect(n11?.centsPerMinute).toBe(75);
     expect(75 / NANP_BASELINE_CENTS_PER_MINUTE).toBe(150);
+    expect(voiceAllowanceRawWeight(null, { lrn: "4163110000" })).toBe(150);
     expect(voiceAllowanceWeight(null, { lrn: "4163110000" })).toBe(20);
+    expect(
+      voiceAllowanceWeight(null, { lrn: "4163110000", billableSeconds: 60 })
+    ).toBe(20);
+    expect(
+      voiceAllowanceWeight(null, { lrn: "4163110000", billableSeconds: 120 })
+    ).toBe(150);
 
     const zone6 = VOICE_RATE_ZONES.find(
       (z) => z.iso === "US" && z.label === "High Cost (Zone 6)"
@@ -494,7 +511,28 @@ describe("voiceAllowanceWeight", () => {
     expect(prefix).toBeTruthy();
     const raw = 18.1 / NANP_BASELINE_CENTS_PER_MINUTE;
     expect(raw).toBeGreaterThan(VOICE_ALLOWANCE_WEIGHT_CAP);
+    expect(voiceAllowanceRawWeight(null, { lrn: prefix })).toBe(raw);
     expect(voiceAllowanceWeight(null, { lrn: prefix })).toBe(20);
+    expect(voiceAllowanceWeight(null, { lrn: prefix, billableSeconds: null })).toBe(
+      20
+    );
+    expect(voiceAllowanceWeight(null, { lrn: prefix, billableSeconds: 61 })).toBe(
+      raw
+    );
+    expect(Math.round(120 * raw)).toBe(4344);
+  });
+
+  it("duration-gates a raw multiplier without a hybrid first-minute split", () => {
+    expect(applyVoiceAllowanceDurationCap(36.2, 33)).toBe(20);
+    expect(applyVoiceAllowanceDurationCap(36.2, 60)).toBe(20);
+    expect(applyVoiceAllowanceDurationCap(36.2, 61)).toBe(36.2);
+    expect(applyVoiceAllowanceDurationCap(36.2, 120)).toBe(36.2);
+    expect(applyVoiceAllowanceDurationCap(14, 33)).toBe(14);
+    expect(applyVoiceAllowanceDurationCap(14, 120)).toBe(14);
+    expect(applyVoiceAllowanceDurationCap(1, 120)).toBe(1);
+    expect(applyVoiceAllowanceDurationCap(0, 120)).toBe(1);
+    expect(applyVoiceAllowanceDurationCap(9999, 120)).toBe(200);
+    expect(applyVoiceAllowanceDurationCap(150, undefined)).toBe(20);
   });
 
   it("treats toll-free 0c as 1x rather than free minutes", () => {
@@ -541,7 +579,16 @@ describe("edge lockstep copy", () => {
       );
     }
     expect(edge.VOICE_ALLOWANCE_WEIGHT_CAP).toBe(VOICE_ALLOWANCE_WEIGHT_CAP);
+    expect(edge.VOICE_ALLOWANCE_SHORT_LEG_SECONDS).toBe(
+      VOICE_ALLOWANCE_SHORT_LEG_SECONDS
+    );
+    expect(edge.VOICE_ALLOWANCE_WEIGHT_STORE_MAX).toBe(
+      VOICE_ALLOWANCE_WEIGHT_STORE_MAX
+    );
     expect(edge.NANP_BASELINE_CENTS_PER_MINUTE).toBe(NANP_BASELINE_CENTS_PER_MINUTE);
+    expect(edge.voiceAllowanceRawWeight(null, { lrn: "4163110000" })).toBe(150);
+    expect(edge.applyVoiceAllowanceDurationCap(36.2, 60)).toBe(20);
+    expect(edge.applyVoiceAllowanceDurationCap(36.2, 120)).toBe(36.2);
   });
 });
 
