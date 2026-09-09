@@ -223,6 +223,32 @@ describe("voice settlement: per-minute carrier rounding", () => {
   });
 });
 
+const neverAnsweredSettlementMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260909214314_voice_never_answered_settlement_heal.sql"
+  ),
+  "utf8"
+);
+
+describe("voice settlement: never-answered released reservation", () => {
+  it("finalizes released + never-connected reservations at 0 instead of reservation_released", () => {
+    expect(neverAnsweredSettlementMigration).toMatch(
+      /if r\.state = 'released'\s+and r\.ws_connected_at is null\s+and r\.answer_issued_at is null then/s
+    );
+    expect(neverAnsweredSettlementMigration).toMatch(/'never_answered', true/);
+    expect(neverAnsweredSettlementMigration).toMatch(
+      /if r\.state = 'released' then\s+return jsonb_build_object\('ok', false, 'reason', 'reservation_released'\);/s
+    );
+  });
+
+  it("heals leftover open settlements whose reservation already released without connecting", () => {
+    expect(neverAnsweredSettlementMigration).toMatch(
+      /update public\.voice_settlements s[\s\S]*?and s\.finalized_at is null[\s\S]*?and r\.state = 'released'[\s\S]*?and r\.ws_connected_at is null[\s\S]*?and r\.answer_issued_at is null;/s
+    );
+  });
+});
+
 const forwardedMeterMigration = readFileSync(
   join(
     repoRoot,

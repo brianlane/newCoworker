@@ -74,6 +74,7 @@ import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { meterForwardedCallSeconds } from "../_shared/forwarded_call_meter.ts";
 import { parseCallDurationSeconds } from "../_shared/telnyx_call_duration.ts";
+import { isNeverAnsweredReservation } from "../_shared/voice_settlement.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -2307,7 +2308,7 @@ serve(async (req: Request) => {
 
   const { data: resv, error: resvErr } = await supabase
     .from("voice_reservations")
-    .select("business_id, id")
+    .select("business_id, id, ws_connected_at, answer_issued_at")
     .eq("call_control_id", callControlId)
     .maybeSingle();
 
@@ -2319,6 +2320,25 @@ serve(async (req: Request) => {
   const businessId = resv?.business_id as string | undefined;
   if (!businessId) {
     return new Response(JSON.stringify({ ok: true, skip: "unknown_call" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  // Mid-ring hangup: inbound already released the reservation. A settlement
+  // row here can never finalize (reservation_released) and the health cron
+  // pages it as stuck. Skip the write; telemetry already recorded
+  // voice_answer_caller_gone on the inbound leg.
+  if (
+    isNeverAnsweredReservation(
+      resv as { ws_connected_at?: string | null; answer_issued_at?: string | null }
+    )
+  ) {
+    await telemetryRecord(supabase, "voice_settlement_skipped_never_answered", {
+      call_control_id: callControlId,
+      business_id: businessId
+    });
+    return new Response(JSON.stringify({ ok: true, skip: "never_answered" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });

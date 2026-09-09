@@ -48,3 +48,13 @@ incident. Read the code. Check the reservation's `created_at` against the log
 stamp; a sub-second gap is the caller, not us. Recurrence is what would matter
 (a spike means something is slowing the webhook into the ring window), so
 count `voice_answer_caller_gone` over time rather than reacting to one.
+
+**Do not treat a stuck-settlement health mail as a live outage for this
+race.** Hangup still used to write a `voice_settlements` row after the
+reservation released. Finalize refused `reservation_released`, the 15-minute
+sweep returned 0, and `voice-bridge-health-alerts` paged hourly after 30
+minutes. Observed 2026-09-09 on Amy (`v3:OtTLp2osf-…`, 1s ring, no
+websocket, minutes already released). Hangup now skips that write
+(`skip: never_answered`); finalize closes a leftover released +
+never-connected row at 0 billable. A stale-bridge count of 0 in the same
+mail means inbound answering is fine.
