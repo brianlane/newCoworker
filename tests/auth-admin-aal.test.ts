@@ -13,6 +13,10 @@ describe("admin-aal", () => {
     expect(isAdminEmail("Admin@Example.com", "admin@example.com")).toBe(true);
     expect(isAdminEmail("other@example.com", "admin@example.com")).toBe(false);
     expect(isAdminEmail("admin@example.com", undefined)).toBe(false);
+    expect(isAdminEmail("admin@example.com", "")).toBe(false);
+    expect(isAdminEmail(null, "admin@example.com")).toBe(false);
+    expect(isAdminEmail(undefined, "admin@example.com")).toBe(false);
+    expect(isAdminEmail("", "admin@example.com")).toBe(false);
   });
 
   it("recognizes aal2 only", () => {
