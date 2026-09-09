@@ -104,7 +104,7 @@ export const TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS = 1000;
  * Synced `telnyx_cost_daily` actuals therefore understate voice by about
  * this much per metered minute; views built on actuals add this top-up so
  * they mirror the invoice. The rate-estimate paths must NOT add it: the
- * 0.9 cents/min voiceTelnyxCentsPerMinute above already includes it.
+ * 1.03 cents/min voiceTelnyxCentsPerMinute above already includes it.
  *
  * Two invoices, denominator = synced billed minutes (both call legs, which
  * is what the adjuncts also meter):
@@ -282,13 +282,14 @@ export function estimateEnterpriseMonthlyCost(
   // Telnyx prices termination per NPA-NXX, not per country: the US spread
   // runs from 0.5c/min in the lower 48 to 7c in "High Cost (Zone 5)" and
   // 18.1c in Zone 6, and those prefixes are overwhelmingly rural.
-  // `voiceTelnyxCentsPerMinute` (0.9) is a single blended figure
-  // back-calibrated from the June and July 2026 invoices. Measuring every
-  // outbound leg we had ever placed on 2026-08-28 showed all 104 of them
-  // landed in Zone 1, so that 0.9 already contains a Zone 1 termination
-  // rate. Adding a full zone rate on top would bill termination twice.
+  // `voiceTelnyxCentsPerMinute` (1.03) is a single blended figure
+  // back-calibrated from the June and July 2026 invoices, then shifted by
+  // the 2026-09-01 termination drift. Measuring every outbound leg we had
+  // ever placed on 2026-08-28 showed all 104 of them landed in Zone 1, so
+  // that 1.03 already contains a Zone 1 termination rate. Adding a full
+  // zone rate on top would bill termination twice.
   //
-  // The INCREMENT above baseline is the part 0.9 cannot contain, and it is
+  // The INCREMENT above baseline is the part 1.03 cannot contain, and it is
   // additive with no double count. A tenant dialing only the lower 48 gets
   // exactly 0 here, which is why the line disappears rather than showing a
   // rounded-to-zero surcharge.
