@@ -5,7 +5,9 @@
  * voice transcripts and reports calls where the AI voiced BOTH sides of the
  * conversation, held a conversation with a recording, gave out a phone
  * number the business does not own, quoted a money figure nothing on the
- * call supplied, or never got past a referral partner's accept menu.
+ * call supplied (or a figure that came only from the call brief, which
+ * means the flow handed it a number worth checking), or never got past a
+ * referral partner's accept menu.
  *
  * WHY A CRON AND NOT A TEST. Each failure is the model disobeying its
  * prompt (the rules added in PRs #1377 and #1612), and prompt adherence
@@ -32,6 +34,7 @@ import { systemLog } from "../_shared/system_log.ts";
 import {
   callIntegrityAlertSubject,
   callerAmounts,
+  amountsFromCallBrief,
   collectAllowedNumbers,
   detectCallIntegrity,
   formatCallIntegrityAlert,
@@ -297,36 +300,39 @@ serve(async (req: Request) => {
       }
     }
 
-    // Amounts need no fleet lookup: the legitimate ones are whatever the other
-    // party said on this very call, which is already loaded. Unlike the number
-    // allowlist there is nothing to fail-open on, so the rule runs on every
-    // call regardless of `allowlistOk`.
-    const allFindings: CallIntegrityFinding[] = detectCallIntegrity(turns, {
-      ...(allowedNumbers ? { allowedNumbers } : {}),
-      allowedAmounts: callerAmounts(turns)
-    });
-
-    // Bridge-blocked fabrications: the spoken-number guard cuts a fabricated
-    // number's audio before it finishes playing and records the cut on the
-    // handoff session context. The transcript still holds what the model
-    // GENERATED, so match findings against that record and report the blocked
-    // ones as attempts, not failures. Fetched only when a number finding
-    // exists, which on a normal day is zero calls; a failed fetch simply
-    // leaves `suppressed` empty, and the finding reports as a failure, the
-    // pre-guard behavior.
-    let suppressed: unknown = null;
-    if (
-      call.call_control_id &&
-      allFindings.some((f) => f.kind === "invented_contact_number")
-    ) {
+    // Amounts: the legitimate ones the OTHER party said, plus (separately)
+    // whatever the flow wrote into this call's brief. A figure in the brief
+    // that the caller never said is `briefed_amount` (check the flow), not
+    // `invented_amount` (the model guessed). Session fetch is best-effort:
+    // a miss leaves briefedAmounts empty and the finding stays invented,
+    // which is the pre-split behaviour.
+    let briefContext: unknown = null;
+    if (call.call_control_id) {
       const { data: sess } = await supabase
         .from("voice_handoff_sessions")
         .select("context")
         .eq("call_control_id", call.call_control_id)
         .maybeSingle();
+      briefContext = (sess as { context?: unknown } | null)?.context ?? null;
+    }
+    const allFindings: CallIntegrityFinding[] = detectCallIntegrity(turns, {
+      ...(allowedNumbers ? { allowedNumbers } : {}),
+      allowedAmounts: callerAmounts(turns),
+      briefedAmounts: amountsFromCallBrief(briefContext)
+    });
+
+    // Bridge-blocked fabrications: the spoken-number guard cuts a fabricated
+    // number's audio before it finishes playing and records the cut on the
+    // handoff session context (already loaded above as briefContext). The
+    // transcript still holds what the model GENERATED, so match findings
+    // against that record and report the blocked ones as attempts, not
+    // failures. A missing context leaves `suppressed` empty, and the finding
+    // reports as a failure, the pre-guard behavior.
+    let suppressed: unknown = null;
+    if (allFindings.some((f) => f.kind === "invented_contact_number")) {
       suppressed =
-        ((sess as { context?: { suppressed_spoken_numbers?: unknown } } | null)?.context
-          ?.suppressed_spoken_numbers) ?? null;
+        (briefContext as { suppressed_spoken_numbers?: unknown } | null)
+          ?.suppressed_spoken_numbers ?? null;
     }
     const { failures, blocked } = partitionBlockedFindings(allFindings, suppressed);
     for (const finding of blocked) {

@@ -3074,6 +3074,7 @@
         "draftBody": "Lo que dice el correo",
         "wholeEmail": "El correo completo, tal como se enviará",
         "fromMailbox": "Enviar desde",
+        "sendAsEmail": "Enviar como (opcional)",
         "bookingMeeting": "Qué reunión ofrece el correo",
         "bookingLinkFirstTouch": "Incluir el enlace de reserva en el primer correo"
       },
@@ -3081,7 +3082,8 @@
         "searchTerms": "plomero, técnico de aire acondicionado, techador",
         "cities": "Phoenix, Mesa, Tempe",
         "valueProp": "Una o dos frases sobre lo que haces y por qué vale la pena responder.",
-        "postalAddress": "Nombre del negocio, calle, ciudad, código postal"
+        "postalAddress": "Nombre del negocio, calle, ciudad, código postal",
+        "sendAsEmail": "equipo@tudominio.com"
       },
       "postalHelp": "La ley lo exige en el correo de marketing, y por eso la prospección no se puede encender sin ella.",
       "capHelp": "10 a 25 al día protege la reputación de tu correo. Los seguimientos también cuentan. Súbelo cuando quieras; nada aquí es un límite de la plataforma.",
@@ -3131,6 +3133,7 @@
       "senderNameHelp": "El nombre al final del correo. No cambia la dirección desde la que se envía.",
       "fromMailboxHelp": "La dirección desde la que sale el correo, y donde llegan las respuestas. Automático usa el buzón que tengas conectado.",
       "fromMailboxGoneOption": "El buzón que elegiste (ya no está conectado)",
+      "sendAsEmailHelp": "Una dirección desde la que tu buzón ya tiene permiso para enviar (en Gmail: Configuración, Cuentas, Enviar como, verificada). El correo muestra esta dirección como remitente y las respuestas llegan a ella, así que tiene que llegar al mismo buzón. Déjalo en blanco para usar la dirección predeterminada del buzón.",
       "bookingMeetingChooser": "Que elijan ellos",
       "bookingMeetingOption": "{name} ({minutes} min)",
       "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte.",

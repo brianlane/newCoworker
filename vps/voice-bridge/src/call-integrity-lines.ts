@@ -151,14 +151,17 @@ export const NO_INVENTED_CONTACT_LINE =
 /**
  * Never state a money figure you were not given.
  *
- * THE INCIDENT (Clever seller lead, 2026-08-20, call 60a64ddd). Calling Luis
- * Castillo about 6826 W Pierson St, the AI said: "Clever offered you a cash
- * offer program, and the offers on your file are 375k and 395k." The only
- * offers ever sent for that lead were $320,097, $342,000 and $325,000, and
- * they arrived four minutes AFTER the call ended. At the moment it spoke, the
- * AI held one referral text reading "Est. home value: $425,000.00" and no
- * offers at all. Both figures were invented, both were tens of thousands
- * high, and it delivered them to the seller as a fact about their own file.
+ * THE INCIDENT (Clever seller leads, call 60a64ddd 2026-08-20 and call
+ * 5339954d 2026-09-06). The AI said: "Clever offered you a cash offer
+ * program, and the offers on your file are 375k and 395k." PR #1726 treated
+ * those figures as invented. They were not: the pitch interpolated
+ * `{{vars.cash_offers}}`, and the page read copied Clever's "Example only"
+ * comparison module (ZoomCasa $375k, QuickBuy $395k, labeled placeholders
+ * not based on this property). Real offers arrive later by text. The flow
+ * fix (drop the interpolation, ignore the example module) is what stops the
+ * recurrence; this line still belongs because a true invention, an amount
+ * asserted as coming from our records that was in neither the brief nor the
+ * caller's mouth, is still a thing the model can do.
  *
  * This is the case NO_INVENTED_CONTACT_LINE deliberately left out. That rule
  * scoped itself to details "a person will ACT on, by dialling or writing to

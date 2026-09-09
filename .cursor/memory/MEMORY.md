@@ -12,7 +12,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Heredoc bodies via files](feedback_heredoc_file_flag.md) - inline heredocs mangle; git commit -F and gh --body-file
 - [Signed-in smoke recipe](project_signed_in_smoke_recipe.md) - TEST_USERNAME/PASSWORD stale; service-role throwaway user + authenticated curl
 - [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp; cost includes carrier fee; auto-recharge is a $2/$28 prepaid floor, not a weekly bill
-- [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC on a drained $28 bucket; Amy offer fan-out; do not cut Standard SMS 5000→3000 (5000 already IS the old 3000-message cap in units; Amy is on pace for 5000); Truly DID `+15198006401` is the Sep 7 grace hold, not a leak
+- [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC on a drained $28 bucket; Amy offer fan-out; do not cut Standard SMS 5000→3000 (5000 already IS the old 3000-message cap in units; Amy is on pace for 5000); Truly DID `+15198006401` was the Sep 7 grace hold, wipe completed 2026-09-08T00:15:05Z, number released
 - [Intl SMS state](project_intl_sms_state.md) - MX SMS never delivered; long codes can't originate non-NANP; non-US/CA skips
 - [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2; counsel items still open
 - [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5; trust zapier-platform history over CLI
@@ -33,7 +33,8 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [supabase start skips migrations](project_supabase_start_skips_migrations.md) - only db reset applies them; start reuses the old volume
 - [Weighted SMS metering shipped](project_weighted_sms_metering.md) - text units since #1189; seed both usage columns in tests
 - [Supabase direct host is IPv6-only](project_supabase_ipv6_direct_host.md) - CI DDL uses IPv4 session pooler us-east-2:5432; SUPABASE_DB_URL is not in .env, export it from DIRECT_DATABASE_URL
-- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented
+- [Amy policies](project_amy_policies.md) - seller call = listing pitch; under-$500K AI-owned gate; cadences; two-var lead_site since #1673; Aug 23 fields ask unimplemented; Clever cash-offer amounts are NOT quoted (page shows Example only placeholders)
+- [Clever Example only cash offers](project_clever_example_offers_not_invented.md) - page placeholders were spoken as real offers; PR #1726 misdiagnosed as invention; option 1 dropped quoted amounts Sep 6 2026
 - [Itest stack has no global Telnyx profile](project_itest_no_global_telnyx_profile.md) - seed business_telnyx_settings or sends no-op
 - [VFM second brand inside KYP](project_vfm_second_brand_kyp.md) - booking drafts DISABLED; James +852 untextable; never quote prices
 - [Wait_for_reply does not mute the coworker](project_wait_for_reply_does_not_mute_coworker.md) - cadence waits skip nudges; suppressDefaultReply is what quiets auto-reply (KIN 2026-09-02)
@@ -157,10 +158,12 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Translator interpret flake](project_translator_interpret_flake.md) - the cue scores 79/80; the nightly went red because this file had no retry
 - [Aug 28-29 nightly reds: three causes, kyp owner-choice drift](project_nightly_red_aug29_kyp_owner_choice_drift.md) - Aug 29 kyp failure is model drift ~40% local, prompt-only contract; NOT #1728
 - [Sep 4 nightly red: two unrelated flakes](project_nightly_red_sep4_two_flakes.md) - kyp regex rejected "triggered"/"ran"/"starts"; reminder-covered 1/6 then 0/10, retry+dump not a prompt edit; NOT #1793
+- [Sep 8 nightly red: three unrelated flakes](project_nightly_red_sep8_three_unrelated_flakes.md) - companion judge dropped markdown asterisks around quoted SMS; call-promise "our team can call you" was 10/10 a judge plural-voice miss, not a coworker promise; schedule-reschedule had no dump; NOT #1806/#1807/#1810/#1811
 - [Page only on what is actionable](feedback_page_only_on_what_is_actionable.md) - three false alarms in a week; error level is for what a human here can act on; the tension with "delivered is not received" resolved
 - [Hostinger billing id must be on the live subscription row](project_subscription_hostinger_link_must_be_stamped.md) - inventory is not the join the audit/sweeps use; leftover unpaid pending carts next to a live sibling make a tenant appear twice
 - [Watchdog SLOW line is per sweep](project_watchdog_slow_line_is_per_sweep.md) - 120s is the DEFAULT; 7 long-budget sweeps judged at 80% of their own maxDuration; a 552s migration run is the sweep WORKING
 - [Telnyx 90018 is the caller hanging up](project_voice_caller_hangup_race.md) - mid-ring race, not a fault; info + voice_answer_caller_gone + 200, never error/500; key on the CODE
+- [Reach ladder concurrent stamps](project_reach_ladder_concurrent_stamps.md) - reach stamps were keyed by attempt only; a duplicate transfer_to_owner spawned concurrent ladders that hung up each other's legs (Amy, Sep 6 2026)
 - [Term-renewal failures do not self-heal](project_term_renewal_failures_do_not_self_heal.md) - one migration per run + 168h cooldown, so a later green run is NOT the repair; Aug 28/29 both CHARGED and both reconciled by hand via --adopt-vm; read vps_inventory, never infer
 - [Parked follow-up watch and PR #1706](project_parked_follow_up_watch_pr1706.md) - #1706 is HELD on purpose until production proves or disproves #1702's park mechanism; daily 9am check is a Claude routine ported to a Cursor Automation via `.cursor/skills/follow-up-park-watch`; Sep 5: 8 days, 0 parked, 0 self-send
 - [Leave the main checkout clean](feedback_leave_main_checkout_clean.md) - when a session ends, git status in /Users/brianlane/newCoworker must be a clean working tree; memories belong in the worktree PR, never leftover on main

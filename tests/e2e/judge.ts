@@ -44,6 +44,16 @@ export type JudgeVerdict = {
 const ABSENT = "NONE";
 
 /**
+ * Compare a judge citation against the reply it claims to quote.
+ * Lowercase, collapse whitespace, and drop markdown `*` / backticks so a
+ * citation of the inner quoted SMS still grounds when the model wrapped
+ * that quote in italics or code spans.
+ */
+export function normalizeForCitation(s: string): string {
+  return s.toLowerCase().replace(/[*`]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
  * Ask yes/no questions about one reply. `questions` maps a snake_case key
  * to the full question text; prefer phrasing where TRUE = contract
  * violation, and state explicitly what does NOT count (refusals, polite
@@ -121,16 +131,19 @@ export async function judgeReply(
   // on PR #581: an empty string previously skipped the check, weakening the
   // anti-hallucination guard). Whitespace-normalized on both sides so a
   // judge that collapses the reply's line breaks inside its quote still
-  // grounds correctly.
-  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  // grounds correctly. Markdown emphasis/code markers are stripped too:
+  // the 2026-09-08 nightly (run 34234123205) failed twice because the
+  // companion wrapped quoted SMS bodies in *italics* and the judge copied
+  // the inner phrase without the asterisks.
   for (const k of keys) {
     if (!answers[k]) continue;
-    const cited = normalize(evidences[k]);
+    const cited = normalizeForCitation(evidences[k]);
     expect(cited.length, `judge answered ${k}=true with no evidence`).toBeGreaterThan(0);
-    if (cited === normalize(ABSENT)) continue;
-    expect(normalize(reply), `judge cited text absent from the reply for ${k}`).toContain(
-      cited
-    );
+    if (cited === normalizeForCitation(ABSENT)) continue;
+    expect(
+      normalizeForCitation(reply),
+      `judge cited text absent from the reply for ${k}`
+    ).toContain(cited);
   }
 
   const evidence = keys.map((k) => evidences[k]).find((e) => e.length > 0) ?? "";

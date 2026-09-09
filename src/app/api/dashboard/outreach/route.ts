@@ -44,6 +44,8 @@ const saveSchema = z.object({
   senderName: z.string().max(120),
   /** A workspace_oauth_connections id, or "" for whichever mailbox is connected. */
   fromConnectionId: z.union([z.literal(""), z.string().uuid()]).default(""),
+  /** A verified send-as alias for the From/Reply-To, or "" to let the provider pick. */
+  sendAsEmail: z.string().trim().max(254).default(""),
   /** A booking_meeting_types id, or "" to link the page and let them choose. */
   bookingMeetingTypeId: z.union([z.literal(""), z.string().uuid()]).default(""),
   /** Whether the FIRST email carries the booking link. Off by default: it asks for a reply. */

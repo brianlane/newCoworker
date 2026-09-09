@@ -37,6 +37,7 @@ type Settings = {
   value_prop: string | null;
   sender_name: string | null;
   from_connection_id: string | null;
+  send_as_email: string | null;
   booking_meeting_type_id: string | null;
   booking_link_on_first_touch: boolean;
 };
@@ -111,6 +112,7 @@ const DEFAULTS: Settings = {
   value_prop: null,
   sender_name: null,
   from_connection_id: null,
+  send_as_email: null,
   booking_meeting_type_id: null,
   booking_link_on_first_touch: false
 };
@@ -247,6 +249,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
           valueProp: form.value_prop ?? "",
           senderName: form.sender_name ?? "",
           fromConnectionId: form.from_connection_id ?? "",
+          sendAsEmail: form.send_as_email ?? "",
           bookingMeetingTypeId: form.booking_meeting_type_id ?? "",
           bookingLinkOnFirstTouch: form.booking_link_on_first_touch
         })
@@ -815,6 +818,30 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
               ))}
             </select>
             <p className="mt-1 text-xs text-parchment/50">{t("fromMailboxHelp")}</p>
+          </div>
+        ) : null}
+        {/* Which ADDRESS the email carries, as distinct from which mailbox
+            sends it. A mailbox that signs in as one account and corresponds
+            from a verified alias on the tenant's own domain (a personal Gmail
+            with team@ on "Send mail as") otherwise leaves cold email under
+            whichever identity the provider defaults to. Always shown when a
+            mailbox is connected, unlike the picker above: one mailbox can
+            still have several identities, so there is a decision here even
+            when there is none there. Blank keeps the provider's default. */}
+        {view && view.mailboxes.length > 0 ? (
+          <div>
+            <label className={labelClass} htmlFor="prospecting-send-as">
+              {t("fields.sendAsEmail")}
+            </label>
+            <input
+              id="prospecting-send-as"
+              type="email"
+              className={inputClass}
+              value={form.send_as_email ?? ""}
+              onChange={(e) => edit({ send_as_email: e.target.value })}
+              placeholder={t("placeholders.sendAsEmail")}
+            />
+            <p className="mt-1 text-xs text-parchment/50">{t("sendAsEmailHelp")}</p>
           </div>
         ) : null}
         <div>

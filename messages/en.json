@@ -3074,6 +3074,7 @@
         "draftBody": "What the email says",
         "wholeEmail": "The whole email, as it will send",
         "fromMailbox": "Send from",
+        "sendAsEmail": "Send as (optional)",
         "bookingMeeting": "Which meeting the email offers",
         "bookingLinkFirstTouch": "Put the booking link in the first email"
       },
@@ -3081,7 +3082,8 @@
         "searchTerms": "plumber, HVAC contractor, roofer",
         "cities": "Phoenix, Mesa, Tempe",
         "valueProp": "One or two sentences on what you do and why it is worth a reply.",
-        "postalAddress": "Business name, street, town, postcode"
+        "postalAddress": "Business name, street, town, postcode",
+        "sendAsEmail": "team@yourdomain.com"
       },
       "postalHelp": "Required by law in marketing email, and it is why outreach cannot be switched on without one.",
       "capHelp": "10 to 25 a day protects your email reputation. Follow-ups count towards this too. Raise it whenever you want; nothing here is a platform limit.",
@@ -3131,6 +3133,7 @@
       "senderNameHelp": "The name at the bottom of the email. It does not change the address it is sent from.",
       "fromMailboxHelp": "The address the email comes from, and where replies land. Automatic uses whichever mailbox you have connected.",
       "fromMailboxGoneOption": "The mailbox you picked (no longer connected)",
+      "sendAsEmailHelp": "An address your mailbox is already allowed to send as (in Gmail: Settings, Accounts, Send mail as, verified). The email shows this address as its sender and replies go to it, so it has to reach the same mailbox. Leave blank to use the mailbox's own default.",
       "bookingMeetingChooser": "Let them choose",
       "bookingMeetingOption": "{name} ({minutes} min)",
       "bookingMeetingHelp": "The booking link goes straight to this meeting. Let them choose sends them to your booking page to pick, which is one more decision for someone who has only just heard of you.",

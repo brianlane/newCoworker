@@ -119,6 +119,20 @@ describe("POST /api/voice/tools/notify-team", () => {
     );
   });
 
+  it("forwards an optional leadType as leadTag", async () => {
+    const res = await POST(
+      req({
+        businessId: BIZ,
+        callerE164: "+16025550199",
+        args: { message: "Seller wants a callback", callerName: "Joseph", leadType: "seller" }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ leadTag: "seller" })
+    );
+  });
+
   it("normalizes a model-formatted callerPhone before storing and routing", async () => {
     // Same rationale as the sms twin (Bugbot, PR #1115): dedupe and routing
     // compare this against worker-normalized E.164 values.

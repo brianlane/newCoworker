@@ -45,6 +45,12 @@ export type OutreachSettingsRow = {
   send_window_start_hour: number;
   send_window_end_hour: number;
   from_connection_id: string | null;
+  /**
+   * Verified send-as alias the cold email leaves from (its From and Reply-To).
+   * Null lets the provider pick: the connected account, or the mailbox's own
+   * default alias, which is what every send did before there was a choice.
+   */
+  send_as_email: string | null;
   /** Meeting the CTA links to. Null links the page and lets them choose. */
   booking_meeting_type_id: string | null;
   /**
@@ -145,6 +151,7 @@ export type OutreachSettingsPatch = Partial<
     | "send_window_start_hour"
     | "send_window_end_hour"
     | "from_connection_id"
+    | "send_as_email"
     | "booking_meeting_type_id"
     | "booking_link_on_first_touch"
     | "postal_address"

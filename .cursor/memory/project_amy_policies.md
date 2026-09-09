@@ -30,7 +30,14 @@ RealEstateAgents.com, HomeLight):
 - **Clever gets an extra angle, and it is her edge.** Clever markets on its
   cash-offer program and instructs her to mention it and quote the offer
   amounts, then argue that listing nets more than a quick cash sale. The other
-  sources get the shorter script with no cash-offer content.
+  sources get the shorter script with no cash-offer content. **Since Sep 6
+  2026 the spoken pitch mentions the program but does not quote dollar
+  amounts.** Clever's referral page has an "Example only" comparison module
+  (sample ZoomCasa/QuickBuy figures, labeled placeholders not based on this
+  property). Real offers arrive later by text. Interpolating
+  `{{vars.cash_offers}}` is how $375k/$395k were read aloud as this seller's
+  file on calls 60a64ddd and 5339954d. See
+  [[project_clever_example_offers_not_invented]].
 - **Comparables are promised on every call and fulfilled by Amy by hand.**
   Nothing automated sends them. She chose this knowingly; it is the promise
   most at risk as call volume rises.

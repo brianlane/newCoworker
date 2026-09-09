@@ -549,9 +549,18 @@ These are mistakes already made on this account. Do not remake them.
   team rung between the two: an unowned contact alerts every teammate carrying
   the lead-type tag, and only an EMPTY eligible set falls to the owner. The
   `notify_team` tool takes an optional `leadType` ("seller"/"buyer") to narrow
-  it. A contact that cannot be found at all still goes owner-direct, on
-  purpose: without a contact row there is no lead, and broadcasting on a
-  lookup miss is noise rather than rescue.
+  it; when the model omits that field the resolver infers the type from stored
+  `ai_flow_runs.context.vars.lead_type` and the contact note line
+  `lead_type: seller|buyer|both`, then drops anyone `filterRosterByAvailability`
+  would skip from a `team_broadcast` offer (time off covering today, outside
+  `weekly_schedule`). That is why Jason Lane (roster tag `buyer` only) no
+  longer gets seller `[Coworker] Follow up… Reply 1 to claim` texts: Joseph
+  Halloran / Fritzpatrick charles (Sep 2026) was a seller in the message body
+  while the audience stayed unfiltered because no call site passed a type.
+  Owned-lead pages stay flag-blind (stewardship). A contact that cannot be
+  found at all still goes owner-direct, on purpose: without a contact row
+  there is no lead, and broadcasting on a lookup miss is noise rather than
+  rescue.
 
 - **Under-$500K gating and the cadence tag are load-bearing TOGETHER.** The
   same lead exposed the other half. The under-500K gate correctly skipped the
@@ -981,6 +990,28 @@ contact up with it; `from_matches` lines up from the other side instead, with
 `resolveRefIdentityValues` listing the key alongside the address.
 
 ## One-shots
+
+**`amy-clever-example-offers.ts` (applied Sep 6 2026):** stops the AI quoting Clever's
+"Example only" cash-offer placeholders as this seller's real offers. Call
+`5339954d` (2026-09-06) and call `60a64ddd` (2026-08-20) both said
+"the offers on your file are 375k and 395k". PR #1726 treated that as the
+model inventing a figure. The rendered persona for both calls already
+contained those amounts: the pitch interpolated `{{vars.cash_offers}}`, and
+the `browse_extract` that fills that var copied Clever's sample ZoomCasa
+$375k / QuickBuy $395k module, labeled "placeholders and are not based on
+this property". Real offers arrive later by text. Measured: 21 of 93 page
+reads since Aug 7 2026 returned those samples (they scale with estimated
+value: $425k pages get $375k/$395k, $625k pages get $550k/$580k).
+
+The one-shot drops the interpolated amounts from the spoken pitch on
+Clever Lead - Accept and hardens the `cash_offers` extraction on that flow
+and on "Clever - Spoke Check & Weekly Call Follow-Up" so team texts stop
+carrying fake numbers. No step added or removed. Builders:
+`amy-seller-ai-call-definition.ts` (`PITCH_CLEVER`, `CASH_OFFERS_FIELD`) and
+`clever-spoke-check-definition.ts` (imports the same field). The daily
+call-integrity sweep now reports a briefed-but-unconfirmed figure as
+"quoted a figure from the call brief, check the flow" rather than as the
+model inventing one.
 
 **`amy-shorten-offer-templates.ts` (applied Aug 29 2026):** shortens
 every `route_to_team` offer template on the eight enabled flows so an unclaimed
@@ -1560,8 +1591,13 @@ new code. Read the rest of this paragraph as the DESIGN, not as production.
 On Clever, where it did land, the AI owns FIRST contact: it dials the seller
 within a minute of the lead landing (skipping $1M+ leads, which stay with
 Amy), pitches the listing with Amy's approved script (the Clever variant
-carries the cash-offer angle and a new `cash_offers` extraction field copied
-verbatim from the spoke check; ReferralExchange does not), then the flow
+carries the cash-offer angle WITHOUT quoting dollar amounts: Clever's
+referral page shows an "Example only" comparison module, not this seller's
+real offers, and interpolating `{{vars.cash_offers}}` is how $375k/$395k
+were read aloud as fact on calls 60a64ddd and 5339954d; see
+`amy-clever-example-offers.ts`. The `cash_offers` extraction field is
+shared with the spoke check and answers 'none listed' for that module;
+ReferralExchange does not pitch cash offers), then the flow
 continues to the unchanged `route_to_team` chain so Dave still owns the
 follow-up. Misses redial at +2h and next morning at 08:30, both inside
 08:30-21:00 Phoenix with `outside: "skip"` so an overnight lead never parks
@@ -1578,6 +1614,23 @@ the AI already did (`actions_taken`), how the call went
 (`call_outcome_label`), and what the ladder does next, with the schedule
 sentence generated from the same constants as the sleeps so copy and
 behavior cannot drift apart.
+
+**Reach-ladder hangups (Sep 6 2026, Miguel Angel Carmona).** Amy's call
+history showed 7 missed + 1 one-second connect from `+16028053377` in two
+minutes. One Clever seller call (`v3:nP1c3dTy...`, 20:14:53Z) asked to be
+transferred. The model called `transfer_to_owner` eight times. Each call
+started a fresh reach ladder on the same A-leg (no in-flight guard). Later
+ladders read ladder 1's `{attempt: 2, status: no_answer}` stamp as their
+own Amy rung and hung up her ringing phone about a second after it started.
+25 B-leg dials, 13 voicemail connects (Gabby/Jason, AMD machine hangup),
+~24 pre-alert texts, 13 more team dials after Miguel hung up at 20:16:49.
+The 8/20 "1 second" pickup is a different bug: she answered at second 20
+of a 20s `timeout_secs`, Telnyx tore the B-leg down, the ladder fail-opened
+to bridge a dead leg and reported nobody_answered. Platform fix: one ladder
+per call, leg-scoped outcome stamps, abort on teardown, dial
+`timeout_secs = ringSeconds + AMD-clear + 5s`. Raising Amy's 20s ring
+window is still a tenant one-shot if she wants more time to pick up; the
+8/20 answer was at second 19-20.
 
 Voicemails (Aug 11 2026): `amy-voicemail-scripts.ts` gives all 13
 `place_ai_call` rungs a `voicemailTemplate`, so a lead who never picks up now

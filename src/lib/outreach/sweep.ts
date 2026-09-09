@@ -876,12 +876,19 @@ async function outreachMailboxMissing(
  * sales@, say) cares which address a cold email comes from: it is the address
  * replies land in and the domain whose reputation is at stake. Storing that
  * choice and then ignoring it would silently send from the wrong place.
+ *
+ * The send-as alias rides BOTH paths. Which mailbox sends and which address it
+ * sends as are separate choices (a mailbox picked for outreach can still
+ * correspond from an alias), so the alias is applied after the mailbox is
+ * resolved, whichever way it was resolved. Null means the provider picks, the
+ * behavior from before there was an alias to name.
  */
 async function sendThroughConfiguredMailbox(
   settings: OutreachSettingsRow,
   r: Resolved,
-  args: { toEmail: string; subject: string; bodyText: string }
+  mail: { toEmail: string; subject: string; bodyText: string }
 ): Promise<OwnerMailboxSendResult> {
+  const args = { ...mail, sendAs: settings.send_as_email?.trim() || null };
   const chosen = settings.from_connection_id?.trim();
   if (!chosen) return r.sendEmail(settings.business_id, args);
   const row = await r.getMailboxConnection(settings.business_id, chosen);

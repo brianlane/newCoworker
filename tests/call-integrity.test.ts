@@ -4,6 +4,7 @@ import {
   DEFAULT_MIN_ASSISTANT_TURNS,
   MIN_REPORTABLE_AMOUNT,
   amountIsSourced,
+  amountsFromCallBrief,
   callerAmounts,
   collectAllowedNumbers,
   detectCallIntegrity,
@@ -630,16 +631,18 @@ describe("detectCallIntegrity: the partner never let us in", () => {
 });
 
 /**
- * invented_amount (call 60a64ddd, 2026-08-20).
- *
- * "Clever offered you a cash offer program, and the offers on your file are
- * 375k and 395k." The real offers were $320,097, $342,000 and $325,000, and
- * they arrived four minutes after the call ended.
+ * invented_amount / briefed_amount (calls 60a64ddd 2026-08-20 and 5339954d
+ * 2026-09-06). The AI said "the offers on your file are 375k and 395k".
+ * Those figures were in the call brief (Clever's Example only module via
+ * `{{vars.cash_offers}}`), so with the brief loaded they are `briefed_amount`,
+ * not the model inventing a number.
  */
 describe("detectCallIntegrity: figures nothing gave it", () => {
   const INCIDENT =
     "Great, so, Clever offered you a cash offer program, and the offers on " +
     "your file are 375k and 395k.";
+  const BRIEF_PERSONA =
+    "Clever offered you a cash offer program, and the offers on your file are $375,000, $395,000.";
 
   it("reports every distinct unsourced amount in the incident turn", () => {
     const turns = [t("caller", "Sure."), t("assistant", INCIDENT)];
@@ -648,6 +651,29 @@ describe("detectCallIntegrity: figures nothing gave it", () => {
     expect(amounts).toHaveLength(2);
     expect(amounts[0]!.detail).toContain("$375,000");
     expect(amounts[1]!.detail).toContain("$395,000");
+  });
+
+  it("names the same figures as briefed when they came from the call brief", () => {
+    const turns = [t("caller", "Sure."), t("assistant", INCIDENT)];
+    const findings = detectCallIntegrity(turns, {
+      allowedAmounts: callerAmounts(turns),
+      briefedAmounts: amountsFromCallBrief({ ai_takeover: { persona: BRIEF_PERSONA } })
+    });
+    expect(findings.map((f) => f.kind)).toEqual(["briefed_amount", "briefed_amount"]);
+    expect(findings[0]!.detail).toContain("came from the call brief, check the flow");
+    expect(findings[0]!.detail).toContain("$375,000");
+    expect(findings[1]!.detail).toContain("$395,000");
+  });
+
+  it("still reports invented when the brief is loaded but does not contain the figure", () => {
+    const turns = [t("caller", "Sure."), t("assistant", "The offer is 375k.")];
+    const findings = detectCallIntegrity(turns, {
+      allowedAmounts: callerAmounts(turns),
+      briefedAmounts: amountsFromCallBrief({
+        ai_takeover: { context_note: "Estimated value: $425,000" }
+      })
+    });
+    expect(findings.map((f) => f.kind)).toEqual(["invented_amount"]);
   });
 
   it("ignores a muted turn that would otherwise look invented", () => {
@@ -715,6 +741,61 @@ describe("detectCallIntegrity: figures nothing gave it", () => {
       }
     ]);
     expect(body).toContain("quoted a figure nothing gave it");
+  });
+
+  it("names a briefed figure as a flow problem, not a model invention", () => {
+    const body = formatCallIntegrityAlert([
+      {
+        kind: "briefed_amount",
+        detail: "d",
+        transcriptId: "5339954d",
+        business: "Amy Laidlaw Real Estate",
+        caller: "+16196938281",
+        startedAt: "2026-09-06T02:57:35Z"
+      }
+    ]);
+    expect(body).toContain("quoted a figure from the call brief, check the flow");
+  });
+});
+
+describe("amountsFromCallBrief", () => {
+  it("reads persona, context note, and voicemail script, and ignores the rest", () => {
+    const amounts = amountsFromCallBrief({
+      ai_takeover: {
+        persona: "the offers on your file are $375,000, $395,000",
+        context_note: "Estimated value: $425,000",
+        notify_e164: "+16025551212"
+      },
+      voicemail: { script: "We listed around $410,000. Give us a call back at 602-695-1142. Thanks." },
+      reach_targets: { pre_sms_body: "Property worth $999,000" }
+    });
+    expect(amounts.has(375_000)).toBe(true);
+    expect(amounts.has(395_000)).toBe(true);
+    expect(amounts.has(425_000)).toBe(true);
+    expect(amounts.has(410_000)).toBe(true);
+    // The teammate SMS is not fed to the model, so its figure is not briefed.
+    expect(amounts.has(999_000)).toBe(false);
+  });
+
+  it("returns empty for missing or shapeless context", () => {
+    expect(amountsFromCallBrief(null).size).toBe(0);
+    expect(amountsFromCallBrief(undefined).size).toBe(0);
+    expect(amountsFromCallBrief("persona $375,000").size).toBe(0);
+    expect(amountsFromCallBrief(5).size).toBe(0);
+    expect(amountsFromCallBrief({}).size).toBe(0);
+    expect(amountsFromCallBrief({ ai_takeover: null }).size).toBe(0);
+    expect(amountsFromCallBrief({ ai_takeover: "x" }).size).toBe(0);
+    expect(amountsFromCallBrief({ ai_takeover: { persona: 12 } }).size).toBe(0);
+    expect(amountsFromCallBrief({ voicemail: null }).size).toBe(0);
+    expect(amountsFromCallBrief({ voicemail: "x" }).size).toBe(0);
+    expect(amountsFromCallBrief({ voicemail: { script: 12 } }).size).toBe(0);
+  });
+
+  it("picks up a context_note without a persona", () => {
+    const amounts = amountsFromCallBrief({
+      ai_takeover: { context_note: "Estimated value: $425,000" }
+    });
+    expect([...amounts]).toEqual([425_000]);
   });
 });
 
@@ -790,7 +871,8 @@ describe("kindPhrase", () => {
     "talked_to_recording",
     "invented_contact_number",
     "gate_never_cleared",
-    "invented_amount"
+    "invented_amount",
+    "briefed_amount"
   ] as const;
 
   it("gives every kind its own sentence, and none inherits another's", () => {
@@ -802,5 +884,7 @@ describe("kindPhrase", () => {
   it("does not describe the two new kinds as talking to a recording", () => {
     expect(kindPhrase("gate_never_cleared")).not.toContain("recording");
     expect(kindPhrase("invented_amount")).not.toContain("recording");
+    expect(kindPhrase("briefed_amount")).not.toContain("recording");
+    expect(kindPhrase("briefed_amount")).toContain("call brief");
   });
 });

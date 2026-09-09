@@ -216,6 +216,11 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
           callerPhone: {
             type: Type.STRING,
             description: "Callback number in E.164 if different from the caller's ANI."
+          },
+          leadType: {
+            type: Type.STRING,
+            description:
+              "seller or buyer when the conversation makes it clear. Narrows an unowned-lead alert to teammates who cover that type. Omit when unsure: the server infers from stored facts, and a wrong guess costs noise rather than a missed lead."
           }
         },
         required: ["message"]
