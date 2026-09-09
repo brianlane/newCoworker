@@ -252,7 +252,7 @@ function mdrIdField(record: Record<string, unknown>, keys: readonly string[]): s
  * to a settlement. Skip rows with no LRN, and skip rows with neither
  * call_control_id nor call_leg_id rather than fuzzy-matching on cld+time.
  */
-export function voiceSettlementLrnUpdatesFromMdrs(
+function voiceSettlementLrnUpdatesFromMdrs(
   records: readonly Record<string, unknown>[]
 ): VoiceSettlementLrnUpdate[] {
   const byKey = new Map<string, VoiceSettlementLrnUpdate>();

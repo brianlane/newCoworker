@@ -12,7 +12,6 @@ import {
   senderLabel,
   runPlatformCostSync,
   stripeCustomerIdFromSource,
-  voiceSettlementLrnUpdatesFromMdrs,
   windowStartDayUtc,
   windowStartMonthUtc,
   type PlatformCostSyncDeps,
@@ -505,44 +504,6 @@ describe("billingCycleMonths", () => {
   });
 });
 
-describe("voiceSettlementLrnUpdatesFromMdrs", () => {
-  it("extracts Payson Zone 5 from a sip-trunking MDR with call_control_id", () => {
-    expect(
-      voiceSettlementLrnUpdatesFromMdrs([
-        {
-          terminating_lrn: "9283630020",
-          call_control_id: "cc-payson"
-        }
-      ])
-    ).toEqual([
-      {
-        callControlId: "cc-payson",
-        callLegId: null,
-        terminatingLrn: "9283630020",
-        zoneWeight: 14
-      }
-    ]);
-  });
-
-  it("skips rows with no LRN or no matchable id, and keeps last write per call", () => {
-    expect(
-      voiceSettlementLrnUpdatesFromMdrs([
-        { cld: "+19289512316", from: "+1602" },
-        { terminating_lrn: "9283630020" },
-        { call_leg_id: "leg-1", terminating_lrn: "5044010000" },
-        { call_leg_id: "leg-1", "Term Prefix": "1928363" }
-      ])
-    ).toEqual([
-      {
-        callControlId: null,
-        callLegId: "leg-1",
-        terminatingLrn: "1928363",
-        zoneWeight: 14
-      }
-    ]);
-  });
-});
-
 describe("buildHostingerSnapshot", () => {
   const kvm2Sub: BillingSubscription = {
     id: "sub-1",
@@ -893,6 +854,46 @@ describe("runPlatformCostSync", () => {
         terminatingLrn: "9283630020",
         zoneWeight: 14
       })
+    ]);
+  });
+
+  it("skips sip-trunking MDRs with no LRN or no matchable id, last write wins", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("record_type]=messaging")) {
+        return jsonResponse({ data: [] });
+      }
+      return jsonResponse({
+        data: [
+          { cld: "+19289512316", from: "+1602", billed_sec: 60 },
+          { terminating_lrn: "9283630020", billed_sec: 60 },
+          {
+            call_leg_id: "leg-1",
+            terminating_lrn: "5044010000",
+            billed_sec: 60
+          },
+          {
+            call_leg_id: "leg-1",
+            "Term Prefix": "1928363",
+            billed_sec: 60
+          }
+        ]
+      });
+    });
+    const applyVoiceSettlementLrns = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      applyVoiceSettlementLrns
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.ok).toBe(true);
+    expect(applyVoiceSettlementLrns).toHaveBeenCalledWith([
+      {
+        callControlId: null,
+        callLegId: "leg-1",
+        terminatingLrn: "1928363",
+        zoneWeight: 14
+      }
     ]);
   });
 
