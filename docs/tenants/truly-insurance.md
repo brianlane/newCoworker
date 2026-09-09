@@ -4,19 +4,24 @@ Commercial insurance brokerage. The account that taught us the most about
 answer quality: several model and prompt fixes in the platform were found by
 reading Truly's transcripts.
 
+**Wiped / out of the active roster.** The 30-day cancel-at-period-end grace
+window ended, the grace wipe ran, and there is nothing left to watch. Do not
+treat this tenant as live, and do not start a new grace-wipe watch.
+
 ## Identity
 
 | | |
 | --- | --- |
 | Business id | `690f85c0-ee16-4ee5-bde5-5829df2e5410` |
-| Tier / box | standard, **boxless** (`hostinger_vps_id` null). Former VPS `1815606` was detached 2026-07-29 and adopted by Scar Fairy |
-| DID | `+15198006401` (still `active` at Telnyx; reserved until the 2026-09-07T22:27:42Z grace wipe) |
+| Status | `businesses.status=wiped`. Out of the active roster. |
+| Tier / box | was standard, **boxless**. Hostinger pointers are null (`vps_id`, `subscription_id`, `post_install_script_id`). Former VPS `1815606` was detached 2026-07-29 and adopted by Scar Fairy |
+| DID | **Released.** `telnyx_voice_routes` empty; `business_telnyx_settings.telnyx_sms_from_e164` null. Former number `+15198006401`. No further grace hold. |
 | Owner | Muhammad Fahad |
 | Onboarded | 2026-07-08 |
 | Roster | Muhammad Fahad, Dania Shaikh, Awais Chauhan |
-| Billing | `status=canceled`, `canceled_at` **2026-08-08T22:27:42Z**, `cancel_reason=user_period_end`. `grace_ends_at` **2026-09-07T22:27:42Z**, `wiped_at` null. Not paused (`billing_paused` is the live column; do not set it). The DID stays rented through grace on purpose; `release_did` fires at wipe. |
+| Billing | `subscriptions.status=canceled`, `canceled_at` **2026-08-08**, `cancel_reason=user_period_end`. `grace_ends_at` **2026-09-07T22:27:42.88Z**. `wiped_at` **2026-09-08T00:15:05.524Z** (≈ 2026-09-07 5:15 PM America/Denver / MT). Not paused (`billing_paused` is the live column; do not set it). |
 
-## Lifecycle (lapsing, not paused)
+## Lifecycle (wiped, grace complete)
 
 Truly canceled at period end. On 2026-07-29 we backed up their vault/memory,
 nulled `businesses.hostinger_vps_id` and
@@ -29,20 +34,29 @@ Stripe pause-collection comp, not cancellation.
 Verification dates:
 
 - **2026-08-08**: Stripe period end stamped `canceled_at` and
-  `grace_ends_at=2026-09-07T22:27:42Z`. No VM side effects (pointers already
-  null). Re-checked 2026-09-02: Telnyx still holds `+15198006401` as `active`.
-- **2026-09-07 22:27 UTC**: grace wipe releases the DID and wipes data/backups.
+  `grace_ends_at=2026-09-07T22:27:42.88Z`. No VM side effects (pointers already
+  null). Re-checked 2026-09-02: Telnyx still held `+15198006401` as `active`
+  (that was during grace, before wipe).
+- **2026-09-07T22:27:42.88Z**: grace window ended. The DID was still reserved
+  through grace on purpose so a reactivation would have kept the same line;
+  `release_did` fires at wipe, not at cancel.
+- **2026-09-08T00:15:05.524Z**: grace wipe completed. `businesses.status=wiped`,
+  `subscriptions.wiped_at` stamped, DID released, `data_backups` row gone, all
+  four AiFlows still disabled (0 enabled / 4 total). The PO grace-wipe watch
+  routine is already deleted. No further watch.
 
-Backup artifact: Supabase Storage bucket `business-backups`, path
-`backups/690f85c0-ee16-4ee5-bde5-5829df2e5410/latest.tar.gz` (taken before the
-1815606 re-image).
+Backup: the durable `data_backups` row is gone after the wipe. The pre-wipe
+artifact (taken before the 1815606 re-image) lived in Supabase Storage bucket
+`business-backups`, path
+`backups/690f85c0-ee16-4ee5-bde5-5829df2e5410/latest.tar.gz`.
 
-## How leads arrive
+## How leads arrived
 
-**Privyr sends lead-alert emails to a tenant mailbox**, which is why the main
+**Privyr sent lead-alert emails to a tenant mailbox**, which is why the main
 flow's trigger is `tenant_email` rather than a webhook. Renewals, not new
-leads, are the recurring business motion here. Inbound on the DID goes
-unanswered while boxless; that is accepted until wipe.
+leads, were the recurring business motion here. Inbound on the DID went
+unanswered while boxless; that was accepted until wipe. The DID is now
+released, so there is no live line.
 
 ## Flows
 
@@ -53,8 +67,8 @@ unanswered while boxless; that is accepted until wipe.
 | Appointment reminder, 24 hours before (calendar, 3) | off | |
 | Post-appointment follow-up (calendar, 4) | off | |
 
-**All four flows are currently disabled.** That was deliberate before the
-cancel; do not re-enable them while the account is lapsing.
+**All four flows are disabled (0 enabled / 4 total).** That was deliberate
+before the cancel. Do not re-enable them: the account is wiped.
 
 ## Sharp edges
 
@@ -81,7 +95,7 @@ cancel; do not re-enable them while the account is lapsing.
 - **Never leave Truly's Hostinger billing pointers pointing at 1815606.** The
   Aug 8 `customer.subscription.deleted` webhook resolves the VM from those
   fields; left pointing, it would stop Scar Fairy's box. Pointers are null as
-  of 2026-07-29.
+  of 2026-07-29 and stayed null through wipe.
 
 ## One-shots
 
@@ -110,3 +124,4 @@ Whether it has run is in the applied_oneshots ledger.
 PRs #581, #593, #599, #613, #618, #638, #658, #705, #823. The full Privyr flow
 has recorded e2e coverage (PR #618), so a change here has a test to run.
 Box handoff and cancel-at-period-end lifecycle: PRs #999, #1008, #1011, #1016.
+Grace wipe completed 2026-09-08T00:15:05.524Z.
