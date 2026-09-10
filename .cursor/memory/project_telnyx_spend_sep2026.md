@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: bc-fb877b95-cf86-454c-96b1-689f8bfc5886
-  modified: 2026-09-02T03:20:00.000Z
+  modified: 2026-09-10T15:25:00.000Z
 ---
 
 Investigated 2026-09-01 after receipts for Auto Recharge $28.03 (Aug 26 04:38 UTC) and $28.63 (Sep 1 07:08 UTC), six days apart. Live Telnyx read the same day: balance $28.01 (just after the morning top-up), auto-recharge still enabled at threshold $2.00 / recharge $28.00 / PayPal. There is still no payments API (404). Card receipts can be a few cents above $28 (PayPal fee on the charge); the prepaid credit is $28.
@@ -17,11 +17,11 @@ Investigated 2026-09-01 after receipts for Auto Recharge $28.03 (Aug 26 04:38 UT
 - 1st of the month: DID MRC $1.00 + SMS feature MRC $0.10 per number. Six active DIDs as of Sep 1 2026 (KIN `+18257860392` added Aug 24), about $6.60. July's invoice line was $11.16 because that month also had prorations and activations.
 - 6th of the month: shared 10DLC campaign $10.00.
 
-The Costs page 7-day window (Aug 26 to Sep 2) showed $11.55 of usage. That is real, and it is not the recharge trigger by itself. Sep 1 07:08 is MRC posting on a bucket that the previous week of usage had already drawn down. Same shape as the Aug 1 reload (PR #1110): previous top-up Jul 21, balance briefly hit -$0.85 when MRC posted. Historical spacing: Jul 21, Aug 1 (MRC day), Aug 26, Sep 1 (MRC day). Mid-August receipts may exist; usage of $58.89 in August cannot fit in a single $28 bucket plus the Aug 1 top-up.
+The Costs page 7-day window (Aug 26 to Sep 2) showed $11.55 of usage. That is real, and it is not the recharge trigger by itself. Sep 1 07:08 is MRC posting on a bucket that the previous week of usage had already drawn down. Same shape as the Aug 1 reload (PR #1110): previous top-up Jul 21, balance briefly hit -$0.85 when MRC posted. Historical spacing: Jul 21, Aug 1 (MRC day), Aug 26, Sep 1 (MRC day), Sep 10 (usage emptied the $28 bucket). Mid-August receipts may exist; usage of $58.89 in August cannot fit in a single $28 bucket plus the Aug 1 top-up.
 
 The Costs "Telnyx This Month, by Type + Direction" widget is the calendar month. On Sep 1 it showed inbound 8 / outbound 23 because September had only just started, not because spend collapsed.
 
-Live after the Sep 1 charge: $28.01. At August's ~$1.90/day usage, the next 10DLC debit on Sep 6 plus a few busy days can empty the bucket again around Sep 10-12. Raise the recharge amount if weekly card charges are the annoyance; the $2 floor is working as configured.
+Live after the Sep 1 charge: $28.01. At August's ~$1.90/day usage, the next 10DLC debit on Sep 6 plus a few busy days was predicted to empty the bucket around Sep 10-12. That date was right: the next auto-recharge email landed **2026-09-10 15:15 UTC**. The mix was different than the 10DLC story (see the Sep 10 note below). Raise the recharge amount if 9-day card charges are the annoyance; the $2 floor is working as configured.
 
 ## How much we are spending (MDR usage, `telnyx_cost_daily`)
 
@@ -30,9 +30,9 @@ Live after the Sep 1 charge: $28.01. At August's ~$1.90/day usage, the next 10DL
 | June 2026 | $6.98 | 542 | $6.98 | (not yet) |
 | July 2026 | $30.78 | 2,027 | $20.30 (1,289 msgs) | $6.49 (339) |
 | August 2026 | $58.89 | 3,187 | $44.28 (2,306 msgs, 234 voice min) | $12.53 (724) |
-| Sep 1 (partial) | $0.47 | 31 | $0.39 | $0.05 |
+| Sep 1-10 (partial 10th) | $25.06 | 1,383 | $18.97 | $4.26 |
 
-July all-in invoice was $54.86 (usage $30.78 + MRC/activations $11.62 + 10DLC $10 + adjuncts $0.39 + tax $2.05). August's invoice is not out yet; a like-for-like estimate is usage $58.89 + ~$7 MRC (6 numbers, KIN prorated from Aug 24) + $10 10DLC + ~$1 voice adjuncts + tax, roughly $80. The 7-day dashboard window Aug 26-Sep 2 is $11.55 (Amy $8.96 / 78%).
+July all-in invoice was $54.86 (usage $30.78 + MRC/activations $11.62 + 10DLC $10 + adjuncts $0.39 + tax $2.05). August invoice #0005 is issued and `paid` (`period_start` 2026-08-01, `invoice_id` `dbc0fa68-706f-4ed0-a0e6-5c20d814b9f2`); line-item PDF parse was not done on Sep 10. Like-for-like estimate remains usage $58.89 + MRC + 10DLC $10 + adjuncts + tax, roughly $80. The 7-day dashboard window Aug 26-Sep 2 is $11.55 (Amy $8.96 / 78%).
 
 ## Delta, and what drove it
 
@@ -52,7 +52,15 @@ RCS agent `new_coworker_jut3q1af_agent` is still LIVE in the testing phase (`NON
 - Live: `GET /v2/balance` and `GET /v2/payment/auto_recharge_prefs`. No charges ledger.
 - Usage: `telnyx_cost_daily` (cost_micros already includes carrier_fee).
 - Amy send mix: `sms_outbound_log` AND `sms_inbound_jobs.assistant_reply_text` (see [[project_sms_send_logging_split]]).
-- Invoice PDFs via `GET /v2/invoices/{id}?action=link` once Telnyx issues August.
+- Invoice PDFs via `GET /v2/invoices/{id}?action=link`. August is #0005 (paid).
+
+## Sep 10 2026 auto-recharge (on par)
+
+Receipt email `[Telnyx LLC] Payment Success` at **2026-09-10 15:15 UTC** (9 days 8 hours after Sep 1 07:08). Prefs unchanged: enabled, threshold $2.00, recharge $28.00, PayPal. Live balance a few minutes later: **$29.95** (`pending` $0). That is leftover **$1.95** plus the $28 credit, which is the $2 floor firing, not a new bill.
+
+Sep 1-9 MDR usage was **$24.83** ($2.76/day), 45% above August's $1.90/day. Sep 1-10 including the partial 10th: **$25.06** (Amy $18.97 / 76%, KYP $4.26). Prepaid drain from the Sep 1 $28.01 bucket down to $1.95 is **$26.06**, within ~$1 of that MDR, so the shared **10DLC $10 did not debit this prepaid cycle** (it remains an invoice line, as in July). The Sep 10-12 date still hit because usage ran hotter, which coincidentally filled the hole of the 10DLC we had assumed would hit the wallet.
+
+Five DIDs on the account (Truly `+15198006401` released at the Sep 8 wipe). Next empty at $2.76/day from $29.95 is about **Sep 20-21**. Oct 1 MRC can force another soon after that.
 
 ## Membership revenue vs costs, and the 3,000-unit idea (Sep 1 2026)
 
