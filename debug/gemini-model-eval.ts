@@ -158,7 +158,7 @@ async function main(): Promise<number> {
 
   const listed = await listGeminiModels(apiKey);
   const published = await fetchPublishedPrices();
-  const newer = findNewerCandidates(listed, GEMINI_MODEL_PINS);
+  const newer = findNewerCandidates(listed, GEMINI_MODEL_PINS, textPrices());
   const probes: Record<string, CandidateProbe> = {};
   for (const id of newer) {
     console.error(`gemini-model-eval: probing ${id}`);

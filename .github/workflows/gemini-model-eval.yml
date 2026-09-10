@@ -2,6 +2,10 @@ name: Gemini model eval
 
 # Weekly check: list Google's Gemini models, diff our worker pins, probe
 # anything newer, and open an issue when a pin should adopt or wait.
+# Skip-only ids (older than the matching pin, wrong family, or already
+# known to cost more than webchat) do not open an issue. Live wait is
+# only for a live-family successor, never for a text Flash/lite id
+# (issue #1808).
 #
 # Why a workflow rather than only a scheduled agent: this runs on GitHub,
 # beside the pin registry it diffs, and depends on no one person still

@@ -65,8 +65,17 @@ or missing key.
 `--json` prints the report as JSON. `--out <path>` writes it to a file.
 
 The weekly GitHub Action `.github/workflows/gemini-model-eval.yml` runs
-this on Mondays and on `workflow_dispatch`. It opens one issue per
-candidate that scored adopt or wait.
+this on Mondays and on `workflow_dispatch`. It opens one issue when a
+candidate scored adopt or wait on a pin that actually accepts that
+family. Skip-only ids do not open an issue.
+
+Live wait is only for a live-family successor (a human still has to pick
+the audio id). A text Flash or flash-lite id never waits on the Live
+audio pin: that was issue #1808, where gemini-3.1-flash-lite,
+gemini-3.5-flash, and gemini-3.6-flash looked "newer than our pins"
+because webchat is still on 2.5-flash-lite, then scored wait against
+Live. Those ids are older than the mid/flagship pins and cost more than
+webchat, so they are not candidates.
 
 ## Cursor Automation prompt
 
