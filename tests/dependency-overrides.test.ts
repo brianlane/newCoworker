@@ -90,4 +90,19 @@ describe("package.json overrides vs direct dependencies", () => {
     const missing = Object.keys(pkg.overrides ?? {}).filter((name) => !docs.includes(name));
     expect(missing, `root overrides missing from docs/DEPENDENCY-OVERRIDES.md: ${missing.join(", ")}`).toEqual([]);
   });
+
+  it("resolves js-yaml to the GHSA-2883-xcg3-v3hh patched floor", () => {
+    const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8")) as {
+      packages?: Record<string, { version?: string }>;
+    };
+    const yaml = lock.packages?.["node_modules/js-yaml"];
+    expect(yaml, "js-yaml must be in the root lockfile").toBeTruthy();
+    const [maj, min, pat] = (yaml!.version ?? "0.0.0").split(".").map(Number);
+    const atLeast432 =
+      maj > 4 || (maj === 4 && (min > 3 || (min === 3 && pat >= 2)));
+    expect(
+      atLeast432,
+      `js-yaml@${yaml!.version} is below 4.3.2 (GHSA-2883-xcg3-v3hh / CVE-2026-84375)`
+    ).toBe(true);
+  });
 });
