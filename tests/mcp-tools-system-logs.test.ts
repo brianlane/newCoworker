@@ -83,6 +83,7 @@ describe("list_system_logs authz", () => {
       source: undefined,
       since: undefined,
       before: undefined,
+      beforeId: undefined,
       limit: 50,
       businessId: undefined
     });
@@ -162,6 +163,7 @@ describe("list_system_logs filters", () => {
       source: "email",
       since: "2026-09-01T00:00:00.000Z",
       before: "2026-09-10T00:00:00.000Z",
+      beforeId: undefined,
       limit: 25,
       businessId: undefined
     });
@@ -175,6 +177,9 @@ describe("list_system_logs filters", () => {
     await expect(runTool(listSystemLogsTool, { before: "nope" }, AUTH)).rejects.toThrow(
       /before must be an ISO timestamp/
     );
+    await expect(
+      runTool(listSystemLogsTool, { before: "2026-09-10T12:00:00.000Z|" }, AUTH)
+    ).rejects.toThrow(/before must be an ISO timestamp/);
     expect(listSystemLogsAll).not.toHaveBeenCalled();
   });
 
@@ -187,7 +192,33 @@ describe("list_system_logs filters", () => {
     const result = (await runTool(listSystemLogsTool, { limit: 2 }, AUTH)) as {
       next_before: string | null;
     };
-    expect(result.next_before).toBe("2026-09-10T11:00:00.000Z");
+    expect(result.next_before).toBe("2026-09-10T11:00:00.000Z|1");
+  });
+
+  it("passes a created_at|id cursor so same-timestamp ties stay reachable", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    await runTool(
+      listSystemLogsTool,
+      { before: "2026-09-10T12:00:00.000Z|11" },
+      AUTH
+    );
+    expect(listSystemLogsAll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        before: "2026-09-10T12:00:00.000Z",
+        beforeId: 11
+      })
+    );
+  });
+
+  it("refuses a cursor whose id is not a positive integer", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    await expect(
+      runTool(listSystemLogsTool, { before: "2026-09-10T12:00:00.000Z|nope" }, AUTH)
+    ).rejects.toThrow(/before cursor id must be a positive integer/);
+    await expect(
+      runTool(listSystemLogsTool, { before: "2026-09-10T12:00:00.000Z|0" }, AUTH)
+    ).rejects.toThrow(/before cursor id must be a positive integer/);
+    expect(listSystemLogsAll).not.toHaveBeenCalled();
   });
 
   it("nulls business_name and email when the join and payload are empty", async () => {

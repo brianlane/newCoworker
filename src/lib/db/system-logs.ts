@@ -216,6 +216,12 @@ export type ListSystemLogsOptions = {
   since?: string;
   /** Only rows strictly older than this ISO timestamp (keyset pagination). */
   before?: string;
+  /**
+   * Second half of the (created_at desc, id desc) keyset. When set with
+   * `before`, rows that share that timestamp and have a lower id stay
+   * reachable. Timestamp-only `before` (the admin date cutoff) is unchanged.
+   */
+  beforeId?: number;
   limit?: number;
 };
 
@@ -264,7 +270,16 @@ function applyListSystemLogFilters(
     if (filter) q = q.or(filter);
   }
   if (options.since) q = q.gte("created_at", options.since);
-  if (options.before) q = q.lt("created_at", options.before);
+  if (options.before && options.beforeId != null) {
+    // Same order as the list: created_at desc, then id desc. A timestamp-only
+    // lt would skip every remaining row that shares the page's last instant
+    // (bulk inserts share now()). Values are double-quoted because `.` and
+    // `:` are reserved inside an or() filter and a timestamp is full of both.
+    const ts = `"${options.before}"`;
+    q = q.or(`created_at.lt.${ts},and(created_at.eq.${ts},id.lt.${options.beforeId})`);
+  } else if (options.before) {
+    q = q.lt("created_at", options.before);
+  }
   return q;
 }
 

@@ -559,4 +559,4 @@ re-annotated without this file being updated in the same PR.
 
 - **Read Only: True** Reads operational system log rows. No writes, no sends, and nothing is marked read or resolved.
 - **Open World: False** Reads rows from our own `system_logs` table. No external service is contacted and nothing is sent.
-- **Destructive: False** Nothing is created, changed or removed. It reports matching log rows, newest first, with keyset pagination.
+- **Destructive: False** Nothing is created, changed or removed. It reports matching log rows, newest first, with a `created_at|id` keyset cursor so rows that share a timestamp are not skipped.

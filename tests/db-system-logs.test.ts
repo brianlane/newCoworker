@@ -332,6 +332,18 @@ describe("listSystemLogsAll", () => {
     expect(db.lt).toHaveBeenCalledWith("created_at", "2026-09-10T00:00:00Z");
   });
 
+  it("pages with created_at+id so same-timestamp rows after the cursor stay reachable", async () => {
+    const db = mockDb();
+    await listSystemLogsAll(
+      { before: "2026-09-10T12:00:00.000Z", beforeId: 11, limit: 2 },
+      db as never
+    );
+    expect(db.lt).not.toHaveBeenCalled();
+    expect(db.or).toHaveBeenCalledWith(
+      'created_at.lt."2026-09-10T12:00:00.000Z",and(created_at.eq."2026-09-10T12:00:00.000Z",id.lt.11)'
+    );
+  });
+
   it("caps the limit at 200 and defaults to 50", async () => {
     const db = mockDb();
     await listSystemLogsAll({ limit: 999 }, db as never);

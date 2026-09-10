@@ -73,6 +73,20 @@ function requireIsoTimestamp(raw: string | undefined, label: string): string | u
   return raw;
 }
 
+function parseBeforeArg(raw: string | undefined): { before?: string; beforeId?: number } {
+  if (!raw) return {};
+  const at = raw.lastIndexOf("|");
+  if (at > 0 && at < raw.length - 1) {
+    const createdAt = requireIsoTimestamp(raw.slice(0, at), "before");
+    const id = Number(raw.slice(at + 1));
+    if (!Number.isInteger(id) || id < 1) {
+      throw new McpToolError("before cursor id must be a positive integer.");
+    }
+    return { before: createdAt, beforeId: id };
+  }
+  return { before: requireIsoTimestamp(raw, "before") };
+}
+
 async function callerIsHqOwner(auth: McpAuthUser): Promise<boolean> {
   const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
   const role = await getBusinessRoleForEmail(HQ_BUSINESS_ID, auth.email);
@@ -106,7 +120,7 @@ export const listSystemLogsTool = defineMcpTool({
     next_before: z.string().nullable()
   }),
   description:
-    "List operational system logs (the same rows as the admin System Logs viewer and the System Errors: All Clients feed), newest first. Not bounce-only: pass event (substring on the event name, for example email_delivery_failed) or search (escaped LIKE across event and message, the same filter the admin log search uses) to narrow. Optional level or minLevel (debug/info/warn/error), source, since (ISO), before (keyset pagination), and limit. HQ owner of the platform HQ tenant may omit business_id for fleet-wide rows including other tenants and platform (null business_id) rows; any other seat only sees a business they can access. Returns email and domain when the payload or message carries them.",
+    "List operational system logs (the same rows as the admin System Logs viewer and the System Errors: All Clients feed), newest first. Not bounce-only: pass event (substring on the event name, for example email_delivery_failed) or search (escaped LIKE across event and message, the same filter the admin log search uses) to narrow. Optional level or minLevel (debug/info/warn/error), source, since (ISO), before (keyset cursor created_at|id, or a plain ISO timestamp), and limit. HQ owner of the platform HQ tenant may omit business_id for fleet-wide rows including other tenants and platform (null business_id) rows; any other seat only sees a business they can access. Returns email and domain when the payload or message carries them.",
   schema: {
     business_id: businessIdField,
     event: z
@@ -139,9 +153,13 @@ export const listSystemLogsTool = defineMcpTool({
       .optional()
       .describe("Exact source column (for example email, aiflow, cron)."),
     since: isoTimestampField("Only rows at or after this ISO timestamp."),
-    before: isoTimestampField(
-      "Only rows strictly older than this ISO timestamp. Pass the previous page's next_before to page."
-    ),
+    before: z
+      .string()
+      .max(80)
+      .optional()
+      .describe(
+        "Keyset cursor from the previous page's next_before (created_at|id), so rows that share a timestamp are not skipped. A plain ISO timestamp still means strictly older than that instant."
+      ),
     limit: z
       .number()
       .int()
@@ -152,7 +170,7 @@ export const listSystemLogsTool = defineMcpTool({
   },
   handler: async (args, auth) => {
     const since = requireIsoTimestamp(args.since, "since");
-    const before = requireIsoTimestamp(args.before, "before");
+    const { before, beforeId } = parseBeforeArg(args.before);
     const filters = {
       event: args.event,
       search: args.search,
@@ -161,6 +179,7 @@ export const listSystemLogsTool = defineMcpTool({
       source: args.source,
       since,
       before,
+      beforeId,
       limit: args.limit ?? LIST_DEFAULT
     };
 
@@ -192,7 +211,9 @@ export const listSystemLogsTool = defineMcpTool({
       scope,
       logs: rows.map(toLogRow),
       next_before:
-        rows.length === limit && rows.length > 0 ? rows[rows.length - 1].created_at : null
+        rows.length === limit && rows.length > 0
+          ? `${rows[rows.length - 1]!.created_at}|${rows[rows.length - 1]!.id}`
+          : null
     };
   }
 });
