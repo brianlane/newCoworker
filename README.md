@@ -1109,7 +1109,12 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   tool puts the booking link into that one draft, see "The first email asks;
   the follow-up books" under Prospecting; the upsert re-pitches a prospect
   still before the send and refuses one already sent, replied, skipped, or
-  unsubscribed; Send stays on the dashboard).
+  unsubscribed; Send stays on the dashboard), and `list_system_logs` (the
+  admin System Logs / System Errors: All Clients feed, with filters: `event`,
+  `search`, `level` / `minLevel`, `source`, `since`, `before`, `limit`; HQ
+  owner may omit `business_id` for fleet-wide rows; other seats stay
+  tenant-scoped. Not a bounce-only tool: pass `event=email_delivery_failed`
+  when that is the slice you want).
   [src/lib/mcp/registry.ts](src/lib/mcp/registry.ts) (`allMcpTools`) is the
   authoritative inventory.
 - Owner self-serve tools (added Aug 2026, the one-shot ask classes):

@@ -41,7 +41,10 @@ the summary.
   2026-09-06: mode `auto`, cap 12, 135 sent). Since Sep 2026 the first email
   ends on a reply ask and only the follow-up carries the booking link
   (README, "The first email asks; the follow-up books"). See the README's
-  Prospecting section.
+  Prospecting section. The HQ Claude/ChatGPT connector can read the
+  fleet System Logs / System Errors feed (not bounce-only) with
+  `list_system_logs`; pass `event=email_delivery_failed` to narrow to
+  bounces.
 - **Tenant zero for the Slack integration** (Aug 10 2026). Connected to the
   "New Coworker" workspace (team `T0BP5MBN1AR`, bot `U0BQ77AUR24`), alert
   channel `#all-new-coworker`. Live-smoked the same day: hello post, an

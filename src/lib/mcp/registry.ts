@@ -39,6 +39,7 @@ import { businessKnowledgeTools } from "@/lib/mcp/tools/business-knowledge";
 import { coworkerToolSettingsTools } from "@/lib/mcp/tools/coworker-tool-settings";
 import { customTableTools } from "@/lib/mcp/tools/custom-tables";
 import { outreachDraftTools } from "@/lib/mcp/tools/outreach-drafts";
+import { systemLogTools } from "@/lib/mcp/tools/system-logs";
 import {
   MCP_WIDGETS,
   MCP_WIDGET_MIME,
@@ -61,7 +62,8 @@ export const allMcpTools: McpToolDef[] = [
   ...businessKnowledgeTools,
   ...coworkerToolSettingsTools,
   ...customTableTools,
-  ...outreachDraftTools
+  ...outreachDraftTools,
+  ...systemLogTools
 ];
 
 /**
