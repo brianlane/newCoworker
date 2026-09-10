@@ -4,12 +4,14 @@
  * Hangup payloads usually omit Terminating LRN. When they do carry it
  * (or a term prefix), we store it and the allowance weight so finalize
  * can bill 14x for Payson Zone 5 instead of guessing from the dialed
- * NPA. `from` / `to` are never treated as LRN.
+ * NPA. Extreme zones stamp the RAW multiplier; SQL duration-gates it
+ * from that settlement's billable_seconds. `from` / `to` are never
+ * treated as LRN.
  */
 
 import {
   telnyxTerminatingLrnFromFields,
-  voiceAllowanceWeight
+  voiceAllowanceRawWeight
 } from "./voice_zone_rates.ts";
 
 export type VoiceSettlementLrnFields = {
@@ -33,7 +35,7 @@ export function settlementMeteringFromHangupPayload(
 ): VoiceSettlementLrnFields {
   const terminatingLrn = telnyxTerminatingLrnFromFields(payload);
   const zoneWeight = terminatingLrn
-    ? voiceAllowanceWeight(null, { lrn: terminatingLrn })
+    ? voiceAllowanceRawWeight(null, { lrn: terminatingLrn })
     : 1;
   const callLegId = payload ? nonEmptyString(payload["call_leg_id"]) : null;
   return { terminatingLrn, zoneWeight, callLegId };

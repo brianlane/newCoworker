@@ -38,7 +38,7 @@ import type {
 } from "@/lib/db/platform-costs";
 import {
   telnyxTerminatingLrnFromFields,
-  voiceAllowanceWeight
+  voiceAllowanceRawWeight
 } from "@/lib/plans/voice-zone-rates";
 
 export const PLATFORM_COST_SYNC_STATUS_KEY = "platform_cost_sync_status";
@@ -267,7 +267,7 @@ function voiceSettlementLrnUpdatesFromMdrs(
       callControlId,
       callLegId,
       terminatingLrn,
-      zoneWeight: voiceAllowanceWeight(null, { lrn: terminatingLrn })
+      zoneWeight: voiceAllowanceRawWeight(null, { lrn: terminatingLrn })
     });
   }
   return [...byKey.values()];

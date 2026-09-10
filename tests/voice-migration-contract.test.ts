@@ -642,3 +642,66 @@ describe("voice allowance zone-weight settlement (contract)", () => {
   });
 });
 
+const voiceAllowanceDurationMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260909235300_voice_allowance_duration_weight.sql"
+  ),
+  "utf8"
+);
+
+describe("voice allowance duration-gated weight (contract)", () => {
+  it("widens the zone_weight store ceiling and duration-gates cap 20", () => {
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /check \(zone_weight >= 1 and zone_weight <= 200\)/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /when coalesce\(p_billable_seconds, 0\) > 60/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /then least\(greatest\(coalesce\(p_raw, 1\), 1\), 200\)/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /else least\(greatest\(coalesce\(p_raw, 1\), 1\), 20\)/
+    );
+    expect(voiceAllowanceDurationMigration).not.toMatch(
+      /ceil\(elapsed \* /
+    );
+  });
+
+  it("keeps the two-arg finalize signature and never-answered heal", () => {
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /create or replace function voice_try_finalize_settlement\(\s*p_call_control_id text,\s*p_allow_one_sided boolean default false/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(/'never_answered', true/);
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /weight := voice_effective_allowance_weight\(s\.zone_weight, billable\)/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /weighted_billable := round\(billable::numeric \* weight\)::int/
+    );
+  });
+
+  it("lets MDR apply use settlement billable_seconds for the cap", () => {
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /weight := voice_effective_allowance_weight\(weight_raw, billable\)/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /if s\.finalized_at is null then/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(/zone_weight = weight_raw/);
+  });
+
+  it("grants the helper and replaced RPCs", () => {
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /grant execute on function voice_effective_allowance_weight\(numeric, integer\) to service_role/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /grant execute on function voice_try_finalize_settlement\(text, boolean\) to service_role/
+    );
+    expect(voiceAllowanceDurationMigration).toMatch(
+      /grant execute on function voice_apply_settlement_lrn\(text, text, numeric\) to service_role/
+    );
+  });
+});
+

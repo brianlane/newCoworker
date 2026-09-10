@@ -23,6 +23,24 @@ describe("settlementMeteringFromHangupPayload", () => {
     ).toEqual({ terminatingLrn: null, zoneWeight: 1, callLegId: null });
   });
 
+  it("stamps the raw Zone 6 / N11 multiplier so SQL can duration-gate", () => {
+    expect(
+      settlementMeteringFromHangupPayload({
+        terminating_lrn: "1308286",
+        call_leg_id: "leg-z6"
+      })
+    ).toEqual({
+      terminatingLrn: "1308286",
+      zoneWeight: 36.2,
+      callLegId: "leg-z6"
+    });
+    expect(
+      settlementMeteringFromHangupPayload({
+        terminating_lrn: "4163110000"
+      }).zoneWeight
+    ).toBe(150);
+  });
+
   it("weights Payson Zone 5 when Terminating LRN is actually on the payload", () => {
     expect(
       settlementMeteringFromHangupPayload({
@@ -105,7 +123,7 @@ describe("applyVoiceSettlementLrnUpdates", () => {
     });
   });
 
-  it("clamps injected weights to 1..20 before the RPC", async () => {
+  it("floors injected weights at 1 and passes raw 150, store-ceiling 200", async () => {
     const rpc = vi.fn(async () => ({ data: { ok: true }, error: null }));
     const client = { from: vi.fn(), rpc };
     await applyVoiceSettlementLrnUpdates(
@@ -121,6 +139,12 @@ describe("applyVoiceSettlementLrnUpdates", () => {
           callLegId: null,
           terminatingLrn: "1",
           zoneWeight: 0
+        },
+        {
+          callControlId: "cc-absurd",
+          callLegId: null,
+          terminatingLrn: "1",
+          zoneWeight: 9999
         }
       ],
       client
@@ -128,12 +152,17 @@ describe("applyVoiceSettlementLrnUpdates", () => {
     expect(rpc).toHaveBeenNthCalledWith(1, "voice_apply_settlement_lrn", {
       p_call_control_id: "cc-hi",
       p_terminating_lrn: "1",
-      p_zone_weight: 20
+      p_zone_weight: 150
     });
     expect(rpc).toHaveBeenNthCalledWith(2, "voice_apply_settlement_lrn", {
       p_call_control_id: "cc-lo",
       p_terminating_lrn: "1",
       p_zone_weight: 1
+    });
+    expect(rpc).toHaveBeenNthCalledWith(3, "voice_apply_settlement_lrn", {
+      p_call_control_id: "cc-absurd",
+      p_terminating_lrn: "1",
+      p_zone_weight: 200
     });
   });
 

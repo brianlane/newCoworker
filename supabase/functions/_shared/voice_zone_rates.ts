@@ -16,8 +16,10 @@
  * TENANT VOICE ALLOWANCE is weighted the same way SMS is: a Zone 5 LRN
  * minute burns 14x the included pool. {@link voiceAllowanceWeight} is that
  * multiplier. Missing LRN stays 1x. Extreme zones cap at
- * {@link VOICE_ALLOWANCE_WEIGHT_CAP} so Zone 6 / Canada N11 cannot wipe a
- * month from one misdial.
+ * {@link VOICE_ALLOWANCE_WEIGHT_CAP} only when the settlement is one
+ * Telnyx billed minute or less ({@link VOICE_ALLOWANCE_SHORT_LEG_SECONDS}),
+ * so Zone 6 / Canada N11 cannot wipe a month from one AMD or misdial.
+ * A longer call uses the full raw zone multiplier on the whole settlement.
  */
 
 import {
@@ -33,11 +35,25 @@ import {
 export const NANP_BASELINE_CENTS_PER_MINUTE = 0.5;
 
 /**
- * Ceiling on {@link voiceAllowanceWeight}. Zone 5 Payson is 14x and must
- * stay under it. Zone 6 is 36.2x and Canada N11 is 150x; those would
- * vaporize a Starter 25-minute pool from one misdial, so they clamp here.
+ * Ceiling on {@link voiceAllowanceWeight} for a short Telnyx minute
+ * (`billable_seconds` omitted, null, or <= {@link VOICE_ALLOWANCE_SHORT_LEG_SECONDS}).
+ * Zone 5 Payson is 14x and stays under it either way. Zone 6 is 36.2x and
+ * Canada N11 is 150x; those clamp here on AMD / voicemail / misdials, and
+ * use the raw multiplier once the call crosses one billed minute.
  */
 export const VOICE_ALLOWANCE_WEIGHT_CAP = 20;
+
+/**
+ * One Telnyx 60/60 billed minute. Weight cap applies at or below this;
+ * above it the raw zone multiplier covers the whole settlement.
+ */
+export const VOICE_ALLOWANCE_SHORT_LEG_SECONDS = 60;
+
+/**
+ * Store / RPC ceiling so a bogus 1e9 cannot land on `zone_weight`.
+ * NANP max today is Canada N11 at 150x. Wider than the short-leg cap.
+ */
+export const VOICE_ALLOWANCE_WEIGHT_STORE_MAX = 200;
 
 type VoiceZoneMatch = {
   iso: string;
@@ -74,6 +90,14 @@ type VoiceZoneLookupOptions = {
    * is used.
    */
   lrn?: string | null;
+  /**
+   * Already-ceiled Telnyx billable seconds for this settlement. Cap 20
+   * applies when omitted, null, or <= {@link VOICE_ALLOWANCE_SHORT_LEG_SECONDS}.
+   * Above that, {@link voiceAllowanceWeight} returns the raw zone rate.
+   * Hangup and MDR pass {@link voiceAllowanceRawWeight} instead and let
+   * SQL apply this same rule from the settlement's billable_seconds.
+   */
+  billableSeconds?: number | null;
 };
 
 /**
@@ -267,6 +291,52 @@ export function voiceZoneFor(
 }
 
 /**
+ * Clamp a raw zone multiplier to the duration rule.
+ *
+ * `billableSeconds` omitted / null / <= 60: short-leg cap 20.
+ * `billableSeconds` > 60: full raw weight, store-ceiling 200.
+ * Always floors at 1. SQL `voice_effective_allowance_weight` is the
+ * lockstep copy used at finalize / MDR apply.
+ */
+export function applyVoiceAllowanceDurationCap(
+  rawWeight: number,
+  billableSeconds?: number | null
+): number {
+  const raw = Math.min(
+    VOICE_ALLOWANCE_WEIGHT_STORE_MAX,
+    Math.max(1, rawWeight)
+  );
+  if (
+    typeof billableSeconds === "number" &&
+    billableSeconds > VOICE_ALLOWANCE_SHORT_LEG_SECONDS
+  ) {
+    return raw;
+  }
+  return Math.min(VOICE_ALLOWANCE_WEIGHT_CAP, raw);
+}
+
+/**
+ * Uncapped zone multiplier (zone ¢ / 0.5), store-ceiling only.
+ *
+ * Hangup and MDR pass this through to SQL so the duration cap can use
+ * that settlement's billable_seconds, not a guess from the payload.
+ */
+export function voiceAllowanceRawWeight(
+  destination: VoiceZoneDestination = null,
+  options?: VoiceZoneLookupOptions
+): number {
+  const lrn = options?.lrn ?? (isLookupObject(destination) ? destination.lrn : undefined);
+  if (!lrnLookupDigits(lrn)) return 1;
+  const zone = voiceZoneFor(null, { lrn });
+  if (!zone || zone.matchedOn !== "lrn") return 1;
+  if (!(zone.centsPerMinute > NANP_BASELINE_CENTS_PER_MINUTE)) return 1;
+  return applyVoiceAllowanceDurationCap(
+    zone.centsPerMinute / NANP_BASELINE_CENTS_PER_MINUTE,
+    Number.POSITIVE_INFINITY
+  );
+}
+
+/**
  * How many included-pool seconds one billed Telnyx minute should consume.
  *
  * Same shape as SMS destination multipliers: Zone 1 is 1x, Zone 5 at 7c
@@ -276,19 +346,18 @@ export function voiceZoneFor(
  *
  * The billed minute itself is already ceiled by settlement (33s → 60).
  * Multiply that 60 by this weight; do not ceil again.
+ *
+ * Duration: omit / null / <= 60 billable seconds keeps
+ * {@link VOICE_ALLOWANCE_WEIGHT_CAP}. Above 60, the raw zone rate
+ * applies to the whole settlement.
  */
 export function voiceAllowanceWeight(
   destination: VoiceZoneDestination = null,
   options?: VoiceZoneLookupOptions
 ): number {
-  const lrn = options?.lrn ?? (isLookupObject(destination) ? destination.lrn : undefined);
-  if (!lrnLookupDigits(lrn)) return 1;
-  const zone = voiceZoneFor(null, { lrn });
-  if (!zone || zone.matchedOn !== "lrn") return 1;
-  if (!(zone.centsPerMinute > NANP_BASELINE_CENTS_PER_MINUTE)) return 1;
-  return Math.min(
-    VOICE_ALLOWANCE_WEIGHT_CAP,
-    zone.centsPerMinute / NANP_BASELINE_CENTS_PER_MINUTE
+  return applyVoiceAllowanceDurationCap(
+    voiceAllowanceRawWeight(destination, options),
+    options?.billableSeconds
   );
 }
 
