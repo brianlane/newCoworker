@@ -554,3 +554,9 @@ re-annotated without this file being updated in the same PR.
 - **Read Only: False** It rewrites a waiting draft's subject and body paragraphs, or marks the draft skipped.
 - **Open World: False** A row update in our own database. No message is sent by this call; sending remains a separate owner action or the sweep's, exactly as before the edit.
 - **Destructive: True** Destructive because the submitted subject or paragraphs overwrite the stored text, and skip retires the draft so it will not be sent and the prospect will not be rediscovered.
+
+### `list_system_logs`
+
+- **Read Only: True** Reads operational system log rows. No writes, no sends, and nothing is marked read or resolved.
+- **Open World: False** Reads rows from our own `system_logs` table. No external service is contacted and nothing is sent.
+- **Destructive: False** Nothing is created, changed or removed. It reports matching log rows, newest first, with a `created_at|id` keyset cursor so rows that share a timestamp are not skipped.

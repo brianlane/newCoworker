@@ -176,7 +176,12 @@ export const MCP_BRIDGE_EXCLUDED: Readonly<Record<string, string>> = {
   upsert_outreach_prospect:
     "no Settings gate group covers cold outreach; a chat turn writing cold email into the send queue needs its own owner toggle first",
   update_outreach_draft:
-    "no Settings gate group covers cold outreach; edit and skip stay on the Marketing page for inline surfaces"
+    "no Settings gate group covers cold outreach; edit and skip stay on the Marketing page for inline surfaces",
+  // Fleet system logs: HQ owner can read other tenants. The companion is
+  // pinned to one business and has no Settings gate for this feed; connectors
+  // keep the tool.
+  list_system_logs:
+    "fleet-wide HQ ops feed; no Settings gate, and a tenant-pinned chat turn must not see other tenants' logs"
 };
 
 /**

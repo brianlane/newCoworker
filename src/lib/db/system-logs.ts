@@ -30,8 +30,8 @@ export type SystemLogRow = {
 const LOG_COLS = "id,business_id,source,level,event,message,payload,created_at";
 
 /**
- * Build the PostgREST `or=(...)` filter that searches `event` and `message` for
- * a literal substring.
+ * LIKE-escape then quote a substring so it can ride inside an
+ * `or=(...ilike."...")` filter. Null when the term is empty after trim.
  *
  * This used to be `search.replace(/[%_,()]/g, "")`, the five characters that
  * are dangerous here were simply DELETED. Every event name in this system is
@@ -59,8 +59,11 @@ const LOG_COLS = "id,business_id,source,level,event,message,payload,created_at";
  * with a single backslash the escape is silently eaten and the underscore goes
  * back to being a wildcard, with no error to notice. Hence the two passes below,
  * in this order.
+ *
+ * Shared by event-column and event+message searches so a future "simplify the
+ * backslashes" edit cannot make one of them quietly over-match.
  */
-export function buildLogSearchFilter(search: string): string | null {
+function quoteLogLikeTerm(search: string): string | null {
   const raw = search.trim();
   if (!raw) return null;
   // 1. LIKE-escape: make %, _ and backslash literal for the pattern engine.
@@ -68,8 +71,20 @@ export function buildLogSearchFilter(search: string): string | null {
   // 2. PostgREST-quote-escape: backslash and double quote both need doubling
   //    inside a quoted value. This is what turns `\_` into the `\\_` the parser
   //    must see.
-  const quoted = likeSafe.replace(/["\\]/g, (c) => `\\${c}`);
+  return likeSafe.replace(/["\\]/g, (c) => `\\${c}`);
+}
+
+export function buildLogSearchFilter(search: string): string | null {
+  const quoted = quoteLogLikeTerm(search);
+  if (!quoted) return null;
   return `event.ilike."%${quoted}%",message.ilike."%${quoted}%"`;
+}
+
+/** Substring match on `event` only, same escaping as {@link buildLogSearchFilter}. */
+function buildLogEventFilter(event: string): string | null {
+  const quoted = quoteLogLikeTerm(event);
+  if (!quoted) return null;
+  return `event.ilike."%${quoted}%"`;
 }
 
 export type SystemLogInput = {
@@ -189,10 +204,24 @@ export type ListSystemLogsOptions = {
   /** Include this level and everything more severe (e.g. "warn" → warn+error). */
   minLevel?: SystemLogLevel;
   source?: string;
+  /**
+   * Substring match on the event column (LIKE, with the same escaping as
+   * {@link buildLogSearchFilter}). `email_delivery_failed` therefore also
+   * matches `email_delivery_failed_unattributed`.
+   */
+  event?: string;
   /** Substring match against event + message. */
   search?: string;
+  /** Only rows at or after this ISO timestamp. */
+  since?: string;
   /** Only rows strictly older than this ISO timestamp (keyset pagination). */
   before?: string;
+  /**
+   * Second half of the (created_at desc, id desc) keyset. When set with
+   * `before`, rows that share that timestamp and have a lower id stay
+   * reachable. Timestamp-only `before` (the admin date cutoff) is unchanged.
+   */
+  beforeId?: number;
   limit?: number;
 };
 
@@ -202,6 +231,62 @@ function levelsAtOrAbove(min: SystemLogLevel): SystemLogLevel[] {
   return LEVEL_ORDER.slice(LEVEL_ORDER.indexOf(min));
 }
 
+type LogListQuery = {
+  eq: (column: string, value: string) => LogListQuery;
+  in: (column: string, values: string[]) => LogListQuery;
+  or: (filter: string) => LogListQuery;
+  lt: (column: string, value: string) => LogListQuery;
+  gte: (column: string, value: string) => LogListQuery;
+  order: (column: string, opts: { ascending: boolean }) => LogListQuery;
+  limit: (n: number) => Promise<{ data: unknown; error: { message: string } | null }>;
+};
+
+/**
+ * Filter chain shared by per-business and fleet list helpers.
+ *
+ * Typed as a small builder surface rather than the supabase query generic:
+ * wrapping that generic here hits TS2589 (instantiation depth) because
+ * `.eq` after `.select()` already carries a huge type.
+ */
+function applyListSystemLogFilters(
+  q: LogListQuery,
+  options: ListSystemLogsAllOptions
+): LogListQuery {
+  if (options.businessId) {
+    q = q.eq("business_id", options.businessId);
+  }
+  if (options.level) {
+    q = q.eq("level", options.level);
+  } else if (options.minLevel && options.minLevel !== "debug") {
+    q = q.in("level", levelsAtOrAbove(options.minLevel));
+  }
+  if (options.source) q = q.eq("source", options.source);
+  if (options.event) {
+    const eventFilter = buildLogEventFilter(options.event);
+    if (eventFilter) q = q.or(eventFilter);
+  }
+  if (options.search) {
+    const filter = buildLogSearchFilter(options.search);
+    if (filter) q = q.or(filter);
+  }
+  if (options.since) q = q.gte("created_at", options.since);
+  if (options.before && options.beforeId != null) {
+    // Same order as the list: created_at desc, then id desc. A timestamp-only
+    // lt would skip every remaining row that shares the page's last instant
+    // (bulk inserts share now()). Values are double-quoted because `.` and
+    // `:` are reserved inside an or() filter and a timestamp is full of both.
+    const ts = `"${options.before}"`;
+    q = q.or(`created_at.lt.${ts},and(created_at.eq.${ts},id.lt.${options.beforeId})`);
+  } else if (options.before) {
+    q = q.lt("created_at", options.before);
+  }
+  return q;
+}
+
+function clampLogLimit(limit: number | undefined, fallback: number, max: number): number {
+  return Math.max(1, Math.min(limit ?? fallback, max));
+}
+
 /** Newest-first logs for one business. */
 export async function listSystemLogs(
   businessId: string,
@@ -209,26 +294,88 @@ export async function listSystemLogs(
   client?: SupabaseClient
 ): Promise<SystemLogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  let q = db.from("system_logs").select(LOG_COLS).eq("business_id", businessId);
-  if (options.level) {
-    q = q.eq("level", options.level);
-  } else if (options.minLevel && options.minLevel !== "debug") {
-    q = q.in("level", levelsAtOrAbove(options.minLevel));
-  }
-  if (options.source) q = q.eq("source", options.source);
-  if (options.search) {
-    const filter = buildLogSearchFilter(options.search);
-    if (filter) {
-      q = q.or(filter);
-    }
-  }
-  if (options.before) q = q.lt("created_at", options.before);
+  const q = applyListSystemLogFilters(
+    db.from("system_logs").select(LOG_COLS) as unknown as LogListQuery,
+    { ...options, businessId }
+  );
   const { data, error } = await q
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .limit(Math.max(1, Math.min(options.limit ?? 100, 500)));
+    .limit(clampLogLimit(options.limit, 100, 500));
   if (error) throw new Error(`listSystemLogs: ${error.message}`);
   return (data ?? []) as SystemLogRow[];
+}
+
+export type ListSystemLogsAllOptions = ListSystemLogsOptions & {
+  /** Omit to read fleet-wide, including platform rows (`business_id` null). */
+  businessId?: string;
+};
+
+export const LIST_SYSTEM_LOGS_ALL_MAX = 200;
+
+/**
+ * Newest-first logs across the fleet (or one business when `businessId` is
+ * set), with the same filters as {@link listSystemLogs}. Joins `businesses(name)`
+ * so a fleet feed can label the tenant. Not error-only: callers who want the
+ * admin "System Errors" card pass `minLevel: "error"` (or `level: "error"`).
+ */
+export async function listSystemLogsAll(
+  options: ListSystemLogsAllOptions = {},
+  client?: SupabaseClient
+): Promise<SystemLogWithBusiness[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const filtered = applyListSystemLogFilters(
+    db.from("system_logs").select(`${LOG_COLS},businesses(name)`) as unknown as LogListQuery,
+    options
+  );
+  const { data, error } = await filtered
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(clampLogLimit(options.limit, 50, LIST_SYSTEM_LOGS_ALL_MAX));
+  if (error) throw new Error(`listSystemLogsAll: ${error.message}`);
+  return (data ?? []) as unknown as SystemLogWithBusiness[];
+}
+
+const EMAIL_IN_TEXT = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+
+function stringPayloadField(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function emailFromMaybeField(raw: string | null): string | null {
+  if (!raw) return null;
+  const angled = raw.match(/<([^<>\s]+@[^<>\s]+)>/);
+  if (angled) return angled[1].toLowerCase();
+  const trimmed = raw.trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return trimmed.toLowerCase();
+  const found = trimmed.match(EMAIL_IN_TEXT);
+  return found ? found[0].toLowerCase() : null;
+}
+
+/**
+ * Email and domain for a log row: payload first (`to` / `email` /
+ * `recipient` / `domain`), then the first address found in `message`.
+ * Used by the MCP list so bounce rows are greppable without dumping payload.
+ */
+export function emailAndDomainFromSystemLog(row: {
+  payload?: Record<string, unknown> | null;
+  message: string;
+}): { email: string | null; domain: string | null } {
+  const payload = row.payload ?? {};
+  const email =
+    emailFromMaybeField(stringPayloadField(payload, "to")) ??
+    emailFromMaybeField(stringPayloadField(payload, "email")) ??
+    emailFromMaybeField(stringPayloadField(payload, "recipient")) ??
+    (row.message.match(EMAIL_IN_TEXT)?.[0]?.toLowerCase() ?? null);
+  const domainField = stringPayloadField(payload, "domain");
+  const domain =
+    domainField && domainField.includes(".")
+      ? domainField.toLowerCase()
+      : email
+        ? email.slice(email.lastIndexOf("@") + 1)
+        : null;
+  return { email, domain };
 }
 
 export type SystemLogWithBusiness = SystemLogRow & {

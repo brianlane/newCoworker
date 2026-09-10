@@ -83,7 +83,10 @@ describe("allMcpTools", () => {
         // Gmail drafts.
         "list_outreach_queue",
         "upsert_outreach_prospect",
-        "update_outreach_draft"
+        "update_outreach_draft",
+        // Fleet / per-business system logs (admin System Errors feed with
+        // filters). Not bounce-only: event/search/level narrow the same rows.
+        "list_system_logs"
       ].sort()
     );
   });

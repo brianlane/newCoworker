@@ -3,8 +3,10 @@ import {
   insertSystemLog,
   recordSystemLog,
   listSystemLogs,
+  listSystemLogsAll,
   listSystemLogErrorsAll,
   buildLogSearchFilter,
+  emailAndDomainFromSystemLog,
   recordFailure
 } from "@/lib/db/system-logs";
 
@@ -185,6 +187,25 @@ describe("db/system-logs", () => {
     expect(db.lt).toHaveBeenCalledWith("created_at", "2026-06-09T00:00:00Z");
   });
 
+  it("listSystemLogs applies event substring and since", async () => {
+    const db = mockDb();
+    await listSystemLogs(
+      "biz-uuid-1",
+      { event: "email_delivery_failed", since: "2026-09-01T00:00:00Z" },
+      db as never
+    );
+    expect(db.or).toHaveBeenCalledWith(
+      String.raw`event.ilike."%email\\_delivery\\_failed%"`
+    );
+    expect(db.gte).toHaveBeenCalledWith("created_at", "2026-09-01T00:00:00Z");
+  });
+
+  it("listSystemLogs skips a whitespace-only event filter", async () => {
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { event: "   " }, db as never);
+    expect(db.or).not.toHaveBeenCalled();
+  });
+
   it("listSystemLogs finds a snake_case event name", async () => {
     // The bug this closes: `ai_flow_run_failed` used to become
     // `aiflowrunfailed` and return zero rows with no warning, which reads
@@ -199,6 +220,12 @@ describe("db/system-logs", () => {
   it("listSystemLogs returns [] when the query yields null data", async () => {
     const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: null, error: null }) });
     await expect(listSystemLogs("biz-uuid-1", {}, db as never)).resolves.toEqual([]);
+  });
+
+  it("listSystemLogs caps the limit at 500", async () => {
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { limit: 999 }, db as never);
+    expect(db.limit).toHaveBeenCalledWith(500);
   });
 
   it("listSystemLogs throws on query error", async () => {
@@ -256,6 +283,162 @@ describe("db/system-logs", () => {
     await expect(listSystemLogErrorsAll(10, db as never)).rejects.toThrow(
       "listSystemLogErrorsAll"
     );
+  });
+});
+
+describe("listSystemLogsAll", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("is fleet-wide when businessId is omitted, and joins business name", async () => {
+    const withBiz = { ...MOCK_ROW, businesses: { name: "Acme" } };
+    const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [withBiz], error: null }) });
+    const rows = await listSystemLogsAll({ limit: 10 }, db as never);
+    expect(rows[0].businesses?.name).toBe("Acme");
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("businesses(name)"));
+    expect(db.eq).not.toHaveBeenCalledWith("business_id", expect.anything());
+    expect(db.limit).toHaveBeenCalledWith(10);
+  });
+
+  it("scopes to one business when businessId is set", async () => {
+    const db = mockDb();
+    await listSystemLogsAll({ businessId: "biz-uuid-1", minLevel: "warn" }, db as never);
+    expect(db.eq).toHaveBeenCalledWith("business_id", "biz-uuid-1");
+    expect(db.in).toHaveBeenCalledWith("level", ["warn", "error"]);
+  });
+
+  it("applies exact level, event, search, since, and before together", async () => {
+    const db = mockDb();
+    await listSystemLogsAll(
+      {
+        businessId: "biz-uuid-1",
+        level: "error",
+        event: "email_delivery_failed",
+        search: "telnyx",
+        since: "2026-09-01T00:00:00Z",
+        before: "2026-09-10T00:00:00Z",
+        source: "email"
+      },
+      db as never
+    );
+    expect(db.eq).toHaveBeenCalledWith("level", "error");
+    expect(db.eq).toHaveBeenCalledWith("source", "email");
+    expect(db.or).toHaveBeenCalledWith(
+      String.raw`event.ilike."%email\\_delivery\\_failed%"`
+    );
+    expect(db.or).toHaveBeenCalledWith(
+      'event.ilike."%telnyx%",message.ilike."%telnyx%"'
+    );
+    expect(db.gte).toHaveBeenCalledWith("created_at", "2026-09-01T00:00:00Z");
+    expect(db.lt).toHaveBeenCalledWith("created_at", "2026-09-10T00:00:00Z");
+  });
+
+  it("pages with created_at+id so same-timestamp rows after the cursor stay reachable", async () => {
+    const db = mockDb();
+    await listSystemLogsAll(
+      { before: "2026-09-10T12:00:00.000Z", beforeId: 11, limit: 2 },
+      db as never
+    );
+    expect(db.lt).not.toHaveBeenCalled();
+    expect(db.or).toHaveBeenCalledWith(
+      'created_at.lt."2026-09-10T12:00:00.000Z",and(created_at.eq."2026-09-10T12:00:00.000Z",id.lt.11)'
+    );
+  });
+
+  it("caps the limit at 200 and defaults to 50", async () => {
+    const db = mockDb();
+    await listSystemLogsAll({ limit: 999 }, db as never);
+    expect(db.limit).toHaveBeenCalledWith(200);
+    const db2 = mockDb();
+    await listSystemLogsAll({}, db2 as never);
+    expect(db2.limit).toHaveBeenCalledWith(50);
+  });
+
+  it("falls back to the service client and returns [] on null data", async () => {
+    const db = mockDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(listSystemLogsAll()).resolves.toEqual([MOCK_ROW]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+
+    const empty = mockDb({ limit: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    await expect(listSystemLogsAll({}, empty as never)).resolves.toEqual([]);
+  });
+
+  it("throws on query error", async () => {
+    const db = mockDb({
+      limit: vi.fn().mockResolvedValue({ data: null, error: { message: "err" } })
+    });
+    await expect(listSystemLogsAll({}, db as never)).rejects.toThrow("listSystemLogsAll");
+  });
+});
+
+describe("emailAndDomainFromSystemLog", () => {
+  it("prefers payload.to, then email, then recipient", () => {
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { to: "Owner@Acme.com" },
+        message: "other@x.com in the message"
+      })
+    ).toEqual({ email: "owner@acme.com", domain: "acme.com" });
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { email: "Name <sales@Acme.com>" },
+        message: ""
+      })
+    ).toEqual({ email: "sales@acme.com", domain: "acme.com" });
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { recipient: "ops@shop.io" },
+        message: ""
+      })
+    ).toEqual({ email: "ops@shop.io", domain: "shop.io" });
+  });
+
+  it("pulls an address out of a sentence in payload or message", () => {
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { to: "bounced to lead@trades.com on send" },
+        message: ""
+      })
+    ).toEqual({ email: "lead@trades.com", domain: "trades.com" });
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: {},
+        message: "Email was not delivered (bounced) to foo@bar.com."
+      })
+    ).toEqual({ email: "foo@bar.com", domain: "bar.com" });
+  });
+
+  it("uses payload.domain when present, and skips a domain with no dot", () => {
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { to: "a@x.com", domain: "Custom.Host" },
+        message: ""
+      })
+    ).toEqual({ email: "a@x.com", domain: "custom.host" });
+    expect(
+      emailAndDomainFromSystemLog({
+        payload: { to: "a@x.com", domain: "nodot" },
+        message: ""
+      })
+    ).toEqual({ email: "a@x.com", domain: "x.com" });
+  });
+
+  it("returns nulls when nothing parseable is present", () => {
+    expect(emailAndDomainFromSystemLog({ payload: { to: 12 }, message: "no address" })).toEqual({
+      email: null,
+      domain: null
+    });
+    expect(emailAndDomainFromSystemLog({ payload: null, message: "" })).toEqual({
+      email: null,
+      domain: null
+    });
+    expect(emailAndDomainFromSystemLog({ payload: { to: "   " }, message: "   " })).toEqual({
+      email: null,
+      domain: null
+    });
+    expect(
+      emailAndDomainFromSystemLog({ payload: { to: "bounced, no address" }, message: "" })
+    ).toEqual({ email: null, domain: null });
   });
 });
 
@@ -333,6 +516,8 @@ describe("buildLogSearchFilter", () => {
     // The old sanitizer deleted all five and produced an empty term.
     expect(buildLogSearchFilter("%_,()")).not.toBeNull();
   });
+
+});
 
   /**
    * The fleet dashboard reads level='error' only, so `error` is a claim that a
@@ -432,4 +617,3 @@ describe("buildLogSearchFilter", () => {
       expect(db.gte).toHaveBeenCalledWith("created_at", expect.any(String));
     });
   });
-});
