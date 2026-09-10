@@ -18,7 +18,7 @@ import {
   voiceAllowanceRawWeight,
   voiceAllowanceWeight,
   voiceZoneFor
-} from "@/lib/plans/voice-zone-rates";
+} from "../supabase/functions/_shared/voice_zone_rates";
 import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
 import {
   VOICE_RATE_DECK_SHA256,
@@ -556,7 +556,8 @@ describe("edge lockstep copy", () => {
     expect(edge).toBe(src);
   });
 
-  it("agrees with src on LRN weight fixtures", async () => {
+  it("agrees with the Next.js re-export on the production surface", async () => {
+    const src = await import("@/lib/plans/voice-zone-rates");
     const edge = await import("../supabase/functions/_shared/voice_zone_rates");
     const cases: Array<{ dialed?: string; lrn?: string | null }> = [
       { dialed: "+19289512316" },
@@ -568,25 +569,23 @@ describe("edge lockstep copy", () => {
       { dialed: "+16028384497", lrn: "+447700900123" }
     ];
     for (const c of cases) {
-      expect(edge.voiceAllowanceWeight(c.dialed, { lrn: c.lrn })).toBe(
-        voiceAllowanceWeight(c.dialed, { lrn: c.lrn })
+      expect(src.voiceAllowanceRawWeight(c.dialed, { lrn: c.lrn })).toBe(
+        edge.voiceAllowanceRawWeight(c.dialed, { lrn: c.lrn })
       );
-      expect(edge.voiceZoneFor(c.dialed, { lrn: c.lrn })).toEqual(
-        voiceZoneFor(c.dialed, { lrn: c.lrn })
+      expect(src.voiceZoneFor(c.dialed, { lrn: c.lrn })).toEqual(
+        edge.voiceZoneFor(c.dialed, { lrn: c.lrn })
       );
-      expect(edge.telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })).toBe(
-        telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })
+      expect(src.telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })).toBe(
+        edge.telnyxTerminatingLrnFromFields({ terminating_lrn: c.lrn })
       );
     }
-    expect(edge.VOICE_ALLOWANCE_WEIGHT_CAP).toBe(VOICE_ALLOWANCE_WEIGHT_CAP);
-    expect(edge.VOICE_ALLOWANCE_SHORT_LEG_SECONDS).toBe(
-      VOICE_ALLOWANCE_SHORT_LEG_SECONDS
+    expect(src.VOICE_ALLOWANCE_WEIGHT_STORE_MAX).toBe(
+      edge.VOICE_ALLOWANCE_WEIGHT_STORE_MAX
     );
-    expect(edge.VOICE_ALLOWANCE_WEIGHT_STORE_MAX).toBe(
-      VOICE_ALLOWANCE_WEIGHT_STORE_MAX
-    );
-    expect(edge.NANP_BASELINE_CENTS_PER_MINUTE).toBe(NANP_BASELINE_CENTS_PER_MINUTE);
-    expect(edge.voiceAllowanceRawWeight(null, { lrn: "4163110000" })).toBe(150);
+    expect(src.NANP_BASELINE_CENTS_PER_MINUTE).toBe(edge.NANP_BASELINE_CENTS_PER_MINUTE);
+    expect(src.voiceAllowanceRawWeight(null, { lrn: "4163110000" })).toBe(150);
+    expect("voiceAllowanceWeight" in src).toBe(false);
+    expect("applyVoiceAllowanceDurationCap" in src).toBe(false);
     expect(edge.applyVoiceAllowanceDurationCap(36.2, 60)).toBe(20);
     expect(edge.applyVoiceAllowanceDurationCap(36.2, 120)).toBe(36.2);
   });
