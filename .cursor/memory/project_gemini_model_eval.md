@@ -28,3 +28,12 @@ Adopt rules (already paid for):
 Weekly Action: `.github/workflows/gemini-model-eval.yml`. Skill:
 `.cursor/skills/gemini-model-eval/SKILL.md`. Changing a code default is
 still not a fleet rollout: see [[project-gemini-model-env-pin-layers]].
+
+Issue #1808 (2026-09-07) was a false positive. `recommendForPin` used to
+wait on the Live audio pin before checking family, so every listed text
+Flash opened the tracking issue. `findNewerCandidates` also treated
+anything newer than webchat's 2.5-flash-lite as "newer than our pins"
+(3.1-flash-lite, 3.5-flash, 3.6-flash), even though those ids are older
+than the mid/flagship pins and cost more than webchat. Live wait is now
+only for a live-family successor. Text ids that every matching pin would
+skip on version or known-worse price are not candidates.

@@ -250,9 +250,33 @@ describe("recommendForPin", () => {
     pinPrice: { in: 1.5, out: 7.5 } as GeminiPrice
   };
 
-  it("waits on live pins before any other rule", () => {
+  it("waits on a live-family successor and skips a text Flash on the live pin", () => {
     const rec = recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash-native-audio", ctx);
     expect(rec.verdict).toBe("wait");
+    expect(
+      recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.1-flash-native-audio", ctx).verdict
+    ).toBe("wait");
+    expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash", ctx).verdict).toBe(
+      "skip"
+    );
+    expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.1-flash-lite", ctx).verdict).toBe(
+      "skip"
+    );
+    expect(
+      recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.0-flash-native-audio", ctx).verdict
+    ).toBe("skip");
+  });
+
+  it("does not wait on a same-version live id when the pin is already GA", () => {
+    const gaLive = fakePin({
+      id: "live-ga",
+      defaultModel: "gemini-3.1-flash-native-audio",
+      family: "live",
+      acceptsFamilies: ["live"],
+      autoAdopt: false
+    });
+    expect(recommendForPin(gaLive, "gemini-3.1-flash-live", ctx).verdict).toBe("skip");
+    expect(recommendForPin(gaLive, "gemini-3.2-flash-native-audio", ctx).verdict).toBe("wait");
   });
 
   it("skips unparseable, unstable, and family-mismatched candidates", () => {
@@ -368,7 +392,7 @@ describe("recommendForPin", () => {
 });
 
 describe("findNewerCandidates / evaluateListedModels", () => {
-  it("ignores unstable, pro, live, other, and not-newer ids", () => {
+  it("ignores unstable, pro, other, already-pinned, and not-newer ids", () => {
     expect(
       findNewerCandidates(
         [
@@ -376,7 +400,6 @@ describe("findNewerCandidates / evaluateListedModels", () => {
           "gemini-3.5-flash-lite",
           "gemini-3.8-flash-preview",
           "gemini-3.1-pro",
-          "gemini-3.8-flash-native-audio",
           "gemini-3-embedding",
           "gpt-4",
           "gemini-3.8-flash",
@@ -387,6 +410,21 @@ describe("findNewerCandidates / evaluateListedModels", () => {
     ).toEqual(["gemini-3.8-flash"]);
   });
 
+  it("keeps a GA live successor for human review, including same-version preview to GA", () => {
+    expect(
+      findNewerCandidates(
+        [
+          "gemini-3.8-flash-native-audio",
+          "gemini-3.1-flash-native-audio",
+          "gemini-3.5-live-translate-preview",
+          "gemini-2.5-flash-native-audio-preview-09-2025"
+        ],
+        GEMINI_MODEL_PINS,
+        PRICES
+      )
+    ).toEqual(["gemini-3.1-flash-native-audio", "gemini-3.8-flash-native-audio"]);
+  });
+
   it("surfaces a cheap-pin successor that is newer than webchat but older than the mid pins", () => {
     expect(
       findNewerCandidates(
@@ -394,6 +432,65 @@ describe("findNewerCandidates / evaluateListedModels", () => {
         GEMINI_MODEL_PINS
       )
     ).toEqual(["gemini-2.6-flash-lite"]);
+  });
+
+  it("still keeps a cheap successor when the meter table has no row for it", () => {
+    expect(findNewerCandidates(["gemini-2.6-flash-lite"], GEMINI_MODEL_PINS, PRICES)).toEqual([
+      "gemini-2.6-flash-lite"
+    ]);
+  });
+
+  it("does not prune an unpriced id on an inferred predecessor rate", () => {
+    // Newer than webchat only, absent from the meter table. A predecessor
+    // guess (flagship $1.50/$7.50) would look worse than webchat and drop
+    // it before the docs page can score wait/adopt.
+    expect(findNewerCandidates(["gemini-2.7-flash"], GEMINI_MODEL_PINS, PRICES)).toEqual([
+      "gemini-2.7-flash"
+    ]);
+  });
+
+  it("does not treat older-than-pin text ids as newer just because webchat is on 2.5", () => {
+    // Issue #1808: 3.1-flash-lite / 3.5-flash / 3.6-flash were listed as
+    // "newer than our pins" because webchat accepts mid+flagship and is
+    // still on 2.5-flash-lite. They are older or cost more than every pin
+    // that would actually take them.
+    expect(
+      findNewerCandidates(
+        [
+          "gemini-3.1-flash-lite",
+          "gemini-3.5-flash",
+          "gemini-3.6-flash",
+          "gemini-3.8-flash"
+        ],
+        GEMINI_MODEL_PINS,
+        PRICES
+      )
+    ).toEqual(["gemini-3.8-flash"]);
+  });
+
+  it("does not open a wait/adopt report for the issue #1808 skip-only ids", () => {
+    const report = evaluateListedModels({
+      listedIds: [
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.7-flash"
+      ],
+      pins: GEMINI_MODEL_PINS,
+      probes: {
+        "gemini-3.1-flash-lite": okProbe("gemini-3.1-flash-lite"),
+        "gemini-3.5-flash": okProbe("gemini-3.5-flash"),
+        "gemini-3.6-flash": okProbe("gemini-3.6-flash")
+      },
+      prices: PRICES,
+      generatedAt: "2026-09-07T19:00:39.968Z"
+    });
+    expect(report.newerThanPins).toEqual([]);
+    expect(report.evaluations).toEqual([]);
+    expect(reportHasAdopt(report)).toBe(false);
+    expect(reportHasWait(report)).toBe(false);
   });
 
   it("discovers a newer listed flagship without being told the id up front", () => {
@@ -422,7 +519,10 @@ describe("findNewerCandidates / evaluateListedModels", () => {
       report.evaluations[0].recommendations.find((r) => r.pinId === "webchat")?.verdict
     ).toBe("skip");
     expect(reportHasAdopt(report)).toBe(true);
-    expect(reportHasWait(report)).toBe(true);
+    expect(reportHasWait(report)).toBe(false);
+    expect(
+      report.evaluations[0].recommendations.find((r) => r.pinId === "gemini-live")?.verdict
+    ).toBe("skip");
   });
 
   it("synthesizes a failed probe and still reports when Google lists a newer id we did not probe", () => {
@@ -466,7 +566,23 @@ describe("formatEvalReport", () => {
     expect(text).toContain("## gemini-3.8-flash");
     expect(text).toContain("### adopt");
     expect(text).toContain("### skip");
+    expect(text).not.toContain("### wait");
+  });
+
+  it("renders wait for a live-family successor, not for a text Flash", () => {
+    const report = evaluateListedModels({
+      listedIds: ["gemini-3.8-flash-native-audio"],
+      pins: GEMINI_MODEL_PINS,
+      probes: { "gemini-3.8-flash-native-audio": okProbe("gemini-3.8-flash-native-audio") },
+      prices: PRICES,
+      generatedAt: "t"
+    });
+    const text = formatEvalReport(report);
+    expect(text).toContain("## gemini-3.8-flash-native-audio");
     expect(text).toContain("### wait");
+    expect(text).not.toContain("### adopt");
+    expect(reportHasWait(report)).toBe(true);
+    expect(reportHasAdopt(report)).toBe(false);
   });
 
   it("prints price unknown when the candidate has no rate", () => {
@@ -507,7 +623,7 @@ describe("debug/gemini-model-eval.ts", () => {
     expect(src).not.toMatch(/argValue\(\s*["']--model["']\s*\)/);
     expect(src).not.toMatch(/process\.argv\.includes\(["']--model["']\)/);
     expect(src).toContain("listGeminiModels");
-    expect(src).toContain("findNewerCandidates(listed, GEMINI_MODEL_PINS)");
+    expect(src).toContain("findNewerCandidates(listed, GEMINI_MODEL_PINS, textPrices())");
   });
 });
 

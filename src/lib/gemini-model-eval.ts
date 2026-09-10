@@ -83,8 +83,30 @@ function pinParsedOrThrow(pin: GeminiModelPin): GeminiParsedModel {
 }
 
 /**
+ * Newer numeric version, or a GA live id replacing a preview pin at the
+ * same version (preview live pin to a GA native-audio id).
+ * Callers already dropped unstable candidates and family mismatches.
+ */
+function candidateOutranksPin(
+  candidate: GeminiParsedModel,
+  current: GeminiParsedModel,
+  pin: GeminiModelPin
+): boolean {
+  if (compareGeminiVersions(candidate.version, current.version) > 0) return true;
+  if (pin.autoAdopt) return false;
+  if (!current.unstable) return false;
+  return compareGeminiVersions(candidate.version, current.version) === 0;
+}
+
+/**
  * One pin vs one candidate. First matching rule wins. Reasons always
  * name the historical lesson so the next session does not re-derive it.
+ *
+ * Family / version / unstable run before the live-pin wait. Issue #1808
+ * opened because every listed text Flash scored wait against the Live
+ * audio pin, including gemini-3.1-flash-lite which is not a live model
+ * and is older than the SMS pin. Live wait is only for a live-family
+ * successor a human still has to pick.
  */
 export function recommendForPin(
   pin: GeminiModelPin,
@@ -99,16 +121,6 @@ export function recommendForPin(
     current: pin.defaultModel,
     candidate: candidate?.id ?? stripAndParseId(candidateId)
   };
-
-  if (!pin.autoAdopt) {
-    return {
-      ...base,
-      verdict: "wait",
-      reasons: [
-        "Live audio pins are never auto-adopted. Preview ids rotate, and a live-translate id can satisfy 'must contain live' while being the wrong product."
-      ]
-    };
-  }
 
   if (!candidate) {
     return {
@@ -146,12 +158,22 @@ export function recommendForPin(
     };
   }
 
-  if (compareGeminiVersions(candidate.version, current.version) <= 0) {
+  if (!candidateOutranksPin(candidate, current, pin)) {
     return {
       ...base,
       verdict: "skip",
       reasons: [
         `Not newer than the current pin (${formatVersion(current.version)} vs candidate ${formatVersion(candidate.version)}).`
+      ]
+    };
+  }
+
+  if (!pin.autoAdopt) {
+    return {
+      ...base,
+      verdict: "wait",
+      reasons: [
+        "Live audio pins are never auto-adopted. Preview ids rotate, and a live-translate id can satisfy 'must contain live' while being the wrong product."
       ]
     };
   }
@@ -254,16 +276,27 @@ export function recommendAllPins(
 }
 
 /**
- * Listed Google ids that are a newer GA model than at least one auto-adopt
- * pin that accepts the family. Ids we already pin are skipped so the
- * weekly report is not "3.5-lite and 3.7 exist" every Monday. A cheap
- * successor (2.6-flash-lite vs webchat on 2.5-flash-lite) still appears
- * because webchat accepts mid, even though parseGeminiModelId never
- * returns the usage family `cheap`.
+ * Listed Google ids that could adopt or wait on at least one pin.
+ *
+ * Ids we already pin are skipped so the weekly report is not "3.5-lite
+ * and 3.7 exist" every Monday. A cheap successor (2.6-flash-lite vs
+ * webchat on 2.5-flash-lite) still appears because webchat accepts mid,
+ * even though parseGeminiModelId never returns the usage family `cheap`.
+ *
+ * Live-family GA ids are included so a human can review them (the live
+ * pin never auto-adopts). Preview / translate live ids stay out via
+ * `unstable`. A GA live id at the same numeric version as a preview pin
+ * still counts (the preview -> GA swap).
+ *
+ * A text id that is only "newer" than webchat, and already known to cost
+ * more than that pin (and not newer than any same-family auto-adopt pin),
+ * is not a candidate. Issue #1808 listed gemini-3.1-flash-lite,
+ * gemini-3.5-flash, and gemini-3.6-flash that way, then waited on Live.
  */
 export function findNewerCandidates(
   listedIds: string[],
-  pins: readonly GeminiModelPin[]
+  pins: readonly GeminiModelPin[],
+  prices: Record<string, GeminiPrice> = {}
 ): string[] {
   const alreadyPinned = new Set(
     pins.map((p) => p.defaultModel.trim().replace(/^models\//i, "").toLowerCase())
@@ -273,19 +306,22 @@ export function findNewerCandidates(
   for (const raw of listedIds) {
     const parsed = parseGeminiModelId(raw);
     if (!parsed || parsed.unstable) continue;
-    if (parsed.family === "other" || parsed.family === "pro" || parsed.family === "live") {
+    if (parsed.family === "other" || parsed.family === "pro") {
       continue;
     }
     if (alreadyPinned.has(parsed.id)) continue;
     let newer = false;
     for (const pin of pins) {
-      if (!pin.autoAdopt) continue;
       if (!pin.acceptsFamilies.includes(parsed.family)) continue;
       const current = pinParsedOrThrow(pin);
-      if (compareGeminiVersions(parsed.version, current.version) > 0) {
+      if (!candidateOutranksPin(parsed, current, pin)) continue;
+      if (!pin.autoAdopt) {
         newer = true;
         break;
       }
+      if (knownWorseThanPin(parsed.id, pin, prices)) continue;
+      newer = true;
+      break;
     }
     if (newer && !seen.has(parsed.id)) {
       seen.add(parsed.id);
@@ -294,6 +330,23 @@ export function findNewerCandidates(
   }
   out.sort();
   return out;
+}
+
+/**
+ * True when both the candidate and the pin have an exact meter-table
+ * price and the candidate is more expensive. Do not infer a predecessor
+ * rate here: a newly listed id with no table row must still reach
+ * resolveCandidatePrice (docs page or wait), not be dropped because we
+ * guessed last generation's list price.
+ */
+function knownWorseThanPin(
+  candidateId: string,
+  pin: GeminiModelPin,
+  prices: Record<string, GeminiPrice>
+): boolean {
+  const candidatePrice = tablePriceFor(candidateId, prices);
+  const pinPrice = tablePriceFor(pin.defaultModel, prices);
+  return Boolean(candidatePrice && pinPrice && priceWorse(candidatePrice, pinPrice));
 }
 
 export type PriceSource = "table" | "docs" | "predecessor" | "cli" | "unknown";
@@ -501,7 +554,7 @@ export function evaluateListedModels(args: {
   published?: Record<string, GeminiPrice>;
   generatedAt: string;
 }): EvalReport {
-  const newerThanPins = findNewerCandidates(args.listedIds, args.pins);
+  const newerThanPins = findNewerCandidates(args.listedIds, args.pins, args.prices);
   const listedSet = new Set(
     args.listedIds.map((id) => id.trim().replace(/^models\//i, "").toLowerCase())
   );
