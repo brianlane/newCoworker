@@ -83,6 +83,22 @@ function pinParsedOrThrow(pin: GeminiModelPin): GeminiParsedModel {
 }
 
 /**
+ * Newer numeric version, or a GA live id replacing a preview pin at the
+ * same version (preview live pin to a GA native-audio id).
+ * Callers already dropped unstable candidates and family mismatches.
+ */
+function candidateOutranksPin(
+  candidate: GeminiParsedModel,
+  current: GeminiParsedModel,
+  pin: GeminiModelPin
+): boolean {
+  if (compareGeminiVersions(candidate.version, current.version) > 0) return true;
+  if (pin.autoAdopt) return false;
+  if (!current.unstable) return false;
+  return compareGeminiVersions(candidate.version, current.version) === 0;
+}
+
+/**
  * One pin vs one candidate. First matching rule wins. Reasons always
  * name the historical lesson so the next session does not re-derive it.
  *
@@ -142,7 +158,7 @@ export function recommendForPin(
     };
   }
 
-  if (compareGeminiVersions(candidate.version, current.version) <= 0) {
+  if (!candidateOutranksPin(candidate, current, pin)) {
     return {
       ...base,
       verdict: "skip",
@@ -269,7 +285,8 @@ export function recommendAllPins(
  *
  * Live-family GA ids are included so a human can review them (the live
  * pin never auto-adopts). Preview / translate live ids stay out via
- * `unstable`.
+ * `unstable`. A GA live id at the same numeric version as a preview pin
+ * still counts (the preview -> GA swap).
  *
  * A text id that is only "newer" than webchat, and already known to cost
  * more than that pin (and not newer than any same-family auto-adopt pin),
@@ -297,12 +314,12 @@ export function findNewerCandidates(
     for (const pin of pins) {
       if (!pin.acceptsFamilies.includes(parsed.family)) continue;
       const current = pinParsedOrThrow(pin);
-      if (compareGeminiVersions(parsed.version, current.version) <= 0) continue;
+      if (!candidateOutranksPin(parsed, current, pin)) continue;
       if (!pin.autoAdopt) {
         newer = true;
         break;
       }
-      if (knownWorseThanPin(parsed.id, pin, pins, prices)) continue;
+      if (knownWorseThanPin(parsed.id, pin, prices)) continue;
       newer = true;
       break;
     }
@@ -316,18 +333,18 @@ export function findNewerCandidates(
 }
 
 /**
- * True when both the candidate and the pin have a known list price and
- * the candidate is more expensive. Unknown price stays a candidate so
- * recommendForPin can wait instead of silently dropping it.
+ * True when both the candidate and the pin have an exact meter-table
+ * price and the candidate is more expensive. Do not infer a predecessor
+ * rate here: a newly listed id with no table row must still reach
+ * resolveCandidatePrice (docs page or wait), not be dropped because we
+ * guessed last generation's list price.
  */
 function knownWorseThanPin(
   candidateId: string,
   pin: GeminiModelPin,
-  pins: readonly GeminiModelPin[],
   prices: Record<string, GeminiPrice>
 ): boolean {
-  const candidatePrice =
-    tablePriceFor(candidateId, prices) ?? predecessorPriceFor(candidateId, pins, prices);
+  const candidatePrice = tablePriceFor(candidateId, prices);
   const pinPrice = tablePriceFor(pin.defaultModel, prices);
   return Boolean(candidatePrice && pinPrice && priceWorse(candidatePrice, pinPrice));
 }

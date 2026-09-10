@@ -253,12 +253,30 @@ describe("recommendForPin", () => {
   it("waits on a live-family successor and skips a text Flash on the live pin", () => {
     const rec = recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash-native-audio", ctx);
     expect(rec.verdict).toBe("wait");
+    expect(
+      recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.1-flash-native-audio", ctx).verdict
+    ).toBe("wait");
     expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash", ctx).verdict).toBe(
       "skip"
     );
     expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.1-flash-lite", ctx).verdict).toBe(
       "skip"
     );
+    expect(
+      recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.0-flash-native-audio", ctx).verdict
+    ).toBe("skip");
+  });
+
+  it("does not wait on a same-version live id when the pin is already GA", () => {
+    const gaLive = fakePin({
+      id: "live-ga",
+      defaultModel: "gemini-3.1-flash-native-audio",
+      family: "live",
+      acceptsFamilies: ["live"],
+      autoAdopt: false
+    });
+    expect(recommendForPin(gaLive, "gemini-3.1-flash-live", ctx).verdict).toBe("skip");
+    expect(recommendForPin(gaLive, "gemini-3.2-flash-native-audio", ctx).verdict).toBe("wait");
   });
 
   it("skips unparseable, unstable, and family-mismatched candidates", () => {
@@ -392,18 +410,19 @@ describe("findNewerCandidates / evaluateListedModels", () => {
     ).toEqual(["gemini-3.8-flash"]);
   });
 
-  it("keeps a GA live successor for human review and drops preview live ids", () => {
+  it("keeps a GA live successor for human review, including same-version preview to GA", () => {
     expect(
       findNewerCandidates(
         [
           "gemini-3.8-flash-native-audio",
+          "gemini-3.1-flash-native-audio",
           "gemini-3.5-live-translate-preview",
           "gemini-2.5-flash-native-audio-preview-09-2025"
         ],
         GEMINI_MODEL_PINS,
         PRICES
       )
-    ).toEqual(["gemini-3.8-flash-native-audio"]);
+    ).toEqual(["gemini-3.1-flash-native-audio", "gemini-3.8-flash-native-audio"]);
   });
 
   it("surfaces a cheap-pin successor that is newer than webchat but older than the mid pins", () => {
@@ -418,6 +437,15 @@ describe("findNewerCandidates / evaluateListedModels", () => {
   it("still keeps a cheap successor when the meter table has no row for it", () => {
     expect(findNewerCandidates(["gemini-2.6-flash-lite"], GEMINI_MODEL_PINS, PRICES)).toEqual([
       "gemini-2.6-flash-lite"
+    ]);
+  });
+
+  it("does not prune an unpriced id on an inferred predecessor rate", () => {
+    // Newer than webchat only, absent from the meter table. A predecessor
+    // guess (flagship $1.50/$7.50) would look worse than webchat and drop
+    // it before the docs page can score wait/adopt.
+    expect(findNewerCandidates(["gemini-2.7-flash"], GEMINI_MODEL_PINS, PRICES)).toEqual([
+      "gemini-2.7-flash"
     ]);
   });
 
