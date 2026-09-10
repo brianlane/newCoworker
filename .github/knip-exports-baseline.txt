@@ -1166,6 +1166,7 @@ src/lib/mcp/tools/search.ts :: fetchTool
 src/lib/mcp/tools/search.ts :: searchTool
 src/lib/mcp/tools/sms.ts :: sendSmsTool
 src/lib/mcp/tools/sms.ts :: sendWhatsAppTool
+src/lib/mcp/tools/system-logs.ts :: listSystemLogsTool
 src/lib/mcp/widgets/index.ts :: MCP_TOOL_WIDGET
 src/lib/mcp/widgets/index.ts :: MCP_WIDGET_CSP
 src/lib/mcp/widgets/index.ts :: MCP_WIDGET_URI

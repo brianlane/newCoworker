@@ -63,7 +63,7 @@ const LOG_COLS = "id,business_id,source,level,event,message,payload,created_at";
  * Shared by event-column and event+message searches so a future "simplify the
  * backslashes" edit cannot make one of them quietly over-match.
  */
-export function quoteLogLikeTerm(search: string): string | null {
+function quoteLogLikeTerm(search: string): string | null {
   const raw = search.trim();
   if (!raw) return null;
   // 1. LIKE-escape: make %, _ and backslash literal for the pattern engine.
@@ -81,7 +81,7 @@ export function buildLogSearchFilter(search: string): string | null {
 }
 
 /** Substring match on `event` only, same escaping as {@link buildLogSearchFilter}. */
-export function buildLogEventFilter(event: string): string | null {
+function buildLogEventFilter(event: string): string | null {
   const quoted = quoteLogLikeTerm(event);
   if (!quoted) return null;
   return `event.ilike."%${quoted}%"`;
@@ -244,8 +244,11 @@ type LogListQuery = {
  */
 function applyListSystemLogFilters(
   q: LogListQuery,
-  options: ListSystemLogsOptions
+  options: ListSystemLogsAllOptions
 ): LogListQuery {
+  if (options.businessId) {
+    q = q.eq("business_id", options.businessId);
+  }
   if (options.level) {
     q = q.eq("level", options.level);
   } else if (options.minLevel && options.minLevel !== "debug") {
@@ -277,8 +280,8 @@ export async function listSystemLogs(
 ): Promise<SystemLogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const q = applyListSystemLogFilters(
-    db.from("system_logs").select(LOG_COLS).eq("business_id", businessId) as unknown as LogListQuery,
-    options
+    db.from("system_logs").select(LOG_COLS) as unknown as LogListQuery,
+    { ...options, businessId }
   );
   const { data, error } = await q
     .order("created_at", { ascending: false })
@@ -306,11 +309,10 @@ export async function listSystemLogsAll(
   client?: SupabaseClient
 ): Promise<SystemLogWithBusiness[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  let q = db.from("system_logs").select(`${LOG_COLS},businesses(name)`);
-  if (options.businessId) {
-    q = q.eq("business_id", options.businessId);
-  }
-  const filtered = applyListSystemLogFilters(q as unknown as LogListQuery, options);
+  const filtered = applyListSystemLogFilters(
+    db.from("system_logs").select(`${LOG_COLS},businesses(name)`) as unknown as LogListQuery,
+    options
+  );
   const { data, error } = await filtered
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })

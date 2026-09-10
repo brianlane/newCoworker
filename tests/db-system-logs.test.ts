@@ -6,8 +6,6 @@ import {
   listSystemLogsAll,
   listSystemLogErrorsAll,
   buildLogSearchFilter,
-  buildLogEventFilter,
-  quoteLogLikeTerm,
   emailAndDomainFromSystemLog,
   recordFailure
 } from "@/lib/db/system-logs";
@@ -456,8 +454,6 @@ describe("buildLogSearchFilter", () => {
   it("returns null for an empty or whitespace-only search", () => {
     expect(buildLogSearchFilter("")).toBeNull();
     expect(buildLogSearchFilter("   ")).toBeNull();
-    expect(quoteLogLikeTerm("")).toBeNull();
-    expect(buildLogEventFilter("   ")).toBeNull();
   });
 
   it("leaves an ordinary term alone apart from quoting", () => {
@@ -509,11 +505,6 @@ describe("buildLogSearchFilter", () => {
     expect(buildLogSearchFilter("%_,()")).not.toBeNull();
   });
 
-  it("buildLogEventFilter is the event-only arm of the same quoting", () => {
-    expect(buildLogEventFilter("email_delivery_failed")).toBe(
-      String.raw`event.ilike."%email\\_delivery\\_failed%"`
-    );
-  });
 });
 
   /**
