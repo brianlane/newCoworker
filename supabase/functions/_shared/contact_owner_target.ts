@@ -48,7 +48,12 @@ import {
   localClock,
   type LocalClock
 } from "./ai_flows/engine.ts";
-import { decideInferredLeadType, leadTypeFromRunContext, leadTypeFromText } from "./lead_type.ts";
+import {
+  decideInferredLeadType,
+  leadTypeFromRunContext,
+  leadTypeFromText,
+  type LeadType
+} from "./lead_type.ts";
 
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -477,7 +482,7 @@ export async function inferLeadType(
   businessId: string,
   phones: readonly string[],
   pinnedMd: string | null | undefined
-): Promise<string | null> {
+): Promise<LeadType | null> {
   const found = [leadTypeFromText(pinnedMd)];
   try {
     const { data, error } = await supabase

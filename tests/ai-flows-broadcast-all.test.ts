@@ -27,6 +27,19 @@ const definition = (step: Record<string, unknown>) => ({
   steps: [step]
 });
 
+const definitionWithLeadType = (step: Record<string, unknown>) => ({
+  version: 1,
+  trigger: { channel: "tag_changed", tag: "Needs Human", change: "added", conditions: [] },
+  steps: [
+    {
+      id: "x",
+      type: "extract_text",
+      fields: [{ name: "lead_type", description: "buyer, seller, or both" }]
+    },
+    step
+  ]
+});
+
 describe("route_to_team broadcastAll, schema", () => {
   it("accepts broadcastAll: true on its own", () => {
     const def = parseAiFlowDefinition(definition(routeStep({ broadcastAll: true })));
@@ -92,9 +105,11 @@ describe("route_to_team teamTagTemplate", () => {
 
   it("accepts a tag alongside broadcastAll", () => {
     const def = parseAiFlowDefinition(
-      definition(routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" }))
+      definitionWithLeadType(
+        routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" })
+      )
     );
-    const step = def.steps[0] as { teamTagTemplate?: string };
+    const step = def.steps[1] as { teamTagTemplate?: string };
     expect(step.teamTagTemplate).toBe("{{vars.lead_type}}");
   });
 
@@ -102,6 +117,12 @@ describe("route_to_team teamTagTemplate", () => {
     const def = parseAiFlowDefinition(definition(routeStep({ teamTagTemplate: "seller" })));
     const step = def.steps[0] as { teamTagTemplate?: string };
     expect(step.teamTagTemplate).toBe("seller");
+  });
+
+  it("scope-checks the tag template like any other route copy", () => {
+    expect(() =>
+      parseAiFlowDefinition(definition(routeStep({ teamTagTemplate: "{{vars.lead_typo}}" })))
+    ).toThrow(AiFlowValidationError);
   });
 
   it("REJECTS a tag alongside a pin or named list", () => {
