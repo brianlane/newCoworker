@@ -263,4 +263,17 @@ describe("filterRosterByLeadTag", () => {
     const out = filterRosterByLeadTag([row({ tags: null })], "seller");
     expect(out).toHaveLength(1);
   });
+
+  it("drops an available row with no tags when the full roster confirms the tag", () => {
+    // anyoneHasTag is true because Dave covers sellers; the available slice
+    // is Jason plus an untagged row, so the filter must walk `tags ?? []`
+    // and return empty rather than fail-safe.
+    const untagged = row({ id: "m9", name: "No Tags", tags: null });
+    const out = filterRosterByLeadTag([untagged, jasonBuyer], "seller", [
+      dave,
+      untagged,
+      jasonBuyer
+    ]);
+    expect(out).toEqual([]);
+  });
 });
