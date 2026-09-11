@@ -562,6 +562,19 @@ These are mistakes already made on this account. Do not remake them.
   there is no lead, and broadcasting on a lookup miss is noise rather than
   rescue.
 
+- **Unclaimed spoke-check offers used to ignore roster tags (fixed Sep 2026).**
+  PR #1813 stopped Jason receiving unowned `[Coworker] Follow up… Reply 1 to
+  claim` *alerts*. The seller *offers* that still reached him were
+  `agent_offer` texts from Clever - Spoke Check & Weekly Call Follow-Up: its
+  unclaimed `route_to_team` is unpinned, so it is a rotation, and rotation did
+  not read tags. The engine now infers buyer/seller/both the same way alerts
+  do (this run's vars, then the contact note and recent runs) and skips
+  teammates whose tags do not cover that type. `routing_enabled` is still
+  the in-line switch: Jason stays in buyer round-robin. A missing type or a
+  tag matching nobody still offers the whole eligible roster. No flow
+  one-shot and no roster edit: the spoke-check step stays unpinned and has
+  no `teamTagTemplate`.
+
 - **Under-$500K gating and the cadence tag are load-bearing TOGETHER.** The
   same lead exposed the other half. The under-500K gate correctly skipped the
   claim offer (`price_gate: "ai"` at $425K), which hands the lead to the Needs
@@ -1330,6 +1343,10 @@ unpinned `route_to_team` offers to every ACTIVE roster member in
 least-recently-offered order, not a tag-filtered subset, and he has been
 offered 18 leads that way since Jul 1, including Sandy Baldwin's where he was
 rung first. Only the explicit transfer list excluded him.
+
+**Correction, Sep 2026:** rotation now honors roster tags. Jason stays in
+buyer round-robin (`routing_enabled` still on) and is skipped on seller
+rotations. The Aug 24 one-shot did not need a follow-up flow edit for that.
 
 Not changed, both decided Aug 24: `route_buyer` keeps its `price_gate` guard
 (Amy chose to keep the under-$500K AI-owned rule for buyers rather than adopt

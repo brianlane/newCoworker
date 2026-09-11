@@ -5,6 +5,7 @@ import {
   decideOwnerRedirect,
   filterUnownedBroadcastTeam,
   resolveContactOwnerTarget,
+  resolveRotationLeadTag,
   type OwnerContactRow,
   type OwnerMemberRow
 } from "../supabase/functions/_shared/contact_owner_target";
@@ -911,5 +912,87 @@ describe("CONTACT_SCOPED_TASK_TYPES", () => {
     for (const kind of ["sms_team_notify", "voice_team_notify"]) {
       expect(CONTACT_SCOPED_TASK_TYPES.has(kind), kind).toBe(false);
     }
+  });
+});
+
+describe("resolveRotationLeadTag", () => {
+  it("an explicit tag wins and issues NO query", async () => {
+    const { db, tables } = makeDb([]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, "  Seller  ", {
+      vars: { lead_type: "buyer" }
+    });
+    expect(out).toBe("Seller");
+    expect(tables).toEqual([]);
+  });
+
+  it("without a phone, returns this run's type and skips the contact lookup", async () => {
+    const { db, tables } = makeDb([]);
+    const out = await resolveRotationLeadTag(db, BIZ, null, undefined, {
+      vars: { lead_type: "seller" }
+    });
+    expect(out).toBe("seller");
+    expect(tables).toEqual([]);
+  });
+
+  it("infers seller from the contact note when this run has no type", async () => {
+    const { db, tables } = makeDb([
+      { data: { pinned_md: "auto_first_contact; lead_type: seller", customer_e164: LEAD } },
+      { data: [] }
+    ]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, { vars: {} });
+    expect(out).toBe("seller");
+    expect(tables).toEqual(["contacts", "ai_flow_runs"]);
+  });
+
+  it("infers seller from a recent run when the contact note is empty", async () => {
+    const { db } = makeDb([
+      { data: { pinned_md: null, customer_e164: LEAD } },
+      { data: [{ context: { vars: { lead_phone: LEAD, lead_type: "seller" } } }] }
+    ]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, { vars: {} });
+    expect(out).toBe("seller");
+  });
+
+  it("fail-safes to no filter when this run and stored facts disagree", async () => {
+    const { db } = makeDb([
+      { data: { pinned_md: "lead_type: buyer", customer_e164: LEAD } },
+      { data: [] }
+    ]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, {
+      vars: { lead_type: "seller" }
+    });
+    expect(out).toBeNull();
+  });
+
+  it("degrades to this run's type when the contact lookup errors", async () => {
+    const { db, tables } = makeDb([{ error: { message: "contacts down" } }]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, {
+      vars: { lead_type: "buyer" }
+    });
+    expect(out).toBe("buyer");
+    expect(tables).toEqual(["contacts"]);
+  });
+
+  it("degrades to this run's type when the contact lookup throws", async () => {
+    const { db } = makeDb([{ throws: true }]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, {
+      vars: { lead_type: "seller" }
+    });
+    expect(out).toBe("seller");
+  });
+
+  it("with no contact row and no stored type, returns no filter", async () => {
+    const { db } = makeDb([{ data: null }, { data: null }]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, undefined, { vars: {} });
+    expect(out).toBeNull();
+  });
+
+  it("treats a whitespace provided tag as omitted", async () => {
+    const { db } = makeDb([
+      { data: { pinned_md: "lead_type: buyer", customer_e164: LEAD } },
+      { data: [] }
+    ]);
+    const out = await resolveRotationLeadTag(db, BIZ, LEAD, "   ", { vars: {} });
+    expect(out).toBe("buyer");
   });
 });

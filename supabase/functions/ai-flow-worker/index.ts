@@ -45,9 +45,11 @@ import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
 import {
   broadcastTagMatched,
+  filterRosterByLeadTag,
   selectBroadcastTeam,
   type BroadcastMemberRow
 } from "../_shared/team_broadcast.ts";
+import { resolveRotationLeadTag } from "../_shared/contact_owner_target.ts";
 import {
   sendOwnerNotifyFallback,
   type OwnerNotifyFallbackReason,
@@ -9738,7 +9740,8 @@ async function routeToTeamStep(
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
     const preferredThisPass = preferredAgent;
     const agent =
-      preferredAgent ?? (await pickNextAgent(supabase, run, scope, tried, pinnedAgentName));
+      preferredAgent ??
+      (await pickNextAgent(supabase, run, scope, tried, pinnedAgentName, action.teamTag));
     preferredAgent = null;
     // No agent at all (none / parse fail / unconfigured / pinned agent missing):
     // roster is exhausted.
@@ -11237,9 +11240,11 @@ async function assignContactOwnerOnClaim(
  * Pick the next team member to offer the lead to, excluding `tried`.
  *
  * Selection is deterministic when the business has an `ai_flow_team_members`
- * roster: active members in `last_offered_at` order (nulls first), and the
- * picked row's cursor is stamped so rotation stays fair ACROSS runs, the
- * "least recently received a lead" rule computed instead of remembered.
+ * roster: active members in `last_offered_at` order (nulls first), narrowed
+ * by lead-type tag on an unpinned rotation (explicit `teamTag` or inferred
+ * from the lead), and the picked row's cursor is stamped so rotation stays
+ * fair ACROSS runs, the "least recently received a lead" rule computed
+ * instead of remembered.
  *
  * Only when no roster rows exist does the legacy path ask the tenant's
  * Rowboat agent (memory-grounded LLM pick). Returns null when the roster is
@@ -11252,7 +11257,8 @@ async function pickNextAgent(
   run: RunRow,
   scope: Scope,
   tried: string[],
-  pinnedAgentName?: string
+  pinnedAgentName?: string,
+  teamTag?: string
 ): Promise<RoutedAgent | null> {
   // --- Deterministic roster path -------------------------------------------
   const { data: rosterRows, error: rosterErr } = await supabase
@@ -11352,8 +11358,25 @@ async function pickNextAgent(
       });
       return null;
     }
+    // Lead-type narrowing for UNPINNED rotation only. A pin already named
+    // the person; preferContactOwner is handled at the call site and never
+    // reaches this filter. Unlike broadcastAll, this does not read
+    // team_broadcast_enabled (rotation's opt-out is routing_enabled, already
+    // applied above). Fail-safe: a missing type or a tag matching nobody
+    // leaves the available roster in place rather than offering nobody.
+    let rotationRoster = availableRoster;
+    if (!pinnedAgentName) {
+      const tag = await resolveRotationLeadTag(
+        supabase,
+        run.business_id,
+        leadContactPhone(scope),
+        teamTag,
+        { vars: scope.vars, trigger: scope.trigger }
+      );
+      rotationRoster = filterRosterByLeadTag(availableRoster, tag);
+    }
     const pick = pickRosterAgent(
-      availableRoster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
+      rotationRoster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
       tried,
       leadPhoneE164(scope)
     );
@@ -11364,7 +11387,7 @@ async function pickNextAgent(
     const { error: stampErr } = await supabase
       .from("ai_flow_team_members")
       .update({ last_offered_at: new Date().toISOString() })
-      .eq("id", availableRoster[pick.index].id);
+      .eq("id", rotationRoster[pick.index].id);
     if (stampErr) {
       console.error(`route_to_team: rotation stamp failed: ${stampErr.message}`);
     }

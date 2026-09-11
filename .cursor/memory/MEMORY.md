@@ -69,7 +69,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [VPS sidecars had no no-undef check](project_vps_sidecars_had_no_undef_check.md) - node --check and 100% tests miss a deleted function
 - [Residency read rules](project_residency_read_rules.md) - 8 of 15 moved tables purge: route via residency/read; 72h floor
 - [Ask AI companion architecture](project_ask_ai_companion_architecture.md) - MCP-to-Gemini bridge seams, partitions, gate groups
-- [route_to_team rotation vs broadcast](project_route_to_team_rotation_vs_broadcast.md) - rotation = whole roster; lead_auto_assign hardens it
+- [route_to_team rotation vs broadcast](project_route_to_team_rotation_vs_broadcast.md) - rotation honors roster tags; lead_auto_assign hardens it
 - [Monthly signup + contract-upgrade sweep](project_monthly_signup_contract_upgrade_strategy.md) - term waits out refund window; the real price IS in the CATALOG, term inferred from the billing-date jump since #1669; compare dates as instants
 - [Provisioning input is rebuilt field by field](project_orchestrate_input_rebuilt_field_by_field.md) - 5 wrappers drop new fields; grep all
 - [Unowned leads alert the tagged team](project_unowned_lead_alerts_tagged_team.md) - team rung before owner; root tsc misses supabase/functions

@@ -472,7 +472,7 @@ function leadPhoneOrFilter(phones: readonly string[]): string {
  * Never throws. A down query degrades to whatever the note already said
  * (or null), never to a guessed type.
  */
-async function inferLeadType(
+export async function inferLeadType(
   supabase: AnyClient,
   businessId: string,
   phones: readonly string[],
@@ -498,6 +498,52 @@ async function inferLeadType(
     console.error("contact_owner_target: lead type lookup threw", e);
   }
   return decideInferredLeadType(found);
+}
+
+/**
+ * Lead-type tag for an unpinned rotation. An explicit `teamTag` from the
+ * step (literal or rendered template) wins. Otherwise infer from this
+ * run's vars, then the contact note and recent runs for that phone, same
+ * lookup the unowned-alert resolver uses. Never throws.
+ */
+export async function resolveRotationLeadTag(
+  supabase: AnyClient,
+  businessId: string,
+  phone: string | null,
+  providedTag: string | null | undefined,
+  runContext?: unknown
+): Promise<string | null> {
+  const provided = (providedTag ?? "").trim();
+  if (provided) return provided;
+  const fromRun = leadTypeFromRunContext(runContext);
+  if (!phone) return fromRun;
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("pinned_md, customer_e164, alias_e164s")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("contact_owner_target: rotation lead type contact lookup", error);
+      return fromRun;
+    }
+    const row = data as {
+      pinned_md?: string | null;
+      customer_e164?: string | null;
+      alias_e164s?: unknown;
+    } | null;
+    const inferred = await inferLeadType(
+      supabase,
+      businessId,
+      contactIdentityPhones(phone, row),
+      row?.pinned_md
+    );
+    return decideInferredLeadType([fromRun, inferred]);
+  } catch (e) {
+    console.error("contact_owner_target: rotation lead type lookup threw", e);
+    return fromRun;
+  }
 }
 
 /**
