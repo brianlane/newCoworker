@@ -5,6 +5,7 @@ import {
   createFlow,
   enqueueRun,
   getRun,
+  getSteps,
   seedBusiness,
   seedContact,
   serviceDb,
@@ -197,5 +198,36 @@ describe("rotation honors roster tags (real worker)", () => {
     const run = await getRun(db, runId);
     expect(run.status).toBe("awaiting_agent");
     expect(routingOf(run).offered).toBe(JASON);
+  });
+
+  it("a seller whose tagged teammates are out falls to the owner, not Jason", async () => {
+    const biz = await seedBusiness(db, "IT rotation tag sellers out");
+    await seedRoster(biz);
+    const { data: daveRow, error: daveErr } = await db
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", biz)
+      .eq("phone_e164", DAVE)
+      .single();
+    if (daveErr) throw new Error(daveErr.message);
+    const { error: offErr } = await db.from("employee_time_off").insert({
+      business_id: biz,
+      member_id: (daveRow as { id: string }).id,
+      starts_on: "2000-01-01",
+      ends_on: "2099-12-31"
+    });
+    if (offErr) throw new Error(offErr.message);
+    await seedContact(db, biz, LEAD, { pinned_md: "lead_type: seller" });
+    const flowId = await createFlow(db, biz, rotationFlow());
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER, { lead_phone: LEAD });
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    expect(routingOf(run).offered).toBeUndefined();
+    expect(run.context.vars?.claimed_agent).toBe("none");
+    const route = (await getSteps(db, runId)).find((s) => s.step_type === "route_to_team");
+    expect((route?.result as { routed?: string }).routed).toBe("owner_fallback");
   });
 });

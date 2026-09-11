@@ -101,21 +101,28 @@ function normalizeTag(tag?: string | null): string {
  * `team_broadcast_enabled`: rotation's opt-out is `routing_enabled`, already
  * applied by `filterRosterByAvailability`.
  *
- * Same fail-safe as the alert selector: an empty or unknown tag leaves the
- * roster untouched, and a tag matching nobody returns everyone rather than
- * offering the lead to no one. Preserves input order (least-recently-offered
- * first).
+ * Fail-safe: an empty or unknown tag leaves `rows` untouched, and a tag
+ * matching nobody on `matchAgainst` (default: `rows`) returns `rows`
+ * rather than offering the lead to no one. Pass the FULL active roster as
+ * `matchAgainst` and the available slice as `rows` so a tag that matches
+ * people who are merely out today returns empty (owner fallback) instead of
+ * widening onto whoever is left. Preserves input order.
  */
 export function filterRosterByLeadTag<T extends { tags?: string[] | null }>(
   rows: readonly T[],
-  tag?: string | null
+  tag?: string | null,
+  matchAgainst?: readonly T[]
 ): T[] {
   const want = normalizeTag(tag);
   if (!want) return [...rows];
-  const tagged = rows.filter((row) =>
+  const source = matchAgainst ?? rows;
+  const anyoneHasTag = source.some((row) =>
     (row.tags ?? []).some((t) => normalizeTag(String(t)) === want)
   );
-  return tagged.length > 0 ? tagged : [...rows];
+  if (!anyoneHasTag) return [...rows];
+  return rows.filter((row) =>
+    (row.tags ?? []).some((t) => normalizeTag(String(t)) === want)
+  );
 }
 
 /**

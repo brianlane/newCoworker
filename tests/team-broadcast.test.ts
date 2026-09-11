@@ -204,6 +204,28 @@ describe("filterRosterByLeadTag", () => {
     expect(out.map((m) => m.id)).toEqual(["m3", "m1"]);
   });
 
+  it("does not fail-safe onto whoever is left when the tag matches people who are merely absent", () => {
+    // Same order unowned alerts use: tag against the FULL roster, then keep
+    // the available slice. Dave covers sellers and is out; Jason is in and
+    // buyer-only. Empty remainder, not Jason.
+    const out = filterRosterByLeadTag([jasonBuyer], "seller", [jasonBuyer, dave]);
+    expect(out).toEqual([]);
+  });
+
+  it("keeps the available tagged slice when matchAgainst confirms the tag", () => {
+    const out = filterRosterByLeadTag([jasonBuyer, dave], "seller", [
+      jasonBuyer,
+      dave,
+      gabbyRow
+    ]);
+    expect(out.map((m) => m.id)).toEqual(["m1"]);
+  });
+
+  it("a typo still fail-safes when the full roster also has no such tag", () => {
+    const out = filterRosterByLeadTag([jasonBuyer], "sellr", [jasonBuyer, dave]);
+    expect(out.map((m) => m.id)).toEqual(["m3"]);
+  });
+
   it("treats an empty or whitespace tag as no filter", () => {
     for (const tag of [undefined, null, "", "   "]) {
       expect(filterRosterByLeadTag([jasonBuyer, dave], tag)).toHaveLength(2);

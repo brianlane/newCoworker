@@ -33,7 +33,9 @@ teammates whose tags cover the type. Rotation infers the type when
 validating them, so: a tag matching nobody offers/alerts EVERYONE eligible; an
 all-empty render means "no filter", not "a tag nobody has"; nobody eligible at
 all falls through to the business owner; one failed send does not suppress the
-rest. A typo costs noise, never a lead.
+rest. A typo costs noise, never a lead. Fail-safe is decided against the full
+eligible roster BEFORE availability: tagged teammates who are out today do
+not widen the offer onto someone who does not cover the type.
 
 **Amy is deliberately UNTAGGED.** Her row already carries
 `team_broadcast_enabled=false`, which is what keeps her out of team alerts; a

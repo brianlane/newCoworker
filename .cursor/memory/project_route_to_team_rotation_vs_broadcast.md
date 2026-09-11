@@ -24,8 +24,10 @@ alerts use: this run's vars, then the contact note and recent runs for that
 phone (`resolveRotationLeadTag`). A pin or named `agentNames` list is not
 tag-filtered: the author already said exactly who to offer.
 `team_broadcast_enabled` is NOT the rotation opt-out; that remains
-`routing_enabled`. Same fail-safe as alerts: a missing type or a tag matching
-nobody offers the whole eligible roster rather than no one.
+`routing_enabled`. Fail-safe is decided against the FULL active roster, the
+same order unowned alerts use: a missing type or a typo matching nobody
+offers the whole eligible roster; a tag that matches people who are merely
+out today falls to the owner rather than whoever is left.
 
 That is why Jason Lane (tags `buyer` only, `routing_enabled` still on) stays
 in buyer round-robin and is skipped on seller rotations, including unclaimed

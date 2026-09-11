@@ -11362,8 +11362,10 @@ async function pickNextAgent(
     // the person; preferContactOwner is handled at the call site and never
     // reaches this filter. Unlike broadcastAll, this does not read
     // team_broadcast_enabled (rotation's opt-out is routing_enabled, already
-    // applied above). Fail-safe: a missing type or a tag matching nobody
-    // leaves the available roster in place rather than offering nobody.
+    // applied above). Fail-safe is decided against the FULL active roster, the
+    // same order unowned alerts use: a typo matching nobody still offers
+    // whoever is available, but a tag that matches people who are merely out
+    // today returns empty and falls to the owner rather than whoever is left.
     let rotationRoster = availableRoster;
     if (!pinnedAgentName) {
       const tag = await resolveRotationLeadTag(
@@ -11373,7 +11375,26 @@ async function pickNextAgent(
         teamTag,
         { vars: scope.vars, trigger: scope.trigger }
       );
-      rotationRoster = filterRosterByLeadTag(availableRoster, tag);
+      rotationRoster = filterRosterByLeadTag(availableRoster, tag, roster);
+      if (rotationRoster.length === 0) {
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_no_agent_available",
+          message:
+            "route_to_team: tagged teammates are on time off, outside their schedule, or have lead rotation turned off; falling back to the owner",
+          payload: {
+            run_id: run.id,
+            flow_id: run.flow_id,
+            roster_size: roster.length,
+            available: availableRoster.length,
+            mode,
+            ...(tag ? { team_tag: tag } : {})
+          }
+        });
+        return null;
+      }
     }
     const pick = pickRosterAgent(
       rotationRoster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
