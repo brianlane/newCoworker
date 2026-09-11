@@ -617,7 +617,8 @@ export type StepAction =
       /** BROADCAST-ALL: offer the entire active roster at once, resolved at
        * execution time (worker caps at 10). Exclusive with every pin. */
       broadcastAll?: boolean;
-      /** Rendered lead-type tag narrowing a broadcastAll offer (fail-safe: see team_broadcast.ts). */
+      /** Rendered lead-type tag narrowing a broadcastAll or unpinned rotation
+       * offer (fail-safe: see team_broadcast.ts). */
       teamTag?: string;
       /** After-hours claim-deadline extension. */
       offerWindow?: RouteOfferWindow;
@@ -1727,7 +1728,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           // Rendered here, like the notify_lead_owner team alert: an all-empty
           // render means "no filter", not "a tag nobody has", so a template
           // pointing at an unset var offers the whole roster rather than
-          // nobody. The schema keeps this broadcastAll-only.
+          // nobody. Rotation infers the type when this is omitted.
           ...(routeTeamTag ? { teamTag: routeTeamTag } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,

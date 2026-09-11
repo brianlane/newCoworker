@@ -96,6 +96,36 @@ function normalizeTag(tag?: string | null): string {
 }
 
 /**
+ * Narrow a rotation-ordered roster to teammates whose tags cover this lead
+ * type. Unlike `selectBroadcastTeam`, this does NOT read
+ * `team_broadcast_enabled`: rotation's opt-out is `routing_enabled`, already
+ * applied by `filterRosterByAvailability`.
+ *
+ * Fail-safe: an empty or unknown tag leaves `rows` untouched, and a tag
+ * matching nobody on `matchAgainst` (default: `rows`) returns `rows`
+ * rather than offering the lead to no one. Pass the FULL active roster as
+ * `matchAgainst` and the available slice as `rows` so a tag that matches
+ * people who are merely out today returns empty (owner fallback) instead of
+ * widening onto whoever is left. Preserves input order.
+ */
+export function filterRosterByLeadTag<T extends { tags?: string[] | null }>(
+  rows: readonly T[],
+  tag?: string | null,
+  matchAgainst?: readonly T[]
+): T[] {
+  const want = normalizeTag(tag);
+  if (!want) return [...rows];
+  const source = matchAgainst ?? rows;
+  const anyoneHasTag = source.some((row) =>
+    (row.tags ?? []).some((t) => normalizeTag(String(t)) === want)
+  );
+  if (!anyoneHasTag) return [...rows];
+  return rows.filter((row) =>
+    (row.tags ?? []).some((t) => normalizeTag(String(t)) === want)
+  );
+}
+
+/**
  * Did the tag narrow the audience, or did the fail-safe widen it back out?
  *
  * Reported alongside a broadcast so "the whole team got a seller alert" is

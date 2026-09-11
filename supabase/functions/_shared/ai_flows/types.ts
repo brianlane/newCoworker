@@ -995,10 +995,11 @@ export type FlowStep =
        */
       broadcastAll?: boolean;
       /**
-       * Narrow a broadcastAll offer to members carrying this tag, rendered as
-       * a template so it can come from the lead ("{{vars.lead_type}}"). Same
-       * selector and fail-safe as the notify_lead_owner team alert. Rejected
-       * by the schema unless broadcastAll is set.
+       * Narrow a whole-roster offer (broadcastAll or unpinned rotation) to
+       * members carrying this tag, rendered as a template so it can come
+       * from the lead ("{{vars.lead_type}}"). Same fail-safe as the
+       * notify_lead_owner team alert. Rejected by the schema on a pinned
+       * or named-list route.
        */
       teamTagTemplate?: string;
       /** After-hours claim-deadline extension; see RouteOfferWindow. */

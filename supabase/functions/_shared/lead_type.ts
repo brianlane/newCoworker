@@ -1,10 +1,10 @@
 /**
  * What kind of lead this contact is (buyer / seller / both).
  *
- * Used to narrow unowned-lead claim alerts to the teammates whose roster
- * tags cover that type. The model-facing `notify_team` tool may omit the
- * type, so the resolver looks it up from stored facts instead of paging
- * everyone. Fail-safe lives with the caller: this module returns null when
+ * Used to narrow unowned-lead claim alerts AND unpinned `route_to_team`
+ * rotation to the teammates whose roster tags cover that type. The
+ * model-facing `notify_team` tool may omit the type, so the resolver looks
+ * it up from stored facts instead of paging everyone. Fail-safe lives with the caller: this module returns null when
  * nothing is stored or the sources disagree, and the broadcast then widens
  * to every eligible teammate rather than going silent.
  *

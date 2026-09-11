@@ -27,6 +27,19 @@ const definition = (step: Record<string, unknown>) => ({
   steps: [step]
 });
 
+const definitionWithLeadType = (step: Record<string, unknown>) => ({
+  version: 1,
+  trigger: { channel: "tag_changed", tag: "Needs Human", change: "added", conditions: [] },
+  steps: [
+    {
+      id: "x",
+      type: "extract_text",
+      fields: [{ name: "lead_type", description: "buyer, seller, or both" }]
+    },
+    step
+  ]
+});
+
 describe("route_to_team broadcastAll, schema", () => {
   it("accepts broadcastAll: true on its own", () => {
     const def = parseAiFlowDefinition(definition(routeStep({ broadcastAll: true })));
@@ -92,21 +105,44 @@ describe("route_to_team teamTagTemplate", () => {
 
   it("accepts a tag alongside broadcastAll", () => {
     const def = parseAiFlowDefinition(
-      definition(routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" }))
+      definitionWithLeadType(
+        routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" })
+      )
     );
-    const step = def.steps[0] as { teamTagTemplate?: string };
+    const step = def.steps[1] as { teamTagTemplate?: string };
     expect(step.teamTagTemplate).toBe("{{vars.lead_type}}");
   });
 
-  it("REJECTS a tag without broadcastAll", () => {
+  it("accepts a tag on an unpinned rotation", () => {
+    const def = parseAiFlowDefinition(definition(routeStep({ teamTagTemplate: "seller" })));
+    const step = def.steps[0] as { teamTagTemplate?: string };
+    expect(step.teamTagTemplate).toBe("seller");
+  });
+
+  it("scope-checks the tag template like any other route copy", () => {
+    expect(() =>
+      parseAiFlowDefinition(definition(routeStep({ teamTagTemplate: "{{vars.lead_typo}}" })))
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("REJECTS a tag alongside a pin or named list", () => {
     // Narrowing an explicitly named list is a contradiction: the author
     // already said exactly who to offer, and dropping some of those names by
     // tag is a surprise no fail-safe can rescue.
-    for (const over of [{}, { agentNames: ["A B", "C D"] }, { agentName: "A B" }]) {
+    for (const over of [{ agentNames: ["A B", "C D"] }, { agentName: "A B" }]) {
       expect(() =>
         parseAiFlowDefinition(definition(routeStep({ ...over, teamTagTemplate: "seller" })))
       ).toThrow(AiFlowValidationError);
     }
+  });
+
+  it("renders the tag into a rotation action from the lead's own vars", () => {
+    const plan = planStep(
+      routeStep({ teamTagTemplate: "{{vars.lead_type}}" }) as FlowStep,
+      scope
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect((plan.action as { teamTag?: string }).teamTag).toBe("seller");
   });
 
   it("renders the tag into the action from the lead's own vars", () => {

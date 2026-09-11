@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   broadcastTagMatched,
+  filterRosterByLeadTag,
   selectBroadcastTeam,
   type BroadcastMemberRow
 } from "../supabase/functions/_shared/team_broadcast";
@@ -168,5 +169,111 @@ describe("broadcastTagMatched", () => {
   it("matches case- and whitespace-insensitively, and skips a null tags column", () => {
     expect(broadcastTagMatched([row({ tags: [" SeLLer "] })], "SELLER")).toBe(true);
     expect(broadcastTagMatched([row({ tags: null })], "seller")).toBe(false);
+  });
+});
+
+/**
+ * Rotation's tag filter. Same fail-safe as the alert selector, but it does
+ * NOT read team_broadcast_enabled: rotation's opt-out is routing_enabled,
+ * already applied before this runs.
+ */
+describe("filterRosterByLeadTag", () => {
+  const dave = row();
+  const gabbyRow = gabby;
+  const jasonBuyer = jason;
+  const amyOffBroadcast = amy;
+
+  it("a seller rotation drops Jason and keeps Dave and Gabby", () => {
+    const out = filterRosterByLeadTag([jasonBuyer, dave, gabbyRow], "seller");
+    expect(out.map((m) => m.name)).toEqual(["Dave Lane", "Gabrielle Mota"]);
+  });
+
+  it("a buyer rotation keeps Jason", () => {
+    const out = filterRosterByLeadTag([jasonBuyer, dave, gabbyRow], "buyer");
+    expect(out.map((m) => m.id)).toEqual(["m3", "m1", "m2"]);
+  });
+
+  it("preserves input order (least-recently-offered first)", () => {
+    // Jason is first in this list, so a buyer rotation still offers him first.
+    const out = filterRosterByLeadTag([jasonBuyer, dave], "buyer");
+    expect(out.map((m) => m.id)).toEqual(["m3", "m1"]);
+  });
+
+  it("FAILS SAFE: a tag nobody carries leaves the whole roster", () => {
+    const out = filterRosterByLeadTag([jasonBuyer, dave], "sellr");
+    expect(out.map((m) => m.id)).toEqual(["m3", "m1"]);
+  });
+
+  it("does not fail-safe onto whoever is left when the tag matches people who are merely absent", () => {
+    // Same order unowned alerts use: tag against the FULL roster, then keep
+    // the available slice. Dave covers sellers and is out; Jason is in and
+    // buyer-only. Empty remainder, not Jason.
+    const out = filterRosterByLeadTag([jasonBuyer], "seller", [jasonBuyer, dave]);
+    expect(out).toEqual([]);
+  });
+
+  it("keeps the available tagged slice when matchAgainst confirms the tag", () => {
+    const out = filterRosterByLeadTag([jasonBuyer, dave], "seller", [
+      jasonBuyer,
+      dave,
+      gabbyRow
+    ]);
+    expect(out.map((m) => m.id)).toEqual(["m1"]);
+  });
+
+  it("a typo still fail-safes when the full roster also has no such tag", () => {
+    const out = filterRosterByLeadTag([jasonBuyer], "sellr", [jasonBuyer, dave]);
+    expect(out.map((m) => m.id)).toEqual(["m3"]);
+  });
+
+  it("treats an empty or whitespace tag as no filter", () => {
+    for (const tag of [undefined, null, "", "   "]) {
+      expect(filterRosterByLeadTag([jasonBuyer, dave], tag)).toHaveLength(2);
+    }
+  });
+
+  it("does NOT drop a teammate whose team broadcasts are off", () => {
+    // selectBroadcastTeam would exclude Amy here. Rotation must not: her
+    // in-line switch is routing_enabled, not team_broadcast_enabled.
+    const out = filterRosterByLeadTag(
+      [amyOffBroadcast, dave],
+      undefined
+    );
+    expect(out.map((m) => m.id)).toEqual(["m4", "m1"]);
+  });
+
+  it("keeps a team-broadcast-off teammate who carries the tag", () => {
+    const taggedAmy = row({
+      id: "m4",
+      name: "Amy Laidlaw",
+      team_broadcast_enabled: false,
+      tags: ["seller"]
+    });
+    const out = filterRosterByLeadTag([taggedAmy, jasonBuyer], "seller");
+    expect(out.map((m) => m.id)).toEqual(["m4"]);
+  });
+
+  it("matches tags case- and whitespace-insensitively", () => {
+    for (const tag of ["Seller", "  SELLER  "]) {
+      expect(filterRosterByLeadTag([row({ tags: ["  SeLLer "] })], tag)).toHaveLength(1);
+    }
+  });
+
+  it("treats a null tags column as carrying no tags, then fails safe", () => {
+    const out = filterRosterByLeadTag([row({ tags: null })], "seller");
+    expect(out).toHaveLength(1);
+  });
+
+  it("drops an available row with no tags when the full roster confirms the tag", () => {
+    // anyoneHasTag is true because Dave covers sellers; the available slice
+    // is Jason plus an untagged row, so the filter must walk `tags ?? []`
+    // and return empty rather than fail-safe.
+    const untagged = row({ id: "m9", name: "No Tags", tags: null });
+    const out = filterRosterByLeadTag([untagged, jasonBuyer], "seller", [
+      dave,
+      untagged,
+      jasonBuyer
+    ]);
+    expect(out).toEqual([]);
   });
 });

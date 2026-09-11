@@ -1664,19 +1664,20 @@ const nonBranchStepMembers = [
     // Only the literal `true` is accepted: absence IS the off state.
     broadcastAll: z.literal(true).optional(),
     /**
-     * Narrow a broadcastAll offer to members carrying this tag
-     * (ai_flow_team_members.tags), rendered as a template so it can come from
-     * the lead itself: "{{vars.lead_type}}" offers a seller lead only to the
-     * teammates who cover sellers.
+     * Narrow a whole-roster offer (broadcastAll or unpinned rotation) to
+     * members carrying this tag (ai_flow_team_members.tags), rendered as a
+     * template so it can come from the lead itself: "{{vars.lead_type}}"
+     * offers a seller lead only to the teammates who cover sellers.
      *
-     * Same selector and same FAIL-SAFE as the `notify_lead_owner` team alert
+     * Same fail-safe as the `notify_lead_owner` team alert
      * (`_shared/team_broadcast.ts`): matching is case-insensitive, and a tag
      * that matches NOBODY offers the whole available roster rather than
      * nobody. Tags are free text with nothing validating them, so a typo must
      * cost noise rather than a lead that is offered to no one.
      *
-     * broadcastAll only: narrowing an explicitly NAMED recipient list would
-     * be a contradiction, and validateDefinitionSemantics rejects it.
+     * Unpinned rotation also INFERS the type when this is omitted, from the
+     * run vars and stored contact/run facts. A pin or named `agentNames` list
+     * cannot carry this field: the author already said exactly who to offer.
      */
     teamTagTemplate: z.string().min(1).max(200).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
@@ -2333,7 +2334,8 @@ function templateStringsForStep(step: FlowStep): string[] {
         // rendered as a bare label ("Address:") on every nudge, three times
         // per recipient per unclaimed lead, with nothing to catch it at
         // author time.
-        step.unclaimedReminders?.detailsTemplate ?? ""
+        step.unclaimedReminders?.detailsTemplate ?? "",
+        step.teamTagTemplate ?? ""
       ];
     case "browse_action":
       // A target is rendered by the runtime exactly when it carries braces
@@ -3299,13 +3301,17 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           `Step "${step.id}" sets broadcastAll alongside agentName/agentRef/agentNames; broadcastAll offers the whole active roster and is mutually exclusive with pinned recipients.`
         );
       }
-      // The tag filter narrows a whole-roster fan-out. Against an explicitly
-      // NAMED list it is a contradiction: the author already said exactly who
-      // to offer, and silently dropping some of those names by tag is the
-      // kind of surprise a fail-safe cannot rescue.
-      if (step.teamTagTemplate && !step.broadcastAll) {
+      // The tag filter narrows a whole-roster rotation or broadcastAll
+      // fan-out. Against an explicitly NAMED list or pin it is a
+      // contradiction: the author already said exactly who to offer, and
+      // silently dropping some of those names by tag is the kind of
+      // surprise a fail-safe cannot rescue.
+      if (
+        step.teamTagTemplate &&
+        (step.agentName || step.agentRef || step.agentNames || step.agentNameVar)
+      ) {
         issues.push(
-          `Step "${step.id}" sets teamTagTemplate without broadcastAll; the tag filter narrows a whole-roster broadcast and cannot be combined with pinned recipients.`
+          `Step "${step.id}" sets teamTagTemplate on a pinned or named-list route; the tag filter narrows a whole-roster rotation or broadcast and cannot be combined with pinned recipients.`
         );
       }
       // The dynamic pin decides pinned-vs-not at execution time from the

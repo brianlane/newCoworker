@@ -963,14 +963,25 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
         agentNames: undefined
       };
     }
+    // A pin or named list already said exactly who to offer, so a leftover
+    // tag filter would fail validation on save.
     if (s.agentNames && s.agentNames.length >= 2) {
-      return { ...s, agentName: undefined, agentRef: undefined, agentNameVar: undefined };
+      return {
+        ...s,
+        agentName: undefined,
+        agentRef: undefined,
+        agentNameVar: undefined,
+        teamTagTemplate: undefined
+      };
     }
     if (s.agentNameVar) {
-      return { ...s, agentName: undefined, agentRef: undefined };
+      return { ...s, agentName: undefined, agentRef: undefined, teamTagTemplate: undefined };
     }
     if (s.agentRef) {
-      return { ...s, agentName: undefined };
+      return { ...s, agentName: undefined, teamTagTemplate: undefined };
+    }
+    if (s.agentName) {
+      return { ...s, teamTagTemplate: undefined };
     }
     return s;
   }
@@ -4705,7 +4716,12 @@ function StepFields({
             patchStep(index, {
               agentName: v.trim() ? v : undefined,
               ...(v.trim()
-                ? { agentNameVar: undefined, agentNames: undefined, broadcastAll: undefined }
+                ? {
+                    agentNameVar: undefined,
+                    agentNames: undefined,
+                    broadcastAll: undefined,
+                    teamTagTemplate: undefined
+                  }
                 : {})
             })
           }
@@ -4715,7 +4731,8 @@ function StepFields({
               agentName: undefined,
               agentNameVar: undefined,
               agentNames: undefined,
-              broadcastAll: undefined
+              broadcastAll: undefined,
+              teamTagTemplate: undefined
             })
           }
           help="Picked employees resolve to their current number at send time."
@@ -4733,7 +4750,8 @@ function StepFields({
                     agentName: undefined,
                     agentRef: undefined,
                     agentNames: undefined,
-                    broadcastAll: undefined
+                    broadcastAll: undefined,
+                    teamTagTemplate: undefined
                   }
                 : { agentNameVar: undefined }
             );
@@ -4774,7 +4792,12 @@ function StepFields({
                 patchStep(index, {
                   agentNames: names.length > 0 ? names : undefined,
                   ...(names.length > 0
-                    ? { agentName: undefined, agentRef: undefined, agentNameVar: undefined }
+                    ? {
+                        agentName: undefined,
+                        agentRef: undefined,
+                        agentNameVar: undefined,
+                        teamTagTemplate: undefined
+                      }
                     : {})
                 });
               }}
@@ -4782,6 +4805,25 @@ function StepFields({
             />
           )}
         </div>
+        {Boolean(step.broadcastAll) ||
+        (!step.agentName &&
+          !step.agentRef &&
+          !step.agentNameVar &&
+          !(step.agentNames && step.agentNames.length > 0)) ? (
+          <Field
+            label="Only offer teammates tagged (optional)"
+            value={step.teamTagTemplate ?? ""}
+            onChange={(v) =>
+              patchStep(index, { teamTagTemplate: v.trim() ? v : undefined })
+            }
+            help={
+              "Matches the tags on each teammate, e.g. seller. You can use a variable " +
+              "like {{vars.lead_type}} so a seller lead reaches whoever handles sellers. " +
+              "On an unpinned rotation, leaving this blank infers the type from the lead. " +
+              "If the tag matches nobody, everyone still gets the offer rather than no one."
+            }
+          />
+        ) : null}
         <Field
           label="Owner fallback SMS (when no agent claims)"
           value={step.ownerFallbackTemplate}
