@@ -103,6 +103,19 @@ updates:
     patterns: ["*"]
     multi-ecosystem-group: "aiflow-render"
 
+  # zapier/ is its own npm tree. Security alerts still fire from the
+  # lockfile even without this entry (alert #66 did), but Dependabot will
+  # not refresh that lockfile on a weekly cadence unless the directory is
+  # listed. Overrides stay on the locked copy until something regenerates
+  # them, which is how adm-zip sat on 0.6.0 after 0.6.1 shipped.
+  - package-ecosystem: npm
+    directory: "/zapier"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
