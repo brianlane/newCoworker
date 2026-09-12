@@ -5,6 +5,7 @@ import {
   selectEmailWorthyFindings,
   TRANSIENT_FINDING_WINDOW_MINUTES
 } from "@/lib/vps/billing-posture";
+import { HOSTINGER_FLAKE_WINDOW_MINUTES } from "@/lib/hostinger/flake";
 import type { BillingPostureFinding } from "@/lib/vps/billing-posture";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
@@ -1811,5 +1812,6 @@ describe("selectEmailWorthyFindings, warn until the lookup flake repeats", () =>
 
   it("uses a 48-hour window so two consecutive daily runs can see each other", () => {
     expect(TRANSIENT_FINDING_WINDOW_MINUTES).toBe(48 * 60);
+    expect(TRANSIENT_FINDING_WINDOW_MINUTES).toBe(HOSTINGER_FLAKE_WINDOW_MINUTES);
   });
 });

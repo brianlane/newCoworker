@@ -195,6 +195,7 @@ async function runSweep(request: Request): Promise<Response> {
       missing: result.missingSweeps,
       graced: result.graced,
       suppressedHttp: result.suppressedHttp,
+      suppressedHostingerFlakes: result.suppressedHostingerFlakes,
       // Raw anomaly count from the HTTP window, whether it paged as a burst
       // or was suppressed as isolated noise.
       httpFailures: httpResult.error ? 0 : (httpResult.data ?? []).length,

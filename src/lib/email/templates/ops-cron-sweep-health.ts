@@ -37,6 +37,7 @@ const HEADINGS: Record<FindingKind, string> = {
   missing: "STOPPED: no run recorded",
   failed: "CRASHED: the sweep threw",
   errors: "PARTIAL FAILURE: answered ok with errors inside",
+  hostinger_flake: "HOSTINGER FLAKE: catalog or billing list timed out two days",
   degraded: "INCOMPLETE: the watchdog could not read one of its two sources",
   slow: "SLOW: approaching the 150s ceiling",
   burst: "HTTP BURST: anomalies clustering past the pager bar",
@@ -55,6 +56,7 @@ const ORDER: FindingKind[] = [
   "missing",
   "failed",
   "errors",
+  "hostinger_flake",
   "degraded",
   // Above `slow`: a degraded owner answer already reached a customer, while a
   // slow sweep is still only approaching a limit.

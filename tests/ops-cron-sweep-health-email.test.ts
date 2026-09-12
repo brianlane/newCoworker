@@ -30,8 +30,8 @@ describe("buildOpsCronSweepHealthEmail", () => {
     expect(email.subject).toContain("crashed");
   });
 
-  it("does not shout for a partial failure, a slow run, or an HTTP blip", () => {
-    for (const kind of ["errors", "degraded", "slow", "http"] as const) {
+  it("does not shout for a partial failure, a slow run, an HTTP blip, or a Hostinger flake", () => {
+    for (const kind of ["errors", "degraded", "slow", "http", "hostinger_flake"] as const) {
       const email = buildOpsCronSweepHealthEmail({ ...base, findings: [finding({ kind })] });
       expect(email.subject).not.toContain("ACTION REQUIRED");
       expect(email.subject).toContain("1 finding(s)");
@@ -65,6 +65,15 @@ describe("buildOpsCronSweepHealthEmail", () => {
     const positions = ["STOPPED", "SLOW", "HTTP LAYER"].map((h) => email.text.indexOf(h));
     expect(positions[0]).toBeLessThan(positions[1]);
     expect(positions[1]).toBeLessThan(positions[2]);
+  });
+
+  it("labels a Hostinger flake in its own section", () => {
+    const email = buildOpsCronSweepHealthEmail({
+      ...base,
+      findings: [finding({ kind: "hostinger_flake", sweep: "vps-contract-upgrade-sweep" })]
+    });
+    expect(email.text).toContain("HOSTINGER FLAKE: catalog or billing list timed out two days");
+    expect(email.subject).not.toContain("ACTION REQUIRED");
   });
 
   it("labels a blind HTTP read as incomplete rather than as a sweep failure", () => {

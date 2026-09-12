@@ -39,6 +39,7 @@ import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { getLastAcquiredAtForBusiness, paidThroughFromBillingSub } from "@/lib/db/vps-inventory";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
+import { loadHostingerListsForSweep } from "@/lib/vps/hostinger-list-load";
 
 export const DEFAULT_SAVINGS_THRESHOLD = 0.1;
 /**
@@ -135,6 +136,12 @@ export type TermRenewalSweepResult = {
    * the same night as a partial failure.
    */
   failures: string[];
+  /**
+   * Opening Hostinger catalog/billing-list call failed after one retry.
+   * The sweep did not throw. The route decides whether this becomes a
+   * watchdog-counted failure (repeat in 48h) or a silent warn.
+   */
+  hostingerUnavailable?: string;
 };
 
 export type TermRenewalSweepOptions = {
@@ -395,11 +402,24 @@ export async function runTermRenewalSweep(
   /* c8 ignore next -- production cooldown default; tests inject */
   const getLastTermPurchaseAt = deps.getLastTermPurchaseAt ?? defaultGetLastTermPurchaseAt;
 
-  const [businesses, catalog, billingSubs] = await Promise.all([
-    deps.listBusinesses(),
-    deps.listCatalog(),
-    deps.listBillingSubscriptions()
-  ]);
+  const businessesP = deps.listBusinesses();
+  const lists = await loadHostingerListsForSweep({
+    listCatalog: deps.listCatalog,
+    listBillingSubscriptions: deps.listBillingSubscriptions
+  });
+  const businesses = await businessesP;
+  if (!lists.ok) {
+    logger.warn("term-renewal sweep: Hostinger list failed", { error: lists.detail });
+    return {
+      checked: 0,
+      skippedEconomics: 0,
+      migrated: 0,
+      findings: [],
+      failures: [],
+      hostingerUnavailable: lists.detail
+    };
+  }
+  const { catalog, billingSubs } = lists.lists;
   const subsById = new Map(billingSubs.map((sub) => [sub.id, sub]));
 
   const hostingerCandidates = businesses

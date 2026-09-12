@@ -69,6 +69,7 @@ import {
   type TermRenewalSweepDeps
 } from "@/lib/vps/term-renewal-sweep";
 import { sweepFailureLines } from "@/lib/vps/term-renewal-sweep";
+import { loadHostingerListsForSweep } from "@/lib/vps/hostinger-list-load";
 
 const SWEEP_REQUESTED_BY = "contract-upgrade-sweep";
 
@@ -104,6 +105,12 @@ export type ContractUpgradeSweepResult = {
   findings: ContractUpgradeSweepFinding[];
   /** migration_failed lines for the run recorder; see TermRenewalSweepResult.failures. */
   failures: string[];
+  /**
+   * Opening Hostinger catalog/billing-list call failed after one retry.
+   * The sweep did not throw. The route decides whether this becomes a
+   * watchdog-counted failure (repeat in 48h) or a silent warn.
+   */
+  hostingerUnavailable?: string;
 };
 
 export type ContractUpgradeSweepOptions = {
@@ -190,11 +197,24 @@ export async function runContractUpgradeSweep(
   const renewalWindowHours = options.renewalWindowHours ?? DEFAULT_RENEWAL_WINDOW_HOURS;
   const purchaseCooldownHours = options.purchaseCooldownHours ?? DEFAULT_PURCHASE_COOLDOWN_HOURS;
 
-  const [businesses, catalog, billingSubs] = await Promise.all([
-    deps.listBusinesses(),
-    deps.listCatalog(),
-    deps.listBillingSubscriptions()
-  ]);
+  const businessesP = deps.listBusinesses();
+  const lists = await loadHostingerListsForSweep({
+    listCatalog: deps.listCatalog,
+    listBillingSubscriptions: deps.listBillingSubscriptions
+  });
+  const businesses = await businessesP;
+  if (!lists.ok) {
+    logger.warn("contract-upgrade sweep: Hostinger list failed", { error: lists.detail });
+    return {
+      checked: 0,
+      alreadyCovered: 0,
+      migrated: 0,
+      findings: [],
+      failures: [],
+      hostingerUnavailable: lists.detail
+    };
+  }
+  const { catalog, billingSubs } = lists.lists;
   const subsById = new Map(billingSubs.map((sub) => [sub.id, sub]));
 
   const hostingerCandidates = businesses

@@ -249,6 +249,29 @@ describe("api/internal/cron-sweep-watchdog route", () => {
     expect(sendOpsCronSweepHealthEmail).not.toHaveBeenCalled();
   });
 
+  it("does not email ACTION REQUIRED for a first-day Hostinger catalog timeout crash", async () => {
+    const rows = healthyRows().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? {
+            ...r,
+            ok: false,
+            error_count: 1,
+            errors: ["Hostinger API /api/billing/v1/catalog?category=VPS timed out after 30000ms"]
+          }
+        : r
+    );
+    mockSupabase({
+      runs: { data: rows, error: null },
+      oldest: { data: [{ finished_at: new Date(Date.now() - 86_400_000 * 30).toISOString() }], error: null }
+    });
+    const res = await POST(makeRequest());
+    const body = await res.json();
+    expect(body.data.findings).toBe(0);
+    expect(body.data.suppressedHostingerFlakes).toBe(1);
+    expect(body.data.emailed).toBe(false);
+    expect(sendOpsCronSweepHealthEmail).not.toHaveBeenCalled();
+  });
+
   it("graces a first-night absentee when yesterday's memory clears it, and remembers it", async () => {
     mockSupabase({
       runs: { data: healthyRows().filter((r) => r.sweep !== "subscription-grace-sweep"), error: null },

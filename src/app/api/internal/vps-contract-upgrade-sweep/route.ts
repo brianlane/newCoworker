@@ -39,6 +39,8 @@ import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/cli
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { runContractUpgradeSweep } from "@/lib/vps/contract-upgrade-sweep";
 import { sendOpsHardwareMigrationEmail } from "@/lib/email/ops-notify";
+import { recordFailure } from "@/lib/db/system-logs";
+import { applyHostingerListFlakePaging } from "@/lib/vps/hostinger-list-load";
 
 export const maxDuration = 1800;
 export const runtime = "nodejs";
@@ -54,7 +56,7 @@ async function runSweep(request: Request): Promise<Response> {
       token: process.env.HOSTINGER_API_TOKEN ?? ""
     });
 
-    const result = await runContractUpgradeSweep({
+    const sweepResult = await runContractUpgradeSweep({
       listBusinesses,
       listBusinessIdsWithLiveSubscription,
       listSubscriptionsByBusinessIds,
@@ -80,12 +82,18 @@ async function runSweep(request: Request): Promise<Response> {
       markVpsNeverRenew,
       sendOpsEmail: sendOpsHardwareMigrationEmail
     });
+    const result = await applyHostingerListFlakePaging(
+      sweepResult,
+      "vps-contract-upgrade-sweep",
+      recordFailure
+    );
 
     logger.info("vps contract-upgrade sweep complete", {
       checked: result.checked,
       alreadyCovered: result.alreadyCovered,
       migrated: result.migrated,
-      findings: result.findings.length
+      findings: result.findings.length,
+      hostingerUnavailable: result.hostingerUnavailable ?? null
     });
 
     return successResponse(result);
