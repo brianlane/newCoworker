@@ -94,11 +94,18 @@ export function capForEachList(hrefs) {
  * the control plainly there, which is what made the failure so confusing to
  * diagnose. Amy Laidlaw's Clever accept step hit this on 2026-08-06: the run
  * dead-lettered at step 1 with the Accept button present in its own artifact.
+ * It happened again on her HomeLight portal-note step (run 39f53cb7,
+ * 2026-09-11): `click_text "Referrals"` failed after a 3.5-hour park and a
+ * fresh login, and the failure screenshot still showed
+ * `<a href="/referrals">Referrals</a>`. settlePage returns once the BODY has
+ * text, so the claim-page copy can paint while the header is still hydrating.
+ * 5s was not enough for that post-login header; 15s is. A later live probe
+ * of the same shortlink clicked the text just fine.
  *
  * Deliberately NOT applied to `click_text_while_present`, where zero matches is
  * how the loop knows it is finished.
  */
-export const CLICK_TEXT_APPEAR_MS = Number(process.env.AIFLOW_CLICK_TEXT_APPEAR_MS ?? 5_000);
+export const CLICK_TEXT_APPEAR_MS = Number(process.env.AIFLOW_CLICK_TEXT_APPEAR_MS ?? 15_000);
 /**
  * Total time a DRY RUN may spend waiting for controls to mount, across the
  * whole sequence. See checkActions for why this is shared rather than

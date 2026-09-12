@@ -248,6 +248,18 @@ stored previous definition),
 `amy-homelight-integration-label.ts` (Aug 17 2026: the credential rename, see
 Sharp edges) over the pure builder
 `amy-homelight-integration-label-definition.ts`,
+`amy-homelight-portal-note.ts` +
+`amy-homelight-portal-note-definition.ts` (Aug 19 2026: posts the
+`actions_taken` note on the agent dashboard drawer),
+`amy-homelight-portal-note-nav.ts` (Sep 12 2026: run `39f53cb7` failed
+that last-step note on `click_text "Referrals"` after the lead work was
+already done; the saved HTML still had
+`<a href="/referrals">Referrals</a>`. Switches the first action to
+`click_selector nav[data-test="navbar"] a[href="/referrals"]`. The matching
+`CLICK_TEXT_APPEAR_MS` 5s to 15s bump in `vps/aiflow-render` needs
+`tsx debug/redeploy-aiflow-render.ts --business-id 621a5b0d-c2ad-449f-9d74-9d50e7b27fa3`
+after merge. Do not requeue that run:
+it would redo outreach),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -400,7 +412,9 @@ steps behind it (Bugbot, PR #1527). Guards nest to AND three conditions:
 `claimed_agent != "none"` (the step's own `when`, matching the sibling sends):
 
 ```
-click_text      "Referrals"                       (claim page header nav)
+click_selector  nav[data-test="navbar"] a[href="/referrals"]
+                (claim page header; used to be click_text "Referrals",
+                 which lost a hydration race on run 39f53cb7)
 click_text      "{{vars.lead_name}}"              (templated target, rendered
                                                    at plan time; clicks the row)
 click_selector  [data-test="referral-detail-modal-add-note-button"]
@@ -443,3 +457,15 @@ the very text the step had just typed).
 - The drawer mounts asynchronously; a read right after the click is a race.
   Use the probe's `--expect` (e.g. `--expect "Add Note"`) to hold until it is
   on the page.
+- **`click_text` can miss a header that is already in the later screenshot.**
+  `settlePage` returns once the body has text, so claim-page copy can paint
+  while the nav is still hydrating. Run `39f53cb7` (Annalie H., 2026-09-11)
+  failed `click_text "Referrals"` after a 3.5-hour park and a fresh login; the
+  step-76 HTML still showed `<a href="/referrals">Referrals</a>`. A later
+  live probe of the same shortlink clicked that text and landed on
+  `/referrals/page/1`. The first action is now HomeLight's href selector so
+  Playwright waits the full action timeout (10s) instead of the shorter
+  text-appear window. The remaining name click still uses `click_text`, which
+  is why `CLICK_TEXT_APPEAR_MS` went from 5s to 15s. The 404 and aborted
+  `google-analytics.com` posts in the same System Errors row are HomeLight's
+  usual noise, identical on a healthy probe.

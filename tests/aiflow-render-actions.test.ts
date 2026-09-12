@@ -12,7 +12,8 @@ import {
   CLOSE_ICON_RE,
   MAX_FOREACH_ITEMS,
   capForEachList,
-  optionalTargetPresent
+  optionalTargetPresent,
+  CLICK_TEXT_APPEAR_MS
 } from "../vps/aiflow-render/actions.mjs";
 import { SWEEP_CAPACITY } from "../scripts/oneshot/amy-clever-weekly-update-sweep-definition";
 
@@ -410,6 +411,13 @@ describe("click_text waits for a control that has not hydrated yet", () => {
     expect(run.waits).toBeGreaterThan(0);
   });
 
+  it("waits long enough for a header that hydrates after body text", () => {
+    // 5s lost Amy's HomeLight portal-note click (run 39f53cb7) while the
+    // failure artifact still showed the Referrals link. Do not silently
+    // drop back to that window.
+    expect(CLICK_TEXT_APPEAR_MS).toBeGreaterThanOrEqual(15_000);
+  });
+
   it("still fails when the control never appears", async () => {
     const { page } = makeStubPage({ count: 0 });
     // appearTimeoutMs 0 keeps this assertion about the OUTCOME rather than
@@ -563,9 +571,15 @@ describe("checkActions (dry run)", () => {
   it("reports a control that is not on the page as absent", async () => {
     const { page } = makeStubPage({ count: 0 });
 
-    const checks = await checkActions(page, [
-      { kind: "click_text", target: "Claim this lead", value: "" }
-    ]);
+    // waitForTimeout is a no-op in this stub, so a production appear wait
+    // busy-loops until wall-clock CLICK_TEXT_APPEAR_MS (15s) elapses and the
+    // vitest 15s timeout races it. The verdict is about the outcome, not the
+    // wait. Sibling tests pass a tiny totalAppearMs for the same reason.
+    const checks = await checkActions(
+      page,
+      [{ kind: "click_text", target: "Claim this lead", value: "" }],
+      { totalAppearMs: 0 }
+    );
 
     expect(checks[0].state).toBe("absent");
   });

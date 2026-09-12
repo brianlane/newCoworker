@@ -100,12 +100,23 @@ export const ADD_NOTE_OPENER = '[data-test="referral-detail-modal-add-note-butto
 export const NOTE_TEXTAREA = '[data-test="referral-add-note-textarea"]';
 export const NOTE_SUBMIT = '[data-test="referral-add-note-btn"]';
 
+/**
+ * Header nav on the claim page. `click_text "Referrals"` is the visible
+ * label, but it lost a hydration race on run 39f53cb7 (2026-09-11): the
+ * saved screenshot and HTML both showed `<a href="/referrals">Referrals</a>`
+ * and the step still failed `no matching control` after the 5s appear wait.
+ * A later live probe of the same shortlink clicked that text just fine
+ * (landed on `/referrals/page/1`). The href is HomeLight's own handle, and
+ * Playwright's selector click waits the full action timeout for visibility
+ * instead of the shorter text-appear window.
+ */
+export const REFERRALS_NAV_SELECTOR = 'nav[data-test="navbar"] a[href="/referrals"]';
+export const LEGACY_REFERRALS_CLICK = { kind: "click_text", target: "Referrals" } as const;
+
 /** The six actions that post the note, from the claim page the run holds. */
 export function noteActions(): Array<Record<string, string>> {
   return [
-    // The claim page's own header nav carries the Referrals link (present on
-    // every one of the 48 stored captures of this flow's pages).
-    { kind: "click_text", target: "Referrals" },
+    { kind: "click_selector", target: REFERRALS_NAV_SELECTOR },
     // Rendered at plan time to the client's name; clicks their row.
     { kind: "click_text", target: "{{vars.lead_name}}" },
     { kind: "click_selector", target: ADD_NOTE_OPENER },
@@ -133,6 +144,58 @@ export function allStepIds(def: AiFlowDefinition): string[] {
   };
   walk(def.steps);
   return out;
+}
+
+type BrowseAction = { kind: string; target: string; valueTemplate?: string };
+type BrowseActionStep = FlowStep & { type: "browse_action"; actions: BrowseAction[] };
+
+/** Nested `hl_portal_note`, or null when the gate is not in this definition. */
+export function findPortalNoteStep(def: AiFlowDefinition): BrowseActionStep | null {
+  let found: BrowseActionStep | null = null;
+  const walk = (steps: readonly FlowStep[]): void => {
+    for (const s of steps) {
+      if (s.id === NOTE_STEP_ID && s.type === "browse_action") {
+        found = s as BrowseActionStep;
+        return;
+      }
+      const b = s as unknown as BranchLike;
+      for (const arm of b.branches ?? []) walk(arm.steps ?? []);
+      walk((b.else ?? []) as FlowStep[]);
+    }
+  };
+  walk(def.steps);
+  return found;
+}
+
+/**
+ * Replace the claim-page `click_text "Referrals"` with the href selector.
+ * Returns true when it wrote, false when the step is already patched.
+ * Throws when the note step is missing or its first action is neither the
+ * legacy text click nor the new selector, so a dashboard edit cannot be
+ * silently overwritten.
+ */
+export function patchPortalNoteNav(def: AiFlowDefinition): boolean {
+  const note = findPortalNoteStep(def);
+  if (!note) {
+    throw new Error(
+      `The flow has no ${NOTE_STEP_ID} step. Apply amy-homelight-portal-note.ts first.`
+    );
+  }
+  const first = note.actions[0];
+  if (!first) {
+    throw new Error(`${NOTE_STEP_ID} has no actions.`);
+  }
+  if (first.kind === "click_selector" && first.target === REFERRALS_NAV_SELECTOR) {
+    return false;
+  }
+  if (first.kind !== LEGACY_REFERRALS_CLICK.kind || first.target !== LEGACY_REFERRALS_CLICK.target) {
+    throw new Error(
+      `${NOTE_STEP_ID} first action is ${first.kind} "${first.target}", not ` +
+        `click_text "Referrals" or the href selector. The flow was edited; re-read it.`
+    );
+  }
+  note.actions[0] = { kind: "click_selector", target: REFERRALS_NAV_SELECTOR };
+  return true;
 }
 
 /**

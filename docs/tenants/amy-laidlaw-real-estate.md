@@ -1535,6 +1535,13 @@ dashboard's drawer, the honest `actions_taken` wording, via a templated
 `click_text "{{vars.lead_name}}"` row click; selectors and the reasoning live
 in [homelight-flow.md](homelight-flow.md), pinned by
 `tests/amy-homelight-portal-note.test.ts`),
+`amy-homelight-portal-note-nav.ts` (Sep 12 2026: run `39f53cb7` already
+finished the lead work, then failed the last-step portal note on
+`click_text "Referrals"` while the saved HTML still showed
+`<a href="/referrals">Referrals</a>`; switches that first action to
+`click_selector nav[data-test="navbar"] a[href="/referrals"]`. The matching
+`CLICK_TEXT_APPEAR_MS` bump in `vps/aiflow-render` needs Amy's box
+redeployed. Do not requeue that run),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
