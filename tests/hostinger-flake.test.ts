@@ -5,6 +5,7 @@ import {
   hostingerFlakeDetail,
   isHostingerFlakeError,
   isHostingerFlakeMessage,
+  isHostingerListFlakeMessage,
   retryOnceOnHostingerFlake
 } from "@/lib/hostinger/flake";
 import { TRANSIENT_FINDING_WINDOW_MINUTES } from "@/lib/vps/billing-posture";
@@ -41,6 +42,50 @@ describe("isHostingerFlakeMessage", () => {
 
   it("does not match a hard miss", () => {
     expect(isHostingerFlakeMessage("Hostinger API /virtual-machines/1 → HTTP 404")).toBe(false);
+  });
+});
+
+describe("isHostingerListFlakeMessage", () => {
+  it("matches a catalog timeout, including the query string", () => {
+    expect(
+      isHostingerListFlakeMessage(
+        "Hostinger API /api/billing/v1/catalog?category=VPS timed out after 30000ms"
+      )
+    ).toBe(true);
+  });
+
+  it("matches a catalog network drop without a query string", () => {
+    expect(
+      isHostingerListFlakeMessage("Hostinger API /api/billing/v1/catalog network error: fetch failed")
+    ).toBe(true);
+  });
+
+  it("matches a billing-list timeout", () => {
+    expect(
+      isHostingerListFlakeMessage("Hostinger API /api/billing/v1/subscriptions timed out after 30000ms")
+    ).toBe(true);
+  });
+
+  it("matches the route's failures[] prefix", () => {
+    expect(
+      isHostingerListFlakeMessage(
+        "Hostinger list failed: Hostinger API /api/billing/v1/catalog?category=VPS timed out after 30000ms"
+      )
+    ).toBe(true);
+  });
+
+  it("does not match a purchase timeout: a box may already have been bought", () => {
+    expect(
+      isHostingerListFlakeMessage("Hostinger API /api/vps/v1/virtual-machines timed out after 30000ms")
+    ).toBe(false);
+  });
+
+  it("does not match an auto-renewal timeout on one subscription", () => {
+    expect(
+      isHostingerListFlakeMessage(
+        "Hostinger API /api/billing/v1/subscriptions/abc/auto-renewal/disable timed out after 30000ms"
+      )
+    ).toBe(false);
   });
 });
 

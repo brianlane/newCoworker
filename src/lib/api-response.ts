@@ -69,8 +69,9 @@ export function handleRouteError(error: unknown): NextResponse {
   });
 
   // Hostinger timeout / network drop: keep the real message so the cron
-  // ledger can hold a first-day flake off ACTION REQUIRED. Other unexpected
-  // errors stay generic so DB/schema internals do not leak to callers.
+  // ledger can tell a catalog/list flake (watchdog holds those off ACTION
+  // REQUIRED) from a purchase or migration timeout (still CRASHED). Other
+  // unexpected errors stay generic so DB/schema internals do not leak.
   if (isHostingerFlakeError(error)) {
     return errorResponse("INTERNAL_SERVER_ERROR", hostingerFlakeDetail(error));
   }

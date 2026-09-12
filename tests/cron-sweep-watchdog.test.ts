@@ -441,6 +441,22 @@ describe("evaluateSweepHealth", () => {
     expect(finding?.detail).toContain("TypeError");
   });
 
+  it("still pages a purchase timeout as CRASHED, not a catalog flake", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? {
+            ...r,
+            ok: false,
+            error_count: 1,
+            errors: ["Hostinger API /api/vps/v1/virtual-machines timed out after 30000ms"]
+          }
+        : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-contract-upgrade-sweep");
+    expect(finding?.kind).toBe("failed");
+    expect(evaluate(runs).suppressedHostingerFlakes).toBe(0);
+  });
+
   it("classifies a recorded Hostinger list failure as hostinger_flake, not a per-tenant silent-200", () => {
     const runs = healthyFleet().map((r) =>
       r.sweep === "vps-term-renewal-sweep"

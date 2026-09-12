@@ -7,7 +7,7 @@ import {
 } from "@/lib/cron/owner-operator-fallback";
 import {
   HOSTINGER_FLAKE_WINDOW_MINUTES,
-  isHostingerFlakeMessage
+  isHostingerListFlakeMessage
 } from "@/lib/hostinger/flake";
 
 /**
@@ -308,7 +308,7 @@ function minutesAgo(iso: string, now: number): number {
 }
 
 function isHostingerFlakeRun(run: SweepRunRow): boolean {
-  return run.errors.length > 0 && run.errors.every((line) => isHostingerFlakeMessage(line));
+  return run.errors.length > 0 && run.errors.every((line) => isHostingerListFlakeMessage(line));
 }
 
 function priorHostingerFlakeCrash(

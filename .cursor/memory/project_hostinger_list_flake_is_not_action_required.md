@@ -21,14 +21,15 @@ repeats inside 48h, and never as CRASHED.
 The opening catalog + billing-list pair is now `loadHostingerListsForSweep`:
 one retry, then `ok:true` with `hostingerUnavailable` instead of a throw. The
 route runs `applyHostingerListFlakePaging` through `recordFailure` (48h
-window, event `vps_sweep_hostinger_list_flake`). First day stays out of
-`failures[]`. A repeat lands in `failures[]` so the watchdog sees
-`hostinger_flake`, whose subject is `[ops] Cron sweep watchdog: N finding(s)`,
-not ACTION REQUIRED.
+window, per-sweep event so 10:30 and 11:00 do not escalate each other).
+First day stays out of `failures[]`. A repeat lands in `failures[]` so the
+watchdog sees `hostinger_flake`, whose subject is `[ops] Cron sweep watchdog:
+N finding(s)`, not ACTION REQUIRED.
 
-Leftover `ok=false` rows whose error still matches a Hostinger timeout or
-network drop: first day suppressed (`suppressedHostingerFlakes`), second
-consecutive in 48h pages `hostinger_flake`. A TypeError or other real crash
+Leftover `ok=false` rows whose error is a catalog or billing-list timeout
+(not a purchase, snapshot, or auto-renewal timeout): first day suppressed
+(`suppressedHostingerFlakes`), second consecutive in 48h pages
+`hostinger_flake`. A TypeError, purchase timeout, or other real crash
 still pages `failed` immediately.
 
 `handleRouteError` keeps the real Hostinger flake message on the 500 so a

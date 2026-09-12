@@ -61,7 +61,7 @@ import { POST } from "@/app/api/internal/vps-term-renewal-sweep/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { runTermRenewalSweep } from "@/lib/vps/term-renewal-sweep";
 import { recordFailure } from "@/lib/db/system-logs";
-import { HOSTINGER_LIST_FLAKE_LOG_EVENT } from "@/lib/vps/hostinger-list-load";
+import { hostingerListFlakeLogEvent } from "@/lib/vps/hostinger-list-load";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/vps-term-renewal-sweep", {
@@ -119,7 +119,7 @@ describe("api/internal/vps-term-renewal-sweep route", () => {
     expect(json.data.failures).toEqual([]);
     expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: HOSTINGER_LIST_FLAKE_LOG_EVENT,
+        event: hostingerListFlakeLogEvent("vps-term-renewal-sweep"),
         source: "vps-term-renewal-sweep"
       }),
       expect.objectContaining({ windowMinutes: 48 * 60 })

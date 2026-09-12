@@ -19,7 +19,15 @@ import {
 } from "@/lib/hostinger/flake";
 import type { recordFailure } from "@/lib/db/system-logs";
 
-export const HOSTINGER_LIST_FLAKE_LOG_EVENT = "vps_sweep_hostinger_list_flake";
+/**
+ * Per-sweep `system_logs.event`. `recordFailure` keys on event + business_id,
+ * not source, so the two buy-sweeps must not share one event: a 10:30
+ * contract-upgrade warn would otherwise make the 11:00 term-renewal run
+ * escalate the same morning.
+ */
+export function hostingerListFlakeLogEvent(sweep: string): string {
+  return `${sweep.replace(/-/g, "_")}_hostinger_list_flake`;
+}
 
 export type HostingerLists = {
   catalog: CatalogItem[];
@@ -57,7 +65,7 @@ type SweepListResult = {
 /**
  * First Hostinger list flake in 48h stays out of `failures[]` (watchdog
  * silent). A repeat in the window is copied into `failures[]` so the
- * watchdog pages PARTIAL FAILURE, not CRASHED / ACTION REQUIRED.
+ * watchdog pages `hostinger_flake`, not CRASHED / ACTION REQUIRED.
  *
  * Fails loud: a recorder throw escalates, matching recordFailure.
  */
@@ -74,7 +82,7 @@ export async function applyHostingerListFlakePaging<T extends SweepListResult>(
       {
         businessId: null,
         source: sweep,
-        event: HOSTINGER_LIST_FLAKE_LOG_EVENT,
+        event: hostingerListFlakeLogEvent(sweep),
         message: detail
       },
       { windowMinutes: HOSTINGER_FLAKE_WINDOW_MINUTES }

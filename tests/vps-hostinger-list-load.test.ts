@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { HostingerApiError } from "@/lib/hostinger/client";
 import {
-  HOSTINGER_LIST_FLAKE_LOG_EVENT,
+  hostingerListFlakeLogEvent,
   applyHostingerListFlakePaging,
   loadHostingerListsForSweep
 } from "@/lib/vps/hostinger-list-load";
@@ -83,7 +83,7 @@ describe("applyHostingerListFlakePaging", () => {
       {
         businessId: null,
         source: sweep,
-        event: HOSTINGER_LIST_FLAKE_LOG_EVENT,
+        event: hostingerListFlakeLogEvent(sweep),
         message: detail
       },
       { windowMinutes: HOSTINGER_FLAKE_WINDOW_MINUTES }
@@ -110,5 +110,17 @@ describe("applyHostingerListFlakePaging", () => {
       recorder
     );
     expect(result.failures).toEqual(["existing", `Hostinger list failed: ${detail}`]);
+  });
+
+  it("keys the two buy-sweeps on different events so a morning flake does not escalate the next hour", () => {
+    expect(hostingerListFlakeLogEvent("vps-contract-upgrade-sweep")).toBe(
+      "vps_contract_upgrade_sweep_hostinger_list_flake"
+    );
+    expect(hostingerListFlakeLogEvent("vps-term-renewal-sweep")).toBe(
+      "vps_term_renewal_sweep_hostinger_list_flake"
+    );
+    expect(hostingerListFlakeLogEvent("vps-contract-upgrade-sweep")).not.toBe(
+      hostingerListFlakeLogEvent("vps-term-renewal-sweep")
+    );
   });
 });

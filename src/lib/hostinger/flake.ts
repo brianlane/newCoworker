@@ -37,6 +37,31 @@ export function isHostingerFlakeError(err: unknown): boolean {
 }
 
 /**
+ * True when the flake is the opening catalog or billing-list call, the
+ * pair both buy-sweeps make before they touch a box. A timeout on
+ * purchase, snapshot, VM lookup, or auto-renewal is a different failure:
+ * work may already have started, and the watchdog must still page CRASHED.
+ *
+ * Catalog: `/api/billing/v1/catalog` (optional query).
+ * Billing list: `/api/billing/v1/subscriptions` with nothing after the path.
+ * `Hostinger list failed:` is the prefix the route copies into failures[].
+ */
+export function isHostingerListFlakeMessage(text: string): boolean {
+  if (!isHostingerFlakeMessage(text)) return false;
+  if (text.includes("Hostinger list failed:")) return true;
+  if (
+    /Hostinger API \/api\/billing\/v1\/catalog(?:\?[^ ]*)? (?:timed out after \d+ms|network error)/.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  return /Hostinger API \/api\/billing\/v1\/subscriptions (?:timed out after \d+ms|network error)/.test(
+    text
+  );
+}
+
+/**
  * Run `fn` once more if the first attempt is a Hostinger timeout or network
  * drop. Any other error is thrown immediately. A second flake is thrown so
  * the caller can record it rather than treating a retry that also failed as
