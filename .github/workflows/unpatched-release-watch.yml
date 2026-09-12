@@ -1,0 +1,115 @@
+name: Unpatched release watch
+
+# Waitlist for overrides we pinned because npm had no patched release.
+# Dependabot does not bump `overrides`, so a PR comment ("raise this when
+# 0.6.1 publishes") is not a reminder. This runs on GitHub every Monday,
+# queries the registry, and opens one issue when the release exists and
+# the lockfile is still behind. Same shape as gemini-model-eval.yml: it
+# depends on no laptop and no one person still being here.
+#
+# The waitlist is .github/unpatched-release-watch.json. Add a row in the
+# same PR as the override. Delete the row after you bump. A leftover row
+# fails this job (stale ratchet, same idea as the audit allowlist).
+
+on:
+  schedule:
+    # 04:48 UTC Monday, half an hour after Dependency Audit (04:18).
+    - cron: "48 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  watch:
+    name: Check npm for waited-on releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run unpatched-release-watch
+        id: watch
+        run: |
+          set +e
+          node scripts/unpatched-release-watch.mjs --out unpatched-release-watch.md
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ -f unpatched-release-watch.md ]; then
+            echo "## Unpatched release watch" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat unpatched-release-watch.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$code" -eq 1 ]; then
+            exit 1
+          fi
+          exit 0
+
+      - name: Open or update the tracking issue
+        if: steps.watch.outputs.exit_code == '2'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.existsSync("unpatched-release-watch.md")
+              ? fs.readFileSync("unpatched-release-watch.md", "utf8")
+              : "(watch report missing)";
+            const LABEL = "unpatched-release-watch";
+            const title = "Unpatched override: npm has the release we are waiting on";
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: LABEL,
+                color: "d93f0b",
+                description: "A waited-on npm release shipped; bump the override and delete the watch row"
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: LABEL,
+              per_page: 100
+            });
+            const prior = existing.find((issue) => issue.title === title);
+            const wrapped = [
+              "Produced by `.github/workflows/unpatched-release-watch.yml` from `node scripts/unpatched-release-watch.mjs`.",
+              "The waitlist is `.github/unpatched-release-watch.json`.",
+              "Bump the override and lockfile to minRelease, then delete the row. Follow `.cursor/skills/dependabot-triage/SKILL.md`.",
+              "",
+              "```",
+              body,
+              "```"
+            ].join("\n");
+            if (prior) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prior.number,
+                body: wrapped
+              });
+              core.info(`Updated #${prior.number}`);
+              return;
+            }
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: wrapped,
+              labels: [LABEL]
+            });
+            core.info(`Opened #${created.data.number}`);

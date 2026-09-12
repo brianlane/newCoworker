@@ -48,6 +48,15 @@ pin regresses to a literal.
 - When the last requester of an overridden package leaves the tree, mark the
   row **Orphaned** here rather than deleting the pin, unless the pin itself
   starts causing ERESOLVE conflicts.
+- When the pin exists because npm has **no patched release yet**, a comment
+  is not a reminder. Add a row to `.github/unpatched-release-watch.json` in
+  the same PR. The Monday workflow
+  `.github/workflows/unpatched-release-watch.yml` queries npm and opens one
+  GitHub issue when the registry has `minRelease` while the lockfile is
+  still behind. After you bump the override and lockfile, delete the row
+  (a leftover row fails the watch as stale, same ratchet as the audit
+  allowlist). Dependabot does not bump `overrides`, so this waitlist is
+  the signal.
 ## Sub-tree overrides
 
 The sub-trees carry their own `overrides` in their own `package.json` files.
@@ -60,7 +69,7 @@ audits every tree the way CI does, dev deps included).
 
 | Package | Pin | Why |
 | --- | --- | --- |
-| `adm-zip` | `>=0.6.0` | GHSA-xcpc-8h2w-3j85 (crafted ZIP memory blowup); CLI pinned 0.5.x exactly (July audit M1). A later moderate advisory, GHSA-vwc7-r8mq-g2x9 / CVE-2026-76845 (Dependabot alert #66), also covers 0.5.9 through 0.6.0: extract-with-overwrite follows a pre-planted destination symlink. **No patched npm release exists** (0.6.0 is still latest; upstream PRs #575/#576 are unmerged). Do not raise this floor to `>=0.6.1` until that version is on the registry, or `npm install` in `zapier/` fails. The only overwrite-extract in `zapier-platform-cli` is `zapier pull`, which writes into a freshly created unique temp dir (`os.tmpdir()` + 20 random bytes, mode 0755 after umask) then copies into cwd via yeoman. A second local user cannot plant a symlink in that dir (sticky `/tmp`). Production runtime is `zapier-platform-core`, which does not depend on `adm-zip`. Re-check for 0.6.1 on the next Dependabot cycle and bump then. |
+| `adm-zip` | `>=0.6.1` | GHSA-xcpc-8h2w-3j85 (crafted ZIP memory blowup) plus GHSA-vwc7-r8mq-g2x9 / CVE-2026-76845 (symlink-following extract overwrite). 0.6.1 (2026-09-11) blocks extraction from writing through destination symlinks. CLI still pins 0.5.x exactly; the override keeps the tree on the patched line. Drop the override once `zapier-platform-cli` pins `>=0.6.1` itself. |
 | `brace-expansion` | `>=5.0.9` | GHSA-rgw5-rvv9-x895 ReDoS; raised past the previously-pinned vulnerable floor |
 | `form-data` | `>=4.0.6` | advisory floor, transitive via the CLI |
 | `tar` | `>=7.5.21` | advisory floor, transitive via the CLI |
