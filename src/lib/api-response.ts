@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { logger } from "@/lib/logger";
+import { isHostingerFlakeError, hostingerFlakeDetail } from "@/lib/hostinger/flake";
 
 type ErrorCode =
   | "DB_ERROR"
@@ -66,6 +67,14 @@ export function handleRouteError(error: unknown): NextResponse {
     errorName: error instanceof Error ? error.name : typeof error,
     errorStack: error instanceof Error ? error.stack : undefined
   });
+
+  // Hostinger timeout / network drop: keep the real message so the cron
+  // ledger can tell a catalog/list flake (watchdog holds those off ACTION
+  // REQUIRED) from a purchase or migration timeout (still CRASHED). Other
+  // unexpected errors stay generic so DB/schema internals do not leak.
+  if (isHostingerFlakeError(error)) {
+    return errorResponse("INTERNAL_SERVER_ERROR", hostingerFlakeDetail(error));
+  }
 
   return errorResponse("INTERNAL_SERVER_ERROR", "An unexpected error occurred");
 }

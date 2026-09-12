@@ -67,6 +67,7 @@
  */
 
 import { logger } from "@/lib/logger";
+import { HOSTINGER_FLAKE_WINDOW_MINUTES, isHostingerFlakeMessage } from "@/lib/hostinger/flake";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
@@ -194,7 +195,7 @@ function warrantsOpsEmail(
  * poll. Two consecutive 13:00 UTC runs are 24h apart; 48h covers a delayed
  * run without treating a timeout from last week as a streak.
  */
-export const TRANSIENT_FINDING_WINDOW_MINUTES = 48 * 60;
+export const TRANSIENT_FINDING_WINDOW_MINUTES = HOSTINGER_FLAKE_WINDOW_MINUTES;
 
 /** `system_logs.source` for a held Hostinger lookup flake. */
 export const TRANSIENT_FINDING_LOG_SOURCE = "vps-billing-posture";
@@ -207,25 +208,13 @@ export const TRANSIENT_FINDING_LOG_SOURCE = "vps-billing-posture";
 export const TRANSIENT_FINDING_LOG_EVENT = "vps_billing_posture_vm_unreachable";
 
 /**
- * True when the unreachable-VM detail is a Hostinger flake (timeout or
- * network error), not a hard miss like HTTP 404.
- *
- * Matches the HostingerClient error text:
- * `Hostinger API ${path} timed out after ${timeoutMs}ms` and
- * `Hostinger API ${path} network error: ...`.
- */
-function isHostingerLookupFlake(detail: string): boolean {
-  return /timed out after \d+ms/.test(detail) || /network error/.test(detail);
-}
-
-/**
  * True when this finding is the daily-cron analog of a system_logs `warn`:
  * real, recorded, and not worth paging until it repeats inside the window.
  */
 function isTransientFinding(
   finding: Pick<BillingPostureFinding, "kind" | "detail">
 ): boolean {
-  return finding.kind === "tenant_vm_unreachable" && isHostingerLookupFlake(finding.detail);
+  return finding.kind === "tenant_vm_unreachable" && isHostingerFlakeMessage(finding.detail);
 }
 
 export type EmailWorthySelection = {

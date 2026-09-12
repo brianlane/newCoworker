@@ -5,6 +5,10 @@ import {
   tallyOwnerFallbacks,
   type OwnerFallbackRow
 } from "@/lib/cron/owner-operator-fallback";
+import {
+  HOSTINGER_FLAKE_WINDOW_MINUTES,
+  isHostingerListFlakeMessage
+} from "@/lib/hostinger/flake";
 
 /**
  * The cron sweep watchdog: decides whether the fleet is healthy, and says
@@ -194,6 +198,7 @@ export type FindingKind =
   | "missing"
   | "failed"
   | "errors"
+  | "hostinger_flake"
   | "degraded"
   | "slow"
   | "burst"
@@ -287,6 +292,11 @@ export type WatchdogResult = {
   /** Lone HTTP anomalies counted but below the burst bar. */
   suppressedHttp: number;
   /**
+   * First-day Hostinger catalog/billing-list crashes held off the pager.
+   * A repeat inside 48h pages as `hostinger_flake`, not `failed`.
+   */
+  suppressedHostingerFlakes: number;
+  /**
    * Every sweep this run saw as missing, paged AND graced, for the run's own
    * summary row: tomorrow's watchdog reads it back as previouslyMissing.
    */
@@ -295,6 +305,39 @@ export type WatchdogResult = {
 
 function minutesAgo(iso: string, now: number): number {
   return (now - Date.parse(iso)) / 60_000;
+}
+
+function isHostingerFlakeRun(run: SweepRunRow): boolean {
+  return run.errors.length > 0 && run.errors.every((line) => isHostingerListFlakeMessage(line));
+}
+
+function priorHostingerFlakeCrash(
+  runs: SweepRunRow[],
+  sweep: string,
+  latestFinishedAt: string
+): SweepRunRow | undefined {
+  let best: SweepRunRow | undefined;
+  let bestTs = Number.NEGATIVE_INFINITY;
+  const latestTs = Date.parse(latestFinishedAt);
+  for (const row of runs) {
+    if (row.sweep !== sweep || row.ok || !isHostingerFlakeRun(row)) continue;
+    const ts = Date.parse(row.finished_at);
+    if (!(ts < latestTs) || ts < bestTs) continue;
+    best = row;
+    bestTs = ts;
+  }
+  return best;
+}
+
+function withinHostingerFlakeWindow(earlierIso: string, laterIso: string): boolean {
+  return Date.parse(laterIso) - Date.parse(earlierIso) <= HOSTINGER_FLAKE_WINDOW_MINUTES * 60_000;
+}
+
+const HOSTINGER_FLAKE_ACTION =
+  "Hostinger timed out or dropped the network two days running. The sweep could not load the catalog or billing list, so it did not touch any box and did not start a purchase. Check Hostinger status; the next run retries on its own.";
+
+function hostingerFlakeFinding(sweep: string, detail: string): Finding {
+  return { kind: "hostinger_flake", sweep, detail, action: HOSTINGER_FLAKE_ACTION };
 }
 
 /** Latest run per sweep, by finished_at. */
@@ -314,7 +357,8 @@ export function latestRuns(runs: SweepRunRow[]): Map<string, SweepRunRow> {
  *
  * Findings are ordered by how badly the operator needs them: a sweep that
  * stopped entirely, then one that crashed, then one failing per tenant, then
- * one drifting toward the timeout ceiling, then raw HTTP failures.
+ * a Hostinger catalog/list flake that has now repeated, then one drifting
+ * toward the timeout ceiling, then raw HTTP failures.
  */
 export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
   const latest = latestRuns(input.runs);
@@ -323,8 +367,10 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
   const missingSweeps: string[] = [];
   const failed: Finding[] = [];
   const withErrors: Finding[] = [];
+  const hostingerFlake: Finding[] = [];
   const slow: Finding[] = [];
   const healthy: string[] = [];
+  let suppressedHostingerFlakes = 0;
 
   const ledgerAgeMinutes =
     input.ledgerOldestAt === null ? 0 : minutesAgo(input.ledgerOldestAt, input.now);
@@ -381,6 +427,22 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
 
     let flagged = false;
     if (!run.ok) {
+      if (isHostingerFlakeRun(run)) {
+        const prior = priorHostingerFlakeCrash(input.runs, sweep, run.finished_at);
+        if (prior && withinHostingerFlakeWindow(prior.finished_at, run.finished_at)) {
+          hostingerFlake.push(
+            hostingerFlakeFinding(
+              sweep,
+              `last run threw a Hostinger timeout or network drop: ${run.errors[0]}`
+            )
+          );
+        } else {
+          suppressedHostingerFlakes += 1;
+        }
+        // The clock is the Hostinger timeout, not a hang. Do not also page SLOW,
+        // and do not call this healthy: there is nothing a human here can flip.
+        continue;
+      }
       flagged = true;
       failed.push({
         kind: "failed",
@@ -391,6 +453,17 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
           `/api/internal/${sweep} around ${run.finished_at}; the row's errors column carries the ` +
           `thrown message.`
       });
+    } else if (run.error_count > 0 && isHostingerFlakeRun(run)) {
+      // Repeat list flake: the sweep finished ok:true and the route copied
+      // the line into failures[] after recordFailure returned error. Not a
+      // crash, and not a per-tenant failure.
+      flagged = true;
+      hostingerFlake.push(
+        hostingerFlakeFinding(
+          sweep,
+          `last run answered ok but Hostinger list failed: ${run.errors.slice(0, 3).join("; ")}`
+        )
+      );
     } else if (run.error_count > 0) {
       flagged = true;
       withErrors.push({
@@ -516,11 +589,21 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
       : [];
 
   return {
-    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...burst, ...fallback],
+    findings: [
+      ...missing,
+      ...failed,
+      ...withErrors,
+      ...hostingerFlake,
+      ...degraded,
+      ...slow,
+      ...burst,
+      ...fallback
+    ],
     healthy: healthy.sort(),
     checked: Object.keys(SWEEP_EXPECTATIONS).length,
     graced: graced.sort(),
     suppressedHttp,
+    suppressedHostingerFlakes,
     missingSweeps: missingSweeps.sort()
   };
 }

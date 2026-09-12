@@ -50,6 +50,9 @@ vi.mock("@/lib/vps/term-renewal-sweep", () => ({
 vi.mock("@/lib/email/ops-notify", () => ({
   sendOpsHardwareMigrationEmail: vi.fn()
 }));
+vi.mock("@/lib/db/system-logs", () => ({
+  recordFailure: vi.fn(async () => "warn")
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -57,6 +60,7 @@ vi.mock("@/lib/logger", () => ({
 import { POST } from "@/app/api/internal/vps-term-renewal-sweep/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { runTermRenewalSweep } from "@/lib/vps/term-renewal-sweep";
+import { recordFailure } from "@/lib/db/system-logs";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/vps-term-renewal-sweep", {
@@ -96,5 +100,45 @@ describe("api/internal/vps-term-renewal-sweep route", () => {
     vi.mocked(runTermRenewalSweep).mockRejectedValue(new Error("hostinger down"));
     const res = await POST(makeRequest());
     expect(res.status).toBe(500);
+  });
+
+  it("holds a first-day Hostinger list flake off failures[]", async () => {
+    vi.mocked(runTermRenewalSweep).mockResolvedValue({
+      checked: 0,
+      skippedEconomics: 0,
+      migrated: 0,
+      findings: [],
+      failures: [],
+      hostingerUnavailable: "Hostinger API /x timed out after 30000ms"
+    });
+    vi.mocked(recordFailure).mockResolvedValue("warn");
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.failures).toEqual([]);
+    expect(recordFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "vps_term_renewal_sweep_hostinger_list_flake",
+        source: "vps-term-renewal-sweep"
+      }),
+      expect.objectContaining({ windowMinutes: 48 * 60 })
+    );
+  });
+
+  it("copies a repeat Hostinger list flake into failures[]", async () => {
+    vi.mocked(runTermRenewalSweep).mockResolvedValue({
+      checked: 0,
+      skippedEconomics: 0,
+      migrated: 0,
+      findings: [],
+      failures: [],
+      hostingerUnavailable: "Hostinger API /x timed out after 30000ms"
+    });
+    vi.mocked(recordFailure).mockResolvedValue("error");
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(json.data.failures).toEqual([
+      "Hostinger list failed: Hostinger API /x timed out after 30000ms"
+    ]);
   });
 });

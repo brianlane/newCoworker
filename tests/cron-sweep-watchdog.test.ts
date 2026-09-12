@@ -317,6 +317,13 @@ describe("evaluateSweepHealth", () => {
       .map((r) => {
         if (r.sweep === "outreach-sweep") return { ...r, ok: false, error_count: 1, errors: ["x"] };
         if (r.sweep === "data-retention-sweep") return { ...r, error_count: 2, errors: ["y", "z"] };
+        if (r.sweep === "vps-contract-upgrade-sweep") {
+          return {
+            ...r,
+            error_count: 1,
+            errors: ["Hostinger list failed: Hostinger API /x timed out after 30000ms"]
+          };
+        }
         if (r.sweep === "blog-publish-sweep") return { ...r, duration_ms: SWEEP_SLOW_MS + 1 };
         return r;
       });
@@ -328,7 +335,155 @@ describe("evaluateSweepHealth", () => {
     ];
     expect(
       evaluate(runs, failures, minutesBefore(60 * 24 * 30), "boom").findings.map((f) => f.kind)
-    ).toEqual(["missing", "failed", "errors", "degraded", "slow", "burst"]);
+    ).toEqual(["missing", "failed", "errors", "hostinger_flake", "degraded", "slow", "burst"]);
+  });
+
+  const HOSTINGER_FLAKE =
+    "Hostinger API /api/billing/v1/catalog?category=VPS timed out after 30000ms";
+
+  it("holds a first-day Hostinger flake crash off the pager", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? { ...r, ok: false, error_count: 1, errors: [HOSTINGER_FLAKE] }
+        : r
+    );
+    const result = evaluate(runs);
+    expect(result.findings).toEqual([]);
+    expect(result.suppressedHostingerFlakes).toBe(1);
+    expect(result.healthy).not.toContain("vps-contract-upgrade-sweep");
+  });
+
+  it("does not page SLOW for a first-day Hostinger flake crash either", () => {
+    const slowMs = slowLineFor("vps-contract-upgrade-sweep");
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? {
+            ...r,
+            ok: false,
+            error_count: 1,
+            errors: [HOSTINGER_FLAKE],
+            duration_ms: slowMs + 1
+          }
+        : r
+    );
+    const result = evaluate(runs);
+    expect(result.findings).toEqual([]);
+    expect(result.suppressedHostingerFlakes).toBe(1);
+  });
+
+  it("pages a Hostinger flake, not CRASHED, when the same sweep flakes two days running", () => {
+    const latest = run({
+      sweep: "vps-contract-upgrade-sweep",
+      ok: false,
+      error_count: 1,
+      errors: [HOSTINGER_FLAKE],
+      finished_at: minutesBefore(10)
+    });
+    const older = run({
+      sweep: "vps-contract-upgrade-sweep",
+      ok: false,
+      error_count: 1,
+      errors: [HOSTINGER_FLAKE],
+      finished_at: minutesBefore(10 + 30 * 60)
+    });
+    const prior = run({
+      sweep: "vps-contract-upgrade-sweep",
+      ok: false,
+      error_count: 1,
+      errors: [HOSTINGER_FLAKE],
+      finished_at: minutesBefore(10 + 24 * 60)
+    });
+    const runs = [
+      ...healthyFleet().filter((r) => r.sweep !== "vps-contract-upgrade-sweep"),
+      prior,
+      older,
+      latest
+    ];
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-contract-upgrade-sweep");
+    expect(finding?.kind).toBe("hostinger_flake");
+    expect(finding?.detail).toContain("timed out after");
+    expect(finding?.action).toContain("did not touch any box");
+  });
+
+  it("still holds a flake crash whose previous flake is older than 48h", () => {
+    const latest = run({
+      sweep: "vps-term-renewal-sweep",
+      ok: false,
+      error_count: 1,
+      errors: [HOSTINGER_FLAKE],
+      finished_at: minutesBefore(10)
+    });
+    const prior = run({
+      sweep: "vps-term-renewal-sweep",
+      ok: false,
+      error_count: 1,
+      errors: [HOSTINGER_FLAKE],
+      finished_at: minutesBefore(10 + 48 * 60 + 60)
+    });
+    const runs = [
+      ...healthyFleet().filter((r) => r.sweep !== "vps-term-renewal-sweep"),
+      prior,
+      latest
+    ];
+    const result = evaluate(runs);
+    expect(result.findings.filter((f) => f.sweep === "vps-term-renewal-sweep")).toEqual([]);
+    expect(result.suppressedHostingerFlakes).toBe(1);
+  });
+
+  it("still pages a real crash immediately, even on a Hostinger buy-sweep", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? { ...r, ok: false, error_count: 1, errors: ["TypeError: x is not a function"] }
+        : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-contract-upgrade-sweep");
+    expect(finding?.kind).toBe("failed");
+    expect(finding?.detail).toContain("TypeError");
+  });
+
+  it("still pages a purchase timeout as CRASHED, not a catalog flake", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-contract-upgrade-sweep"
+        ? {
+            ...r,
+            ok: false,
+            error_count: 1,
+            errors: ["Hostinger API /api/vps/v1/virtual-machines timed out after 30000ms"]
+          }
+        : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-contract-upgrade-sweep");
+    expect(finding?.kind).toBe("failed");
+    expect(evaluate(runs).suppressedHostingerFlakes).toBe(0);
+  });
+
+  it("classifies a recorded Hostinger list failure as hostinger_flake, not a per-tenant silent-200", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-term-renewal-sweep"
+        ? {
+            ...r,
+            error_count: 1,
+            errors: [`Hostinger list failed: ${HOSTINGER_FLAKE}`]
+          }
+        : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-term-renewal-sweep");
+    expect(finding?.kind).toBe("hostinger_flake");
+    expect(finding?.detail).toContain("Hostinger list failed");
+  });
+
+  it("keeps mixed per-tenant errors on the silent-200 kind", () => {
+    const runs = healthyFleet().map((r) =>
+      r.sweep === "vps-term-renewal-sweep"
+        ? {
+            ...r,
+            error_count: 2,
+            errors: ["Amy migration failed: ssh down", `Hostinger list failed: ${HOSTINGER_FLAKE}`]
+          }
+        : r
+    );
+    const finding = evaluate(runs).findings.find((f) => f.sweep === "vps-term-renewal-sweep");
+    expect(finding?.kind).toBe("errors");
   });
 });
 

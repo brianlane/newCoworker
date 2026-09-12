@@ -30,6 +30,7 @@ import {
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { CatalogItem } from "@/lib/hostinger/client";
+import { HostingerApiError } from "@/lib/hostinger/client";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 
 const BIZ = "11111111-2222-3333-4444-555555555555";
@@ -1579,5 +1580,55 @@ describe("failures mirror migration_failed findings for the run recorder", () =>
       expect(result.failures.join(" ")).toContain(String(f.vmId));
       expect(result.failures.join(" ")).toContain(f.detail);
     }
+  });
+});
+
+function catalogTimeout(): HostingerApiError {
+  return new HostingerApiError(
+    "/api/billing/v1/catalog?category=VPS",
+    0,
+    null,
+    "Hostinger API /api/billing/v1/catalog?category=VPS timed out after 30000ms"
+  );
+}
+
+describe("Hostinger list flakes do not crash the sweep", () => {
+  it("retries a catalog timeout and then continues", async () => {
+    const listCatalog = vi
+      .fn()
+      .mockRejectedValueOnce(catalogTimeout())
+      .mockResolvedValueOnce(catalogKvm2Biennial(3500, 5000));
+    const result = await runTermRenewalSweep(makeDeps({ listCatalog }), { now: NOW });
+    expect(result.hostingerUnavailable).toBeUndefined();
+    expect(result.failures).toEqual([]);
+    expect(listCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns hostingerUnavailable after two flakes, with an empty failures list", async () => {
+    const result = await runTermRenewalSweep(
+      makeDeps({
+        listCatalog: vi.fn(async () => {
+          throw catalogTimeout();
+        })
+      }),
+      { now: NOW }
+    );
+    expect(result.hostingerUnavailable).toContain("timed out after 30000ms");
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toBe(0);
+    expect(loggerWarnMock).toHaveBeenCalled();
+  });
+
+  it("still throws a non-flake Hostinger failure", async () => {
+    await expect(
+      runTermRenewalSweep(
+        makeDeps({
+          listCatalog: vi.fn(async () => {
+            throw new Error("catalog 500");
+          })
+        }),
+        { now: NOW }
+      )
+    ).rejects.toThrow("catalog 500");
   });
 });

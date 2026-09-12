@@ -67,6 +67,18 @@ describe("api-response", () => {
   it("handleRouteError returns 500 for unknown errors", async () => {
     const res = handleRouteError(new Error("boom"));
     expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.message).toBe("An unexpected error occurred");
+  });
+
+  it("handleRouteError keeps a Hostinger flake message so the ledger can hold it off ACTION REQUIRED", async () => {
+    const err = Object.assign(new Error("Hostinger API /api/billing/v1/catalog timed out after 30000ms"), {
+      name: "HostingerApiError"
+    });
+    const res = handleRouteError(err);
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.message).toContain("timed out after 30000ms");
   });
 
   it("handleRouteError maps ZodError to 400", async () => {
