@@ -571,9 +571,15 @@ describe("checkActions (dry run)", () => {
   it("reports a control that is not on the page as absent", async () => {
     const { page } = makeStubPage({ count: 0 });
 
-    const checks = await checkActions(page, [
-      { kind: "click_text", target: "Claim this lead", value: "" }
-    ]);
+    // waitForTimeout is a no-op in this stub, so a production appear wait
+    // busy-loops until wall-clock CLICK_TEXT_APPEAR_MS (15s) elapses and the
+    // vitest 15s timeout races it. The verdict is about the outcome, not the
+    // wait. Sibling tests pass a tiny totalAppearMs for the same reason.
+    const checks = await checkActions(
+      page,
+      [{ kind: "click_text", target: "Claim this lead", value: "" }],
+      { totalAppearMs: 0 }
+    );
 
     expect(checks[0].state).toBe("absent");
   });
