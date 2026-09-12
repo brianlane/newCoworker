@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { HostingerApiError } from "@/lib/hostinger/client";
 import {
-  hostingerListFlakeLogEvent,
   applyHostingerListFlakePaging,
   loadHostingerListsForSweep
 } from "@/lib/vps/hostinger-list-load";
@@ -83,7 +82,7 @@ describe("applyHostingerListFlakePaging", () => {
       {
         businessId: null,
         source: sweep,
-        event: hostingerListFlakeLogEvent(sweep),
+        event: "vps_contract_upgrade_sweep_hostinger_list_flake",
         message: detail
       },
       { windowMinutes: HOSTINGER_FLAKE_WINDOW_MINUTES }
@@ -112,15 +111,22 @@ describe("applyHostingerListFlakePaging", () => {
     expect(result.failures).toEqual(["existing", `Hostinger list failed: ${detail}`]);
   });
 
-  it("keys the two buy-sweeps on different events so a morning flake does not escalate the next hour", () => {
-    expect(hostingerListFlakeLogEvent("vps-contract-upgrade-sweep")).toBe(
-      "vps_contract_upgrade_sweep_hostinger_list_flake"
+  it("keys the two buy-sweeps on different events so a morning flake does not escalate the next hour", async () => {
+    const recorder = vi.fn(async () => "warn") as unknown as typeof recordFailure;
+    await applyHostingerListFlakePaging(
+      { failures: [], hostingerUnavailable: detail },
+      "vps-contract-upgrade-sweep",
+      recorder
     );
-    expect(hostingerListFlakeLogEvent("vps-term-renewal-sweep")).toBe(
+    await applyHostingerListFlakePaging(
+      { failures: [], hostingerUnavailable: detail },
+      "vps-term-renewal-sweep",
+      recorder
+    );
+    const events = vi.mocked(recorder).mock.calls.map((c) => c[0].event);
+    expect(events).toEqual([
+      "vps_contract_upgrade_sweep_hostinger_list_flake",
       "vps_term_renewal_sweep_hostinger_list_flake"
-    );
-    expect(hostingerListFlakeLogEvent("vps-contract-upgrade-sweep")).not.toBe(
-      hostingerListFlakeLogEvent("vps-term-renewal-sweep")
-    );
+    ]);
   });
 });

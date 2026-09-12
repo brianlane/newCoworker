@@ -25,16 +25,16 @@ import type { recordFailure } from "@/lib/db/system-logs";
  * contract-upgrade warn would otherwise make the 11:00 term-renewal run
  * escalate the same morning.
  */
-export function hostingerListFlakeLogEvent(sweep: string): string {
+function hostingerListFlakeLogEvent(sweep: string): string {
   return `${sweep.replace(/-/g, "_")}_hostinger_list_flake`;
 }
 
-export type HostingerLists = {
+type HostingerLists = {
   catalog: CatalogItem[];
   billingSubs: BillingSubscription[];
 };
 
-export type HostingerListLoad =
+type HostingerListLoad =
   | { ok: true; lists: HostingerLists }
   | { ok: false; detail: string };
 

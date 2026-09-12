@@ -68,7 +68,6 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { runContractUpgradeSweep } from "@/lib/vps/contract-upgrade-sweep";
 import { getLastEnqueuedAtForPurpose } from "@/lib/provisioning/jobs";
 import { recordFailure } from "@/lib/db/system-logs";
-import { hostingerListFlakeLogEvent } from "@/lib/vps/hostinger-list-load";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/vps-contract-upgrade-sweep", {
@@ -138,7 +137,7 @@ describe("api/internal/vps-contract-upgrade-sweep route", () => {
     expect(json.data.failures).toEqual([]);
     expect(recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: hostingerListFlakeLogEvent("vps-contract-upgrade-sweep"),
+        event: "vps_contract_upgrade_sweep_hostinger_list_flake",
         source: "vps-contract-upgrade-sweep"
       }),
       expect.objectContaining({ windowMinutes: 48 * 60 })
