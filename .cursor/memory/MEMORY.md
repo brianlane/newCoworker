@@ -56,7 +56,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [callWindow skip resolves to not_placed](project_call_window_skip_not_placed_trap.md) - use defer, stop ladders on REACHED
 - [Roster member tags](project_roster_member_tags.md) - tags say what a teammate handles; fails safe to everyone
 - [Main checkout is stale, never copy files](project_main_checkout_is_stale_never_copy_files.md) - a whole-file copy silently deletes newer keys
-- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); hapi cookie; templated click_text; THREE price channels, IVR can disagree with the written pair
+- [HomeLight portal traps](project_homelight_portal_traps.md) - email-first login (probe = false login_failed); hapi cookie; templated click_text; click_text can miss a header that is already in the later screenshot (run 39f53cb7, `CLICK_TEXT_APPEAR_MS` 5s to 15s, nav is the href selector); THREE price channels, IVR can disagree with the written pair
 - [PostgREST writes matching zero rows](project_postgrest_write_matching_zero_rows.md) - no-match write returns no error; .select() and check
 - [Fixed future date is a time bomb](project_fixed_future_date_is_a_time_bomb.md) - a hardcoded booking instant took main red; anchor to now
 - [Run itest and live e2e locally](project_live_e2e_cannot_run_locally.md) - exact recipes; admin toggle nightly-only

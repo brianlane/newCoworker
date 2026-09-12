@@ -12,7 +12,8 @@ import {
   CLOSE_ICON_RE,
   MAX_FOREACH_ITEMS,
   capForEachList,
-  optionalTargetPresent
+  optionalTargetPresent,
+  CLICK_TEXT_APPEAR_MS
 } from "../vps/aiflow-render/actions.mjs";
 import { SWEEP_CAPACITY } from "../scripts/oneshot/amy-clever-weekly-update-sweep-definition";
 
@@ -408,6 +409,13 @@ describe("click_text waits for a control that has not hydrated yet", () => {
     expect(run.clicks).toBe(1);
     // It genuinely waited rather than getting lucky on a retry-free path.
     expect(run.waits).toBeGreaterThan(0);
+  });
+
+  it("waits long enough for a header that hydrates after body text", () => {
+    // 5s lost Amy's HomeLight portal-note click (run 39f53cb7) while the
+    // failure artifact still showed the Referrals link. Do not silently
+    // drop back to that window.
+    expect(CLICK_TEXT_APPEAR_MS).toBeGreaterThanOrEqual(15_000);
   });
 
   it("still fails when the control never appears", async () => {

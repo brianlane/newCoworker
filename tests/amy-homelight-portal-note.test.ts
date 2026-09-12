@@ -4,6 +4,7 @@ import {
   AUTH_LABEL,
   GATE_OURS_ARM_ID,
   GATE_STEP_ID,
+  LEGACY_REFERRALS_CLICK,
   NAMED_ARM_ID,
   NAMED_BRANCH_ID,
   NOTE_EXPECT,
@@ -11,11 +12,14 @@ import {
   NOTE_SUBMIT,
   NOTE_TEXT,
   NOTE_TEXTAREA,
+  REFERRALS_NAV_SELECTOR,
   URL_VAR,
   addPortalNote,
   allStepIds,
   buildPortalNote,
-  noteActions
+  findPortalNoteStep,
+  noteActions,
+  patchPortalNoteNav
 } from "../scripts/oneshot/amy-homelight-portal-note-definition";
 import {
   parseAiFlowDefinition,
@@ -98,7 +102,7 @@ function liveish(): AiFlowDefinition {
 describe("noteActions", () => {
   it("navigates, posts, and re-clicks the opener as the submit proof", () => {
     expect(noteActions()).toEqual([
-      { kind: "click_text", target: "Referrals" },
+      { kind: "click_selector", target: REFERRALS_NAV_SELECTOR },
       { kind: "click_text", target: "{{vars.lead_name}}" },
       { kind: "click_selector", target: ADD_NOTE_OPENER },
       { kind: "fill_selector", target: NOTE_TEXTAREA, valueTemplate: NOTE_TEXT },
@@ -117,6 +121,11 @@ describe("noteActions", () => {
     expect(ADD_NOTE_OPENER).toBe('[data-test="referral-detail-modal-add-note-button"]');
     expect(NOTE_TEXTAREA).toBe('[data-test="referral-add-note-textarea"]');
     expect(NOTE_SUBMIT).toBe('[data-test="referral-add-note-btn"]');
+  });
+
+  it("keys the claim-page header on HomeLight's href, not the visible label", () => {
+    expect(REFERRALS_NAV_SELECTOR).toBe('nav[data-test="navbar"] a[href="/referrals"]');
+    expect(LEGACY_REFERRALS_CLICK).toEqual({ kind: "click_text", target: "Referrals" });
   });
 
   it("the note is the honest actions_taken log and the expect is its leading fragment", () => {
@@ -227,5 +236,51 @@ describe("buildPortalNote", () => {
     };
     const actions = gate.branches[0].steps[0].branches[0].steps[0].actions;
     expect(actions[1].target).toBe("{{vars.lead_name}}");
+    expect(actions[0].target).toBe(REFERRALS_NAV_SELECTOR);
+  });
+});
+
+describe("patchPortalNoteNav", () => {
+  it("is a no-op when the note step already uses the href selector", () => {
+    const def = liveish();
+    addPortalNote(def);
+    expect(patchPortalNoteNav(def)).toBe(false);
+    expect(findPortalNoteStep(def)?.actions[0]).toEqual({
+      kind: "click_selector",
+      target: REFERRALS_NAV_SELECTOR
+    });
+  });
+
+  it("rewrites the live click_text Referrals action in place", () => {
+    const def = liveish();
+    addPortalNote(def);
+    const note = findPortalNoteStep(def)!;
+    note.actions[0] = { ...LEGACY_REFERRALS_CLICK };
+    expect(patchPortalNoteNav(def)).toBe(true);
+    expect(note.actions[0]).toEqual({
+      kind: "click_selector",
+      target: REFERRALS_NAV_SELECTOR
+    });
+    // The rest of the sequence, including the templated name click, is untouched.
+    expect(note.actions[1]).toEqual({ kind: "click_text", target: "{{vars.lead_name}}" });
+    expect(patchPortalNoteNav(def)).toBe(false);
+  });
+
+  it("refuses when the note step is missing", () => {
+    expect(() => patchPortalNoteNav(liveish())).toThrow(/no hl_portal_note/);
+  });
+
+  it("refuses when the note step has no actions", () => {
+    const def = liveish();
+    addPortalNote(def);
+    findPortalNoteStep(def)!.actions = [];
+    expect(() => patchPortalNoteNav(def)).toThrow(/no actions/);
+  });
+
+  it("refuses when the first action is neither the legacy click nor the selector", () => {
+    const def = liveish();
+    addPortalNote(def);
+    findPortalNoteStep(def)!.actions[0] = { kind: "click_text", target: "Dashboard" };
+    expect(() => patchPortalNoteNav(def)).toThrow(/Dashboard/);
   });
 });

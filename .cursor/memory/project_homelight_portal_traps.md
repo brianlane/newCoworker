@@ -192,6 +192,54 @@ the click races the SPA re-render onto the wrong referral (observed live).
 See [[project_homelight_claim_click_silent_noop]] for the never-guess-selectors
 rule this account keeps re-learning.
 
+## homelight-referrals-nav-click-hydration
+
+**`click_text "Referrals"` can fail while the later screenshot still shows the
+link.** On 2026-09-11 run `39f53cb7` (Annalie H., $379,205, zip 85205) the
+HomeLight Referral flow claimed the lead, offered it, texted Amy, ran the
+late-contact ladder, and then failed at its LAST nested step (`hl_portal_note`)
+with `no matching control on the page` for `click_text "Referrals"`. That
+pair of `ai_flow_run_failed` / `ai_flow_step_failed` rows is what showed up on
+the admin System Errors card. The 404 and aborted `google-analytics.com`
+POSTs in the same message are HomeLight's usual noise (identical on a healthy
+live probe; see `_ssgManifest.js` and `/_next/data/*.json` as `text/html`
+above).
+
+The saved artifacts (`aiflow-screenshots` `.../39f53cb7-.../step-76.jpg` and
+`.html`) were a logged-in claim page titled "Agent Portal" with
+`<a href="/referrals">Referrals</a>` already in `nav[data-test="navbar"]`.
+A live probe of the same shortlink (`https://hmlt.co/f8ce24b6`) the next day
+clicked that text and landed on `https://agent.homelight.com/referrals/page/1`
+in 47s including SSH and login, same 404/GA noise.
+
+**Why.** `settlePage` returns once the body has text. Claim-page copy paints
+before the header hydrates. `click_text` then spends `CLICK_TEXT_APPEAR_MS`
+(was 5s) waiting for `.count()` and can miss a control the later failure
+screenshot still shows. Same class as Clever Accept on 2026-08-06. This run
+had been parked ~3.5 hours, so the note step was a fresh login, not a
+mid-session click.
+
+**Do not requeue that run.** `requeue-failed-flow-run.ts` would redo outreach.
+Do not post Annalie's note by hand via the probe either; the next healthy run
+will.
+
+**How to apply:**
+- Flow: `amy-homelight-portal-note-nav.ts` replaces the first action with
+  `click_selector nav[data-test="navbar"] a[href="/referrals"]`. Playwright's
+  selector click waits the full `ACTION_TIMEOUT_MS` (10s) for visibility.
+  The rest of the note sequence, including `click_text "{{vars.lead_name}}"`,
+  is untouched. Structure is untouched so parked runs resume.
+- Render: `CLICK_TEXT_APPEAR_MS` default 5_000 -> 15_000 in
+  `vps/aiflow-render/actions.mjs`, so the later name click (and other portals)
+  get the same grace. Tests stub `waitForTimeout`, so this does not slow the
+  suite. Live only after
+  `tsx debug/redeploy-aiflow-render.ts --business-id
+  621a5b0d-c2ad-449f-9d74-9d50e7b27fa3`.
+- Do NOT add a browse_action `url` field: the dashboard rebuilds steps
+  field-by-field in `AiFlowsManager.tsx` and would drop it. Do NOT add
+  `continueWhenText: "Referrals"`: that would skip the note on the claim page
+  that already contains the word.
+
 ## homelight-three-price-channels
 
 HomeLight states a referral's price on THREE channels and they are not one
