@@ -1549,8 +1549,9 @@ ungated `route_to_team` then offered a lost lead as a press-1 race. Engine
 persists inbound before eval (`suppress_reply` starts true), dedupes by
 the newest active `trigger.url`, unique index on the live URL. Flow
 claims first, offers only after a text claim or a connected claim call, and
-lost / no-call paths are alerts. Apply after the webhook is live on main.
-Do not requeue that run),
+lost / no-call paths are alerts. Applied Sep 14 2026 after main Vercel
+Deploy of PR #1842 (`207d2c46`). Waited for in-flight run `e09b3f18` to
+leave `route`. Do not requeue Sonia's run),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
