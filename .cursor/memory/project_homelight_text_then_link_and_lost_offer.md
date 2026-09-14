@@ -31,7 +31,10 @@ the run started ~0.8s after create. The bug was correlation, not the queue.
   error. Empty URLs never dedupe. A unique partial index on
   `(flow_id, trigger.url)` for active statuses is the atomic close of the
   35ms sibling race; `dedupe_key` stays the per-SMS event id so a later
-  run of the same URL after done is not blocked.
+  run of the same URL after done is not blocked. The migration cancels
+  newer duplicate active rows first so CREATE UNIQUE INDEX cannot fail
+  the deploy. 23505 on insert is the sibling of THIS referral; a later
+  lead whose newest window URL is different is a different key.
 - Insert `sms_inbound_jobs` with `suppress_reply` true. Flip it false
   only after eval, and only when no suppressing flow queued and the wait
   does not own the coworker. If the worker already claimed the row, the

@@ -416,7 +416,11 @@ async function evaluateAndEnqueueAiFlows(
         current_step: 0,
         dedupe_key: ctx.eventId
       });
-      // 23505 = a prior webhook already queued it, which still counts as queued.
+      // 23505 = a prior webhook already queued THIS referral (same event id
+      // or the live-URL unique index: the sibling of THIS referral, not a
+      // later lead). That still counts as queued: the run exists and owns
+      // the reply. A later lead with a different newest window URL is a
+      // different key and inserts cleanly.
       const queued = !runErr || (runErr as { code?: string }).code === "23505";
       if (runErr && (runErr as { code?: string }).code !== "23505") {
         console.error("ai_flow_runs insert", runErr);

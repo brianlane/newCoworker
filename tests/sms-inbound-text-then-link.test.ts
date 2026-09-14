@@ -78,5 +78,6 @@ describe("persist inbound before AiFlow trigger eval", () => {
   it("treats 23505 on run insert as queued so the unique URL index closes the sibling race", () => {
     expect(webhook).toContain("unique index on the live trigger URL");
     expect(webhook).toContain('(runErr as { code?: string }).code === "23505"');
+    expect(webhook).toContain("sibling of THIS referral");
   });
 });
