@@ -105,6 +105,30 @@ describe("findActiveRunWithTriggerUrl", () => {
     ).toBeNull();
     spy.mockRestore();
   });
+
+  it("returns null when the hit has no usable id (empty, missing, or not a string)", async () => {
+    expect(
+      await findActiveRunWithTriggerUrl(mockClient({ data: { id: "" }, error: null }), {
+        businessId: "b",
+        flowId: "f",
+        url: "https://hmlt.co/x"
+      })
+    ).toBeNull();
+    expect(
+      await findActiveRunWithTriggerUrl(mockClient({ data: { id: 123 }, error: null }), {
+        businessId: "b",
+        flowId: "f",
+        url: "https://hmlt.co/x"
+      })
+    ).toBeNull();
+    expect(
+      await findActiveRunWithTriggerUrl(mockClient({ data: null, error: null }), {
+        businessId: "b",
+        flowId: "f",
+        url: "https://hmlt.co/x"
+      })
+    ).toBeNull();
+  });
 });
 
 describe("ai_flow_runs_active_trigger_url unique index", () => {
