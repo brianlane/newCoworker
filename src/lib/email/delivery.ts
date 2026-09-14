@@ -328,9 +328,9 @@ export type ApplyEmailDeliveryByRecipientInput = {
  *
  * The key is heuristic, so it is deliberately conservative: exact subject,
  * case-insensitive exact recipient, outbound only, and a bounded recency
- * window. A first pitch and its follow-up nudge share a subject by design;
- * either row names the same tenant and the same conversation, and newest
- * wins, which is the row the receipt most plausibly belongs to.
+ * window. A first pitch and its follow-up use different subjects; either row
+ * still names the same tenant, and newest wins, which is the row the
+ * receipt most plausibly belongs to.
  */
 export async function applyEmailDeliveryStatusByRecipient(
   input: ApplyEmailDeliveryByRecipientInput,

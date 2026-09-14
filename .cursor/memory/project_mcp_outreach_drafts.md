@@ -25,8 +25,9 @@ What to know before touching it:
 - **The CTA is the one appended line a caller may decide about.** Since Sep
   2026 the first email closes on "Just reply if you want to hear more." by
   default (`outreach_settings.booking_link_on_first_touch = false`, panel
-  checkbox "Put the booking link in the first email"); the day-5 nudge always
-  carries the link. `include_booking_link` on `upsert_outreach_prospect` and
+  checkbox "Put the booking link in the first email"); the day-10 follow-up
+  always carries the link. Day-3 is a soft bump with no link.
+  `include_booking_link` on `upsert_outreach_prospect` and
   `update_outreach_draft` overrides per draft and is STORED on the row
   (`outreach_prospects.include_booking_link`, null = tenant default), so Save
   draft, Write it again, and a re-pitch that says nothing keep it.

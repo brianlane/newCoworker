@@ -48,7 +48,7 @@ against a 32-hex machine localpart.
 
 **How to apply:** treat unattributed Resend failures whose subject matches an
 outreach pitch as REAL undelivered pitches (the ledger still says `sent`,
-and the day-5 nudge will re-mail the same dead address). When auditing
+and the follow-up will re-mail the same dead address). When auditing
 deliverability, remember Gmail send-as smtpMsa means "delivered by Resend",
 not "delivered by Google".
 

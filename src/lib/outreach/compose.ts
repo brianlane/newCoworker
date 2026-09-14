@@ -15,8 +15,9 @@
  *
  * The one line below the paragraphs that IS a choice is the CTA. The first
  * email ends on a reply ask unless the tenant switched the booking link on
- * for first touch (or a draft was marked for it); the follow-up carries the
- * link whenever the tenant has one. The sign-off and the footer never vary.
+ * for first touch (or a draft was marked for it); the day-10 follow-up
+ * carries the link whenever the tenant has one. The sign-off and the footer
+ * never vary.
  *
  * The pitch is tenant-aware: what the business does and what it is asking for
  * come from the tenant's own settings and profile, so the same machinery sells
@@ -48,7 +49,7 @@ export type PitchTenant = {
   /**
    * Whether the FIRST email carries `bookingUrl` as its CTA
    * (`outreach_settings.booking_link_on_first_touch`). Off, the first email
-   * ends on a reply ask and the link waits for the follow-up: asking a
+   * ends on a reply ask and the link waits for the day-10 follow-up: asking a
    * stranger to pick a calendar slot before they have answered once is what
    * Outbound Prospecting read as the reason cold pitches drew no replies.
    */
@@ -248,7 +249,7 @@ export type AssembleOptions = {
   /**
    * Whether the CTA line carries the booking link. Left out, the tenant's
    * first-touch default decides (`bookingLinkOnFirstTouch`); a boolean is a
-   * per-email decision that wins over it: `true` for the follow-up nudge, and
+   * per-email decision that wins over it: `true` for the day-10 follow-up, and
    * whatever `outreach_prospects.include_booking_link` holds for a draft a
    * connector or owner decided about. Never produces a link the tenant does
    * not have: with no `bookingUrl` the reply ask is the only CTA there is.

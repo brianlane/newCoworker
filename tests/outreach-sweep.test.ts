@@ -4,9 +4,9 @@
  *
  * The invariants under test are the ones that cost money or credibility:
  * paid Places queries are stamped before they are bought, the send is claimed
- * before the mail leaves, the daily cap and weekday window are obeyed, one
- * nudge per prospect ever, and nothing that cannot be pitched honestly is
- * pitched at all.
+ * before the mail leaves, the daily cap and weekday window are obeyed, two
+ * follow-ups per silent prospect (day-3 then day-10), and nothing that cannot
+ * be pitched honestly is pitched at all.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +39,10 @@ import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import * as db from "@/lib/outreach/db";
 import { OUTREACH_ACTIVE_PAGE_SIZE } from "@/lib/outreach/db";
 import type { OutreachProspectRow, OutreachSettingsRow } from "@/lib/outreach/db";
+import {
+  followupDueWindows,
+  followupSubjectFor
+} from "@/lib/outreach/followup";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -96,6 +100,8 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     drafted_at: "2026-07-27T15:00:00Z",
     queued_at: null,
     sent_at: null,
+    followup_1_at: null,
+    followup_2_at: null,
     nudged_at: null,
     contacted_stage_at: null,
     replied_at: null,
@@ -185,10 +191,10 @@ function stubLedger(over: Record<string, unknown> = {}) {
     insertProspects: vi.fn(async () => []),
     listProspectsByStatus: vi.fn(async () => []),
     listProspectsToProbe: vi.fn(async () => []),
-    listProspectsDueForNudge: vi.fn(async () => []),
+    listProspectsDueForFollowup: vi.fn(async () => []),
     patchProspect: vi.fn(async () => true),
     transitionProspect: vi.fn(async () => true),
-    claimProspectNudge: vi.fn(async () => true),
+    claimProspectFollowup: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
     countProspectsNudgedSince: vi.fn(async () => 0),
     listProspectsContactedSince: vi.fn(async () => []),
@@ -1365,52 +1371,81 @@ describe("phase 3: sending", () => {
   });
 });
 
-describe("phase 4: the single nudge", () => {
-  function nudgeLedger(over: Record<string, unknown> = {}) {
-    return stubLedger({
-      listProspectsDueForNudge: vi.fn(async () => [
-        prospect({ status: "sent", sent_at: "2026-07-20T16:00:00Z" })
-      ]),
+describe("phase 4: the follow-up sequence", () => {
+  const DAY3_SENT_AT = "2026-07-20T16:00:00Z";
+  const DAY10_SENT_AT = "2026-07-15T16:00:00Z";
+  const PRIOR_FOLLOWUP = "2026-07-22T16:00:00Z";
+
+  function day3Prospect(over: Partial<OutreachProspectRow> = {}) {
+    return prospect({ status: "sent", sent_at: DAY3_SENT_AT, ...over });
+  }
+
+  function day10Prospect(over: Partial<OutreachProspectRow> = {}) {
+    return prospect({
+      id: "33333333-3333-4333-8333-333333333333",
+      status: "sent",
+      sent_at: DAY10_SENT_AT,
+      followup_1_at: PRIOR_FOLLOWUP,
+      nudged_at: PRIOR_FOLLOWUP,
       ...over
     });
   }
 
-  it("follows up once, on the original subject, with the footer intact", async () => {
+  function dueFor(stamp: string, rows: OutreachProspectRow[]) {
+    return vi.fn(async (_b: string, stepStamp: string) => (stepStamp === stamp ? rows : []));
+  }
+
+  function nudgeLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_1_at", [day3Prospect()]),
+      ...over
+    });
+  }
+
+  it("sends the day-3 bump with a unique subject, no booking link, and the footer intact", async () => {
     const ledger = nudgeLedger();
     const deps = baseDeps();
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(1);
-    // Claimed through the nudge-specific guard, not the status transition: a
-    // nudge leaves the status alone, so "nudged_at is still null" is the only
-    // thing that stops two overlapping passes both sending it.
-    expect(ledger.claimProspectNudge).toHaveBeenCalledWith(
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledWith(
       BIZ,
       prospect().id,
+      "followup_1_at",
       MONDAY_MORNING.toISOString(),
       expect.anything()
     );
     const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
     const args = send.mock.calls[0][1] as { subject: string; bodyText: string };
-    expect(args.subject).toBe(prospect().pitch_subject);
+    expect(args.subject).toBe(followupSubjectFor(1, prospect().id, prospect().pitch_subject));
+    expect(args.subject).not.toBe(prospect().pitch_subject);
     expect(args.bodyText).toContain("/api/outreach/unsubscribe?");
     expect(args.bodyText).toContain("1 Example Plaza, Phoenix AZ");
-    expect(args.bodyText).toContain("I wrote last week");
+    expect(args.bodyText).toContain("Instant Form");
+    expect(args.bodyText).toContain("Worth a look?");
+    expect(args.bodyText).toContain("Just reply if you want to hear more.");
+    expect(args.bodyText).not.toContain("grab a time");
+    expect(args.bodyText.toLowerCase()).not.toMatch(/checking in|i wrote last week/);
   });
 
-  it("carries the booking link even though the first email did not", async () => {
-    // The tenant default is off (settings() above), so the FIRST email asked
-    // for a reply. The follow-up is the later touch where the link belongs:
-    // the prospect has heard from us once and not said no.
-    nudgeLedger();
+  it("sends the day-10 last bump with the booking link and a different unique subject", async () => {
+    const row = day10Prospect();
+    stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [row])
+    });
     const deps = baseDeps();
-    await processOutreachSweep(deps);
+    const result = await processOutreachSweep(deps);
+    expect(result.nudged).toBe(1);
     const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
-    const args = send.mock.calls[0][1] as { bodyText: string };
+    const args = send.mock.calls[0][1] as { subject: string; bodyText: string };
+    expect(args.subject).toBe(followupSubjectFor(2, row.id, row.pitch_subject));
+    expect(args.subject).not.toBe(row.pitch_subject);
     expect(args.bodyText).toContain("You can grab a time here: https://app.example.com/book/hq");
+    expect(args.bodyText).toContain("Relevant?");
     expect(args.bodyText).not.toContain("Just reply");
 
-    // And still never a link the tenant does not have.
-    nudgeLedger();
+    stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [row])
+    });
     const noLink = baseDeps({ schedulingLinkImpl: vi.fn(async () => null) });
     await processOutreachSweep(noLink);
     const plain = (noLink as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
@@ -1418,33 +1453,129 @@ describe("phase 4: the single nudge", () => {
     expect(plain.bodyText).toContain("Just reply if you want to hear more.");
   });
 
-  it("asks only for prospects inside the patience window", async () => {
+  it("does not re-send the old day-5 slot to an already-nudged row; day-10 is still available", async () => {
+    const already = day3Prospect({
+      followup_1_at: PRIOR_FOLLOWUP,
+      nudged_at: PRIOR_FOLLOWUP
+    });
+    const later = day10Prospect();
+    const ledger = stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [later])
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.nudged).toBe(1);
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledWith(
+      BIZ,
+      later.id,
+      "followup_2_at",
+      MONDAY_MORNING.toISOString(),
+      expect.anything()
+    );
+    expect(ledger.claimProspectFollowup).not.toHaveBeenCalledWith(
+      BIZ,
+      already.id,
+      "followup_1_at",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("catch-up: a never-nudged row past day 10 gets only the last bump, not a stacked pair", async () => {
+    const catchup = prospect({
+      status: "sent",
+      sent_at: DAY10_SENT_AT,
+      followup_1_at: null,
+      followup_2_at: null
+    });
+    const ledger = stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [catchup])
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.nudged).toBe(1);
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledTimes(1);
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledWith(
+      BIZ,
+      catchup.id,
+      "followup_2_at",
+      MONDAY_MORNING.toISOString(),
+      expect.anything()
+    );
+  });
+
+  it("does not send the same prospect twice when both queries return it", async () => {
+    const row = day10Prospect({ followup_1_at: null, nudged_at: null });
+    const ledger = stubLedger({
+      listProspectsDueForFollowup: vi.fn(async () => [row])
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.nudged).toBe(1);
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledTimes(1);
+    expect(ledger.claimProspectFollowup).toHaveBeenCalledWith(
+      BIZ,
+      row.id,
+      "followup_2_at",
+      MONDAY_MORNING.toISOString(),
+      expect.anything()
+    );
+  });
+
+  it("asks day-10 then day-3, with windows that do not overlap", async () => {
     const ledger = nudgeLedger();
     await processOutreachSweep(baseDeps());
-    expect(ledger.listProspectsDueForNudge).toHaveBeenCalledWith(
+    const windows = followupDueWindows(MONDAY_MORNING);
+    expect(ledger.listProspectsDueForFollowup).toHaveBeenNthCalledWith(
+      1,
       BIZ,
-      "2026-07-06T16:00:00.000Z",
-      "2026-07-22T16:00:00.000Z",
+      "followup_2_at",
+      {
+        sentAfterIso: windows.staleIso,
+        sentBeforeIso: windows.day10Iso,
+        sentAfterInclusive: true
+      },
+      5,
+      expect.anything()
+    );
+    expect(ledger.listProspectsDueForFollowup).toHaveBeenNthCalledWith(
+      2,
+      BIZ,
+      "followup_1_at",
+      {
+        sentAfterIso: windows.day10Iso,
+        sentBeforeIso: windows.day3Iso,
+        sentAfterInclusive: false
+      },
       5,
       expect.anything()
     );
   });
 
+  it("skips the day-3 query when day-10 already filled the allowance", async () => {
+    const ledger = stubLedger({
+      countProspectsSentSince: vi.fn(async () => 11),
+      listProspectsDueForFollowup: dueFor("followup_2_at", [day10Prospect()])
+    });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.listProspectsDueForFollowup).toHaveBeenCalledTimes(1);
+    expect(ledger.listProspectsDueForFollowup).toHaveBeenCalledWith(
+      BIZ,
+      "followup_2_at",
+      expect.any(Object),
+      1,
+      expect.anything()
+    );
+  });
+
   it("spends only what the cap has left, and stops when first pitches used it", async () => {
-    // 10 of 12 already sent today leaves 2, so the follow-up batch shrinks to
-    // 2 rather than its usual 5.
     const ledger = nudgeLedger({ countProspectsSentSince: vi.fn(async () => 10) });
     await processOutreachSweep(baseDeps());
-    expect(ledger.listProspectsDueForNudge).toHaveBeenCalledWith(
+    expect(ledger.listProspectsDueForFollowup).toHaveBeenCalledWith(
       BIZ,
-      expect.any(String),
-      expect.any(String),
+      "followup_2_at",
+      expect.any(Object),
       2,
       expect.anything()
     );
 
-    // And when the first pitches in THIS pass consume the last of the cap,
-    // nothing is left for follow-ups at all.
     const exhausted = nudgeLedger({
       countProspectsSentSince: vi.fn(async () => 11),
       listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
@@ -1454,13 +1585,10 @@ describe("phase 4: the single nudge", () => {
     const result = await processOutreachSweep(baseDeps());
     expect(result.sent).toBe(1);
     expect(result.nudged).toBe(0);
-    expect(exhausted.listProspectsDueForNudge).not.toHaveBeenCalled();
+    expect(exhausted.listProspectsDueForFollowup).not.toHaveBeenCalled();
   });
 
-  it("a failed follow-up keeps the original send and frees the nudge to retry", async () => {
-    // The first pitch really did go out. Marking the row failed and clearing
-    // sent_at would erase a real send, drop the day's count, and burn the one
-    // allowed nudge on an email nobody received.
+  it("a failed follow-up keeps the original send and frees that step to retry", async () => {
     for (const sendEmailImpl of [
       vi.fn(async () => ({ ok: false as const, detail: "email_not_connected" })),
       vi.fn(async () => {
@@ -1471,34 +1599,53 @@ describe("phase 4: the single nudge", () => {
       const result = await processOutreachSweep(baseDeps({ sendEmailImpl }));
       expect(result.nudged).toBe(0);
       const patch = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[0][2];
-      expect(patch).toMatchObject({ nudged_at: null });
+      expect(patch).toMatchObject({ followup_1_at: null, nudged_at: null });
       expect(patch.status).toBeUndefined();
       expect(patch).not.toHaveProperty("sent_at");
     }
   });
 
+  it("a failed day-10 restores nudged_at to the earlier step instead of clearing it", async () => {
+    const row = day10Prospect();
+    const ledger = stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [row])
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        sendEmailImpl: vi.fn(async () => ({ ok: false as const, detail: "email_not_connected" }))
+      })
+    );
+    expect(result.nudged).toBe(0);
+    const patch = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(patch).toMatchObject({
+      followup_2_at: null,
+      nudged_at: PRIOR_FOLLOWUP
+    });
+    expect(patch).not.toHaveProperty("sent_at");
+  });
+
   it("nudges nobody outside the send window", async () => {
     const ledger = nudgeLedger();
     await processOutreachSweep(baseDeps({ now: () => MONDAY_AFTERNOON }));
-    expect(ledger.listProspectsDueForNudge).not.toHaveBeenCalled();
+    expect(ledger.listProspectsDueForFollowup).not.toHaveBeenCalled();
   });
 
-  it("greets a nameless prospect neutrally and keeps a missing subject sane", async () => {
+  it("greets a nameless prospect neutrally", async () => {
     nudgeLedger({
-      listProspectsDueForNudge: vi.fn(async () => [
-        prospect({ status: "sent", business_name: "  ", pitch_subject: null })
+      listProspectsDueForFollowup: dueFor("followup_1_at", [
+        day3Prospect({ business_name: "  ", pitch_subject: null })
       ])
     });
     const deps = baseDeps();
     await processOutreachSweep(deps);
     const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
     const args = send.mock.calls[0][1] as { subject: string; bodyText: string };
-    expect(args.subject).toBe("Following up");
     expect(args.bodyText).toContain("Hi there,");
+    expect(args.subject).toBe(followupSubjectFor(1, prospect().id, null));
   });
 
-  it("counts nothing when the nudge claim is lost to another pass", async () => {
-    nudgeLedger({ claimProspectNudge: vi.fn(async () => false) });
+  it("counts nothing when the follow-up claim is lost to another pass", async () => {
+    nudgeLedger({ claimProspectFollowup: vi.fn(async () => false) });
     const deps = baseDeps();
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(0);
@@ -1508,11 +1655,6 @@ describe("phase 4: the single nudge", () => {
   });
 
   it("does not follow up with a prospect who already booked or advanced", async () => {
-    // The gap this closes: the nudge is scheduled off SILENCE, and the only
-    // thing that ever counted as noise was an inbound EMAIL. A prospect who
-    // took a slot from the link in the pitch, met, and signed was still
-    // silent by that definition, so "I wrote last week..." went to a
-    // customer.
     const ledger = nudgeLedger();
     const deps = baseDeps({
       findEngagedImpl: vi.fn(async () => ({
@@ -1523,16 +1665,10 @@ describe("phase 4: the single nudge", () => {
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(0);
     expect(result.skipped).toBe(1);
-    // Never claimed, so the one follow-up a prospect ever gets is still
-    // theirs if the owner decides to reach out later.
-    expect(ledger.claimProspectNudge).not.toHaveBeenCalled();
+    expect(ledger.claimProspectFollowup).not.toHaveBeenCalled();
   });
 
   it("retires the engaged prospect so it cannot starve the queue behind it", async () => {
-    // The due query is oldest-first and capped at NUDGE_BATCH. Left at
-    // `status = 'sent'`, a handful of booked leads would win every slot on
-    // every pass and the silent prospects behind them would age out of the
-    // window unnudged. Same starvation the Contacted reconcile documents.
     const ledger = nudgeLedger();
     const deps = baseDeps({
       findEngagedImpl: vi.fn(async () => ({
@@ -1544,15 +1680,13 @@ describe("phase 4: the single nudge", () => {
     expect(ledger.patchProspect).toHaveBeenCalledWith(
       BIZ,
       prospect().id,
-      // "Replied" is what happened: this ledger's replied means the prospect
-      // ANSWERED, and booking a call is an answer. nudged_at stays null.
       expect.objectContaining({ status: "replied", replied_at: expect.any(String) }),
       expect.anything()
     );
     expect(ledger.patchProspect).not.toHaveBeenCalledWith(
       BIZ,
       prospect().id,
-      expect.objectContaining({ nudged_at: expect.anything() }),
+      expect.objectContaining({ followup_1_at: expect.anything() }),
       expect.anything()
     );
   });
@@ -1566,29 +1700,25 @@ describe("phase 4: the single nudge", () => {
     await processOutreachSweep(baseDeps({ findEngagedImpl }));
     expect(findEngagedImpl).toHaveBeenCalled();
     const engagedAt = findEngagedImpl.mock.invocationCallOrder[0];
-    const claimedAt = (ledger.claimProspectNudge as ReturnType<typeof vi.fn>).mock
+    const claimedAt = (ledger.claimProspectFollowup as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
     expect(engagedAt).toBeLessThan(claimedAt);
   });
 
   it("holds the whole batch, and says so, when engagement cannot be read", async () => {
-    // Fail-safe: a duplicate cold email is a spam complaint while a missed
-    // one costs nothing. Nothing is stamped, so the same prospects are due
-    // again in five minutes; only a PERSISTENT failure stops follow-ups, and
-    // the note is how that stops being silent.
     const ledger = nudgeLedger();
     const deps = baseDeps({
       findEngagedImpl: vi.fn(async () => ({ engaged: new Set<string>(), readFailed: true }))
     });
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(0);
-    expect(ledger.claimProspectNudge).not.toHaveBeenCalled();
+    expect(ledger.claimProspectFollowup).not.toHaveBeenCalled();
     expect(result.notes.some((n) => n.note.includes("held this pass's follow-ups"))).toBe(
       true
     );
   });
 
-  it("abandons a claimed nudge when the prospect replied, opted out, or vanished", async () => {
+  it("abandons a claimed follow-up when the prospect replied, opted out, or vanished", async () => {
     for (const current of [prospect({ status: "unsubscribed" }), null]) {
       const ledger = nudgeLedger({ getProspect: vi.fn(async () => current) });
       const deps = baseDeps();
@@ -1597,25 +1727,40 @@ describe("phase 4: the single nudge", () => {
       expect(
         (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
       ).not.toHaveBeenCalled();
-      // The nudge stamp is released, so the one follow-up is not burned on
-      // an email that never went out.
       expect(ledger.patchProspect).toHaveBeenCalledWith(
         BIZ,
         prospect().id,
-        { nudged_at: null },
+        { followup_1_at: null, nudged_at: null },
         expect.anything()
       );
     }
   });
 
-  it("skips a nudge-due row with no address rather than burning its one follow-up", async () => {
+  it("abandons a claimed day-10 without erasing the earlier step", async () => {
+    const row = day10Prospect();
+    const ledger = stubLedger({
+      listProspectsDueForFollowup: dueFor("followup_2_at", [row]),
+      getProspect: vi.fn(async () => ({ ...row, status: "unsubscribed" }))
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.nudged).toBe(0);
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      row.id,
+      { followup_2_at: null, nudged_at: PRIOR_FOLLOWUP },
+      expect.anything()
+    );
+  });
+
+  it("skips a due row with no address rather than burning its step", async () => {
     const ledger = nudgeLedger({
-      listProspectsDueForNudge: vi.fn(async () => [prospect({ status: "sent", email: null })])
+      listProspectsDueForFollowup: dueFor("followup_1_at", [day3Prospect({ email: null })])
     });
     const deps = baseDeps();
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(0);
     expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    expect(ledger.claimProspectFollowup).not.toHaveBeenCalled();
     expect(
       (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
     ).not.toHaveBeenCalled();

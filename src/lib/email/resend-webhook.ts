@@ -314,7 +314,7 @@ async function maybeAlertTenant(
 }
 
 /**
- * A bounced cold-outreach pitch must leave the day-5 nudge queue the moment
+ * A bounced cold-outreach pitch must leave the follow-up queue the moment
  * the receipt lands. The Aug 28 one-shot did this after the fact; doing it
  * here means we do not wait for an operator to re-run the script. Best-effort:
  * a fault here must not make Resend retry (and eventually disable) the

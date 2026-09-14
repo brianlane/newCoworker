@@ -79,6 +79,8 @@ function row(over: Record<string, unknown> = {}) {
     drafted_at: "2026-09-05T04:00:00Z",
     queued_at: null,
     sent_at: null,
+    followup_1_at: null,
+    followup_2_at: null,
     nudged_at: null,
     contacted_stage_at: null,
     replied_at: null,

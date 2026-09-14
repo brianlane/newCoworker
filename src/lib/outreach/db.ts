@@ -15,7 +15,10 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import type { PlacesOpeningHours } from "./discover";
+import type { FollowupStamp } from "./followup";
 import { UNKNOWN_VERTICAL } from "./stats";
+
+export type { FollowupStamp } from "./followup";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -55,8 +58,8 @@ export type OutreachSettingsRow = {
   booking_meeting_type_id: string | null;
   /**
    * Whether the FIRST email carries the booking link as its CTA. Off (the
-   * default) it ends on a reply ask; the follow-up carries the link either
-   * way. A draft's own `include_booking_link` overrides this per prospect.
+   * default) it ends on a reply ask; the day-10 follow-up carries the link
+   * either way. A draft's own `include_booking_link` overrides this per prospect.
    */
   booking_link_on_first_touch: boolean;
   /**
@@ -112,7 +115,17 @@ export type OutreachProspectRow = {
   drafted_at: string | null;
   queued_at: string | null;
   sent_at: string | null;
-  /** One follow-up per prospect, ever; this stamp is what enforces it. */
+  /**
+   * Day-3 follow-up (or the migrated old day-5 nudge). Null means that slot
+   * has not been sent. Independently claimable from `followup_2_at`.
+   */
+  followup_1_at: string | null;
+  /** Day-10 follow-up. Null means that slot has not been sent. */
+  followup_2_at: string | null;
+  /**
+   * Last follow-up sent. The daily cap counts this. Per-step truth is
+   * `followup_1_at` / `followup_2_at`.
+   */
   nudged_at: string | null;
   /** When the board was moved to Contacted. Null means not yet. */
   contacted_stage_at: string | null;
@@ -660,35 +673,47 @@ export async function listProspectsByEmailAnyTenant(
 }
 
 /**
- * Prospects sent to a while ago with no reply and no nudge yet: the one
- * follow-up each, oldest first. `sentBefore` is the patience window and
- * `sentAfter` the staleness floor, because nudging a two-month-old cold email
- * reads as a stranger rediscovering you rather than a follow-up.
+ * Prospects due for one follow-up step: sent inside the window, still
+ * `sent`, no reply, that step's stamp still null. Oldest first.
+ *
+ * `sentBefore` is the patience window (3 days for step 1, 10 for step 2)
+ * and `sentAfter` the other bound. Day-3 uses an exclusive floor at the
+ * day-10 boundary so a prospect who is already due for the last bump is
+ * not also mailed the earlier one in the same pass. Day-10 uses an
+ * inclusive stale floor (21 days): older than that, leave them alone.
  *
  * A reply moves the row off `sent`, so the status filter alone would do. The
  * explicit `replied_at is null` is belt and braces on the one thing that must
  * never happen: a machine following up on somebody who already answered.
  */
-export async function listProspectsDueForNudge(
+export async function listProspectsDueForFollowup(
   businessId: string,
-  sentAfterIso: string,
-  sentBeforeIso: string,
+  stamp: FollowupStamp,
+  window: {
+    sentAfterIso: string;
+    sentBeforeIso: string;
+    sentAfterInclusive?: boolean;
+  },
   limit: number,
   client?: SupabaseClient
 ): Promise<OutreachProspectRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
+  const sentAfterInclusive = window.sentAfterInclusive !== false;
+  let q = db
     .from("outreach_prospects")
     .select()
     .eq("business_id", businessId)
     .eq("status", "sent")
-    .is("nudged_at", null)
-    .is("replied_at", null)
-    .gte("sent_at", sentAfterIso)
-    .lte("sent_at", sentBeforeIso)
+    .is(stamp, null)
+    .is("replied_at", null);
+  q = sentAfterInclusive
+    ? q.gte("sent_at", window.sentAfterIso)
+    : q.gt("sent_at", window.sentAfterIso);
+  const { data, error } = await q
+    .lte("sent_at", window.sentBeforeIso)
     .order("sent_at", { ascending: true })
     .limit(limit);
-  if (error) throw new Error(`listProspectsDueForNudge: ${error.message}`);
+  if (error) throw new Error(`listProspectsDueForFollowup: ${error.message}`);
   return (data ?? []) as OutreachProspectRow[];
 }
 
@@ -712,6 +737,8 @@ export type OutreachProspectPatch = Partial<
     | "drafted_at"
     | "queued_at"
     | "sent_at"
+    | "followup_1_at"
+    | "followup_2_at"
     | "nudged_at"
     | "replied_at"
     | "contacted_stage_at"
@@ -830,30 +857,39 @@ export async function claimDiscoveryRun(
 }
 
 /**
- * Claim the ONE follow-up a prospect ever gets, atomically.
+ * Claim one follow-up step atomically.
  *
  * `transitionProspect` guards on status, which is enough for the first pitch
- * (drafted to sent) but not for a nudge: the row stays `sent` either way, so
- * two overlapping passes would both win the status check and both send. The
- * guard that matters here is `nudged_at is null`, evaluated inside the same
- * UPDATE that sets it, so exactly one caller can ever win.
+ * (drafted to sent) but not for a follow-up: the row stays `sent` either way,
+ * so two overlapping passes would both win the status check and both send.
+ * The guard that matters here is `{stamp} is null`, evaluated inside the same
+ * UPDATE that sets it, so exactly one caller can ever win that step. The two
+ * steps are independent: a prospect who already has `followup_1_at` (the
+ * migrated old day-5 nudge) can still be claimed for day-10.
+ *
+ * `nudged_at` is refreshed to now so the daily cap counts this send.
  */
-export async function claimProspectNudge(
+export async function claimProspectFollowup(
   businessId: string,
   prospectId: string,
+  stamp: FollowupStamp,
   nowIso: string,
   client?: SupabaseClient
 ): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("outreach_prospects")
-    .update({ nudged_at: nowIso, updated_at: new Date().toISOString() })
+    .update({
+      [stamp]: nowIso,
+      nudged_at: nowIso,
+      updated_at: new Date().toISOString()
+    })
     .eq("business_id", businessId)
     .eq("id", prospectId)
     .eq("status", "sent")
-    .is("nudged_at", null)
+    .is(stamp, null)
     .select("id");
-  if (error) throw new Error(`claimProspectNudge: ${error.message}`);
+  if (error) throw new Error(`claimProspectFollowup: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 
@@ -875,8 +911,9 @@ export async function countProspectsSentSince(
 
 /**
  * Follow-ups already sent in the current window. The other half of the cap: a
- * nudge is a cold email too, so the tenant's daily limit has to count it, or a
- * day at the cap can still emit a batch of follow-ups every tick.
+ * follow-up is a cold email too, so the tenant's daily limit has to count it,
+ * or a day at the cap can still emit a batch of bumps every tick. Counted on
+ * `nudged_at`, which every follow-up send refreshes.
  */
 export async function countProspectsNudgedSince(
   businessId: string,

@@ -14,7 +14,7 @@
  *   day 0  cold email goes out, with a booking link
  *   day 1  prospect books from the link and never replies
  *   day 3  the meeting happens, the minutes classifier moves them to Won
- *   day 5  "I wrote last week..." lands on somebody who already signed
+ *   day 3  (or day 10) a follow-up lands on somebody who already signed
  *
  * Two INDEPENDENT signals close it, and either one is enough:
  *

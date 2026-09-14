@@ -14,7 +14,10 @@
  *   3. SEND (auto only, inside the window, under the cap) send from the
  *      tenant's own mailbox, then hand the prospect to the tenant's AiFlow for
  *      filing and the owner brief.
- *   4. NUDGE one follow-up per prospect, ever, to those who went quiet.
+ *   4. FOLLOW-UP two later touches for prospects who went quiet: a day-3
+ *      bump (no booking link, unique subject) then a day-10 last bump (link
+ *      on when the tenant has one). Already-nudged rows from the old day-5
+ *      path skip the first slot and can still get day-10.
  *
  * WHY THE SEND LIVES HERE AND NOT IN THE FLOW'S send_email STEP. The pitch
  * carries a legally required unsubscribe link and postal address. A flow step's
@@ -54,7 +57,7 @@ import { findEngagedProspects } from "./engagement";
 import { logger } from "@/lib/logger";
 import {
   claimDiscoveryRun,
-  claimProspectNudge,
+  claimProspectFollowup,
   countProspectsNudgedSince,
   countProspectsSentSince,
   countProspectsByStatus,
@@ -70,13 +73,14 @@ import {
   listActiveOutreachSettings,
   OUTREACH_ACTIVE_PAGE_SIZE,
   listProspectsByStatus,
-  listProspectsDueForNudge,
+  listProspectsDueForFollowup,
   listProspectsToProbe,
   listProspectsToRewrite,
   patchProspect,
   transitionProspect,
   tryTransitionProspect,
   upsertOutreachSettings,
+  type FollowupStamp,
   type OutreachProspectRow,
   type OutreachProspectStatus,
   type OutreachSettingsRow
@@ -101,6 +105,22 @@ import {
   type PitchTenant
 } from "./compose";
 import { buildOutreachUnsubscribeUrl, isWithinSendWindow, utcDayStartIso } from "./compliance";
+import {
+  FOLLOWUP_BATCH,
+  followupAssembleOptions,
+  followupDueWindows,
+  followupParagraphs,
+  followupSubjectFor,
+  undoFollowupClaim,
+  type FollowupStep
+} from "./followup";
+
+export {
+  FOLLOWUP_1_AFTER_DAYS,
+  FOLLOWUP_2_AFTER_DAYS,
+  FOLLOWUP_STALE_AFTER_DAYS,
+  FOLLOWUP_BATCH
+} from "./followup";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -109,15 +129,6 @@ export const DRAFT_BUDGET_MULTIPLIER = 2;
 
 /** Floor on the per-pass draft budget, for tenants with a tiny cap. */
 export const DRAFT_BUDGET_MIN = 4;
-
-/** Days of silence before the single follow-up goes out. */
-export const NUDGE_AFTER_DAYS = 5;
-
-/** Past this age a prospect is left alone: a late nudge reads as a stranger. */
-export const NUDGE_STALE_AFTER_DAYS = 21;
-
-/** Follow-ups per pass, per business. */
-export const NUDGE_BATCH = 5;
 
 /**
  * Pages of active businesses one pass will walk. A safety rail against a
@@ -617,7 +628,7 @@ async function reconcileContactedForBusiness(
   }
 }
 
-/** Phase 4: the single follow-up, for prospects who went quiet. */
+/** Phase 4: the two later touches, for prospects who went quiet. */
 async function nudgeForBusiness(
   settings: OutreachSettingsRow,
   tenant: PitchTenant,
@@ -625,20 +636,17 @@ async function nudgeForBusiness(
   result: OutreachSweepResult,
   allowance: number
 ): Promise<void> {
-  const day = 24 * 60 * 60 * 1000;
-  const due = await listProspectsDueForNudge(
-    settings.business_id,
-    new Date(r.now.getTime() - NUDGE_STALE_AFTER_DAYS * day).toISOString(),
-    new Date(r.now.getTime() - NUDGE_AFTER_DAYS * day).toISOString(),
-    allowance,
-    r.db
-  );
+  const due = await listDueFollowups(settings.business_id, r, allowance);
   // Silence is what schedules this mail, and `replied_at` only ever hears
   // EMAIL. Ask the other two ways a prospect can have answered (they booked
   // from the link the pitch carried, or their card has moved past Contacted)
   // before writing to somebody who has already met us. Checked BEFORE the
   // claim so the common case never claims and undoes.
-  const engagement = await r.findEngaged(settings.business_id, due, r.db);
+  const engagement = await r.findEngaged(
+    settings.business_id,
+    due.map((d) => d.prospect),
+    r.db
+  );
   if (engagement.readFailed) {
     // Fail-safe: suppress rather than risk mailing a customer. Nothing is
     // stamped, so the same prospects are due again on the next pass; only a
@@ -650,25 +658,25 @@ async function nudgeForBusiness(
     return;
   }
 
-  for (const prospect of due) {
+  for (const { prospect, step } of due) {
     const to = prospect.email;
     // Same reasoning as the send phase: no address means nothing to do, and
-    // silently "succeeding" would burn this prospect's one follow-up.
+    // silently "succeeding" would burn this step on an email nobody can get.
     if (!to) continue;
     if (engagement.engaged.has(prospect.id)) {
       // RETIRE the row, do not just skip it. The due query is oldest-first
-      // and capped at NUDGE_BATCH, so a handful of booked leads left at
+      // and capped at FOLLOWUP_BATCH, so a handful of booked leads left at
       // `status = 'sent'` would win every slot on every pass and starve the
       // silent prospects behind them until those aged out of the window
       // unnudged. That is the same starvation `reconcileContactedForBusiness`
       // documents a few functions up, and leaving it unstamped walked
       // straight back into it (Bugbot, PR #1571).
       //
-      // Stamped as `replied` rather than `nudged`, because that is what
-      // happened: this ledger's "replied" means the prospect ANSWERED the
-      // outreach, and `noteProspectReply` writes the same pair for the email
-      // case. Booking a call is an answer. `nudged_at` stays null, so the one
-      // follow-up they are owed is still theirs if the owner ever wants it.
+      // Stamped as `replied` rather than a follow-up stamp, because that is
+      // what happened: this ledger's "replied" means the prospect ANSWERED
+      // the outreach, and `noteProspectReply` writes the same pair for the
+      // email case. Booking a call is an answer. Follow-up stamps stay null,
+      // so the remaining steps are still theirs if the owner ever wants them.
       await patchProspect(
         settings.business_id,
         prospect.id,
@@ -683,30 +691,69 @@ async function nudgeForBusiness(
       settings.business_id,
       prospect.id
     );
-    // The follow-up is where the booking link belongs, whatever the tenant
-    // chose for the first email: the prospect has heard from us once and not
-    // said no, so offering a time is no longer a stranger asking for a slot.
-    // Still only when the tenant HAS a link; callToAction never invents one.
     const body = assembleBody(
       tenant,
-      [
-        `Hi ${prospect.business_name.trim() || "there"},`,
-        "I wrote last week about what I noticed when I looked you up. If it is not useful, no problem at all and I will leave it there.",
-        "If it is, I am happy to walk you through it."
-      ],
+      followupParagraphs(step, prospect.business_name),
       unsubscribeUrl,
-      { bookingLink: true }
+      followupAssembleOptions(step)
     );
-    // The nudge rides the ORIGINAL subject so it reads as the same conversation.
     const sent = await deliverPitch(settings, tenant, prospect, r, {
       to,
-      subject: prospect.pitch_subject?.trim() || "Following up",
+      subject: followupSubjectFor(step, prospect.id, prospect.pitch_subject),
       body,
-      stamp: "nudged_at"
+      stamp: step === 1 ? "followup_1_at" : "followup_2_at"
     });
     if (sent) result.nudged += 1;
   }
 }
+
+/**
+ * Day-10 first (older, closer to going stale), then fill the rest of the
+ * batch with day-3. Windows do not overlap, so a catch-up prospect who is
+ * already past day 10 is only mailed the last bump, not a stacked pair.
+ */
+async function listDueFollowups(
+  businessId: string,
+  r: Resolved,
+  allowance: number
+): Promise<Array<{ prospect: OutreachProspectRow; step: FollowupStep }>> {
+  const windows = followupDueWindows(r.now);
+  const dueLater = await listProspectsDueForFollowup(
+    businessId,
+    "followup_2_at",
+    {
+      sentAfterIso: windows.staleIso,
+      sentBeforeIso: windows.day10Iso,
+      sentAfterInclusive: true
+    },
+    allowance,
+    r.db
+  );
+  const remaining = allowance - dueLater.length;
+  const dueEarly =
+    remaining > 0
+      ? await listProspectsDueForFollowup(
+          businessId,
+          "followup_1_at",
+          {
+            sentAfterIso: windows.day10Iso,
+            sentBeforeIso: windows.day3Iso,
+            sentAfterInclusive: false
+          },
+          remaining,
+          r.db
+        )
+      : [];
+  const laterIds = new Set(dueLater.map((p) => p.id));
+  return [
+    ...dueLater.map((prospect) => ({ prospect, step: 2 as const })),
+    ...dueEarly
+      .filter((p) => !laterIds.has(p.id))
+      .map((prospect) => ({ prospect, step: 1 as const }))
+  ];
+}
+
+type PitchStamp = "sent_at" | FollowupStamp;
 
 /**
  * Claim the prospect, send the mail, log it. The claim comes FIRST and is
@@ -724,16 +771,16 @@ async function deliverPitch(
     to: string;
     subject: string;
     body: string;
-    stamp: "sent_at" | "nudged_at";
+    stamp: PitchStamp;
   }
 ): Promise<boolean> {
   const to = mail.to;
-  // Two different atomic claims, because the two sends have different
-  // invariants. A first pitch is guarded on the STATUS moving (drafted to
-  // sent), which no second pass can repeat. A nudge leaves the status alone,
-  // so the guard has to be "nudged_at is still null", checked inside the same
-  // UPDATE that sets it, or two overlapping passes both send the one follow-up
-  // a prospect ever gets.
+  // Two different atomic claims, because the two kinds of send have
+  // different invariants. A first pitch is guarded on the STATUS moving
+  // (drafted to sent), which no second pass can repeat. A follow-up leaves
+  // the status alone, so the guard has to be that step's stamp still null,
+  // checked inside the same UPDATE that sets it, or two overlapping passes
+  // both send the same bump.
   const claimed =
     mail.stamp === "sent_at"
       ? await transitionProspect(
@@ -743,7 +790,13 @@ async function deliverPitch(
           { status: "sent", sent_at: r.now.toISOString() },
           r.db
         )
-      : await claimProspectNudge(settings.business_id, prospect.id, r.now.toISOString(), r.db);
+      : await claimProspectFollowup(
+          settings.business_id,
+          prospect.id,
+          mail.stamp,
+          r.now.toISOString(),
+          r.db
+        );
   if (!claimed) return false;
 
   // LAST-MILE SUPPRESSION RE-CHECK, immediately before the provider call and
@@ -767,7 +820,9 @@ async function deliverPitch(
     await patchProspect(
       settings.business_id,
       prospect.id,
-      mail.stamp === "sent_at" ? { sent_at: null, status: "drafted" } : { nudged_at: null },
+      mail.stamp === "sent_at"
+        ? { sent_at: null, status: "drafted" }
+        : undoFollowupClaim(mail.stamp, prospect),
       r.db
     );
     return false;
@@ -784,7 +839,7 @@ async function deliverPitch(
       prospect.id,
       mail.stamp === "sent_at"
         ? { sent_at: null, status: optedOut ? "unsubscribed" : "replied" }
-        : { nudged_at: null },
+        : undoFollowupClaim(mail.stamp, current),
       r.db
     );
     return false;
@@ -817,6 +872,10 @@ async function deliverPitch(
     // them. Gmail returns the conversation id on send; Graph returns no body,
     // so Microsoft tenants send fine and simply get no autonomous follow-ups
     // (the same limitation the email coworker documents).
+    //
+    // Follow-ups use a unique subject and do not pass threadId / In-Reply-To,
+    // so Gmail starts a new conversation. rememberThread records THAT new
+    // thread, which is how a reply to the bump is still read.
     if (outcome.threadId) {
       await r.rememberThread(
         {
@@ -920,16 +979,16 @@ async function sendThroughConfiguredMailbox(
  * A failed FOLLOW-UP is a different situation, and treating it like the first
  * case corrupts the ledger: the original pitch really did go out, so marking
  * the row failed and clearing `sent_at` would erase a real send, drop the
- * day's send count, and burn the prospect's one nudge on an email nobody
- * received. Only the nudge stamp is released, which leaves the row exactly as
- * it was before the attempt and lets a later pass retry until the prospect
- * ages out of the follow-up window.
+ * day's send count, and burn that step on an email nobody received. Only that
+ * step's stamp is released (and `nudged_at` restored to the earlier step, if
+ * any), which leaves the row exactly as it was before the attempt and lets a
+ * later pass retry until the prospect ages out of the follow-up window.
  */
 async function recordSendFailure(
   settings: OutreachSettingsRow,
   prospect: OutreachProspectRow,
   r: Resolved,
-  stamp: "sent_at" | "nudged_at",
+  stamp: PitchStamp,
   detail: string
 ): Promise<void> {
   await patchProspect(
@@ -937,7 +996,7 @@ async function recordSendFailure(
     prospect.id,
     stamp === "sent_at"
       ? { status: "failed", status_detail: detail, sent_at: null }
-      : { status_detail: detail, nudged_at: null },
+      : { status_detail: detail, ...undoFollowupClaim(stamp, prospect) },
     r.db
   );
 }
@@ -1859,9 +1918,9 @@ async function sweepBusiness(
     return;
   }
   const justSent = await sendForBusiness(settings, resolved.tenant, r, result, allowance);
-  const leftForNudges = Math.min(allowance - justSent, NUDGE_BATCH);
-  if (leftForNudges <= 0) return;
-  await nudgeForBusiness(settings, resolved.tenant, r, result, leftForNudges);
+  const leftForFollowups = Math.min(allowance - justSent, FOLLOWUP_BATCH);
+  if (leftForFollowups <= 0) return;
+  await nudgeForBusiness(settings, resolved.tenant, r, result, leftForFollowups);
 }
 
 /**

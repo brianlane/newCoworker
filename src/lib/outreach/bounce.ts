@@ -1,23 +1,26 @@
 /**
- * Prospecting, bounce retirement: take a dead address off the day-5 nudge
+ * Prospecting, bounce retirement: take a dead address off the follow-up
  * queue the moment the receipt lands.
  *
- * Until 2026-08-28 a bounced pitch stayed at `sent`. The sweep's one
- * follow-up is keyed on that status, so five days later we re-mailed a
- * mailbox that had already refused us: bad for the recipient, bad for the
- * sending domain, and it burned the one follow-up the prospect will ever
- * get. A one-shot repaired the rows that had already bounced. This module
- * is the live path, so the next bounce does not wait for an operator.
+ * Until 2026-08-28 a bounced pitch stayed at `sent`. The sweep's follow-up
+ * sequence is keyed on that status, so days later we re-mailed a mailbox
+ * that had already refused us: bad for the recipient, bad for the sending
+ * domain, and it burned a follow-up slot the prospect will never get. A
+ * one-shot repaired the rows that had already bounced. This module is the
+ * live path, so the next bounce does not wait for an operator.
  *
  * Policy is the one-shot's, not a new one: bounced/failed only (a spam
  * complaint received the mail, and whether to keep talking is an owner
  * call), `sent` -> `failed` with `sent_at` kept so the daily cap still
- * counts the send, skip a row that already replied or already got its
- * nudge. See scripts/oneshot/retire-bounced-outreach-prospects.ts.
+ * counts the send. Skip a row that already replied, or that already finished
+ * the sequence (`followup_2_at` set). A row that only had the old day-5
+ * nudge (or day-3) still has day-10 left, so a bounce of the first pitch
+ * MUST retire it. See scripts/oneshot/retire-bounced-outreach-prospects.ts.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listProspectsByEmail, listProspectsByEmailAnyTenant, transitionProspect } from "./db";
+import { isOutreachFollowupSubject } from "./followup";
 import type { EmailDeliveryStatus } from "@/lib/email/delivery";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -55,7 +58,10 @@ function bounceSubjectMatchesPitch(
   receiptSubject: string | null
 ): boolean {
   if (!receiptSubject || !pitchSubject) return true;
-  return receiptSubject === pitchSubject;
+  if (receiptSubject === pitchSubject) return true;
+  // Follow-ups use a unique subject, so a bounce of the bump would otherwise
+  // miss the pitch_subject match and leave day-10 queued to a dead mailbox.
+  return isOutreachFollowupSubject(receiptSubject);
 }
 
 /**
@@ -87,9 +93,9 @@ export async function retireProspectsOnBounce(
   for (const prospect of prospects) {
     if (prospect.status !== "sent") continue;
     if (prospect.replied_at) continue;
-    // The one follow-up already went out. Nothing left to cancel, and
-    // treating this like a first-pitch bounce would erase a real send.
-    if (prospect.nudged_at) continue;
+    // The sequence is already finished. Nothing left to cancel, and
+    // treating this like a first-pitch bounce would rewrite a real send.
+    if (prospect.followup_2_at) continue;
     if (!bounceSubjectMatchesPitch(prospect.pitch_subject, input.subject)) continue;
     const sentMs = prospect.sent_at ? Date.parse(prospect.sent_at) : NaN;
     // An older bounce of unrelated mail to the same address must not retire

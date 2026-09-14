@@ -2419,12 +2419,18 @@ address ride every email either way**: the toggle moves exactly one line, and
 `tests/outreach-compose.test.ts` pins the footer as byte-identical across the
 two settings.
 
-**The follow-up nudge always carries the link** when the tenant has one. By
-the time it goes out the prospect has heard from us once and not said no, so
-offering a time is a next step rather than an opening demand. That is the
-"later touch" the link waits for; `nudgeForBusiness` passes `bookingLink:
-true` explicitly and the CTA line still refuses to invent a link for a tenant
-without one.
+**The day-10 follow-up carries the link** when the tenant has one. Day-3 is
+still a soft bump with no calendar. By day 10 the prospect has heard from us
+twice and not said no, so offering a time is a last step rather than an
+opening demand. `nudgeForBusiness` passes `bookingLink: true` on that later
+touch only; the CTA line still refuses to invent a link for a tenant without
+one. Day-3 passes `bookingLink: false`.
+
+**Follow-up subjects are unique.** Day-3 and day-10 do not reuse
+`pitch_subject`. Gmail only files a send into an existing conversation when
+the subject matches and In-Reply-To / References / threadId are set; we pass
+none of those, so each bump starts a new conversation. Replies still work:
+`rememberThread` records the new thread the same way the first pitch does.
 
 **`outreach_prospects.include_booking_link`** is the per-draft override: null
 follows the tenant default, a boolean is a decision made for this one
@@ -2440,7 +2446,7 @@ default. `list_outreach_queue` reports the tenant default and each draft's
 override so an agent knows what a draft will get without asking.
 
 To enable the link on later touches or after a reply: leave the tenant default
-off, and either let the nudge carry it (nothing to do) or flip the one draft
+off, and either let the day-10 follow-up carry it (nothing to do) or flip the one draft
 with `update_outreach_draft { draft_id, include_booking_link: true }`. To go
 back to link-first for every email, tick the panel checkbox and save.
 
@@ -2702,7 +2708,11 @@ carries no send step at all, and a test pins that.
   is suppressed like anyone else. Only an already-suppressed row short-circuits.
 - Weekdays only, inside a per-tenant window in the tenant's timezone, under a
   per-tenant daily cap (12 by default) that counts follow-ups too.
-- One follow-up per prospect, ever, and any reply cancels it. A hard bounce
+- Two follow-ups per silent prospect, and any reply cancels the rest. Day-3
+  is a new-angle bump with a unique subject and no booking link. Day-10 is the
+  last bump and carries the link when the tenant has one. Prospects who
+  already got the old day-5 nudge keep that as their first follow-up slot
+  (`nudged_at` copied onto `followup_1_at`) and can still get day-10. A hard bounce
   (or a failed send) marks the row `failed` the moment the receipt lands, so
   the follow-up never goes to a mailbox that already refused us; `sent_at` is
   kept so the daily cap still counts the pitch. Opt-out
@@ -2731,7 +2741,7 @@ path the mail is written to produce. So this was live:
 day 0  cold email goes out, with a booking link
 day 1  prospect books from the link and never replies
 day 3  the meeting happens, the minutes classifier moves them to Won
-day 5  "I wrote last week..." lands on somebody who already signed
+day 3  (or day 10) a follow-up lands on somebody who already signed
 ```
 
 `findEngagedProspects` ([src/lib/outreach/engagement.ts](src/lib/outreach/engagement.ts))
@@ -2767,14 +2777,14 @@ it, while `attendee_email` keeps whatever casing the booker typed, so that one
 needs `ilike` or it silently never fires.
 
 **An engaged prospect is RETIRED, not just skipped.** The due query is
-oldest-first and capped at `NUDGE_BATCH`, so a handful of booked leads left at
+oldest-first and capped at `FOLLOWUP_BATCH`, so a handful of booked leads left at
 `status = 'sent'` would win every slot on every pass and starve the silent
 prospects behind them until they aged out of the window unnudged. That is the
 same starvation the Contacted reconcile documents, and skipping without
 stamping walks straight back into it. They are stamped `replied`, which is
 what happened: this ledger's "replied" means the prospect ANSWERED the
-outreach, and booking a call is an answer. `nudged_at` stays null, so the one
-follow-up they are owed is still theirs if the owner ever wants it.
+outreach, and booking a call is an answer. Follow-up stamps stay null, so the
+remaining steps they are owed are still theirs if the owner ever wants them.
 
 **Fail direction is suppress.** An unreadable or TRUNCATED signal answers
 "engaged" and holds the whole batch, because the sweep's own doctrine settles
@@ -2850,7 +2860,8 @@ single guarded UPDATE rather than a read followed by a write:
 | --- | --- | --- |
 | Today's discovery | `last_discovery_at` older than today | Places queries are billable, so two passes must not both buy them |
 | A first pitch | status still `drafted` | A duplicate cold email is a spam complaint |
-| The one follow-up | `nudged_at` still null | The status stays `sent` either way, so status alone does not gate it |
+| Day-3 follow-up | `followup_1_at` still null | The status stays `sent` either way, so status alone does not gate it |
+| Day-10 follow-up | `followup_2_at` still null | Independent of day-3, so an already-nudged old day-5 row can still get this later touch |
 
 There is also a last-mile suppression re-check immediately before the provider
 call, mirroring the campaign sweep: an opt-out landing just after the claim

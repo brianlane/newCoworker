@@ -9,25 +9,26 @@
  * recipient+subject fallback shipped, only as
  * `email_delivery_failed_unattributed` rows in system_logs, while the
  * prospect ledger kept saying `sent`. A prospect at `sent` with no reply is
- * exactly what the sweep nudges five days later, so every bounced pitch was
- * queued to re-mail a known-dead address: bad for the recipient, bad for the
- * sending domain's reputation, and the nudge burns the one follow-up the
- * prospect will ever get on an email that cannot arrive.
+ * exactly what the sweep follows up on, so every bounced pitch was queued
+ * to re-mail a known-dead address: bad for the recipient, bad for the
+ * sending domain's reputation, and the send burns a follow-up slot on an
+ * email that cannot arrive.
  *
  * EVIDENCE, NOT A HAND-TYPED LIST. The bounced recipients are read from
  * system_logs (`email_delivery_failed` + `email_delivery_failed_unattributed`,
  * source `email`, status `bounced`/`failed` in the payload), then matched to
  * `outreach_prospects` rows still at `sent` with the same address; when the
  * receipt carried a subject it must also equal the prospect's pitch subject
- * (first pitch and nudge share it by design). Nothing tenant-specific is
+ * or a known follow-up subject. Nothing tenant-specific is
  * hardcoded, so the same script covers any tenant the relay gap bit.
  *
  * WHAT IT WRITES. `status: sent -> failed` (which is what removes the row
- * from listProspectsDueForNudge), with a status_detail naming the bounce.
+ * from the follow-up due queries), with a status_detail naming the bounce.
  * `sent_at` is KEPT: the pitch really did go out, and countProspectsSentSince
- * keys the daily cap on it. `replied_at`/`nudged_at` are untouched; a row
- * with either set is skipped, since a reply proves delivery and a sent nudge
- * means the follow-up already happened.
+ * keys the daily cap on it. `replied_at` / `followup_2_at` are untouched; a
+ * row with a reply is skipped (delivery is proven) and a finished sequence
+ * (`followup_2_at` set) has nothing left to cancel. A row that only had the
+ * old day-5 / day-3 slot still has day-10 left, so a bounce still retires it.
  *
  * The LIVE path is `retireProspectsOnBounce` in src/lib/outreach/bounce.ts,
  * called from the Resend delivery webhook as the receipt arrives. This
@@ -45,6 +46,7 @@
  */
 import { loadEnv } from "../../debug/_shared.ts";
 import { recordOneshotApplied } from "./_ledger";
+import { isOutreachFollowupSubject } from "../../src/lib/outreach/followup.ts";
 
 loadEnv();
 
@@ -57,7 +59,7 @@ function argValue(flag: string): string | undefined {
 
 const BUSINESS_ID = argValue("--business") ?? null;
 
-/** `--since 14d` or an ISO date; default one week, comfortably past the day-5 nudge. */
+/** `--since 14d` or an ISO date; default one week, comfortably past the day-3 follow-up. */
 function sinceIso(raw: string | undefined): string {
   const m = /^(\d+)d$/.exec(raw ?? "");
   if (m) return new Date(Date.now() - Number(m[1]) * 86_400_000).toISOString();
@@ -158,7 +160,7 @@ for (const [to, receipts] of bounces) {
   //    say "already retired" instead of silently finding nothing on a re-run.
   let query = db
     .from("outreach_prospects")
-    .select("id, business_id, domain, business_name, email, status, status_detail, pitch_subject, sent_at, nudged_at, replied_at")
+    .select("id, business_id, domain, business_name, email, status, status_detail, pitch_subject, sent_at, followup_2_at, replied_at")
     .ilike("email", escapeIlike(to))
     .order("sent_at", { ascending: false })
     .limit(10);
@@ -178,8 +180,8 @@ for (const [to, receipts] of bounces) {
     //     system_logs clock, which is always after the sent_at claim stamp),
     //     or an old bounce of unrelated mail to the same address would
     //     retire a later pitch that delivered fine (Bugbot, PR #1695);
-    //   - a receipt naming a subject must name the pitch's (first pitch and
-    //     nudge share it by design), while a subjectless receipt matches;
+    //   - a receipt naming a subject must name the pitch's or a known
+    //     follow-up subject, while a subjectless receipt matches;
     //   - searched newest first across ALL of the address's receipts, so an
     //     unrelated later bounce cannot shadow the one that matches.
     const sentAtMs = prospect.sent_at ? Date.parse(String(prospect.sent_at)) : NaN;
@@ -188,7 +190,10 @@ for (const [to, receipts] of bounces) {
       .find(
         (r) =>
           (Number.isNaN(sentAtMs) || Date.parse(r.at) >= sentAtMs) &&
-          (!r.subject || !prospect.pitch_subject || r.subject === prospect.pitch_subject)
+          (!r.subject ||
+            !prospect.pitch_subject ||
+            r.subject === prospect.pitch_subject ||
+            isOutreachFollowupSubject(r.subject))
       );
     if (!bounce) {
       console.log(`  SKIP ${label}: no bounce receipt matches this pitch (subject and send time)`);
@@ -210,8 +215,8 @@ for (const [to, receipts] of bounces) {
       skipped++;
       continue;
     }
-    if (prospect.nudged_at) {
-      console.log(`  SKIP ${label}: the one follow-up already went out, nothing left to stop`);
+    if (prospect.followup_2_at) {
+      console.log(`  SKIP ${label}: the follow-up sequence already finished, nothing left to stop`);
       skipped++;
       continue;
     }
