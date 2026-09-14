@@ -23,17 +23,17 @@
 import type { AssembleOptions } from "./compose";
 
 /** Silence before the first follow-up. */
-export const FOLLOWUP_1_AFTER_DAYS = 3;
+const FOLLOWUP_1_AFTER_DAYS = 3;
 
 /** Silence before the last follow-up. */
-export const FOLLOWUP_2_AFTER_DAYS = 10;
+const FOLLOWUP_2_AFTER_DAYS = 10;
 
 /**
  * Past this age a prospect is left alone: a late bump reads as a stranger.
  * Same 21-day floor the old day-5 path used, so ancient sends do not get a
  * sudden cold bump when this ships.
  */
-export const FOLLOWUP_STALE_AFTER_DAYS = 21;
+const FOLLOWUP_STALE_AFTER_DAYS = 21;
 
 /** Follow-ups per pass, per business. Shared with first pitches via the cap. */
 export const FOLLOWUP_BATCH = 5;
@@ -42,13 +42,13 @@ export type FollowupStep = 1 | 2;
 
 export type FollowupStamp = "followup_1_at" | "followup_2_at";
 
-export const FOLLOWUP_1_SUBJECTS = [
+const FOLLOWUP_1_SUBJECTS = [
   "One gap after Instant Forms",
   "After the form fills",
   "The five-minute window"
 ] as const;
 
-export const FOLLOWUP_2_SUBJECTS = [
+const FOLLOWUP_2_SUBJECTS = [
   "Smaller ask",
   "Two-minute read",
   "Still relevant?"
@@ -59,38 +59,12 @@ const ALL_FOLLOWUP_SUBJECTS: readonly string[] = [
   ...FOLLOWUP_2_SUBJECTS
 ];
 
-export type FollowupSpec = {
-  step: FollowupStep;
-  stamp: FollowupStamp;
-  afterDays: number;
-  bookingLink: boolean;
-};
-
-export const FOLLOWUP_SPECS: readonly FollowupSpec[] = [
-  {
-    step: 1,
-    stamp: "followup_1_at",
-    afterDays: FOLLOWUP_1_AFTER_DAYS,
-    bookingLink: false
-  },
-  {
-    step: 2,
-    stamp: "followup_2_at",
-    afterDays: FOLLOWUP_2_AFTER_DAYS,
-    bookingLink: true
-  }
-];
-
-export function followupSpec(step: FollowupStep): FollowupSpec {
-  return FOLLOWUP_SPECS[step - 1];
-}
-
 /**
  * Gmail's thread key after stripping reply prefixes. Follow-up subjects must
  * not collide with the first pitch's fingerprint, or the unique-subject rule
  * is only a different string on the page.
  */
-export function subjectFingerprint(subject: string): string {
+function subjectFingerprint(subject: string): string {
   return subject
     .trim()
     .replace(/^(?:re|fw|fwd)\s*:\s*/gi, "")
@@ -132,28 +106,14 @@ export function followupDueWindows(now: Date): FollowupDueWindows {
   };
 }
 
-export function firstSubjectNotMatching(
-  pool: readonly string[],
-  start: number,
-  avoidFingerprint: string
-): string {
-  if (pool.length === 0) return "";
-  const idx = start % pool.length;
-  for (let i = 0; i < pool.length; i += 1) {
-    const candidate = pool[(idx + i) % pool.length];
-    if (subjectFingerprint(candidate) !== avoidFingerprint) return candidate;
-  }
-  return pool[idx];
-}
-
 /**
  * Pick a short unique subject for this step. Deterministic on prospect id so
  * a retried send (claim released after a provider fault) does not rotate to
  * a different line and look like a fresh campaign.
  *
- * Walks the pool if the first pick collides with the first-touch fingerprint,
- * which the product copy should never do (company-prefixed finding subjects
- * vs these short peer lines) but is cheap to refuse anyway.
+ * Steps to the next pool line if the first pick collides with the first-touch
+ * fingerprint, which the product copy should never do (company-prefixed
+ * finding subjects vs these short peer lines) but is cheap to refuse anyway.
  */
 export function followupSubjectFor(
   step: FollowupStep,
@@ -161,15 +121,13 @@ export function followupSubjectFor(
   pitchSubject: string | null
 ): string {
   const pool = step === 1 ? FOLLOWUP_1_SUBJECTS : FOLLOWUP_2_SUBJECTS;
-  return firstSubjectNotMatching(
-    pool,
-    rotateIndex(prospectId, pool.length),
-    subjectFingerprint(pitchSubject ?? "")
-  );
+  const start = rotateIndex(prospectId, pool.length);
+  const pick = pool[start];
+  if (subjectFingerprint(pick) !== subjectFingerprint(pitchSubject ?? "")) return pick;
+  return pool[(start + 1) % pool.length];
 }
 
-/** Greeting name: the prospect's business, or a neutral fallback. */
-export function followupGreetingName(businessName: string): string {
+function followupGreetingName(businessName: string): string {
   return businessName.trim() || "there";
 }
 
@@ -191,7 +149,7 @@ export function followupParagraphs(step: FollowupStep, businessName: string): st
 
 /** assembleBody option for this step: day-3 never a link, day-10 always when one exists. */
 export function followupAssembleOptions(step: FollowupStep): AssembleOptions {
-  return { bookingLink: followupSpec(step).bookingLink };
+  return { bookingLink: step === 2 };
 }
 
 /**

@@ -115,13 +115,6 @@ import {
   type FollowupStep
 } from "./followup";
 
-export {
-  FOLLOWUP_1_AFTER_DAYS,
-  FOLLOWUP_2_AFTER_DAYS,
-  FOLLOWUP_STALE_AFTER_DAYS,
-  FOLLOWUP_BATCH
-} from "./followup";
-
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Prospects probed per pass, as a multiple of the daily cap. */
