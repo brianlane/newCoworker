@@ -99,6 +99,7 @@ import {
   isDuplicateDelivery
 } from "../_shared/sms_auto_responder.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
+import { findActiveRunWithTriggerUrl } from "../_shared/ai_flows/trigger_url_dedupe.ts";
 import { kickAiFlowWorker, wantsImmediateStart } from "../_shared/ai_flows/worker_kick.ts";
 import { parseRouting, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { withResumeMarkerVar } from "../_shared/ai_flows/branching.ts";
@@ -240,8 +241,14 @@ async function evaluateAiFlows(
       atMs: Number.isFinite(atMs) ? atMs : current.nowMs
     });
   }
-  // The current inbound is newest (it isn't in sms_inbound_jobs yet).
-  messages.push({ text: current.text, from: current.from, atMs: current.nowMs });
+  // Append the current inbound only when it is not already in the job
+  // rows. The webhook persists the job BEFORE evaluation so a sibling
+  // "text then link" webhook 35ms later can see it. Persisting first would
+  // double-count if we always pushed current on top.
+  const lastFromSender = [...messages].reverse().find((m) => m.from === current.from);
+  if (!lastFromSender || lastFromSender.text !== current.text) {
+    messages.push({ text: current.text, from: current.from, atMs: current.nowMs });
+  }
 
   const matched: MatchedAiFlow[] = [];
   for (const f of flows) {
@@ -277,10 +284,10 @@ async function evaluateAiFlows(
 
 /**
  * Evaluate AiFlow triggers and enqueue one ai_flow_run per matched flow.
- * Runs FIRST (before stamping the inbound job) so the default Coworker reply is
- * only suppressed when an automation is actually queued to handle it. Returns
- * whether a flow that requested suppression has a queued run. Fully
- * failure-isolated: never throws, so the inbound SMS path is never broken.
+ * The inbound job is already persisted (status pending or Safe Mode done) so a
+ * sibling "text then link" webhook can correlate against this row. suppress_reply
+ * is stamped after this returns, once we know a suppressing flow actually queued.
+ * Fully failure-isolated: never throws, so the inbound SMS path is never broken.
  * Called from BOTH the normal enqueue path and the Safe-Mode forward path, so a
  * lead automation still starts even when the customer reply is handled manually.
  */
@@ -376,6 +383,14 @@ async function evaluateAndEnqueueAiFlows(
       // sender who already has a (non-test) run. Suppression is NOT granted
       // by a blocked enqueue, no run was queued to own the reply.
       if (await reentryBlocked(supabase, businessId, m.id, m.def, ctx.from ?? "")) continue;
+      // Same portal URL already running: the "too late" SMS still matches
+      // has_url plus the earlier alert in the window. Key off m.url, which is
+      // the newest URL in the window. Do not start a second run.
+      // 23505 on insert is the atomic close of the 35ms sibling race
+      // (unique index on the live trigger URL).
+      if (await findActiveRunWithTriggerUrl(supabase, { businessId, flowId: m.id, url: m.url })) {
+        continue;
+      }
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
         flow_id: m.id,
         business_id: businessId,
@@ -401,7 +416,11 @@ async function evaluateAndEnqueueAiFlows(
         current_step: 0,
         dedupe_key: ctx.eventId
       });
-      // 23505 = a prior webhook already queued it, which still counts as queued.
+      // 23505 = a prior webhook already queued THIS referral (same event id
+      // or the live-URL unique index: the sibling of THIS referral, not a
+      // later lead). That still counts as queued: the run exists and owns
+      // the reply. A later lead with a different newest window URL is a
+      // different key and inserts cleanly.
       const queued = !runErr || (runErr as { code?: string }).code === "23505";
       if (runErr && (runErr as { code?: string }).code !== "23505") {
         console.error("ai_flow_runs insert", runErr);
@@ -4490,13 +4509,24 @@ serve(async (req: Request) => {
           if (from) {
             await stopRunsOnResponse(supabase, businessId, from);
           }
+          // Persist FIRST so a sibling "text then link" webhook can correlate
+          // against this job. status=done: the worker never claims it, so there
+          // is no double-forward and no AI reply. Then evaluate.
+          const { error: smJobErr } = await supabase.from("sms_inbound_jobs").insert({
+            business_id: businessId,
+            telnyx_event_id: eventId,
+            payload: envelope as unknown as Record<string, unknown>,
+            status: "done",
+            suppress_reply: true,
+            customer_e164: from,
+            outbound_idempotency_key: crypto.randomUUID(),
+            channel: inboundChannel
+          });
+          if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
+            console.error("safe mode inbound persist", smJobErr);
+          }
           // Safe Mode only changes how the CUSTOMER reply is handled (owner does
-          // it manually); owner-configured lead automations must still start, so
-          // enqueue any matched AiFlow runs. Evaluate BEFORE persisting the job
-          // below (the engine appends the current message itself, so persisting
-          // first would double-count it in the correlation window). The kill
-          // switch (is_paused) above already stopped everything, and the worker
-          // re-checks is_paused before any side effect.
+          // it manually); owner-configured lead automations must still start.
           await evaluateAndEnqueueAiFlows(supabase, businessId, {
             from,
             to,
@@ -4518,27 +4548,6 @@ serve(async (req: Request) => {
             await applyLifecycleStage(supabase, businessId, from, "replied", {
               dedupeSuffix: eventId
             });
-          }
-          // Persist the inbound as an already-`done` job so it still appears in
-          // the AiFlow correlation window + audit trail for FUTURE messages
-          // (a multi-message "text then link" flow must see this part later).
-          // status='done' means the sms-inbound-worker never claims it, so there
-          // is no double-forward and no AI reply.
-          const { error: smJobErr } = await supabase.from("sms_inbound_jobs").insert({
-            business_id: businessId,
-            telnyx_event_id: eventId,
-            payload: envelope as unknown as Record<string, unknown>,
-            status: "done",
-            suppress_reply: true,
-            // Safe Mode persists the job as `done`, so the worker never claims it
-            // to denormalize the sender. Stamp it here so the contact page still
-            // surfaces these inbound texts.
-            customer_e164: from,
-            outbound_idempotency_key: crypto.randomUUID(),
-            channel: inboundChannel
-          });
-          if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
-            console.error("safe mode inbound persist", smJobErr);
           }
           return new Response(
             JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
@@ -4696,6 +4705,33 @@ serve(async (req: Request) => {
       }
     }
 
+    // Persist the inbound job BEFORE wait-resume / trigger evaluation so a
+    // sibling "text then link" webhook (HomeLight sends the alert and the URL
+    // 35ms apart) can see this row in the correlation window. Evaluate used
+    // to run first, so neither SMS matched and the run only started on the
+    // later "no longer available" text.
+    //
+    // suppress_reply starts TRUE: claim_sms_inbound_jobs can take a pending
+    // row while this webhook is still evaluating, and a coworker reply on a
+    // flow that owns the turn is the worse race. After eval we flip it false
+    // only when no suppressing flow queued and the wait does not own the
+    // coworker.
+    const inboundIdempotencyKey = crypto.randomUUID();
+    const { error: persistErr } = await supabase.from("sms_inbound_jobs").insert({
+      business_id: businessId,
+      telnyx_event_id: eventId,
+      payload: envelope as unknown as Record<string, unknown>,
+      status: "pending",
+      suppress_reply: true,
+      customer_e164: from,
+      outbound_idempotency_key: inboundIdempotencyKey,
+      channel: inboundChannel
+    });
+    if (persistErr && (persistErr as { code?: string }).code !== "23505") {
+      console.error("sms queue insert", persistErr);
+      return new Response("Queue error", { status: 500 });
+    }
+
     // wait_for_reply resume: if a flow run is parked waiting for THIS sender's
     // next text, capture the message into the run and re-queue it so remaining
     // no_reply nudges skip. That does NOT mute the coworker unless the waiting
@@ -4737,11 +4773,10 @@ serve(async (req: Request) => {
       });
     }
 
-    // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
-    // default Coworker reply when an automation is actually queued to handle
-    // it. Skipped entirely when a parked wait_for_reply consumed this message:
-    // the reply belongs to the waiting flow's turn, and letting it ALSO start
-    // fresh runs (e.g. a match-every-SMS flow) would double-process the lead.
+    // Evaluate AiFlow triggers + enqueue runs. Skipped entirely when a parked
+    // wait_for_reply consumed this message: the reply belongs to the waiting
+    // flow's turn, and letting it ALSO start fresh runs (e.g. a match-every-SMS
+    // flow) would double-process the lead.
     const { suppressingRunQueued } = waitReplyResumed
       ? { suppressingRunQueued: false }
       : await evaluateAndEnqueueAiFlows(supabase, businessId, {
@@ -4753,49 +4788,13 @@ serve(async (req: Request) => {
           image: telnyxInboundImages(payload)[0]
         });
 
-    const { error } = await supabase.from("sms_inbound_jobs").insert({
-      business_id: businessId,
-      telnyx_event_id: eventId,
-      payload: envelope as unknown as Record<string, unknown>,
-      status: "pending",
-      // Only suppress when a flow that requested it actually has a queued run
-      // (or a parked wait_for_reply whose flow set suppressDefaultReply just
-      // captured this message). A cadence wait without that flag still
-      // records the reply and skips remaining nudges, then the coworker
-      // answers.
-      suppress_reply: suppressingRunQueued || waitOwnsCoworker,
-      // Stamp the sender up front so the contact page + summarizer (which query
-      // by this column, not the JSONB payload) see the message even when an
-      // AiFlow suppresses the reply, the worker's suppression branch returns
-      // before it would otherwise denormalize this.
-      customer_e164: from,
-      outbound_idempotency_key: crypto.randomUUID(),
-      channel: inboundChannel
-    });
-
-    if (error) {
-      if ((error as { code?: string }).code === "23505") {
-        // Duplicate event: the first delivery already created the job. If THIS
-        // delivery is the one that managed to queue a suppressing flow (e.g. the
-        // first delivery's run insert failed and stamped suppress_reply=false),
-        // promote the existing still-pending job to suppressed so it doesn't get
-        // a normal Coworker reply alongside the AiFlow. Only touch pending rows
-        // so we never race the worker after it has claimed the job.
-        if (suppressingRunQueued || waitOwnsCoworker) {
-          await supabase
-            .from("sms_inbound_jobs")
-            .update({ suppress_reply: true })
-            .eq("business_id", businessId)
-            .eq("telnyx_event_id", eventId)
-            .eq("status", "pending");
-        }
-        return new Response(JSON.stringify({ ok: true, duplicate_job: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      console.error("sms queue insert", error);
-      return new Response("Queue error", { status: 500 });
+    if (!(suppressingRunQueued || waitOwnsCoworker)) {
+      await supabase
+        .from("sms_inbound_jobs")
+        .update({ suppress_reply: false })
+        .eq("business_id", businessId)
+        .eq("telnyx_event_id", eventId)
+        .eq("status", "pending");
     }
 
     await telemetryRecord(supabase, "sms_inbound_enqueued", { business_id: businessId, event_id: eventId });

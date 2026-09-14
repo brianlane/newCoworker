@@ -16,6 +16,7 @@ import {
   extractPhones,
   filterRosterByAvailability,
   firstUrlInText,
+  lastUrlInText,
   hasUnresolvedPlaceholders,
   htmlToText,
   flowTriggers,
@@ -245,6 +246,19 @@ describe("allUrlsInText", () => {
   });
 });
 
+describe("lastUrlInText", () => {
+  it("returns the last distinct url, not the first", () => {
+    expect(
+      lastUrlInText(
+        "https://hmlt.co/old then New HomeLight Warm Transfer https://hmlt.co/new"
+      )
+    ).toBe("https://hmlt.co/new");
+  });
+  it("returns null when no url present", () => {
+    expect(lastUrlInText("no link here")).toBeNull();
+  });
+});
+
 describe("safeRegexTest", () => {
   it("matches case-insensitively by default", () => {
     expect(safeRegexTest("lead", "New LEAD arrived")).toBe(true);
@@ -308,6 +322,24 @@ describe("evaluateSmsTrigger", () => {
     );
     expect(r.matched).toBe(true);
     expect(r.url).toBe("https://rfrl.to/xy");
+  });
+
+  it("returns the newest URL when the window still holds an earlier referral", () => {
+    const trig: SmsTrigger = {
+      channel: "sms",
+      correlationWindowMinutes: 15,
+      conditions: [{ type: "has_url" }]
+    };
+    const r = evaluateSmsTrigger(
+      trig,
+      ctx([
+        { text: "New HomeLight Referral https://hmlt.co/old" },
+        { text: "New HomeLight Warm Transfer Opportunity: later lead" },
+        { text: "https://hmlt.co/new" }
+      ])
+    );
+    expect(r.matched).toBe(true);
+    expect(r.url).toBe("https://hmlt.co/new");
   });
 
   it("fails when a condition is unmet", () => {
