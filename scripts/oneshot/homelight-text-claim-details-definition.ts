@@ -72,7 +72,7 @@ export type Step = Record<string, unknown> & {
   message?: string;
   when?: { var?: string; equals?: string; notEquals?: string; contains?: string };
   fields?: Array<{ name?: string; description?: string }>;
-  branches?: Array<{
+  branches?: Array<
     Record<string, unknown> & {
       id?: string;
       condition?: { var?: string; equals?: string; notEquals?: string; contains?: string };
