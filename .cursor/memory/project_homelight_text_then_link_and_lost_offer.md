@@ -46,9 +46,10 @@ the run started ~0.8s after create. The bug was correlation, not the queue.
   flow-owned turn.
 - Do NOT set `allowReentry=false`: HomeLight sends many leads from one sender
   while earlier runs are still parked.
-- One-shot `homelight-claim-then-offer.ts` is the flow half. Apply it only
-  after the webhook is live on main (edge functions deploy inside Vercel
-  Deploy on main). Merging the PR does not apply the one-shot.
+- One-shot `homelight-claim-then-offer.ts` is the flow half. Applied Sep 14
+  2026 after main Vercel Deploy of PR #1842 (`207d2c46`). Ledger row on
+  Amy's HomeLight Referral (`4a3b03f4`). Merging a PR does not apply a
+  one-shot.
 
 ## homelight-ungated-route-offered-a-lost-lead
 

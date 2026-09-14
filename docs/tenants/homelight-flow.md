@@ -300,7 +300,11 @@ Engine: persist inbound before eval (`suppress_reply` starts true), skip a
 second run of the newest `trigger.url`, unique index on the live URL.
 Flow: `offer_gate` claims first, offers only after a text claim or a
 connected claim call, and lost / no-call paths are alerts, not offers.
-Do not requeue that run. Apply only after the webhook is live on main),
+Applied Sep 14 2026 after main Vercel Deploy of PR #1842 (`207d2c46`).
+Waited for in-flight run `e09b3f18` to leave `route` (it had reached
+`late_wait`). Live readback: trunk 28, `lost_alert` is
+`notify_lead_owner` with `unownedFallback: "team"`, no "Reply 1" on the
+lost path. Do not requeue Sonia's run),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
