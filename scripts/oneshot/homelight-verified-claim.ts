@@ -105,14 +105,16 @@ export const STATE_SENT = "claim message sent";
 export const STATE_TAKEN = "another agent has it";
 export const STATE_UNCONFIRMED = "NOT CONFIRMED, claim by hand now";
 
-/** Schema caps extraction field descriptions at 300 chars; the test pins it. */
+/** Schema caps extraction field descriptions at 300 chars; the test pins it.
+ *  Name the team: "Taken by another agent" without that sentence reads our own
+ *  Claimed By as a rival (Vince N., run e09b3f18, same trap as already_claimed). */
 export const CLAIM_STATE_FIELD = {
   name: "claim_state",
   description:
-    `Claim state. If it shows Pick up now, We're calling you, or Call me again answer: ${STATE_CALLING}. ` +
-    `If our claim message shows as sent answer: ${STATE_SENT}. ` +
-    `Taken by another agent: ${STATE_TAKEN}. ` +
-    `Claim button still unused or unsure: ${STATE_UNCONFIRMED}.`
+    `Claim state. Pick up now/We're calling you/Call me again: ${STATE_CALLING}. ` +
+    `Claimed By Amy Laidlaw or her team, or our message sent: ${STATE_SENT}. ` +
+    `A different brokerage: ${STATE_TAKEN}. ` +
+    `Unused or unsure: ${STATE_UNCONFIRMED}.`
 };
 
 /**

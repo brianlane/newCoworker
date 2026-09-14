@@ -1552,6 +1552,14 @@ claims first, offers only after a text claim or a connected claim call, and
 lost / no-call paths are alerts. Applied Sep 14 2026 after main Vercel
 Deploy of PR #1842 (`207d2c46`). Waited for in-flight run `e09b3f18` to
 leave `route`. Do not requeue Sonia's run),
+`homelight-text-claim-details.ts` +
+`homelight-text-claim-details-definition.ts` (Sep 14 2026: Vince N., run
+`e09b3f18`. Text claim completed and the portal card had the contact;
+`claim_state` still said another agent has it; three mailbox reads returned
+`{found:false}`; `late2_never_notify` said the contact never arrived. Teaches
+`claim_state` the team name, re-reads the portal before the never-sent
+alerts, and only fires those alerts when `lead_phone` is still `none`. Do
+not requeue that run. Not yet applied: merge first, then `--apply`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

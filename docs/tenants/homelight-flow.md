@@ -187,6 +187,18 @@ a key to accept it. Everything downstream follows from that:
   visible text, since the text is exactly what changed; and never use its
   `sc-*` classes, which are styled-components build hashes. (The offer line
   that was wrong on this path is gone; see the claim-status edge above.)
+- **A text claim reveals the contact card on the portal.** After Send
+  message, HomeLight shows phone, email, and street on the referral page
+  (Claimed By this team). The late ladder only re-read the mailbox, and
+  `claim_state` still treated "Claimed By Amy Laidlaw" as a rival because
+  that field said "Taken by another agent" and did not name the team
+  (`already_claimed` already did, Kevin Duford, Aug 11). Vince N. (85140,
+  ~$428K, run `e09b3f18`, 2026-09-14): `claim_text` completed, three mailbox
+  reads returned `{found:false}`, `late2_never_notify` said the contact never
+  arrived. `homelight-text-claim-details.ts` teaches `claim_state` the team
+  name, re-reads the portal before the never-sent alerts, and only fires
+  those alerts when `lead_phone` is still `none`. Do not requeue that run.
+  Do not click Claim/Decline on the live portal from a probe.
 - **`route` runs BEFORE anything is known about the lead, which twice bound
   ownership to HomeLight's own alert line.** `route_to_team` is step 5; the
   extraction that produces `lead_phone` is step 6. Contact-ownership routing
@@ -305,6 +317,17 @@ Waited for in-flight run `e09b3f18` to leave `route` (it had reached
 `late_wait`). Live readback: trunk 28, `lost_alert` is
 `notify_lead_owner` with `unownedFallback: "team"`, no "Reply 1" on the
 lost path. Do not requeue Sonia's run),
+`homelight-text-claim-details.ts` +
+`homelight-text-claim-details-definition.ts` (Sep 14 2026: Vince N., run
+`e09b3f18`. Text claim completed. The portal card showed Claimed By Amy
+Laidlaw and the contact details. `claim_state` still said another agent
+has it. Three mailbox reads returned `{found:false}`. `late2_never_notify`
+said the contact never arrived. Teaches `claim_state` that Claimed By this
+team is `claim message sent`, inserts `late2_portal` before the never-sent
+alerts, and only fires those alerts when `lead_phone` is still `none`.
+Unique ids kept. Refuses in-flight runs parked on a moved step. Do not
+requeue Vince's run. Not yet applied: merge first, then dry-run, then
+`--apply`),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -324,7 +347,8 @@ re-run: several supersede each other.
 
 PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 #1400. Sonia R. (Sep 13 2026, run `76248380`): persist-before-eval plus
-`homelight-claim-then-offer.ts`.
+`homelight-claim-then-offer.ts`. Vince N. (Sep 14 2026, run `e09b3f18`):
+`homelight-text-claim-details.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 

@@ -71,11 +71,13 @@ the neighbouring ladder, not just its shape: per-read status vars,
 gate-while-missing so it delivers the moment details land, and stop-on-reached.
 Every one of those was already solved in the claimed path.
 
-Other HomeLight facts worth keeping: contact details are revealed ONLY after a
-successful live transfer or a connected call, so a seller who hangs up first
-means none are ever coming; the reveal email is delayed, so reads must retry;
-nothing can screenshot an email (`attachScreenshot` is a BROWSE screenshot);
-and definitions cap TOP-LEVEL steps at 30, which this flow is near.
+Other HomeLight facts worth keeping: contact details are revealed on the
+portal after a successful live transfer, a connected claim call, OR a
+completed text claim (Send message). Call-claim details also arrive later by
+email, so mailbox reads must retry; a text claim can show the card while
+email is still empty. Nothing can screenshot an email (`attachScreenshot` is
+a BROWSE screenshot); and definitions cap TOP-LEVEL steps at 30, which this
+flow is near.
 
 See [[project-call-window-skip-not-placed-trap]] for the other silent-no-op trap
 on this account.
@@ -285,4 +287,46 @@ Sep 13 2026, Sonia R., run `76248380`. The alert and URL arrived 35ms apart;
 eval-before-persist missed both; the withdrawal started the run; ungated
 `route_to_team` offered a lost lead as a press-1 race. Full write-up:
 [[project_homelight_text_then_link_and_lost_offer]].
+
+## homelight-claim-state-own-claim-as-rival
+
+**`claim_state` had the same own-claim-as-rival bug `already_claimed` already
+learned.** The field prompt said "Taken by another agent" and did not name
+Amy's team. HomeLight's card is a single `Claimed By: <name>` row for our
+claim and a rival's. Vince N. (85140, ~$428K, run `e09b3f18`, 2026-09-14):
+`claim_text` completed, the portal showed Claimed By Amy Laidlaw, and
+`claim_verify` wrote `claim_state=another agent has it`. `already_claimed`
+correctly said `no` because that field already names the team (Kevin Duford,
+run `85d1bd1f`, Aug 11).
+
+**How to apply:** `CLAIM_STATE_FIELD` in `homelight-verified-claim.ts` now
+says Claimed By Amy Laidlaw or her team (or our message sent) is
+`claim message sent`; a different brokerage is `another agent has it`.
+`homelight-text-claim-details.ts` writes that onto `claim_verify` and
+`claim_verify2`. Do not requeue Vince's run.
+
+## homelight-text-claim-details-on-portal
+
+**A text claim reveals phone, email, and street on the portal after Send
+message.** The late ladder (`late2_read` / `late2_never_notify`) only
+re-read email. Vince's three mailbox reads all returned `{found:false}`.
+The `open` screenshot was the "This client prefers texting" modal, not the
+card. `card` had been gated on roster `claimed_agent notEquals none`, so it
+never ran. Amy then got `late2_never_notify`: "HomeLight never sent Vince's
+contact info... claimed by none."
+
+`fillOnlyEmpty` treats `"none"` as empty (`isEmptyVarValue` in the worker),
+so a later portal read can overwrite `lead_phone=none`. An empty string is
+NOT `none`: `"" equals "none"` fails, which is why the never-sent wrap
+must use `lead_phone equals "none"`, not `notEquals "none"`.
+
+**How to apply:** `homelight-text-claim-details.ts` inserts `late2_portal`
+(browse_extract, `fillOnlyEmpty`, screenshot) before the never-sent alerts,
+then wraps those alerts in `late2_phone_miss`: still `none` after the
+portal read keeps the never-sent texts; otherwise `late2_portal_alert`
+(`notify_owner`, no Reply 1). Apply after merge. Dry-run first. Vince's
+resume `unclaimed_wait_2` is not a moved step. Do not `--click` the live
+`hmlt.co` URL. Do not requeue that run.
+
+See [[project-homelight-own-claim-read-as-rival]].
 
