@@ -110,6 +110,7 @@ describe("homelight-verified-claim", () => {
     // The gate and the copy both hang off this stable marker.
     expect(STATE_UNCONFIRMED).toContain("NOT CONFIRMED");
     expect(CLAIM_STATE_FIELD.description).toContain(STATE_UNCONFIRMED);
+    expect(CLAIM_STATE_FIELD.description).toContain("Amy Laidlaw");
   });
 
   it("retries the click only for call-mode claims, and a retry failure can never end the run", () => {
