@@ -17,7 +17,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   claimDiscoveryRun,
-  claimProspectNudge,
+  claimProspectFollowup,
   countProspectsNudgedSince,
   countProspectsByStatus,
   countProspectsInVertical,
@@ -35,7 +35,7 @@ import {
   listProspectsByEmail,
   listProspectsByEmailAnyTenant,
   listProspectsByStatus,
-  listProspectsDueForNudge,
+  listProspectsDueForFollowup,
   listProspectsContactedSince,
   listProspectsToProbe,
   listProspectsToRewrite,
@@ -67,6 +67,7 @@ function chain(terminal?: unknown): Chain {
     "in",
     "ilike",
     "is",
+    "gt",
     "gte",
     "lte",
     "lt",
@@ -383,30 +384,48 @@ describe("listProspectsByStatus / getProspect / listProspectOutcomes", () => {
   });
 });
 
-describe("listProspectsDueForNudge", () => {
-  it("asks only for sent, never-nudged prospects inside the patience window", async () => {
+describe("listProspectsDueForFollowup", () => {
+  const WINDOW = {
+    sentAfterIso: "2026-07-06T00:00:00Z",
+    sentBeforeIso: "2026-07-17T00:00:00Z"
+  };
+
+  it("asks only for sent, never-stamped prospects inside the patience window", async () => {
     const c = chain({ data: [{ id: PROSPECT }], error: null });
     expect(
-      await listProspectsDueForNudge(
-        BIZ,
-        "2026-07-06T00:00:00Z",
-        "2026-07-22T00:00:00Z",
-        5,
-        makeDb(c)
-      )
+      await listProspectsDueForFollowup(BIZ, "followup_2_at", WINDOW, 5, makeDb(c))
     ).toHaveLength(1);
     expect(c.eq).toHaveBeenCalledWith("status", "sent");
-    // The null check is what makes "one follow-up, ever" true.
-    expect(c.is).toHaveBeenCalledWith("nudged_at", null);
-    expect(c.gte).toHaveBeenCalledWith("sent_at", "2026-07-06T00:00:00Z");
-    expect(c.lte).toHaveBeenCalledWith("sent_at", "2026-07-22T00:00:00Z");
+    expect(c.is).toHaveBeenCalledWith("followup_2_at", null);
+    expect(c.is).toHaveBeenCalledWith("replied_at", null);
+    expect(c.gte).toHaveBeenCalledWith("sent_at", WINDOW.sentAfterIso);
+    expect(c.lte).toHaveBeenCalledWith("sent_at", WINDOW.sentBeforeIso);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
-    expect(await listProspectsDueForNudge(BIZ, "a", "b", 5)).toEqual([]);
+    expect(await listProspectsDueForFollowup(BIZ, "followup_1_at", WINDOW, 5)).toEqual([]);
 
     await expect(
-      listProspectsDueForNudge(BIZ, "a", "b", 5, makeDb(chain({ data: null, error: { message: "nd" } })))
+      listProspectsDueForFollowup(
+        BIZ,
+        "followup_1_at",
+        WINDOW,
+        5,
+        makeDb(chain({ data: null, error: { message: "nd" } }))
+      )
     ).rejects.toThrow(/nd/);
+  });
+
+  it("uses an exclusive floor for the day-3 window so day-10 owns the boundary", async () => {
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    await listProspectsDueForFollowup(
+      BIZ,
+      "followup_1_at",
+      { ...WINDOW, sentAfterInclusive: false },
+      5,
+      makeDb(c)
+    );
+    expect(c.gt).toHaveBeenCalledWith("sent_at", WINDOW.sentAfterIso);
+    expect(c.gte).not.toHaveBeenCalled();
   });
 });
 
@@ -565,30 +584,37 @@ describe("claimDiscoveryRun", () => {
   });
 });
 
-describe("claimProspectNudge", () => {
-  it("wins only while the follow-up is still unspent", async () => {
+describe("claimProspectFollowup", () => {
+  it("wins only while that step is still unspent", async () => {
     const won = chain({ data: [{ id: PROSPECT }], error: null });
-    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z", makeDb(won))).toBe(true);
-    // Both guards ride inside the UPDATE, so exactly one caller can win: the
-    // status check alone would let two overlapping passes both send.
+    expect(
+      await claimProspectFollowup(BIZ, PROSPECT, "followup_1_at", "2026-07-27T16:00:00Z", makeDb(won))
+    ).toBe(true);
     expect(won.eq).toHaveBeenCalledWith("status", "sent");
-    expect(won.is).toHaveBeenCalledWith("nudged_at", null);
+    expect(won.is).toHaveBeenCalledWith("followup_1_at", null);
     expect(won.update).toHaveBeenCalledWith(
-      expect.objectContaining({ nudged_at: "2026-07-27T16:00:00Z" })
+      expect.objectContaining({
+        followup_1_at: "2026-07-27T16:00:00Z",
+        nudged_at: "2026-07-27T16:00:00Z"
+      })
     );
 
     const lost = chain({ data: [], error: null });
-    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z", makeDb(lost))).toBe(
-      false
-    );
+    expect(
+      await claimProspectFollowup(BIZ, PROSPECT, "followup_2_at", "2026-07-27T16:00:00Z", makeDb(lost))
+    ).toBe(false);
+    expect(lost.is).toHaveBeenCalledWith("followup_2_at", null);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ data: [{ id: PROSPECT }], error: null })));
-    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z")).toBe(true);
+    expect(await claimProspectFollowup(BIZ, PROSPECT, "followup_2_at", "2026-07-27T16:00:00Z")).toBe(
+      true
+    );
 
     await expect(
-      claimProspectNudge(
+      claimProspectFollowup(
         BIZ,
         PROSPECT,
+        "followup_1_at",
         "2026-07-27T16:00:00Z",
         makeDb(chain({ data: null, error: { message: "cn" } }))
       )

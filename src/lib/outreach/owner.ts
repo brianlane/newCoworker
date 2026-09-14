@@ -259,7 +259,7 @@ export type ProspectingSettingsInput = {
   bookingMeetingTypeId: string;
   /**
    * Whether the FIRST email carries the booking link. Off, it ends on a reply
-   * ask and the follow-up carries the link instead; see assembleBody.
+   * ask and the day-10 follow-up carries the link instead; see assembleBody.
    */
   bookingLinkOnFirstTouch: boolean;
 };

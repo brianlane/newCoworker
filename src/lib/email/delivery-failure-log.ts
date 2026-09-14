@@ -3,7 +3,7 @@
  *
  * Resend's bounce body tells the operator to "remove the recipient from your
  * mailing list". That was true when a bounced outreach pitch stayed `sent`
- * and the day-5 nudge re-mailed it. The webhook now retires the prospect, so
+ * and the follow-up re-mailed it. The webhook now retires the prospect, so
  * quoting Resend's advice on the admin System Errors card reads as a to-do
  * that is already done. Keep the vendor text in payload.errorMessage; the
  * row message says what WE did.

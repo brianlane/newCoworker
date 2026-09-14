@@ -474,7 +474,7 @@ describe("processResendDeliveryEvent", () => {
     expect(await processResendDeliveryEvent(event)).toBe(false);
   });
 
-  it("retires a bounced outreach pitch so the day-5 nudge never fires", async () => {
+  it("retires a bounced outreach pitch so a later follow-up never fires", async () => {
     applyEmailDeliveryStatus.mockResolvedValue({ outcome: "applied", businessId: BIZ });
     await processResendDeliveryEvent(event);
     expect(retireProspectsOnBounce).toHaveBeenCalledWith({

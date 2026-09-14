@@ -762,7 +762,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         {/* Whether the FIRST email offers the calendar at all. Off by default:
             asking a stranger to pick a slot before they have replied once is
             what was costing replies, so the first email ends on a reply ask
-            and the follow-up carries the link. Always shown, unlike the two
+            and the last follow-up carries the link. Always shown, unlike the two
             pickers above, because the decision exists for every tenant with a
             booking page and there is no "only one option" case to hide. */}
         <div className="flex items-start gap-2 sm:col-span-2">

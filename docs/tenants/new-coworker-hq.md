@@ -39,7 +39,7 @@ the summary.
   Configured by `configure-hq-prospecting.ts` in **manual mode**; Brian has
   since flipped it to **auto** from the Marketing page (verified live
   2026-09-06: mode `auto`, cap 12, 135 sent). Since Sep 2026 the first email
-  ends on a reply ask and only the follow-up carries the booking link
+  ends on a reply ask and only the day-10 follow-up carries the booking link
   (README, "The first email asks; the follow-up books"). See the README's
   Prospecting section. The HQ Claude/ChatGPT connector can read the
   fleet System Logs / System Errors feed (not bounce-only) with
@@ -199,7 +199,7 @@ default-alias sends already were.
 approved as the zero-reply fix. `outreach_settings.booking_link_on_first_touch`
 ships `false` by default (migration `20260906033938`), so from the merge on,
 every first pitch closes with "Just reply if you want to hear more." instead
-of the discovery-call link; the day-5 nudge still carries the link, and a
+of the discovery-call link; the day-10 follow-up still carries the link, and a
 connector can opt a single draft in with `include_booking_link: true` on
 `upsert_outreach_prospect` / `update_outreach_draft`. HQ is the only tenant
 with outreach on (mode is now **auto**, not the manual mode
@@ -216,6 +216,16 @@ through `editProspectDraft`. Verified in SQL afterwards: 21 drafted, 0 with
 "grab a time here", 21 with "Just reply if you want to hear more.", 21 with
 the unsubscribe link, 21 with their first paragraph intact; a second `--apply`
 reported 21 already current. No send happened in between (weekend, no window).
+
+**Follow-up cadence is day-3 then day-10 (product, not a one-shot):** the
+single day-5 nudge (`nudged_at`, same subject as the first pitch, booking
+link on) is replaced by two later touches. Day-3 is a new-angle bump, unique
+subject, no booking link. Day-10 is the last bump and carries the discovery
+call link. Existing `nudged_at` rows are copied onto `followup_1_at` so they
+are not mailed that first slot again; they can still get day-10 if they are
+inside the 21-day stale window. Silent never-nudged rows enter by age since
+`sent_at`. Caps, send window, engagement, and the unsubscribe footer are
+unchanged.
 
 **Hostinger billing id stamped on the synthetic subscription (2026-08-31):**
 `reconcile-subscription-hostinger-links.ts --apply` copied
@@ -239,7 +249,7 @@ webhook writes that sentence from here on.
 **Bounced-pitch prospects retired (2026-08-28):**
 `retire-bounced-outreach-prospects.ts --apply` moved five prospects whose
 pitch provably bounced from `sent` to `failed`, which is what removes them
-from the day-5 nudge queue (three hard bounces, one full inbox, and the
+from the follow-up queue (three hard bounces, one full inbox, and the
 Sentry-DSN-scraped-as-email case at sunlandautomesa.com; the probe now
 filters DSN-shaped addresses). The bounce list is read from system_logs
 delivery receipts at run time rather than hand-typed, so the script can be

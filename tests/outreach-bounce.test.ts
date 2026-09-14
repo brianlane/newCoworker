@@ -1,6 +1,6 @@
 /**
  * Prospecting bounce retirement (src/lib/outreach/bounce.ts): a hard bounce
- * of a cold pitch must take the row off the day-5 nudge queue. The Aug 28
+ * of a cold pitch must take the row off the follow-up queue. The Aug 28
  * one-shot did this after the fact; these tests pin the live path.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,8 @@ function prospect(over: Record<string, unknown> = {}) {
     status: "sent",
     pitch_subject: "ASAP Plumbing: the calls that come in after you close",
     sent_at: "2026-08-26T15:00:00.000Z",
+    followup_1_at: null,
+    followup_2_at: null,
     nudged_at: null,
     replied_at: null,
     ...over
@@ -101,14 +103,31 @@ describe("retireProspectsOnBounce", () => {
     expect(listProspectsByEmailSpy).not.toHaveBeenCalled();
   });
 
-  it("leaves a row that already replied, already got its nudge, or left sent", async () => {
+  it("leaves a row that already replied, already finished the sequence, or left sent", async () => {
     listProspectsByEmailSpy.mockResolvedValue([
       prospect({ replied_at: "2026-08-27T00:00:00.000Z" }),
-      prospect({ id: "nudge", nudged_at: "2026-08-31T12:00:00.000Z" }),
+      prospect({ id: "done", followup_2_at: "2026-08-31T12:00:00.000Z" }),
       prospect({ id: "failed", status: "failed" })
     ]);
     expect(await retireProspectsOnBounce(receipt)).toBe(0);
     expect(transitionProspectSpy).not.toHaveBeenCalled();
+  });
+
+  it("still retires a row that only had the first follow-up, so day-10 is cancelled", async () => {
+    listProspectsByEmailSpy.mockResolvedValue([
+      prospect({
+        followup_1_at: "2026-08-29T12:00:00.000Z",
+        nudged_at: "2026-08-29T12:00:00.000Z"
+      })
+    ]);
+    transitionProspectSpy.mockResolvedValue(true);
+    expect(await retireProspectsOnBounce(receipt)).toBe(1);
+  });
+
+  it("retires on a bounce of the unique follow-up subject", async () => {
+    listProspectsByEmailSpy.mockResolvedValue([prospect()]);
+    transitionProspectSpy.mockResolvedValue(true);
+    expect(await retireProspectsOnBounce({ ...receipt, subject: "Smaller ask" })).toBe(1);
   });
 
   it("does not retire a later pitch when the bounce names a different subject", async () => {
