@@ -150,9 +150,11 @@ a key to accept it. Everything downstream follows from that:
   withdrawal correlated against both prior jobs and started the run, so
   `trigger.event_id` was the withdrawal. The webhook now inserts
   `sms_inbound_jobs` FIRST (and skips appending the current body when that
-  row is already in the window). It also skips enqueue when an ACTIVE run of
-  the same flow already carries this `trigger.url`, so the withdrawal does
-  not start a second run. Do not set `allowReentry=false`: HomeLight sends
+  row is already in the window). Pending jobs start with `suppress_reply`
+  true so the coworker cannot reply while eval is still running. The
+  enqueue skip keys the NEWEST URL in the window (`lastUrlInText`), not
+  the oldest, and a unique partial index on the live trigger URL closes the
+  35ms sibling race. Do not set `allowReentry=false`: HomeLight sends
   many leads from one sender while earlier runs are still parked.
 - **Never offer a referral the portal already lost.** Sonia's `open` read
   `claim_mode=none` / `claim_state=another agent has it`. `route_to_team` had
@@ -294,11 +296,11 @@ HomeLight's alert and URL arrived 35ms apart; the webhook used to evaluate
 triggers before inserting `sms_inbound_jobs`, so neither SMS matched and
 the withdrawal started the run. The portal was already lost
 (`claim_mode=none`) and ungated `route_to_team` still offered a press-1 race.
-Engine: persist inbound before eval, skip a second run of the same
-`trigger.url`. Flow: `offer_gate` claims first, offers only after a text
-claim or a connected claim call, and lost / no-call paths are alerts, not
-offers. Do not requeue that run. Apply only after the webhook is live on
-main),
+Engine: persist inbound before eval (`suppress_reply` starts true), skip a
+second run of the newest `trigger.url`, unique index on the live URL.
+Flow: `offer_gate` claims first, offers only after a text claim or a
+connected claim call, and lost / no-call paths are alerts, not offers.
+Do not requeue that run. Apply only after the webhook is live on main),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the

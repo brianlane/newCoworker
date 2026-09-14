@@ -8,9 +8,15 @@
  * before evaluation lets the URL SMS start the run. Without this guard the
  * withdrawal SMS would start a SECOND run of the same referral.
  *
+ * The URL passed in MUST be the newest URL in the window (evaluateSmsTrigger
+ * returns lastUrlInText). The oldest URL is a previous referral from the same
+ * sender and must not block a new lead.
+ *
  * Fail OPEN on a lookup error: a duplicate follow-up is recoverable, a
  * silently dropped lead is not. Empty or missing URLs never dedupe: those
- * flows have nothing unique to key on.
+ * flows have nothing unique to key on. The lookup is not atomic with insert;
+ * a unique partial index on the live trigger URL closes the sibling-webhook
+ * race (two 35ms deliveries both matching once both rows exist).
  */
 // deno-lint-ignore no-explicit-any
 type AnyClient = any;

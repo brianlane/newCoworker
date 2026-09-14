@@ -1546,7 +1546,8 @@ redeployed. Do not requeue that run),
 `homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
 HomeLight's alert+URL 35ms race started the flow on the withdrawal SMS;
 ungated `route_to_team` then offered a lost lead as a press-1 race. Engine
-persists inbound before eval and dedupes by active `trigger.url`. Flow
+persists inbound before eval (`suppress_reply` starts true), dedupes by
+the newest active `trigger.url`, unique index on the live URL. Flow
 claims first, offers only after a text claim or a connected claim call, and
 lost / no-call paths are alerts. Apply after the webhook is live on main.
 Do not requeue that run),

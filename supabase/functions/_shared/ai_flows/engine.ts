@@ -52,6 +52,12 @@ export function allUrlsInText(text: string): string[] {
   return out;
 }
 
+/** Newest http(s) URL in a string (last distinct URL in order), or null. */
+export function lastUrlInText(text: string): string | null {
+  const urls = allUrlsInText(text);
+  return urls.length > 0 ? urls[urls.length - 1]! : null;
+}
+
 /** Strip common trailing punctuation that gets glued onto URLs in prose. */
 function trimUrlPunctuation(url: string): string {
   return url.replace(/[.,;:!?]+$/, "");
@@ -119,10 +125,14 @@ function evaluateCondition(
 
 /**
  * Evaluate an SMS trigger over the correlation window. Returns matched +
- * windowText + first URL. All conditions must pass (AND). An empty condition
+ * windowText + newest URL. All conditions must pass (AND). An empty condition
  * list matches any inbound SMS. `refValues` carries the pre-resolved identity
  * values for any `from_matches` contact refs (see resolveFromMatchesRefValues);
  * evaluation itself stays pure.
+ *
+ * The URL is the LAST distinct http(s) link in the window, not the first.
+ * HomeLight (and other "text then link" vendors) send many leads from one
+ * sender; the oldest URL in a 15-minute window is a previous referral.
  */
 export function evaluateSmsTrigger(
   trigger: SmsTrigger,
@@ -133,7 +143,7 @@ export function evaluateSmsTrigger(
   const inWindow = messagesInWindow(ctx, windowMinutes);
   const windowText = inWindow.map((m) => m.text).join("\n");
   const latestFrom = inWindow.length > 0 ? inWindow[inWindow.length - 1].from : "";
-  const url = firstUrlInText(windowText);
+  const url = lastUrlInText(windowText);
   const matched = trigger.conditions.every((c) =>
     evaluateCondition(c, windowText, latestFrom, refValues)
   );

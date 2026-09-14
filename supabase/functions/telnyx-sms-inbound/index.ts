@@ -384,7 +384,10 @@ async function evaluateAndEnqueueAiFlows(
       // by a blocked enqueue, no run was queued to own the reply.
       if (await reentryBlocked(supabase, businessId, m.id, m.def, ctx.from ?? "")) continue;
       // Same portal URL already running: the "too late" SMS still matches
-      // has_url plus the earlier alert in the window. Do not start a second run.
+      // has_url plus the earlier alert in the window. Key off m.url, which is
+      // the newest URL in the window. Do not start a second run.
+      // 23505 on insert is the atomic close of the 35ms sibling race
+      // (unique index on the live trigger URL).
       if (await findActiveRunWithTriggerUrl(supabase, { businessId, flowId: m.id, url: m.url })) {
         continue;
       }
@@ -4702,15 +4705,20 @@ serve(async (req: Request) => {
     // sibling "text then link" webhook (HomeLight sends the alert and the URL
     // 35ms apart) can see this row in the correlation window. Evaluate used
     // to run first, so neither SMS matched and the run only started on the
-    // later "no longer available" text. suppress_reply is updated after
-    // evaluate, once we know whether a suppressing flow queued.
+    // later "no longer available" text.
+    //
+    // suppress_reply starts TRUE: claim_sms_inbound_jobs can take a pending
+    // row while this webhook is still evaluating, and a coworker reply on a
+    // flow that owns the turn is the worse race. After eval we flip it false
+    // only when no suppressing flow queued and the wait does not own the
+    // coworker.
     const inboundIdempotencyKey = crypto.randomUUID();
     const { error: persistErr } = await supabase.from("sms_inbound_jobs").insert({
       business_id: businessId,
       telnyx_event_id: eventId,
       payload: envelope as unknown as Record<string, unknown>,
       status: "pending",
-      suppress_reply: false,
+      suppress_reply: true,
       customer_e164: from,
       outbound_idempotency_key: inboundIdempotencyKey,
       channel: inboundChannel
@@ -4776,10 +4784,10 @@ serve(async (req: Request) => {
           image: telnyxInboundImages(payload)[0]
         });
 
-    if (suppressingRunQueued || waitOwnsCoworker) {
+    if (!(suppressingRunQueued || waitOwnsCoworker)) {
       await supabase
         .from("sms_inbound_jobs")
-        .update({ suppress_reply: true })
+        .update({ suppress_reply: false })
         .eq("business_id", businessId)
         .eq("telnyx_event_id", eventId)
         .eq("status", "pending");

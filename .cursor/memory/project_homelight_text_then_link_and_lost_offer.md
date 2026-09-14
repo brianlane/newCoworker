@@ -25,7 +25,18 @@ the run started ~0.8s after create. The bug was correlation, not the queue.
   the main path, done on Safe Mode). Skip appending `current` onto the
   correlation window when the last same-from job already has that text.
 - Skip enqueue when an ACTIVE run of the same flow already carries this
-  `trigger.url`. Fail OPEN on lookup error. Empty URLs never dedupe.
+  `trigger.url`. Key the URL as the NEWEST link in the window
+  (`lastUrlInText`), never the first: HomeLight sends many leads from one
+  sender, and the oldest URL is a previous referral. Fail OPEN on lookup
+  error. Empty URLs never dedupe. A unique partial index on
+  `(flow_id, trigger.url)` for active statuses is the atomic close of the
+  35ms sibling race; `dedupe_key` stays the per-SMS event id so a later
+  run of the same URL after done is not blocked.
+- Insert `sms_inbound_jobs` with `suppress_reply` true. Flip it false
+  only after eval, and only when no suppressing flow queued and the wait
+  does not own the coworker. If the worker already claimed the row, the
+  update no-ops: skip the coworker reply rather than send one on a
+  flow-owned turn.
 - Do NOT set `allowReentry=false`: HomeLight sends many leads from one sender
   while earlier runs are still parked.
 - One-shot `homelight-claim-then-offer.ts` is the flow half. Apply it only

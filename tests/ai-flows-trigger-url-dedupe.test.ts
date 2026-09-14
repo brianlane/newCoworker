@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ACTIVE_TRIGGER_URL_RUN_STATUSES,
@@ -102,5 +104,24 @@ describe("findActiveRunWithTriggerUrl", () => {
       })
     ).toBeNull();
     spy.mockRestore();
+  });
+});
+
+describe("ai_flow_runs_active_trigger_url unique index", () => {
+  const migrationsDir = join(__dirname, "..", "supabase", "migrations");
+  const files = readdirSync(migrationsDir).filter((f) =>
+    f.endsWith("_ai_flow_runs_active_trigger_url.sql")
+  );
+
+  it("ships one unique partial index whose statuses match ACTIVE_TRIGGER_URL_RUN_STATUSES", () => {
+    expect(files).toHaveLength(1);
+    const sql = readFileSync(join(migrationsDir, files[0]!), "utf8");
+    expect(sql).toMatch(/create unique index if not exists ai_flow_runs_active_trigger_url_idx/i);
+    expect(sql).toContain("context -> 'trigger' ->> 'url'");
+    expect(sql).toContain("coalesce(context -> 'trigger' ->> 'url', '') <> ''");
+    for (const status of ACTIVE_TRIGGER_URL_RUN_STATUSES) {
+      expect(sql).toContain(`'${status}'`);
+    }
+    expect(sql).toContain("Do NOT fold the URL into dedupe_key");
   });
 });

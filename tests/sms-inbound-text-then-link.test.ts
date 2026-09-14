@@ -60,4 +60,23 @@ describe("persist inbound before AiFlow trigger eval", () => {
     const smReturn = webhook.indexOf('skip: "safe_mode_forwarded"', smEval);
     expect(smReturn).toBeGreaterThan(smEval);
   });
+
+  it("inserts pending jobs with suppress_reply true, then un-suppresses only when no flow owns the turn", () => {
+    const persistComment = webhook.indexOf(
+      "Persist the inbound job BEFORE wait-resume / trigger evaluation"
+    );
+    const pendingBlock = webhook.slice(
+      persistComment,
+      webhook.indexOf("await evaluateAndEnqueueAiFlows", persistComment)
+    );
+    expect(pendingBlock).toContain("suppress_reply: true");
+    expect(webhook).toContain("if (!(suppressingRunQueued || waitOwnsCoworker))");
+    expect(webhook).toContain(".update({ suppress_reply: false })");
+    expect(webhook).toContain('.eq("status", "pending")');
+  });
+
+  it("treats 23505 on run insert as queued so the unique URL index closes the sibling race", () => {
+    expect(webhook).toContain("unique index on the live trigger URL");
+    expect(webhook).toContain('(runErr as { code?: string }).code === "23505"');
+  });
 });

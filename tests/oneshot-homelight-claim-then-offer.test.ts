@@ -236,6 +236,19 @@ describe("HomeLight SMS trigger (Sonia window)", () => {
     ).toBe(true);
   });
 
+  it("keys trigger.url on the newest hmlt.co, not an earlier referral still in the window", () => {
+    const r = evaluateSmsTrigger(
+      trig,
+      ctx([
+        "New HomeLight Referral Opportunity: earlier lead https://hmlt.co/old",
+        "New HomeLight Warm Transfer Opportunity: Sonia - $448K seller in Queen Creek AZ",
+        "https://hmlt.co/08dba950"
+      ])
+    );
+    expect(r.matched).toBe(true);
+    expect(r.url).toBe("https://hmlt.co/08dba950");
+  });
+
   it("a missing hl_call_outcome passes notEquals no_call, so wait must not be skipped", () => {
     expect(
       evaluateStepCondition({ var: "hl_call_outcome", notEquals: "no_call" }, { vars: {} })
