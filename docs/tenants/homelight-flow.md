@@ -140,6 +140,34 @@ a key to accept it. Everything downstream follows from that:
   enqueue so the claim starts within seconds. That removes the QUEUE delay, not
   the work: the claim still needs a credentialed page load, so a single-digit
   window can still close first.
+- **The alert and the URL are two SMS, and eval-before-persist missed both.**
+  On 2026-09-13 Sonia R. (run `76248380`, Queen Creek AZ, $448,159) HomeLight
+  sent the warm-transfer alert at 17:58:29.748 UTC, the `hmlt.co` URL 35ms
+  later, then "this referral is no longer available" at 17:58:45. The trigger
+  is `has_url` AND `New HomeLight (Referral|Warm Transfer)`. Each webhook used
+  to evaluate that AND against jobs already in the table, then insert. The
+  first two deliveries each saw only themselves. Neither matched. The
+  withdrawal correlated against both prior jobs and started the run, so
+  `trigger.event_id` was the withdrawal. The webhook now inserts
+  `sms_inbound_jobs` FIRST (and skips appending the current body when that
+  row is already in the window). It also skips enqueue when an ACTIVE run of
+  the same flow already carries this `trigger.url`, so the withdrawal does
+  not start a second run. Do not set `allowReentry=false`: HomeLight sends
+  many leads from one sender while earlier runs are still parked.
+- **Never offer a referral the portal already lost.** Sonia's `open` read
+  `claim_mode=none` / `claim_state=another agent has it`. `route_to_team` had
+  no when-guard, so the team still got a press-1 race whose copy said both
+  "Claim status: another agent has it" and "First to reply 1 gets it."
+  Amy replied 1. That was our roster claim, not HomeLight's. Wait sat behind
+  `claimed_agent notEquals none`, so we waited for a call that was never going
+  to come. `homelight-claim-then-offer.ts` nests the offer behind `offer_gate`:
+  text-mode offers after the claim message; call-mode briefs, waits, then
+  offers only when `hl_call_outcome notEquals no_call`; lost is a
+  `notify_lead_owner` alert (`unownedFallback: "team"`), not an offer. Empty
+  `hl_call_outcome` PASSES `notEquals "no_call"`, which is why the wait must
+  live inside the call arm rather than be skipped on the trunk. Do not
+  requeue Sonia's run. Do not click Claim/Decline on the live portal from a
+  probe: `hmlt.co` self-authenticates.
 - **HomeLight has TWO claim mechanics, and the newer one has no call.** A
   text-preferred referral opens with a "This client prefers texting" modal and
   says outright "You don't need to call and enter a PIN to accept these types of
@@ -260,6 +288,17 @@ already done; the saved HTML still had
 `tsx debug/redeploy-aiflow-render.ts --business-id 621a5b0d-c2ad-449f-9d74-9d50e7b27fa3`
 after merge. Do not requeue that run:
 it would redo outreach),
+`homelight-claim-then-offer.ts` +
+`homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
+HomeLight's alert and URL arrived 35ms apart; the webhook used to evaluate
+triggers before inserting `sms_inbound_jobs`, so neither SMS matched and
+the withdrawal started the run. The portal was already lost
+(`claim_mode=none`) and ungated `route_to_team` still offered a press-1 race.
+Engine: persist inbound before eval, skip a second run of the same
+`trigger.url`. Flow: `offer_gate` claims first, offers only after a text
+claim or a connected claim call, and lost / no-call paths are alerts, not
+offers. Do not requeue that run. Apply only after the webhook is live on
+main),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -278,7 +317,8 @@ re-run: several supersede each other.
 ## History
 
 PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
-#1400.
+#1400. Sonia R. (Sep 13 2026, run `76248380`): persist-before-eval plus
+`homelight-claim-then-offer.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 

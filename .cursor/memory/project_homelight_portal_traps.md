@@ -278,3 +278,11 @@ stale one.
 - Three different 85205 sellers (Kim Aug 5, Nancy Aug 24, Rhonda Aug 28) all
   came through at $379K. Only Rhonda's email was captured, so whether that is a
   zip-level default is UNPROVEN; do not repeat it as fact.
+
+## homelight-text-then-link-and-lost-offer
+
+Sep 13 2026, Sonia R., run `76248380`. The alert and URL arrived 35ms apart;
+eval-before-persist missed both; the withdrawal started the run; ungated
+`route_to_team` offered a lost lead as a press-1 race. Full write-up:
+[[project_homelight_text_then_link_and_lost_offer]].
+

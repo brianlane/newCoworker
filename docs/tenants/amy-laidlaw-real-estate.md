@@ -1542,6 +1542,14 @@ finished the lead work, then failed the last-step portal note on
 `click_selector nav[data-test="navbar"] a[href="/referrals"]`. The matching
 `CLICK_TEXT_APPEAR_MS` bump in `vps/aiflow-render` needs Amy's box
 redeployed. Do not requeue that run),
+`homelight-claim-then-offer.ts` +
+`homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
+HomeLight's alert+URL 35ms race started the flow on the withdrawal SMS;
+ungated `route_to_team` then offered a lost lead as a press-1 race. Engine
+persists inbound before eval and dedupes by active `trigger.url`. Flow
+claims first, offers only after a text claim or a connected claim call, and
+lost / no-call paths are alerts. Apply after the webhook is live on main.
+Do not requeue that run),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
