@@ -147,8 +147,11 @@ describe("ai_flow_runs_active_trigger_url unique index", () => {
       expect(sql).toContain(`'${status}'`);
     }
     expect(sql).toContain("Do NOT fold the URL into dedupe_key");
-    expect(sql).toContain("row_number() over");
+    expect(sql).toContain("where r.status = 'queued'");
+    expect(sql).toContain("o.status <> 'queued'");
     expect(sql).toContain("status = 'canceled'");
-    expect(sql).toContain("ranked.rn > 1");
+    expect(sql).toContain("Do not touch");
+    expect(sql).toContain("awaiting_* rows");
+    expect(sql).not.toContain("row_number() over");
   });
 });
