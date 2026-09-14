@@ -1559,7 +1559,9 @@ leave `route`. Do not requeue Sonia's run),
 `{found:false}`; `late2_never_notify` said the contact never arrived. Teaches
 `claim_state` the team name, re-reads the portal before the never-sent
 alerts, and only fires those alerts when `lead_phone` is still `none`. Do
-not requeue that run. Not yet applied: merge first, then `--apply`),
+not requeue that run. Applied Sep 14 2026 after merge of PR #1845
+(`4ebadb7d`). Vince was still in flight on `unclaimed_wait_3`. Live
+readback: trunk 28, `late2_portal` present, `claim_state` names the team),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

@@ -324,9 +324,9 @@ must use `lead_phone equals "none"`, not `notEquals "none"`.
 (browse_extract, `fillOnlyEmpty`, screenshot) before the never-sent alerts,
 then wraps those alerts in `late2_phone_miss`: still `none` after the
 portal read keeps the never-sent texts; otherwise `late2_portal_alert`
-(`notify_owner`, no Reply 1). Apply after merge. Dry-run first. Vince's
-resume `unclaimed_wait_2` is not a moved step. Do not `--click` the live
-`hmlt.co` URL. Do not requeue that run.
+(`notify_owner`, no Reply 1). Applied Sep 14 2026 after merge of PR #1845
+(`4ebadb7d`). Vince's resume `unclaimed_wait_3` was not a moved step. Do
+not `--click` the live `hmlt.co` URL. Do not requeue that run.
 
 See [[project-homelight-own-claim-read-as-rival]].
 

@@ -326,8 +326,11 @@ said the contact never arrived. Teaches `claim_state` that Claimed By this
 team is `claim message sent`, inserts `late2_portal` before the never-sent
 alerts, and only fires those alerts when `lead_phone` is still `none`.
 Unique ids kept. Refuses in-flight runs parked on a moved step. Do not
-requeue Vince's run. Not yet applied: merge first, then dry-run, then
-`--apply`),
+requeue Vince's run. Applied Sep 14 2026 after merge of PR #1845
+(`4ebadb7d`). Vince was still in flight (`queued`, resume
+`unclaimed_wait_3`, not a moved step). Live readback: trunk 28, `late2_portal`
+present with `fillOnlyEmpty`, `late2_phone_miss` gates never-sent on
+`lead_phone equals none`, `claim_state` names Amy Laidlaw or her team),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
