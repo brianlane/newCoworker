@@ -12,6 +12,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Heredoc bodies via files](feedback_heredoc_file_flag.md) - inline heredocs mangle; git commit -F and gh --body-file
 - [Signed-in smoke recipe](project_signed_in_smoke_recipe.md) - TEST_USERNAME/PASSWORD stale; service-role throwaway user + authenticated curl
 - [Telnyx billing model traps](project_telnyx_billing_model_traps.md) - detail_records 50-row clamp; cost includes carrier fee; auto-recharge is a $2/$28 prepaid floor, not a weekly bill
+- [Telnyx Idempotency-Key charset](project_telnyx_idempotency_key.md) - only [A-Za-z0-9_-]{1,255}; AiFlow colon keys 400/10015, not an undialable number; encode at the shared SMS client
 - [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC; Sep 10 15:15 UTC recharge was on par (9d after Sep 1, usage $2.76/day, 10DLC did not hit prepaid); Amy offer fan-out; do not cut Standard SMS 5000→3000; Truly DID released 2026-09-08
 - [Intl SMS state](project_intl_sms_state.md) - MX SMS never delivered; long codes can't originate non-NANP; non-US/CA skips
 - [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2; counsel items still open

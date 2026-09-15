@@ -70,6 +70,41 @@ describe("telnyx messaging", () => {
     expect(h["Idempotency-Key"]).toBe("idem-uuid-1");
   });
 
+  it("sendTelnyxSms encodes a colon-separated AiFlow key before sending", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_enc" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof" },
+      "+16025551212",
+      "Hi",
+      {
+        fetchImpl: fetchMock as typeof fetch,
+        idempotencyKey: "aiflow:550e8400-e29b-41d4-a716-446655440000:1"
+      }
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const h = init.headers as Record<string, string>;
+    expect(h["Idempotency-Key"]).toBe("aiflow-550e8400-e29b-41d4-a716-446655440000-1");
+  });
+
+  it("sendTelnyxSms omits Idempotency-Key when the logical key is whitespace-only", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_ws" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof" },
+      "+15550001111",
+      "Hi",
+      { fetchImpl: fetchMock as typeof fetch, idempotencyKey: "  " }
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const h = init.headers as Record<string, string>;
+    expect(h["Idempotency-Key"]).toBeUndefined();
+  });
+
   it("sendTelnyxSms attaches media_urls for MMS sends", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
