@@ -41,6 +41,12 @@
  *   - `claim_again.continueWhenText` "HomeLight" -> "We're calling you"
  *     (the post-click success page). The old marker is on every HomeLight
  *     header, including the referrals list after a miss.
+ *   - Wrap `notify_unclaimed` behind `claim_callback_is_ai equals no` so a
+ *     cell-callback run is not also told "Not claimed". Empty var fails
+ *     `equals no`, so a text claim or an AI-DID wait still gets the notice.
+ *     Apply refuses in-flight runs parked on any nested call-arm id: wrapping
+ *     adds a `callback_gate` hop, and resume-by-id skips those steps unless
+ *     `__branch_callback_gate` was already recorded.
  *
  * Unique step ids kept. `when` stays one condition on one var.
  *
@@ -50,13 +56,20 @@
 import {
   BRIEF_ID,
   NO_CALL_MSG_ID,
+  NOTIFY_UNCLAIMED_ID,
   OFFER_CALL_ARM_ID,
   OFFER_GATE_ID,
+  ROUTE_ID,
+  UNCLAIMED_NOT_NOCALL_ID,
+  UNCLAIMED_OFFER_MISSED_ARM_ID,
   WAIT_ID
 } from "./homelight-claim-then-offer-definition";
 import {
   CLAIM_AGAIN_CONTINUE,
-  CLAIM_AGAIN_ID
+  CLAIM_AGAIN_ID,
+  RECALL_GATE_ID,
+  RECALL_PAUSE_ID,
+  WAIT2_ID
 } from "./homelight-nocall-contact-definition";
 import {
   CARD_ID,
@@ -75,6 +88,8 @@ export const CALLBACK_VAR = "claim_callback_is_ai";
 export const ALREADY_CLAIMED_VAR = "already_claimed";
 /** The AI coworker's HomeLight DID, already in the wait_for_call fromE164. */
 export const AI_DID_DISPLAY = "415 985 1909";
+export const UNCLAIMED_CELL_SKIP_ID = "unclaimed_cell_skip";
+export const UNCLAIMED_WAS_CELL_ARM_ID = "unclaimed_was_cell";
 export const CLAIM_AGAIN_CONTINUE_NEW = "We're calling you";
 
 export const CALLBACK_CELL_WHEN = { var: CALLBACK_VAR, equals: "no" } as const;
@@ -87,8 +102,8 @@ export const CALLBACK_FIELD = {
   name: CALLBACK_VAR,
   description:
     `Is the selected claim-callback the AI coworker's HomeLight number (${AI_DID_DISPLAY})? ` +
-    "Answer yes if the page will call that number, or if you cannot tell. " +
-    "Answer no only if it shows a different phone (for example a cell labeled as the agent's). " +
+    "Answer yes if the page will call that number, if it is a Send message / prefers " +
+    "texting page, or if you cannot tell. Answer no only if it shows a different phone. " +
     "One lowercase word."
 };
 
@@ -106,7 +121,15 @@ export const SHIFT_UNSAFE_RESUME_IDS = [
   CELL_ALERT_ID,
   CLAIM_AGAIN_ID,
   BRIEF_ID,
-  WAIT_ID
+  WAIT_ID,
+  WAIT2_ID,
+  RECALL_GATE_ID,
+  RECALL_PAUSE_ID,
+  ROUTE_ID,
+  NO_CALL_MSG_ID,
+  UNCLAIMED_CELL_SKIP_ID,
+  UNCLAIMED_NOT_NOCALL_ID,
+  NOTIFY_UNCLAIMED_ID
 ] as const;
 
 function cloneStep<T>(step: T): T {
@@ -211,11 +234,46 @@ function retargetClaimAgain(def: Definition, edits: string[]): void {
   );
 }
 
+function wrapUnclaimedNotice(def: Definition, edits: string[]): void {
+  if (findStep(def, UNCLAIMED_CELL_SKIP_ID)) return;
+  const inner = requireStep(def, UNCLAIMED_NOT_NOCALL_ID, "branch");
+  const arm = (inner.branches ?? []).find((b) => b.id === UNCLAIMED_OFFER_MISSED_ARM_ID);
+  if (!arm || !Array.isArray(arm.steps)) {
+    throw new Error(`no "${UNCLAIMED_OFFER_MISSED_ARM_ID}" arm`);
+  }
+  const existing = arm.steps.slice();
+  if (existing[0]?.id !== NOTIFY_UNCLAIMED_ID) {
+    throw new Error(
+      `"${UNCLAIMED_OFFER_MISSED_ARM_ID}" should start with "${NOTIFY_UNCLAIMED_ID}", found ${String(existing[0]?.id)}`
+    );
+  }
+  arm.steps = [
+    {
+      id: UNCLAIMED_CELL_SKIP_ID,
+      type: "branch",
+      question: "Did HomeLight ring a teammate cell instead of a press-1 offer?",
+      branches: [
+        {
+          id: UNCLAIMED_WAS_CELL_ARM_ID,
+          label: "Cell path: already told the team to pick up",
+          condition: { ...CALLBACK_CELL_WHEN },
+          steps: []
+        }
+      ],
+      else: existing
+    }
+  ];
+  edits.push(
+    `wrap "${NOTIFY_UNCLAIMED_ID}" so a cell-callback run is not told "not claimed"`
+  );
+}
+
 export function patchDefinition(def: Definition): string[] {
   const edits: string[] = [];
   addCallbackField(def, edits);
   wrapCallArm(def, edits);
   dropCardAlreadyClaimed(def, edits);
   retargetClaimAgain(def, edits);
+  wrapUnclaimedNotice(def, edits);
   return edits;
 }

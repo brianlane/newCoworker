@@ -9,16 +9,20 @@ import { patchDefinition as patchNocall } from "../scripts/oneshot/homelight-noc
 import {
   BRIEF_ID,
   NO_CALL_MSG_ID,
+  NOTIFY_UNCLAIMED_ID,
   OFFER_CALL_ARM_ID,
   OFFER_GATE_ID,
   ROUTE_ID,
+  UNCLAIMED_NOT_NOCALL_ID,
   WAIT_ID
 } from "../scripts/oneshot/homelight-claim-then-offer-definition";
 import { CARD_ID, findStep, type Definition } from "../scripts/oneshot/homelight-text-claim-details-definition";
 import {
   CLAIM_AGAIN_CONTINUE,
   CLAIM_AGAIN_ID,
-  RECALL_GATE_ID
+  RECALL_ARM_ID,
+  RECALL_GATE_ID,
+  WAIT2_ID
 } from "../scripts/oneshot/homelight-nocall-contact-definition";
 import {
   AI_DID_DISPLAY,
@@ -32,8 +36,17 @@ import {
   CELL_ALERT_MESSAGE,
   CLAIM_AGAIN_CONTINUE_NEW,
   OPEN_ID,
+  SHIFT_UNSAFE_RESUME_IDS,
+  UNCLAIMED_CELL_SKIP_ID,
+  UNCLAIMED_WAS_CELL_ARM_ID,
   patchDefinition
 } from "../scripts/oneshot/homelight-claim-calls-cell-definition";
+import {
+  BRANCH_ELSE_ARM,
+  branchChoiceVar,
+  flattenSteps,
+  isOnActivePath
+} from "../supabase/functions/_shared/ai_flows/branching";
 
 /**
  * homelight-claim-calls-cell.ts.
@@ -98,6 +111,7 @@ describe("homelight-claim-calls-cell", () => {
     expect(field).toEqual(CALLBACK_FIELD);
     expect(CALLBACK_FIELD.description.length).toBeLessThanOrEqual(300);
     expect(CALLBACK_FIELD.description).toContain(AI_DID_DISPLAY);
+    expect(CALLBACK_FIELD.description).toMatch(/Send message/i);
     expect(CALLBACK_FIELD.description.toLowerCase()).not.toContain("receptionist");
     expect(CALLBACK_FIELD.description).not.toMatch(/\u2014/);
   });
@@ -168,5 +182,52 @@ describe("homelight-claim-calls-cell", () => {
       expect(s.toLowerCase()).not.toContain("receptionist");
       expect(s.toLowerCase()).not.toContain("enquiry");
     }
+  });
+
+  it("refuses apply on every nested call-arm id the wrap would skip", () => {
+    const def = patchedLive();
+    const flat = flattenSteps(def.steps as never);
+    const wait2 = flat.find((e) => e.step.id === WAIT2_ID);
+    const route = flat.find((e) => e.step.id === ROUTE_ID);
+    expect(wait2).toBeTruthy();
+    expect(route).toBeTruthy();
+    expect(wait2!.branchPath.some((h) => h.branchStepId === CALLBACK_GATE_ID)).toBe(true);
+    expect(route!.branchPath.some((h) => h.branchStepId === CALLBACK_GATE_ID)).toBe(true);
+    const withoutHop = {
+      [branchChoiceVar(OFFER_GATE_ID)]: OFFER_CALL_ARM_ID
+    };
+    expect(isOnActivePath(wait2!.branchPath, withoutHop)).toBe(false);
+    expect(isOnActivePath(route!.branchPath, withoutHop)).toBe(false);
+    const withHop = {
+      ...withoutHop,
+      [branchChoiceVar(CALLBACK_GATE_ID)]: BRANCH_ELSE_ARM,
+      [branchChoiceVar(RECALL_GATE_ID)]: RECALL_ARM_ID
+    };
+    expect(isOnActivePath(wait2!.branchPath, withHop)).toBe(true);
+    expect(SHIFT_UNSAFE_RESUME_IDS).toEqual(
+      expect.arrayContaining([WAIT2_ID, ROUTE_ID, NO_CALL_MSG_ID, RECALL_GATE_ID])
+    );
+  });
+
+  it("does not send the not-claimed notice after a cell-callback alert", () => {
+    const def = patchedLive();
+    const skip = byId(def, UNCLAIMED_CELL_SKIP_ID);
+    expect(skip.type).toBe("branch");
+    expect(skip.branches[0].id).toBe(UNCLAIMED_WAS_CELL_ARM_ID);
+    expect(skip.branches[0].condition).toEqual(CALLBACK_CELL_WHEN);
+    expect(skip.branches[0].steps).toEqual([]);
+    expect(skip.else.map((s: Step) => s.id)).toEqual([NOTIFY_UNCLAIMED_ID]);
+    const inner = byId(def, UNCLAIMED_NOT_NOCALL_ID);
+    expect(inner.branches[0].steps.map((s: Step) => s.id)).toEqual([UNCLAIMED_CELL_SKIP_ID]);
+    expect(
+      evaluateStepCondition(
+        { var: "hl_call_outcome", notEquals: "no_call" },
+        { vars: {} }
+      )
+    ).toBe(true);
+    expect(evaluateStepCondition(CALLBACK_CELL_WHEN, { vars: { [CALLBACK_VAR]: "no" } })).toBe(
+      true
+    );
+    expect(evaluateStepCondition(CALLBACK_CELL_WHEN, { vars: {} })).toBe(false);
   });
 });
