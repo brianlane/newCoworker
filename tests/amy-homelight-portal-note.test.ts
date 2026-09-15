@@ -1,10 +1,16 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   ADD_NOTE_OPENER,
   AUTH_LABEL,
   GATE_OURS_ARM_ID,
   GATE_STEP_ID,
+  LEGACY_NAME_CLICK,
+  LEGACY_NAMED_ARM_CONDITION,
   LEGACY_REFERRALS_CLICK,
+  LEGACY_REFERRALS_HREF_SELECTOR,
+  NAMED_ARM_CONDITION,
   NAMED_ARM_ID,
   NAMED_BRANCH_ID,
   NOTE_EXPECT,
@@ -12,14 +18,20 @@ import {
   NOTE_SUBMIT,
   NOTE_TEXT,
   NOTE_TEXTAREA,
+  REFERRAL_ROW_NAME_TEST,
+  REFERRAL_ROW_SELECTOR,
+  REFERRAL_ROW_TEST,
   REFERRALS_NAV_SELECTOR,
   URL_VAR,
   addPortalNote,
   allStepIds,
   buildPortalNote,
+  findNamedArm,
   findPortalNoteStep,
   noteActions,
-  patchPortalNoteNav
+  patchPortalNoteNav,
+  patchPortalNoteRow,
+  referralRowSelector
 } from "../scripts/oneshot/amy-homelight-portal-note-definition";
 import {
   parseAiFlowDefinition,
@@ -32,10 +44,11 @@ import {
  *
  * Every selector here is a click/fill target read live headless through Amy's
  * render sidecar on 2026-08-19; a reworded data-test breaks the write
- * silently, and this is the file that should fail first. The name click is a
- * TEMPLATED target (`{{vars.lead_name}}`), which the runtime renders at plan
- * time; a search-box fill was tried instead and raced the SPA list re-render
- * onto the wrong referral.
+ * silently, and this is the file that should fail first. The row click is a
+ * TEMPLATED first-name `:has-text` on HomeLight's list-row data-test, not
+ * `click_text` of the full card name: the list abbreviates "Vince Nguyen" to
+ * "Vince N.". A search-box fill was tried instead and raced the SPA list
+ * re-render onto the wrong referral.
  */
 
 /** A trunk shaped like the live "HomeLight Referral" flow (4a3b03f4). */
@@ -49,6 +62,11 @@ function liveish(): AiFlowDefinition {
     },
     steps: [
       { id: "url", type: "extract_url", saveAs: URL_VAR },
+      {
+        id: "alert",
+        type: "extract_text",
+        fields: [{ name: "lead_first_name", description: "The lead's first name from the alert" }]
+      },
       {
         id: "card",
         type: "browse_extract",
@@ -103,7 +121,7 @@ describe("noteActions", () => {
   it("navigates, posts, and re-clicks the opener as the submit proof", () => {
     expect(noteActions()).toEqual([
       { kind: "click_selector", target: REFERRALS_NAV_SELECTOR },
-      { kind: "click_text", target: "{{vars.lead_name}}" },
+      { kind: "click_selector", target: REFERRAL_ROW_SELECTOR },
       { kind: "click_selector", target: ADD_NOTE_OPENER },
       { kind: "fill_selector", target: NOTE_TEXTAREA, valueTemplate: NOTE_TEXT },
       { kind: "click_selector", target: NOTE_SUBMIT },
@@ -123,9 +141,23 @@ describe("noteActions", () => {
     expect(NOTE_SUBMIT).toBe('[data-test="referral-add-note-btn"]');
   });
 
-  it("keys the claim-page header on HomeLight's href, not the visible label", () => {
-    expect(REFERRALS_NAV_SELECTOR).toBe('nav[data-test="navbar"] a[href="/referrals"]');
+  it("keys the claim-page header on /referrals and /referrals/page/, not claim URLs", () => {
+    expect(REFERRALS_NAV_SELECTOR).toContain('a[href="/referrals"]');
+    expect(REFERRALS_NAV_SELECTOR).toContain('a[href^="/referrals/page/"]');
+    expect(REFERRALS_NAV_SELECTOR).not.toContain('href^="/referrals"]');
+    expect(LEGACY_REFERRALS_HREF_SELECTOR).toBe('nav[data-test="navbar"] a[href="/referrals"]');
     expect(LEGACY_REFERRALS_CLICK).toEqual({ kind: "click_text", target: "Referrals" });
+  });
+
+  it("clicks the list row by first name, not the full card name", () => {
+    expect(REFERRAL_ROW_TEST).toBe("referralsList-row");
+    expect(REFERRAL_ROW_NAME_TEST).toBe("referralsList-rowClientName");
+    expect(REFERRAL_ROW_SELECTOR).toBe(
+      `[data-test="referralsList-row"]:has([data-test="referralsList-rowClientName"]:has-text("{{vars.lead_first_name}}"))`
+    );
+    expect(referralRowSelector("Vince")).toContain(':has-text("Vince")');
+    expect(REFERRAL_ROW_SELECTOR).not.toContain("lead_name");
+    expect(LEGACY_NAME_CLICK).toEqual({ kind: "click_text", target: "{{vars.lead_name}}" });
   });
 
   it("the note is the honest actions_taken log and the expect is its leading fragment", () => {
@@ -171,7 +203,7 @@ describe("addPortalNote", () => {
       branches: Array<{ condition: Record<string, unknown>; steps: Array<Record<string, unknown>> }>;
     };
     expect(named.id).toBe(NAMED_BRANCH_ID);
-    expect(named.branches[0].condition).toEqual({ var: "lead_name", notEquals: "none" });
+    expect(named.branches[0].condition).toEqual(NAMED_ARM_CONDITION);
     const note = named.branches[0].steps[0];
     expect(note).toMatchObject({
       id: NOTE_STEP_ID,
@@ -208,6 +240,12 @@ describe("addPortalNote", () => {
     expect(() => addPortalNote(def)).toThrow(/no longer produces already_claimed/);
   });
 
+  it("throws when the flow no longer produces lead_first_name", () => {
+    const def = liveish();
+    def.steps = def.steps.filter((s) => s.id !== "alert");
+    expect(() => addPortalNote(def)).toThrow(/no longer produces lead_first_name/);
+  });
+
   it("throws when there is no route_to_team to produce claimed_agent", () => {
     const def = liveish();
     def.steps = def.steps.filter((s) => s.id !== "route");
@@ -235,8 +273,10 @@ describe("buildPortalNote", () => {
       }>;
     };
     const actions = gate.branches[0].steps[0].branches[0].steps[0].actions;
-    expect(actions[1].target).toBe("{{vars.lead_name}}");
+    expect(actions[1].target).toBe(REFERRAL_ROW_SELECTOR);
     expect(actions[0].target).toBe(REFERRALS_NAV_SELECTOR);
+    expect(actions[1].target).toContain("{{vars.lead_first_name}}");
+    expect(actions[1].target).not.toContain("{{vars.lead_name}}");
   });
 });
 
@@ -261,9 +301,18 @@ describe("patchPortalNoteNav", () => {
       kind: "click_selector",
       target: REFERRALS_NAV_SELECTOR
     });
-    // The rest of the sequence, including the templated name click, is untouched.
-    expect(note.actions[1]).toEqual({ kind: "click_text", target: "{{vars.lead_name}}" });
+    // The rest of the sequence, including the row click, is untouched.
+    expect(note.actions[1]).toEqual({ kind: "click_selector", target: REFERRAL_ROW_SELECTOR });
     expect(patchPortalNoteNav(def)).toBe(false);
+  });
+
+  it("rewrites the Sep 12 exact /referrals href to also match /referrals/page/", () => {
+    const def = liveish();
+    addPortalNote(def);
+    const note = findPortalNoteStep(def)!;
+    note.actions[0] = { kind: "click_selector", target: LEGACY_REFERRALS_HREF_SELECTOR };
+    expect(patchPortalNoteNav(def)).toBe(true);
+    expect(note.actions[0].target).toBe(REFERRALS_NAV_SELECTOR);
   });
 
   it("refuses when the note step is missing", () => {
@@ -282,5 +331,71 @@ describe("patchPortalNoteNav", () => {
     addPortalNote(def);
     findPortalNoteStep(def)!.actions[0] = { kind: "click_text", target: "Dashboard" };
     expect(() => patchPortalNoteNav(def)).toThrow(/Dashboard/);
+  });
+});
+
+/** Shape of the live HomeLight Referral note step as of Sep 14 2026 (after nav + nocall). */
+function liveNoteShape(def: ReturnType<typeof liveish>): void {
+  addPortalNote(def);
+  const note = findPortalNoteStep(def)!;
+  note.actions[0] = { kind: "click_selector", target: LEGACY_REFERRALS_HREF_SELECTOR };
+  note.actions[1] = { ...LEGACY_NAME_CLICK };
+  const arm = findNamedArm(def)!;
+  arm.condition = { ...LEGACY_NAMED_ARM_CONDITION };
+}
+
+describe("patchPortalNoteRow", () => {
+  it("is a no-op when the note step already uses the row data-test", () => {
+    const def = liveish();
+    addPortalNote(def);
+    expect(patchPortalNoteRow(def)).toEqual([]);
+    expect(findPortalNoteStep(def)?.actions[1]).toEqual({
+      kind: "click_selector",
+      target: REFERRAL_ROW_SELECTOR
+    });
+    expect(findNamedArm(def)?.condition).toEqual(NAMED_ARM_CONDITION);
+  });
+
+  it("rewrites the live Sep 14 name click, exact href, and lead_name gate", () => {
+    const def = liveish();
+    liveNoteShape(def);
+    const edits = patchPortalNoteRow(def);
+    expect(edits.some((e) => e.startsWith("nav:"))).toBe(true);
+    expect(edits.some((e) => e.startsWith("row:"))).toBe(true);
+    expect(edits.some((e) => e.startsWith("gate:"))).toBe(true);
+    const note = findPortalNoteStep(def)!;
+    expect(note.actions).toEqual(noteActions());
+    expect(findNamedArm(def)?.condition).toEqual(NAMED_ARM_CONDITION);
+    expect(patchPortalNoteRow(def)).toEqual([]);
+  });
+
+  it("rewrites the 2026-09-13 live fixture without moving step ids", () => {
+    const def = parseAiFlowDefinition(
+      JSON.parse(
+        readFileSync(join(__dirname, "fixtures", "homelight-referral-live-2026-09-13.json"), "utf8")
+      )
+    );
+    const idsBefore = allStepIds(def);
+    const edits = patchPortalNoteRow(def);
+    expect(edits.length).toBeGreaterThan(0);
+    expect(allStepIds(def)).toEqual(idsBefore);
+    expect(findPortalNoteStep(def)?.actions).toEqual(noteActions());
+    expect(findNamedArm(def)?.condition).toEqual(NAMED_ARM_CONDITION);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+    expect(patchPortalNoteRow(def)).toEqual([]);
+  });
+
+  it("refuses when the Add Note form actions were edited", () => {
+    const def = liveish();
+    addPortalNote(def);
+    findPortalNoteStep(def)!.actions[2] = { kind: "click_text", target: "Add Note" };
+    expect(() => patchPortalNoteRow(def)).toThrow(/Add Note sequence/);
+  });
+
+  it("refuses when the row action is neither the name click nor the data-test", () => {
+    const def = liveish();
+    addPortalNote(def);
+    findPortalNoteStep(def)!.actions[1] = { kind: "click_text", target: "First row" };
+    expect(() => patchPortalNoteRow(def)).toThrow(/First row/);
   });
 });

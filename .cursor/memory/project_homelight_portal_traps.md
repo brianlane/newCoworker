@@ -178,7 +178,10 @@ team filter reuses `select-selected-item`) and Add Note
 NOTE with `{{vars.actions_taken}}`, deliberately not a stage write:
 `hl_call_outcome` proves our line answered HomeLight's claim call, not that
 the client was reached, and HomeLight's own AI already maintains stages. The
-row click is `click_text "{{vars.lead_name}}"`: browse_action TARGETS render
+row click is HomeLight's `referralsList-row` filtered by
+`:has-text("{{vars.lead_first_name}}")` (`amy-homelight-portal-note-row.ts`):
+the list abbreviates last names, so `click_text "{{vars.lead_name}}"` missed
+Vince Nguyen on run `e09b3f18`. browse_action TARGETS still render
 {{vars.*}} at plan time since #1527 (braced targets only; literal targets
 byte-identical). Do NOT fill the list's search box and click the first row:
 the click races the SPA re-render onto the wrong referral (observed live).
@@ -229,8 +232,14 @@ will.
 - Flow: `amy-homelight-portal-note-nav.ts` replaces the first action with
   `click_selector nav[data-test="navbar"] a[href="/referrals"]`. Playwright's
   selector click waits the full `ACTION_TIMEOUT_MS` (10s) for visibility.
-  The rest of the note sequence, including `click_text "{{vars.lead_name}}"`,
-  is untouched. Structure is untouched so parked runs resume.
+  Structure is untouched so parked runs resume.
+- Sep 14 2026: the remaining name click died on Vince Nguyen / Brandi V. /
+  Sharon I. (`e09b3f18`, `62ecd626`, `89268fa7`, `d9c840e3`). The list
+  abbreviates last names and Next.js aborts `/referrals` toward
+  `/referrals/page/[page]`. `amy-homelight-portal-note-row.ts` switches the
+  row click to `[data-test="referralsList-row"]` + first-name `:has-text`
+  and widens the nav href to `/referrals` or `/referrals/page/`. Do not
+  requeue those runs.
 - Render: `CLICK_TEXT_APPEAR_MS` default 5_000 -> 15_000 in
   `vps/aiflow-render/actions.mjs`, so the later name click (and other portals)
   get the same grace. Tests stub `waitForTimeout`, so this does not slow the

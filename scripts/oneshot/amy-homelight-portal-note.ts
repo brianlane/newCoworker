@@ -8,7 +8,9 @@
  * This appends one guarded browse_action (wrapped in the `hl_note_gate`
  * branch) as the LAST trunk step, filling the flow's 30th and final slot:
  * open the referrals list, click the client's row
- * (`click_text "{{vars.lead_name}}"`, rendered at plan time), open Add Note,
+ * (`click_selector` on HomeLight's `referralsList-row` filtered by the
+ * client-name cell `:has-text("{{vars.lead_first_name}}")`, rendered at plan
+ * time), open Add Note,
  * post "Update from Amy's assistant: {{vars.actions_taken}}. Will keep
  * following up.", and re-click the Add Note opener as the submit proof. Every
  * selector was read live headless through Amy's render sidecar on 2026-08-19;

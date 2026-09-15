@@ -302,6 +302,14 @@ already done; the saved HTML still had
 `tsx debug/redeploy-aiflow-render.ts --business-id 621a5b0d-c2ad-449f-9d74-9d50e7b27fa3`
 after merge. Do not requeue that run:
 it would redo outreach),
+`amy-homelight-portal-note-row.ts` (Sep 15 2026: Vince Nguyen run
+`e09b3f18`, Brandi V. `62ecd626` / `d9c840e3`, Sharon I. `89268fa7`
+failed terminal at `hl_portal_note`. Exact `click_text "{{vars.lead_name}}"`
+misses the list's abbreviated names; exact `a[href="/referrals"]` is
+aborted by Next.js in favor of `/referrals/page/[page]`. Row click is
+`referralsList-row` + first-name `:has-text`; nav matches `/referrals` or
+`/referrals/page/`. Inner arm gates on `lead_first_name`. Structure
+untouched. Do not requeue those runs),
 `homelight-claim-then-offer.ts` +
 `homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
 HomeLight's alert and URL arrived 35ms apart; the webhook used to evaluate
@@ -379,6 +387,7 @@ PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 `homelight-claim-then-offer.ts`. Vince N. (Sep 14 2026, run `e09b3f18`):
 `homelight-text-claim-details.ts`. Sharon I. (Sep 15 2026, run
 `89268fa7`) and Brandi V. (run `62ecd626`): `homelight-nocall-contact.ts`.
+Same day's portal-note row click: `amy-homelight-portal-note-row.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 
@@ -512,11 +521,16 @@ steps behind it (Bugbot, PR #1527). Guards nest to AND three conditions:
 `claimed_agent != "none"` (the step's own `when`, matching the sibling sends):
 
 ```
-click_selector  nav[data-test="navbar"] a[href="/referrals"]
-                (claim page header; used to be click_text "Referrals",
-                 which lost a hydration race on run 39f53cb7)
-click_text      "{{vars.lead_name}}"              (templated target, rendered
-                                                   at plan time; clicks the row)
+click_selector  nav[data-test="navbar"] a[href="/referrals"],
+                nav[data-test="navbar"] a[href^="/referrals/page/"]
+                (claim page header; matches the list at /referrals/page/1,
+                 not a claim URL. Used to be click_text "Referrals", then
+                 exact href="/referrals", which Next.js aborted on Sep 14)
+click_selector  [data-test="referralsList-row"]:has(
+                  [data-test="referralsList-rowClientName"]:has-text("{{vars.lead_first_name}}")
+                )
+                (the list row; first name matches both "Vince Nguyen" and
+                 "Vince N.". Used to be click_text "{{vars.lead_name}}")
 click_selector  [data-test="referral-detail-modal-add-note-button"]
 fill_selector   [data-test="referral-add-note-textarea"]
                   -> "Update from Amy's assistant: {{vars.actions_taken}}.
@@ -543,9 +557,15 @@ the very text the step had just typed).
 - **Do not fill the list's search box and click "the first row".** The click
   races the SPA re-render and lands on the stale first row of the unfiltered
   list; observed live, and the row it hit was a terminal referral with no
-  editor at all. The templated name click replaces that whole idea: action
-  targets render `{{vars.*}}` at plan time (steps.ts), so
-  `click_text "{{vars.lead_name}}"` waits for the one row carrying the name.
+  editor at all. **Do not `click_text` the full `lead_name` either.** The
+  list abbreviates last names: Vince Nguyen's run `e09b3f18` (2026-09-14)
+  died `click_text "Vince Nguyen": no matching control` while Brandi V. and
+  Sharon I. died the same way, and a later Brandi run timed out on the
+  add-note button after a span click that did not open the drawer. The row
+  click is HomeLight's `referralsList-row` filtered by the client-name cell
+  `:has-text("{{vars.lead_first_name}}")`, so "Vince" hits both the full
+  card name and the list's "Vince N.". Action targets still render
+  `{{vars.*}}` at plan time (steps.ts).
 - A referral in a TERMINAL stage (`Failed`, `Closed`) has no stage dropdown
   and no Add Note in ANY browser, just static text and Done. Probe a live one
   (`Thomas Larkin` at Left Voicemail, `Jose King` at Listing), never
@@ -565,7 +585,10 @@ the very text the step had just typed).
   live probe of the same shortlink clicked that text and landed on
   `/referrals/page/1`. The first action is now HomeLight's href selector so
   Playwright waits the full action timeout (10s) instead of the shorter
-  text-appear window. The remaining name click still uses `click_text`, which
-  is why `CLICK_TEXT_APPEAR_MS` went from 5s to 15s. The 404 and aborted
+  text-appear window. The remaining name click is the row `data-test` plus
+  first-name `:has-text` (`amy-homelight-portal-note-row.ts`). Sep 14 runs
+  then died with `Abort fetching component for route: "/referrals/page/[page]"`
+  after clicking the exact `/referrals` href: the live list is
+  `/referrals/page/1`. The nav selector now matches both. The 404 and aborted
   `google-analytics.com` posts in the same System Errors row are HomeLight's
   usual noise, identical on a healthy probe.
