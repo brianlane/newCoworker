@@ -224,7 +224,7 @@ describe("scheduled SMS dispatch", () => {
       from: "+15550001111"
     });
     expect((init as { headers: Record<string, string> }).headers["Idempotency-Key"]).toBe(
-      "scheduled_sms:sched-1"
+      "scheduled_sms-sched-1"
     );
     expect(insert).toHaveBeenCalledWith({
       business_id: "biz-1",

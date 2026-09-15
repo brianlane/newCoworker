@@ -9,6 +9,7 @@ import {
   internationalGatewayFrom
 } from "./sms_international_gateway.ts";
 import { intlAlphaProfileId } from "./alpha_sender.ts";
+import { toTelnyxIdempotencyKey } from "./telnyx_idempotency_key.ts";
 
 /** Gateway from-number for an international destination, else null. */
 function resolveInternationalGatewayFrom(toE164: string): string | null {
@@ -127,6 +128,11 @@ export async function telnyxSendSms(params: {
    * Optional Telnyx `Idempotency-Key`. Set this on compliance auto-replies (STOP/HELP/START)
    * so that if the inbound webhook is retried by Telnyx, Telnyx itself will de-duplicate the
    * resulting outbound message instead of sending it twice.
+   *
+   * Logical keys may contain colons or E.164 `+` (AiFlow uses
+   * `aiflow:${runId}:${step}`). `toTelnyxIdempotencyKey` rewrites them at
+   * this seam: Telnyx allows only `[A-Za-z0-9_-]{1,255}` and 400s code
+   * 10015 otherwise.
    */
   idempotencyKey?: string;
   /**
@@ -147,8 +153,13 @@ export async function telnyxSendSms(params: {
     Authorization: `Bearer ${params.apiKey}`,
     "Content-Type": "application/json"
   };
-  if (params.idempotencyKey) {
-    headers["Idempotency-Key"] = params.idempotencyKey;
+  // Telnyx 400/10015 on `/header/Idempotency-Key` if the value has colons,
+  // plus signs, or other punctuation. Encode at this seam so every caller
+  // (AiFlow send_sms / route_to_team, scheduled SMS, inbound replies)
+  // keeps a stable logical key while the header stays in the allowed charset.
+  const idempotencyKey = toTelnyxIdempotencyKey(params.idempotencyKey);
+  if (idempotencyKey) {
+    headers["Idempotency-Key"] = idempotencyKey;
   }
   // International destinations ride the dedicated P2P gateway as the
   // visible from-number (tenant A2P long codes cannot originate
@@ -267,8 +278,9 @@ export async function telnyxSendGroupMms(params: {
     Authorization: `Bearer ${params.apiKey}`,
     "Content-Type": "application/json"
   };
-  if (params.idempotencyKey) {
-    headers["Idempotency-Key"] = params.idempotencyKey;
+  const idempotencyKey = toTelnyxIdempotencyKey(params.idempotencyKey);
+  if (idempotencyKey) {
+    headers["Idempotency-Key"] = idempotencyKey;
   }
   const body: Record<string, unknown> = {
     from: params.fromE164,

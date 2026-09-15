@@ -231,6 +231,48 @@ describe("_shared/telnyx_sms_compliance", () => {
     });
   });
 
+  it("telnyxSendSms encodes colon and plus logical keys into a Telnyx-accepted Idempotency-Key", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    const logical = "aiflow:550e8400-e29b-41d4-a716-446655440000:0";
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+16025551212",
+      text: "hi",
+      idempotencyKey: logical,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({
+      "Idempotency-Key": "aiflow-550e8400-e29b-41d4-a716-446655440000-0"
+    });
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).not.toContain(":");
+  });
+
+  it("telnyxSendSms omits Idempotency-Key when the logical key is whitespace-only", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "hi",
+      idempotencyKey: "   ",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("Idempotency-Key");
+  });
+
   it("telnyxSendSms includes Idempotency-Key header when idempotencyKey is provided", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -517,6 +559,18 @@ describe("_shared/telnyx_sms_compliance", () => {
     });
     const [, withMedia] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(withMedia.headers).toMatchObject({ "Idempotency-Key": "grp_idem_1" });
+
+    fetchImpl.mockClear();
+    await telnyxSendGroupMms({
+      apiKey: "KEY",
+      fromE164: "+15550001111",
+      toE164: ["+15550002222", "+15550003333"],
+      text: "colon key",
+      idempotencyKey: "aiflow:run-id:2",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, colonKey] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(colonKey.headers).toMatchObject({ "Idempotency-Key": "aiflow-run-id-2" });
     expect(JSON.parse(withMedia.body as string)).toMatchObject({
       media_urls: ["https://example.com/shot.jpg"]
     });

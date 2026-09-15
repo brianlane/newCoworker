@@ -41,7 +41,10 @@ import {
 } from "../_shared/ai_flows/extracted_contact.ts";
 import { resolveSoloOwner } from "../_shared/solo_owner.ts";
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
-import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
+import {
+  isPermanentTelnyxSmsFailure,
+  telnyxSmsRejectedOperatorCopy
+} from "../_shared/telnyx_permanent_failure.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
 import {
   broadcastTagMatched,
@@ -6847,9 +6850,11 @@ async function sendSmsStep(
       if (isPermanentTelnyxSmsFailure(send.status)) {
         return {
           kind: "fail",
-          error:
-            `send_sms: the carrier rejected the text to ${toE164} and a retry can't fix it, ` +
-            `usually the number isn't a real dialable line. (${detail})`
+          error: `send_sms: ${telnyxSmsRejectedOperatorCopy({
+            target: `the text to ${toE164}`,
+            status: send.status,
+            body: send.body
+          })}`
         };
       }
       throw new Error(detail);
@@ -7047,12 +7052,14 @@ async function sendGroupSmsStep(
       // Same permanent-4xx rule as the 1:1 send above (408/429 stay
       // transient): retrying an invalid recipient or rejected payload can
       // only fail again.
-      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
+      if (isPermanentTelnyxSmsFailure(send.status)) {
         return {
           kind: "fail",
-          error:
-            `send_sms: the carrier rejected the group text and a retry can't fix it, ` +
-            `check the recipient numbers. (${detail})`
+          error: `send_sms: ${telnyxSmsRejectedOperatorCopy({
+            target: "the group text",
+            status: send.status,
+            body: send.body
+          })}`
         };
       }
       throw new Error(detail);
@@ -11568,7 +11575,15 @@ async function sendOfferSms(
       mediaUrls: effectiveMediaUrls,
       idempotencyKey
     });
-    if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+    if (!send.ok) {
+      throw new Error(
+        `route_to_team: ${telnyxSmsRejectedOperatorCopy({
+          target: `the offer text to ${to}`,
+          status: send.status,
+          body: send.body
+        })}`
+      );
+    }
     await logOutboundSms(supabase, run, {
       to,
       from: cfg.from || null,

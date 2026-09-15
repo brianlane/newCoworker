@@ -8,6 +8,7 @@ import {
 } from "@/lib/telnyx/international-gateway";
 import { intlAlphaProfileId } from "@/lib/telnyx/alpha-sender";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
+import { toTelnyxIdempotencyKey } from "../../../supabase/functions/_shared/telnyx_idempotency_key";
 
 export type TelnyxMessagingConfig = {
   apiKey: string;
@@ -136,7 +137,7 @@ export async function rcsChannelActiveForBusiness(
 
 export type SendTelnyxSmsOptions = {
   fetchImpl?: typeof fetch;
-  /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
+  /** Telnyx supports Idempotency-Key for at-most-once sends (§10). Encoded to `[A-Za-z0-9_-]{1,255}` at send time so colon-separated logical keys cannot 400/10015. */
   idempotencyKey?: string;
   /**
    * When set, meters this send against the business's monthly pool of text
@@ -416,8 +417,9 @@ export async function sendTelnyxSms(
       Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json"
     };
-    if (options?.idempotencyKey) {
-      headers["Idempotency-Key"] = options.idempotencyKey;
+    const idempotencyKey = toTelnyxIdempotencyKey(options?.idempotencyKey);
+    if (idempotencyKey) {
+      headers["Idempotency-Key"] = idempotencyKey;
     }
 
     const mediaUrls = (options?.mediaUrls ?? []).filter((u) => u.length > 0);

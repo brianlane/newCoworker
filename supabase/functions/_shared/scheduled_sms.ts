@@ -13,8 +13,9 @@
  *   3. Telnyx messaging configured for the tenant
  *   4. monthly SMS cap (try_reserve_sms_outbound_slot, owner-scheduled
  *      sends are customer-facing and metered like any other outbound)
- *   5. Telnyx send (idempotency key scheduled_sms:<id> makes stale-claim
- *      retries safe), RCS-first for eligible tenants
+ *   5. Telnyx send (idempotency key scheduled_sms:<id> is encoded to the
+ *      Telnyx-allowed charset at the shared client, so a colon in the
+ *      logical key cannot 400; stale-claim retries stay safe)
  *
  * Dependency-injected (structural supabase type + fetchFn) so this is
  * unit-tested from vitest under the shared 100% coverage gate, mirroring
