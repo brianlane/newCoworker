@@ -53,8 +53,8 @@ import { recordGeminiUsage } from "./usage-log";
 
 /** The inline engine's production default (DASHBOARD_CHAT_MODEL:
  * gemini-3.6-flash since the PR #809 fleet migration, gemini-3.7-flash
- * since the Aug 2026 flagship bump). */
-const OPERATOR_MODEL = "gemini-3.7-flash";
+ * since the Aug 2026 flagship bump, gemini-3.8-flash since Sep 2026). */
+const OPERATOR_MODEL = "gemini-3.8-flash";
 
 /**
  * Honest "I ran the automation" confirmation. Widened Sep 4 2026 after

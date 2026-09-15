@@ -75,7 +75,7 @@ describe("tablePriceFor / predecessorPriceFor", () => {
   });
 
   it("inherits the newest older same-family pin price", () => {
-    expect(predecessorPriceFor("gemini-3.8-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
+    expect(predecessorPriceFor("gemini-3.9-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
       in: 1.5,
       out: 7.5
     });
@@ -84,7 +84,7 @@ describe("tablePriceFor / predecessorPriceFor", () => {
       out: 2.5
     });
     expect(predecessorPriceFor("not-a-model", GEMINI_MODEL_PINS, PRICES)).toBeNull();
-    expect(predecessorPriceFor("gemini-3.7-flash", GEMINI_MODEL_PINS, PRICES)).toBeNull();
+    expect(predecessorPriceFor("gemini-3.8-flash", GEMINI_MODEL_PINS, PRICES)).toBeNull();
   });
 
   it("skips live pins and unpriced defaults when inheriting", () => {
@@ -215,7 +215,7 @@ describe("resolveCandidatePrice", () => {
     expect(
       resolveCandidatePrice("gemini-3.7-flash", GEMINI_MODEL_PINS, PRICES, {}, { in: 9, out: 9 })
     ).toEqual({ price: { in: 9, out: 9 }, source: "cli" });
-    expect(resolveCandidatePrice("gemini-3.7-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
+    expect(resolveCandidatePrice("gemini-3.8-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
       price: { in: 1.5, out: 7.5 },
       source: "table"
     });
@@ -224,7 +224,7 @@ describe("resolveCandidatePrice", () => {
         "gemini-9.9-flash": { in: 2, out: 8 }
       })
     ).toEqual({ price: { in: 2, out: 8 }, source: "docs" });
-    expect(resolveCandidatePrice("gemini-3.8-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
+    expect(resolveCandidatePrice("gemini-3.9-flash", GEMINI_MODEL_PINS, PRICES)).toEqual({
       price: { in: 1.5, out: 7.5 },
       source: "predecessor"
     });
@@ -236,8 +236,8 @@ describe("resolveCandidatePrice", () => {
 
   it("ignores a docs intro promo that undercuts the post-intro predecessor", () => {
     expect(
-      resolveCandidatePrice("gemini-3.8-flash", GEMINI_MODEL_PINS, PRICES, {
-        "gemini-3.8-flash": { in: 0.75, out: 3.75 }
+      resolveCandidatePrice("gemini-3.9-flash", GEMINI_MODEL_PINS, PRICES, {
+        "gemini-3.9-flash": { in: 0.75, out: 3.75 }
       })
     ).toEqual({ price: { in: 1.5, out: 7.5 }, source: "predecessor" });
   });
@@ -245,7 +245,7 @@ describe("resolveCandidatePrice", () => {
 
 describe("recommendForPin", () => {
   const ctx = {
-    probe: okProbe("gemini-3.8-flash"),
+    probe: okProbe("gemini-3.9-flash"),
     candidatePrice: { in: 1.5, out: 7.5 } as GeminiPrice,
     pinPrice: { in: 1.5, out: 7.5 } as GeminiPrice
   };
@@ -284,14 +284,14 @@ describe("recommendForPin", () => {
     expect(
       recommendForPin(pinByIdRequired("sms-chat"), "gemini-3.8-flash-preview", ctx).verdict
     ).toBe("skip");
-    expect(recommendForPin(pinByIdRequired("sms-chat"), "gemini-3.8-flash", ctx).verdict).toBe(
+    expect(recommendForPin(pinByIdRequired("sms-chat"), "gemini-3.9-flash", ctx).verdict).toBe(
       "skip"
     );
   });
 
   it("returns already when the pin is already on the candidate", () => {
     expect(
-      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.7-flash", ctx).verdict
+      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", ctx).verdict
     ).toBe("already");
   });
 
@@ -313,32 +313,32 @@ describe("recommendForPin", () => {
   it("skips generateContent failures and OpenAI-compat failures on router pins", () => {
     const genFail = {
       ...ctx,
-      probe: { ...okProbe("gemini-3.8-flash"), generateContent: { ok: false, status: 404 } }
+      probe: { ...okProbe("gemini-3.9-flash"), generateContent: { ok: false, status: 404 } }
     };
-    expect(recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", genFail).verdict).toBe(
+    expect(recommendForPin(pinByIdRequired("voice-task"), "gemini-3.9-flash", genFail).verdict).toBe(
       "skip"
     );
     const oaiFail = {
       ...ctx,
-      probe: { ...okProbe("gemini-3.8-flash"), openAiCompat: { ok: false, status: 404 } }
+      probe: { ...okProbe("gemini-3.9-flash"), openAiCompat: { ok: false, status: 404 } }
     };
-    expect(recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", oaiFail).verdict).toBe(
+    expect(recommendForPin(pinByIdRequired("voice-task"), "gemini-3.9-flash", oaiFail).verdict).toBe(
       "skip"
     );
-    expect(recommendForPin(pinByIdRequired("aiflow-compile"), "gemini-3.8-flash", oaiFail).verdict).toBe(
+    expect(recommendForPin(pinByIdRequired("aiflow-compile"), "gemini-3.9-flash", oaiFail).verdict).toBe(
       "adopt"
     );
   });
 
   it("waits when price is unknown and skips when the candidate costs more", () => {
     expect(
-      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", {
+      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.9-flash", {
         ...ctx,
         candidatePrice: null
       }).verdict
     ).toBe("wait");
     expect(
-      recommendForPin(pinByIdRequired("webchat"), "gemini-3.8-flash", {
+      recommendForPin(pinByIdRequired("webchat"), "gemini-3.9-flash", {
         ...ctx,
         pinPrice: { in: 0.1, out: 0.4 }
       }).verdict
@@ -347,10 +347,10 @@ describe("recommendForPin", () => {
 
   it("waits when both thinking levels are rejected", () => {
     expect(
-      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", {
+      recommendForPin(pinByIdRequired("voice-task"), "gemini-3.9-flash", {
         ...ctx,
         probe: {
-          ...okProbe("gemini-3.8-flash"),
+          ...okProbe("gemini-3.9-flash"),
           thinkingMinimal: "rejected",
           thinkingLow: "rejected"
         }
@@ -359,9 +359,9 @@ describe("recommendForPin", () => {
   });
 
   it("adopts a same-price flagship successor and notes a missing list entry", () => {
-    const rec = recommendForPin(pinByIdRequired("voice-task"), "gemini-3.8-flash", {
+    const rec = recommendForPin(pinByIdRequired("voice-task"), "gemini-3.9-flash", {
       ...ctx,
-      probe: { ...okProbe("gemini-3.8-flash", false), thinkingMinimal: "rejected" }
+      probe: { ...okProbe("gemini-3.9-flash", false), thinkingMinimal: "rejected" }
     });
     expect(rec.verdict).toBe("adopt");
     expect(rec.reasons.some((r) => r.includes("OpenAI-compat"))).toBe(true);
@@ -370,9 +370,9 @@ describe("recommendForPin", () => {
   });
 
   it("adopts without the optional notes when list+thinking are clean and no router", () => {
-    const rec = recommendForPin(pinByIdRequired("aiflow-compile"), "gemini-3.8-flash", {
+    const rec = recommendForPin(pinByIdRequired("aiflow-compile"), "gemini-3.9-flash", {
       ...ctx,
-      probe: { ...okProbe("gemini-3.8-flash"), thinkingMinimal: "supported" }
+      probe: { ...okProbe("gemini-3.9-flash"), thinkingMinimal: "supported" }
     });
     expect(rec.verdict).toBe("adopt");
     expect(rec.reasons.some((r) => r.includes("OpenAI-compat"))).toBe(false);
@@ -387,7 +387,7 @@ describe("recommendForPin", () => {
       family: "flagship",
       acceptsFamilies: ["flagship"]
     });
-    expect(() => recommendForPin(bad, "gemini-3.8-flash", ctx)).toThrow(/unparseable default/);
+    expect(() => recommendForPin(bad, "gemini-3.9-flash", ctx)).toThrow(/unparseable default/);
   });
 });
 
@@ -396,18 +396,18 @@ describe("findNewerCandidates / evaluateListedModels", () => {
     expect(
       findNewerCandidates(
         [
-          "models/gemini-3.7-flash",
+          "models/gemini-3.8-flash",
           "gemini-3.5-flash-lite",
           "gemini-3.8-flash-preview",
           "gemini-3.1-pro",
           "gemini-3-embedding",
           "gpt-4",
-          "gemini-3.8-flash",
-          "gemini-3.8-flash"
+          "gemini-3.9-flash",
+          "gemini-3.9-flash"
         ],
         GEMINI_MODEL_PINS
       )
-    ).toEqual(["gemini-3.8-flash"]);
+    ).toEqual(["gemini-3.9-flash"]);
   });
 
   it("keeps a GA live successor for human review, including same-version preview to GA", () => {
@@ -423,6 +423,22 @@ describe("findNewerCandidates / evaluateListedModels", () => {
         PRICES
       )
     ).toEqual(["gemini-3.1-flash-native-audio", "gemini-3.8-flash-native-audio"]);
+  });
+
+  it("drops transcribe and translate Live SKUs as unstable, not wait candidates", () => {
+    // Issue #1847: gemini-3.5-transcribe-live is family live but the wrong
+    // product (speech-to-text), same lesson as live-translate-preview.
+    expect(
+      findNewerCandidates(
+        [
+          "gemini-3.5-transcribe-live",
+          "gemini-3.5-live-translate",
+          "gemini-3.8-flash-native-audio"
+        ],
+        GEMINI_MODEL_PINS,
+        PRICES
+      )
+    ).toEqual(["gemini-3.8-flash-native-audio"]);
   });
 
   it("surfaces a cheap-pin successor that is newer than webchat but older than the mid pins", () => {
@@ -460,12 +476,12 @@ describe("findNewerCandidates / evaluateListedModels", () => {
           "gemini-3.1-flash-lite",
           "gemini-3.5-flash",
           "gemini-3.6-flash",
-          "gemini-3.8-flash"
+          "gemini-3.9-flash"
         ],
         GEMINI_MODEL_PINS,
         PRICES
       )
-    ).toEqual(["gemini-3.8-flash"]);
+    ).toEqual(["gemini-3.9-flash"]);
   });
 
   it("does not open a wait/adopt report for the issue #1808 skip-only ids", () => {
@@ -476,7 +492,7 @@ describe("findNewerCandidates / evaluateListedModels", () => {
         "gemini-3.6-flash",
         "gemini-2.5-flash-lite",
         "gemini-3.5-flash-lite",
-        "gemini-3.7-flash"
+        "gemini-3.8-flash"
       ],
       pins: GEMINI_MODEL_PINS,
       probes: {
@@ -498,15 +514,15 @@ describe("findNewerCandidates / evaluateListedModels", () => {
       listedIds: [
         "gemini-2.5-flash-lite",
         "gemini-3.5-flash-lite",
-        "gemini-3.7-flash",
-        "models/gemini-3.8-flash"
+        "gemini-3.8-flash",
+        "models/gemini-3.9-flash"
       ],
       pins: GEMINI_MODEL_PINS,
-      probes: { "gemini-3.8-flash": okProbe("gemini-3.8-flash") },
+      probes: { "gemini-3.9-flash": okProbe("gemini-3.9-flash") },
       prices: PRICES,
       generatedAt: "2026-09-03T00:00:00.000Z"
     });
-    expect(report.newerThanPins).toEqual(["gemini-3.8-flash"]);
+    expect(report.newerThanPins).toEqual(["gemini-3.9-flash"]);
     expect(report.listedCount).toBe(4);
     const flagship = report.evaluations[0].recommendations.filter((r) => r.verdict === "adopt");
     expect(flagship.map((r) => r.pinId).sort()).toEqual(
@@ -527,7 +543,7 @@ describe("findNewerCandidates / evaluateListedModels", () => {
 
   it("synthesizes a failed probe and still reports when Google lists a newer id we did not probe", () => {
     const report = evaluateListedModels({
-      listedIds: ["gemini-3.8-flash"],
+      listedIds: ["gemini-3.9-flash"],
       pins: GEMINI_MODEL_PINS,
       probes: {},
       prices: PRICES,
@@ -540,7 +556,7 @@ describe("findNewerCandidates / evaluateListedModels", () => {
 
   it("returns an empty evaluation when nothing listed is newer", () => {
     const report = evaluateListedModels({
-      listedIds: ["gemini-3.7-flash", "gemini-3.5-flash-lite"],
+      listedIds: ["gemini-3.8-flash", "gemini-3.5-flash-lite"],
       pins: GEMINI_MODEL_PINS,
       probes: {},
       prices: PRICES,
@@ -556,14 +572,14 @@ describe("findNewerCandidates / evaluateListedModels", () => {
 describe("formatEvalReport", () => {
   it("renders adopt/wait/skip/already groups and an unknown price", () => {
     const report = evaluateListedModels({
-      listedIds: ["gemini-3.8-flash"],
+      listedIds: ["gemini-3.9-flash"],
       pins: GEMINI_MODEL_PINS,
-      probes: { "gemini-3.8-flash": okProbe("gemini-3.8-flash") },
+      probes: { "gemini-3.9-flash": okProbe("gemini-3.9-flash") },
       prices: PRICES,
       generatedAt: "t"
     });
     const text = formatEvalReport(report);
-    expect(text).toContain("## gemini-3.8-flash");
+    expect(text).toContain("## gemini-3.9-flash");
     expect(text).toContain("### adopt");
     expect(text).toContain("### skip");
     expect(text).not.toContain("### wait");
@@ -607,8 +623,8 @@ describe("formatEvalReport", () => {
 
 describe("recommendAllPins", () => {
   it("prices each pin from its own default, so webchat does not inherit flagship rates", () => {
-    const rows = recommendAllPins(GEMINI_MODEL_PINS, "gemini-3.8-flash", {
-      probe: okProbe("gemini-3.8-flash"),
+    const rows = recommendAllPins(GEMINI_MODEL_PINS, "gemini-3.9-flash", {
+      probe: okProbe("gemini-3.9-flash"),
       candidatePrice: { in: 1.5, out: 7.5 },
       prices: PRICES
     });

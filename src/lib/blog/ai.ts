@@ -12,9 +12,9 @@ import { stripEmDashes } from "./copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-// gemini-3.7-flash (GA Aug 13 2026): newer than 3.5-flash AND cheaper on
-// output ($7.50/1M vs 9.00 post-intro).
-export const DEFAULT_BLOG_AI_TEXT_MODEL = "gemini-3.7-flash";
+// gemini-3.8-flash (on models.list by 2026-09-03): successor to 3.7-flash
+// at the same post-intro list price ($1.50/$7.50).
+export const DEFAULT_BLOG_AI_TEXT_MODEL = "gemini-3.8-flash";
 export const DEFAULT_BLOG_AI_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
 
 function geminiApiKey(): string {

@@ -63,9 +63,9 @@ export const DIGEST_MIN_WORDS = 150;
  */
 export const DIGEST_MAX_WINDOW_DAYS = 28;
 
-// gemini-3.7-flash (GA Aug 13 2026): newer than 3.5-flash AND cheaper on
-// output ($7.50/1M vs 9.00 post-intro).
-export const DEFAULT_DIGEST_TEXT_MODEL = "gemini-3.7-flash";
+// gemini-3.8-flash (on models.list by 2026-09-03): successor to 3.7-flash
+// at the same post-intro list price ($1.50/$7.50).
+export const DEFAULT_DIGEST_TEXT_MODEL = "gemini-3.8-flash";
 export const DEFAULT_DIGEST_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
 
 export type MergedPr = {
