@@ -441,7 +441,11 @@ re-run the lead flow for H Eve after the Canada-whitelist outage killed run
 4e9fdf3c at its first customer text), `repoint-roster-member-phone.ts`
 (generic; applied here Aug 28 2026 to move James's roster row off the
 untextable +852 number onto his +1514 mobile and set his email, ledger id
-244, details in the +852 sharp edge above).
+244, details in the +852 sharp edge above), `resume-telnyx-10015-runs.ts`
+(generic; Sep 15 2026 Telnyx 10015 Idempotency-Key incident. Re-queues the
+failed KYP `send_sms` runs at their existing `current_step` so the worker
+retries that nudge only, not a fresh run from step 0. Opposite of
+`requeue-failed-flow-run.ts`. Does not touch HomeLight or Spoke Check.).
 
 Owner-alert WhatsApp switched OFF 2026-08-31:
 `disable-undeliverable-whatsapp-alerts.ts` (generic, evidence-gated) sets
