@@ -348,7 +348,15 @@ a phone after a mailbox miss now texts the seller. `hl_portal_note.when`
 is restored to `claimed_agent notEquals none` so the last-step name click
 does not fail the four no-call runs. Do not requeue those runs. Do not
 `--click` a live `hmlt.co` URL. A screenshot sent to the coworker does not
-write AiFlow vars),
+write AiFlow vars. Applied Sep 15 2026 after merge of PR #1848
+(`f36f1fe1`). Zero in-flight runs at apply time. Live readback: trunk 28,
+call arm `brief_call -> wait_hl_call -> recall_gate -> route -> no_call_msg`,
+`recall_go` is `recall_pause` (1 min) then `claim_again` (`click_text
+"Call me again"`, `continueWhenText: "HomeLight"`) then `wait_hl_call2`
+(`saveAs: hl_call_outcome`, `awaitStartMinutes: 6`), seller intro gated on
+`contact_status equals found`, `late2_wait` 15 minutes, `late2_portal_sms`
+on `lead_phone contains +`, `late2_portal_email` on `lead_email contains @`,
+`hl_portal_note.when` is `claimed_agent notEquals none`),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -369,7 +377,8 @@ re-run: several supersede each other.
 PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 #1400. Sonia R. (Sep 13 2026, run `76248380`): persist-before-eval plus
 `homelight-claim-then-offer.ts`. Vince N. (Sep 14 2026, run `e09b3f18`):
-`homelight-text-claim-details.ts`.
+`homelight-text-claim-details.ts`. Sharon I. (Sep 15 2026, run
+`89268fa7`) and Brandi V. (run `62ecd626`): `homelight-nocall-contact.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 
