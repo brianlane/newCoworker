@@ -331,6 +331,24 @@ requeue Vince's run. Applied Sep 14 2026 after merge of PR #1845
 `unclaimed_wait_3`, not a moved step). Live readback: trunk 28, `late2_portal`
 present with `fillOnlyEmpty`, `late2_phone_miss` gates never-sent on
 `lead_phone equals none`, `claim_state` names Amy Laidlaw or her team),
+`homelight-nocall-contact.ts` +
+`homelight-nocall-contact-definition.ts` (Sep 15 2026: Sharon I. run
+`89268fa7` and Brandi V. run `62ecd626`. Call-mode claims showed
+"Call me again" / "We're calling you", then `no_call`. Nobody pressed 1.
+HomeLight's own iPhone nags ("It's been 30 minutes") kept firing because
+we had not completed their contact loop. `lead_sms` waited for a roster
+claim; `late2_wait` slept 60 minutes. Sharon was texted when the details
+email finally arrived (~86 min); Brandi never got a phone. After
+`no_call` the flow now pauses 1 minute, clicks "Call me again" (the
+button HomeLight shows after a verified call claim, not the original
+"Call me to claim referral"), and waits a second time. Seller intro
+fires when `contact_status equals found`, not
+when a teammate presses 1. `late2_wait` is 15 minutes. A portal card with
+a phone after a mailbox miss now texts the seller. `hl_portal_note.when`
+is restored to `claimed_agent notEquals none` so the last-step name click
+does not fail the four no-call runs. Do not requeue those runs. Do not
+`--click` a live `hmlt.co` URL. A screenshot sent to the coworker does not
+write AiFlow vars),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the

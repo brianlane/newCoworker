@@ -191,14 +191,14 @@ function assertPatchedShape(def: Definition): void {
   if (textIds[0] !== ROUTE_TEXT_ID) {
     throw new Error(`text arm should start with "${ROUTE_TEXT_ID}", found ${textIds.join(",")}`);
   }
-  if (
-    callIds[0] !== BRIEF_ID ||
-    callIds[1] !== WAIT_ID ||
-    callIds[2] !== ROUTE_ID ||
-    callIds[3] !== NO_CALL_MSG_ID
-  ) {
+  if (callIds[0] !== BRIEF_ID || callIds[1] !== WAIT_ID) {
     throw new Error(
-      `call arm should be ${BRIEF_ID}, ${WAIT_ID}, ${ROUTE_ID}, ${NO_CALL_MSG_ID}; found ${callIds.join(",")}`
+      `call arm should start with ${BRIEF_ID}, ${WAIT_ID}; found ${callIds.join(",")}`
+    );
+  }
+  if (callIds[callIds.length - 2] !== ROUTE_ID || callIds[callIds.length - 1] !== NO_CALL_MSG_ID) {
+    throw new Error(
+      `call arm should end with ${ROUTE_ID}, ${NO_CALL_MSG_ID}; found ${callIds.join(",")}`
     );
   }
   const elseIds = (gate.else ?? []).map((s) => s.id);
