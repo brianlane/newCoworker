@@ -52,7 +52,7 @@ import { recordGeminiUsage } from "./usage-log";
  *      tool results don't show.
  */
 
-const COMPANION_MODEL = "gemini-3.7-flash";
+const COMPANION_MODEL = "gemini-3.8-flash";
 
 const ALL_ACTION_GATES: ActionToolGates = {
   send_sms: true,

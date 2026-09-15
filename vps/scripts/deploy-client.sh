@@ -32,7 +32,7 @@
 #                               voice picker). Blank keeps the model default.
 #   GEMINI_ROWBOAT_MODEL, optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
-#                               gemini-3.7-flash.
+#                               gemini-3.8-flash.
 #   OWNER_CHAT_MODEL, optional; model for the OwnerCoworker (owner
 #                               dashboard chat) agent. Defaults to
 #                               gemini-3.5-flash-lite; degrades to OLLAMA_MODEL
@@ -287,14 +287,14 @@ fi
 # container serve both the SMS dispatcher agent (Ollama) and the voice_task
 # agent (Gemini).
 LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
-# gemini-3.7-flash (GA 2026-08-13): replaces 3.6-flash, its direct successor
-# for agentic/tool work at the same post-intro list price ($1.50/$7.50 per
-# 1M; intro $0.75/$3.75 through Dec 31 2026). Verify any new id live on BOTH
-# :generateContent and the OpenAI-compat route the llm-router uses before
-# changing this default: the old "gemini-3.1-flash" default did NOT exist on
-# the API (404 on both) and broke voice turns fleet-wide. gemini-3.7-flash
-# verified live on both routes + the on-box Rowboat router path 2026-08-14.
-GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.7-flash"
+# gemini-3.8-flash (on models.list by 2026-09-03): replaces 3.7-flash, its
+# direct successor for agentic/tool work at the same post-intro list price
+# ($1.50/$7.50 per 1M). Verify any new id live on BOTH :generateContent and
+# the OpenAI-compat route the llm-router uses before changing this default:
+# the old "gemini-3.1-flash" default did NOT exist on the API (404 on both)
+# and broke voice turns fleet-wide. gemini-3.8-flash verified live on both
+# routes 2026-09-03 (thinkingLevel minimal 400s, same as 3.7; retry to low).
+GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.8-flash"
 
 # Owner-dashboard chat model (OwnerCoworker agent only, SMS's Coworker agent
 # stays on the local Ollama model for $0 marginal cost). The owner surface

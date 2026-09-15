@@ -22,6 +22,8 @@ Adopt rules (already paid for):
 - Flagship Flash does not replace the SMS/lite pin (3.5-flash was a poor
   deal on that path).
 - Preview / cyber / `-latest` never become fleet defaults.
+- `transcribe` / `translate` in the id are specialist Live SKUs, not the
+  voice-bridge native-audio model (issue #1847).
 - Live audio pins are never auto-adopted.
 - `thinkingLevel: "minimal"` 400 is not a skip (PR #1372 retries to low).
 
@@ -37,3 +39,10 @@ anything newer than webchat's 2.5-flash-lite as "newer than our pins"
 than the mid/flagship pins and cost more than webchat. Live wait is now
 only for a live-family successor. Text ids that every matching pin would
 skip on version or known-worse price are not candidates.
+
+Flagship pins moved 3.7-flash to 3.8-flash in Sep 2026 (issue #1847).
+The eval had scored adopt on 2026-09-03 (PR #1792) and every Monday
+after; the bump itself is a separate change from the checker. SMS/lite
+and webchat stayed put. `GEMINI_ROWBOAT_MODEL` on Vercel and the laptop
+`.env` can still override the script default on new provisions and
+redeploys.

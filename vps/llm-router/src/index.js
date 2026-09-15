@@ -526,13 +526,15 @@ function handleHealth(_req, res) {
 
 function handleModels(_req, res) {
   // Minimal model list so Rowboat's probe (`GET /v1/models`) doesn't 404. We
-  // advertise the two tiers the rest of the system knows about; Rowboat
-  // never filters on this list.
+  // advertise the Gemini and Ollama ids the rest of the system knows about;
+  // Rowboat never filters on this list. Keep 3.7-flash listed so a box still
+  // pinned there via env override does not see an empty probe.
   writeJson(res, 200, {
     object: "list",
     data: [
       { id: "llama3.2:3b", object: "model", owned_by: "ollama" },
       { id: "qwen3:4b-instruct", object: "model", owned_by: "ollama" },
+      { id: "gemini-3.8-flash", object: "model", owned_by: "google" },
       { id: "gemini-3.7-flash", object: "model", owned_by: "google" },
       { id: "gemini-3.5-flash-lite", object: "model", owned_by: "google" }
     ]

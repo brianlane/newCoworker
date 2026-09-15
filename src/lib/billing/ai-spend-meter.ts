@@ -66,7 +66,11 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   // 3.6-flash), not the launch promo ($0.75/$3.75 through Dec 31 2026): a
   // promo-rate row would undercount the fuse the day the promo lapses, and
   // date-conditional pricing is a time bomb. Thinking tokens bill as output.
-  "gemini-3.7-flash": { in: 1.5, out: 7.5 }
+  "gemini-3.7-flash": { in: 1.5, out: 7.5 },
+  // Gemini 3.8 Flash (on models.list by 2026-09-03): replaces 3.7-flash as
+  // the flagship default. Same post-intro list rate as 3.7 ($1.50/$7.50).
+  // Meter the post-intro rate even if a launch promo exists.
+  "gemini-3.8-flash": { in: 1.5, out: 7.5 }
 };
 
 /**

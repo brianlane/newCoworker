@@ -11,7 +11,7 @@
  *
  * Families match how we actually spend, not Google's marketing names:
  *   flagship  gemini-X.Y-flash (not lite). Compile, dashboard chat, blog,
- *             voice_task. Today gemini-3.7-flash.
+ *             voice_task. Today gemini-3.8-flash.
  *   mid       gemini-X.Y-flash-lite. SMS, owner chat, extract, summaries.
  *             Today gemini-3.5-flash-lite.
  *   cheap     anonymous public traffic. Webchat stays on 2.5-flash-lite
@@ -68,6 +68,8 @@ export function stripGeminiModelsPrefix(raw: string): string {
 /**
  * True when the id is a preview, experiment, alias, or a specialist SKU
  * we would never make a fleet default. GA Flash ids do not match.
+ * transcribe / translate are Live speech SKUs (issue #1847), not the
+ * native-audio model the voice bridge uses.
  */
 export function isUnstableGeminiId(id: string): boolean {
   const n = stripGeminiModelsPrefix(id).toLowerCase();
@@ -78,7 +80,9 @@ export function isUnstableGeminiId(id: string): boolean {
     n.includes("-latest-") ||
     n.includes("cyber") ||
     n.includes("-tts") ||
-    n.includes("robotics")
+    n.includes("robotics") ||
+    n.includes("transcribe") ||
+    n.includes("translate")
   );
 }
 
@@ -169,7 +173,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "voice-task",
     workers: ["voice_task (Rowboat text turns on a live call)"],
     envVar: "GEMINI_ROWBOAT_MODEL",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     family: "flagship",
     acceptsFamilies: ["flagship"],
     needsOpenAiCompat: true,
@@ -177,7 +181,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "vps/scripts/deploy-client.sh",
-        mustContain: 'GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.7-flash"'
+        mustContain: 'GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.8-flash"'
       },
       { file: "vps/rowboat/rowboat.json", mustContain: "{{GEMINI_ROWBOAT_MODEL}}" }
     ]
@@ -206,7 +210,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "dashboard-chat",
     workers: ["Dashboard inline chat (Owner operator)"],
     envVar: "DASHBOARD_CHAT_MODEL",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     family: "flagship",
     acceptsFamilies: ["flagship"],
     needsOpenAiCompat: false,
@@ -214,7 +218,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "src/lib/dashboard-chat/inline-turn.ts",
-        mustContain: 'const DEFAULT_INLINE_MODEL = "gemini-3.7-flash"'
+        mustContain: 'const DEFAULT_INLINE_MODEL = "gemini-3.8-flash"'
       }
     ]
   },
@@ -298,7 +302,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "aiflow-compile",
     workers: ["AiFlow compile / edit / library adapt"],
     envVar: "AIFLOW_COMPILE_MODEL",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     family: "flagship",
     acceptsFamilies: ["flagship"],
     needsOpenAiCompat: false,
@@ -306,7 +310,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "src/lib/ai-flows/compile-service.ts",
-        mustContain: 'process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.7-flash"'
+        mustContain: 'process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.8-flash"'
       }
     ]
   },
@@ -314,7 +318,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "agent-run",
     workers: ["Document agents (executeAgentRun)"],
     envVar: "AGENT_RUN_MODEL",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     family: "flagship",
     acceptsFamilies: ["flagship"],
     needsOpenAiCompat: false,
@@ -322,7 +326,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "src/lib/agents/run.ts",
-        mustContain: 'const DEFAULT_AGENT_MODEL = "gemini-3.7-flash"'
+        mustContain: 'const DEFAULT_AGENT_MODEL = "gemini-3.8-flash"'
       }
     ]
   },
@@ -455,7 +459,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "blog-text",
     workers: ["Admin blog AI assist", "Weekly PR digest"],
     envVar: "BLOG_DIGEST_TEXT_MODEL",
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     family: "flagship",
     acceptsFamilies: ["flagship"],
     needsOpenAiCompat: false,
@@ -463,11 +467,11 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "src/lib/blog/ai.ts",
-        mustContain: 'export const DEFAULT_BLOG_AI_TEXT_MODEL = "gemini-3.7-flash"'
+        mustContain: 'export const DEFAULT_BLOG_AI_TEXT_MODEL = "gemini-3.8-flash"'
       },
       {
         file: "src/lib/blog/weekly-digest.ts",
-        mustContain: 'export const DEFAULT_DIGEST_TEXT_MODEL = "gemini-3.7-flash"'
+        mustContain: 'export const DEFAULT_DIGEST_TEXT_MODEL = "gemini-3.8-flash"'
       }
     ]
   },

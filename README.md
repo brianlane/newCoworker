@@ -132,7 +132,7 @@ admin business page ("Messaging channel (RCS)" card).
 - KVM2 / KVM4 local fallback model: `llama3.2:3b` (KVM1 ships no local model)
 - KVM8 local fallback model: `qwen3:4b-instruct`
 
-Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) which forwards `gemini-*` traffic to Google's OpenAI-compatible endpoint and everything else to Ollama's `/v1` API. The SMS `dispatcher` agent runs `SMS_CHAT_MODEL` (default `gemini-3.5-flash-lite`, `vps/scripts/deploy-client.sh`) through that router, degrading to its local Ollama twin `CoworkerLocal` when the combined spend cap trips or the box has no Gemini key; the voice `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default `gemini-3.7-flash`). No Bifrost layer.
+Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) which forwards `gemini-*` traffic to Google's OpenAI-compatible endpoint and everything else to Ollama's `/v1` API. The SMS `dispatcher` agent runs `SMS_CHAT_MODEL` (default `gemini-3.5-flash-lite`, `vps/scripts/deploy-client.sh`) through that router, degrading to its local Ollama twin `CoworkerLocal` when the combined spend cap trips or the box has no Gemini key; the voice `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default `gemini-3.8-flash`). No Bifrost layer.
 
 ### The voice callers hear (per tenant, live)
 
@@ -2978,7 +2978,7 @@ are RLS-on/no-policies (service-role only); core logic lives in
 - **Env**: `GITHUB_DIGEST_REPO` (`owner/name`) + `GITHUB_DIGEST_TOKEN`
   (repo-read PAT) for the digest's PR listing; `BLOG_DIGEST_TEXT_MODEL` /
   `BLOG_DIGEST_IMAGE_MODEL` override the Gemini models (defaults
-  `gemini-3.7-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
+  `gemini-3.8-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
   gates subscriber email (unset = publish still works, email skipped).
 
 ## Lead pipeline: stage tags the platform writes itself

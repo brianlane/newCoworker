@@ -25,7 +25,7 @@ describe("stripGeminiModelsPrefix", () => {
 });
 
 describe("isUnstableGeminiId", () => {
-  it("flags preview, exp, latest, cyber, tts, and robotics ids", () => {
+  it("flags preview, exp, latest, cyber, tts, robotics, transcribe, and translate ids", () => {
     expect(isUnstableGeminiId("gemini-3.5-live-translate-preview")).toBe(true);
     expect(isUnstableGeminiId("gemini-exp-1206")).toBe(true);
     expect(isUnstableGeminiId("gemini-3-experimental")).toBe(true);
@@ -34,10 +34,13 @@ describe("isUnstableGeminiId", () => {
     expect(isUnstableGeminiId("gemini-3.8-flash-cyber")).toBe(true);
     expect(isUnstableGeminiId("gemini-2.5-flash-tts")).toBe(true);
     expect(isUnstableGeminiId("gemini-robotics-er-1.5-preview")).toBe(true);
+    expect(isUnstableGeminiId("gemini-3.5-transcribe-live")).toBe(true);
+    expect(isUnstableGeminiId("gemini-3.5-live-translate")).toBe(true);
   });
 
   it("lets a GA flash id through", () => {
     expect(isUnstableGeminiId("gemini-3.7-flash")).toBe(false);
+    expect(isUnstableGeminiId("gemini-3.8-flash")).toBe(false);
     expect(isUnstableGeminiId("gemini-3.5-flash-lite")).toBe(false);
   });
 });
@@ -75,6 +78,10 @@ describe("parseGeminiModelId", () => {
       unstable: true
     });
     expect(parseGeminiModelId("gemini-3.5-live-translate-preview")).toMatchObject({
+      family: "live",
+      unstable: true
+    });
+    expect(parseGeminiModelId("gemini-3.5-transcribe-live")).toMatchObject({
       family: "live",
       unstable: true
     });

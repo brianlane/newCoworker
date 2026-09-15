@@ -32,7 +32,9 @@ already paid for:
   ~$0.026/turn vs ~$0.004). Family mismatch is a skip, not a maybe.
 - Preview / cyber / `-latest` ids are never fleet defaults.
   `gemini-3.5-live-translate-preview` satisfied "must contain live" and was
-  the wrong product.
+  the wrong product. `transcribe` and `translate` in the id are the same
+  class (issue #1847: `gemini-3.5-transcribe-live` 400s on generateContent
+  and is speech-to-text, not the voice-bridge native-audio model).
 - `thinkingLevel: "minimal"` 400s on some Flash ids (3.7). That is not a
   skip: `geminiGenerateTextDetailed` already retries at `low` (PR #1372).
 

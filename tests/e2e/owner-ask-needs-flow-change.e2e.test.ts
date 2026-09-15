@@ -50,7 +50,7 @@ import { recordGeminiUsage } from "./usage-log";
  */
 
 /** Production default for this surface (inline-turn.ts DASHBOARD_CHAT_MODEL). */
-const OPERATOR_MODEL = "gemini-3.7-flash";
+const OPERATOR_MODEL = "gemini-3.8-flash";
 
 const AMY_E164 = "+16026951142";
 
