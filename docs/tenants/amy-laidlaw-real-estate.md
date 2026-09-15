@@ -1548,6 +1548,11 @@ Sharon I. died at `hl_portal_note` on exact `click_text` of the full name
 and a bare `/referrals` href that Next.js aborted. Row click is
 HomeLight's `referralsList-row` + first-name `:has-text`; nav matches
 `/referrals` or `/referrals/page/`. Do not requeue those runs),
+`resume-telnyx-10015-runs.ts` (Sep 15 2026: Telnyx 10015 Idempotency-Key.
+Re-queues the failed Clever Homeward Offers, Needs Follow Up, and
+ReferralExchange `send_sms` runs at their existing `current_step`. Does
+not touch HomeLight Referral or Clever Spoke Check `6b6a0f11`, which
+Brian left parked as team-notify after park),
 `homelight-claim-then-offer.ts` +
 `homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
 HomeLight's alert+URL 35ms race started the flow on the withdrawal SMS;

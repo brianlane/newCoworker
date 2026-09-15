@@ -249,6 +249,10 @@ they are a distinct human.
   reply) and repairs the typo'd white-glove greeting block in `soul.md`.
 - `mint-kin-zapier-key.ts`: mints the Zapier bridge API key for James.
 - `swap-kin-did-alberta.ts`: 519 -> Alberta DID swap + old-number release.
+- `resume-telnyx-10015-runs.ts`: generic; Sep 15 2026 Telnyx 10015
+  Idempotency-Key incident. Re-queues KIN's failed Lead follow-up run
+  `178ea407` at `current_step` 17 (`s_nudge_2`) so the worker retries that
+  send_sms only. Does not start the cadence over.
 
 ## History
 

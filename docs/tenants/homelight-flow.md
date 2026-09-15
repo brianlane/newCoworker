@@ -310,6 +310,8 @@ aborted by Next.js in favor of `/referrals/page/[page]`. Row click is
 `referralsList-row` + first-name `:has-text`; nav matches `/referrals` or
 `/referrals/page/`. Inner arm gates on `lead_first_name`. Structure
 untouched. Do not requeue those runs),
+`resume-telnyx-10015-runs.ts` (Sep 15 2026 Telnyx 10015: does NOT requeue
+HomeLight Referral runs; those are a different incident),
 `homelight-claim-then-offer.ts` +
 `homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
 HomeLight's alert and URL arrived 35ms apart; the webhook used to evaluate
