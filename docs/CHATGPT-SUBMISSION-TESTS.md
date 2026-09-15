@@ -20,9 +20,16 @@ described below. Build the sandbox first.
 >    ChatGPT confirmation UX, and not a calendar the sandbox does not have.
 >
 > **Resubmitted 2026-09-02 ~8:51 PM Phoenix.** Version
-> `asdk_app_v_6a7eba8c28208191853a7554ffe2605a` is in REVIEW. Same 1.0.0
-> string. Subtitle is `Look up and message customers` (30-character cap on
-> Info; a longer phrase blocks Submit even when Testing is complete).
+> `asdk_app_v_6a7eba8c28208191853a7554ffe2605a`. Same 1.0.0 string. Subtitle is
+> `Look up and message customers` (30-character cap on Info; a longer phrase
+> blocks Submit even when Testing is complete).
+>
+> **Approved 2026-09-15.** OpenAI email for the ChatGPT app (v1.0.0), app id
+> `asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5`. Status is Approved, ready to
+> publish, not Published. Click Publish in the OpenAI plugins dashboard. No
+> MCP or sandbox change is required for that click. Flip the dashboard and
+> `/integrations/chatgpt` install copy to "install from the ChatGPT directory"
+> only after Publish lands.
 
 ### Build it with the script
 
