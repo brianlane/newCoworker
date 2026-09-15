@@ -25,12 +25,18 @@
  *     [data-test="referral-add-note-textarea"]  placeholder "Add an optional note..."
  *     [data-test="referral-add-note-btn"]       "Add note" (submits)
  *
- * WHY `click_text "{{vars.lead_name}}"` AND NOT A SEARCH FILL. Action targets
- * render {{vars.*}} at plan time (steps.ts), so the click waits for the one
- * row carrying the lead's name. Filling the list's search box and clicking
- * "the first row" was tried and RACES the re-render: the click landed on the
- * stale first row of the unfiltered list (a terminal `Failed` referral, which
- * does not even carry the note button).
+ * WHY THE ROW `data-test` PLUS FIRST NAME, NOT `click_text` OF THE FULL
+ * NAME. Action targets still render {{vars.*}} at plan time (steps.ts). The
+ * list row is `[data-test="referralsList-row"]` with the client name in
+ * `referralsList-rowClientName`. `click_text "{{vars.lead_name}}"` died on
+ * Vince Nguyen / Brandi V. / Sharon I. (Sep 14 2026): the claim card and SMS
+ * often carry a full name ("Vince Nguyen") while the list shows the
+ * abbreviated form ("Vince N."), so an exact text click finds no control.
+ * `:has-text("{{vars.lead_first_name}}")` matches both. Filling the list's
+ * search box and clicking "the first row" was tried and RACES the re-render:
+ * the click landed on the stale first row of the unfiltered list (a terminal
+ * `Failed` referral, which does not even carry the note button). Do not go
+ * back to that.
  *
  * HOW THE WRITE PROVES ITSELF. The note text alone cannot: right after the
  * fill, the draft is visible page text, so an `expectText` on the note
@@ -58,9 +64,8 @@
  * `when`:
  *   - outer arm  `already_claimed` != "yes": another brokerage's referral is
  *     not in Amy's list, so there is nothing to update;
- *   - inner arm  `lead_name` != "none": the click needs the client's real
- *     name, and the card extraction answers "none" when the portal never
- *     showed one;
+ *   - inner arm  `lead_first_name` != "none": the row click uses the SMS
+ *     first name, and an empty `:has-text("")` would match every row;
  *   - step when  `claimed_agent` != "none": matches the sibling sends, so an
  *     offer nobody took posts nothing.
  *
@@ -75,9 +80,13 @@ import type { AiFlowDefinition, FlowStep } from "@/lib/ai-flows/schema";
 export const GATE_STEP_ID = "hl_note_gate";
 /** Outer arm: the referral is still ours. */
 export const GATE_OURS_ARM_ID = "hl_note_ours";
-/** Inner branch + arm: we know the client's portal name. */
+/** Inner branch + arm: we know the client's first name. */
 export const NAMED_BRANCH_ID = "hl_note_named";
 export const NAMED_ARM_ID = "hl_note_go";
+/** Inner-arm gate: skip the note rather than click `:has-text("")`. */
+export const NAMED_ARM_CONDITION = { var: "lead_first_name", notEquals: "none" } as const;
+/** Pre-Sep-15 inner arm: gated on the full card name. */
+export const LEGACY_NAMED_ARM_CONDITION = { var: "lead_name", notEquals: "none" } as const;
 /** The browse_action that posts the note. */
 export const NOTE_STEP_ID = "hl_portal_note";
 
@@ -101,24 +110,42 @@ export const NOTE_TEXTAREA = '[data-test="referral-add-note-textarea"]';
 export const NOTE_SUBMIT = '[data-test="referral-add-note-btn"]';
 
 /**
- * Header nav on the claim page. `click_text "Referrals"` is the visible
- * label, but it lost a hydration race on run 39f53cb7 (2026-09-11): the
- * saved screenshot and HTML both showed `<a href="/referrals">Referrals</a>`
- * and the step still failed `no matching control` after the 5s appear wait.
- * A later live probe of the same shortlink clicked that text just fine
- * (landed on `/referrals/page/1`). The href is HomeLight's own handle, and
- * Playwright's selector click waits the full action timeout for visibility
- * instead of the shorter text-appear window.
+ * Header nav on the claim page. `click_text "Referrals"` lost a hydration
+ * race on run 39f53cb7 (2026-09-11). The Sep 12 patch keyed the exact href
+ * `/referrals`. Sep 14 runs then died with Next.js
+ * `Abort fetching component for route: "/referrals/page/[page]"` and a 404
+ * in the same error as the name click: the live list is
+ * `/referrals/page/1`, not the bare `/referrals` path. Match both the bare
+ * href (still in some nav builds) and any `/referrals/page/...` href. Do
+ * NOT use `href^="/referrals"`: that would also hit `/referrals/claim`.
  */
-export const REFERRALS_NAV_SELECTOR = 'nav[data-test="navbar"] a[href="/referrals"]';
+export const LEGACY_REFERRALS_HREF_SELECTOR = 'nav[data-test="navbar"] a[href="/referrals"]';
+export const REFERRALS_NAV_SELECTOR =
+  'nav[data-test="navbar"] a[href="/referrals"], nav[data-test="navbar"] a[href^="/referrals/page/"]';
 export const LEGACY_REFERRALS_CLICK = { kind: "click_text", target: "Referrals" } as const;
+export const LEGACY_NAME_CLICK = { kind: "click_text", target: "{{vars.lead_name}}" } as const;
+
+/** HomeLight list row + client-name cell, read live 2026-08-19. */
+export const REFERRAL_ROW_TEST = "referralsList-row";
+export const REFERRAL_ROW_NAME_TEST = "referralsList-rowClientName";
+export const LEAD_FIRST_NAME_TEMPLATE = "{{vars.lead_first_name}}";
+
+/**
+ * Click the list row whose client-name cell contains the SMS first name.
+ * Playwright `:has-text` is a case-insensitive substring, so "Vince" hits
+ * both "Vince Nguyen" and "Vince N.".
+ */
+export function referralRowSelector(nameTemplate = LEAD_FIRST_NAME_TEMPLATE): string {
+  return `[data-test="${REFERRAL_ROW_TEST}"]:has([data-test="${REFERRAL_ROW_NAME_TEST}"]:has-text("${nameTemplate}"))`;
+}
+
+export const REFERRAL_ROW_SELECTOR = referralRowSelector();
 
 /** The six actions that post the note, from the claim page the run holds. */
 export function noteActions(): Array<Record<string, string>> {
   return [
     { kind: "click_selector", target: REFERRALS_NAV_SELECTOR },
-    // Rendered at plan time to the client's name; clicks their row.
-    { kind: "click_text", target: "{{vars.lead_name}}" },
+    { kind: "click_selector", target: REFERRAL_ROW_SELECTOR },
     { kind: "click_selector", target: ADD_NOTE_OPENER },
     { kind: "fill_selector", target: NOTE_TEXTAREA, valueTemplate: NOTE_TEXT },
     { kind: "click_selector", target: NOTE_SUBMIT },
@@ -167,35 +194,162 @@ export function findPortalNoteStep(def: AiFlowDefinition): BrowseActionStep | nu
   return found;
 }
 
-/**
- * Replace the claim-page `click_text "Referrals"` with the href selector.
- * Returns true when it wrote, false when the step is already patched.
- * Throws when the note step is missing or its first action is neither the
- * legacy text click nor the new selector, so a dashboard edit cannot be
- * silently overwritten.
- */
-export function patchPortalNoteNav(def: AiFlowDefinition): boolean {
+function requirePortalNote(def: AiFlowDefinition): BrowseActionStep {
   const note = findPortalNoteStep(def);
   if (!note) {
     throw new Error(
       `The flow has no ${NOTE_STEP_ID} step. Apply amy-homelight-portal-note.ts first.`
     );
   }
-  const first = note.actions[0];
-  if (!first) {
+  if (!note.actions[0]) {
     throw new Error(`${NOTE_STEP_ID} has no actions.`);
   }
-  if (first.kind === "click_selector" && first.target === REFERRALS_NAV_SELECTOR) {
-    return false;
+  return note;
+}
+
+export function isCurrentReferralsNav(action: { kind: string; target: string }): boolean {
+  return action.kind === "click_selector" && action.target === REFERRALS_NAV_SELECTOR;
+}
+
+export function isLegacyReferralsNav(action: { kind: string; target: string }): boolean {
+  if (action.kind === LEGACY_REFERRALS_CLICK.kind && action.target === LEGACY_REFERRALS_CLICK.target) {
+    return true;
   }
-  if (first.kind !== LEGACY_REFERRALS_CLICK.kind || first.target !== LEGACY_REFERRALS_CLICK.target) {
+  return action.kind === "click_selector" && action.target === LEGACY_REFERRALS_HREF_SELECTOR;
+}
+
+export function isCurrentRowClick(action: { kind: string; target: string }): boolean {
+  return action.kind === "click_selector" && action.target === REFERRAL_ROW_SELECTOR;
+}
+
+export function isLegacyNameClick(action: { kind: string; target: string }): boolean {
+  return action.kind === LEGACY_NAME_CLICK.kind && action.target === LEGACY_NAME_CLICK.target;
+}
+
+function sameCondition(
+  actual: unknown,
+  expected: { var: string; notEquals: string }
+): boolean {
+  if (!actual || typeof actual !== "object") return false;
+  const c = actual as { var?: string; equals?: string; notEquals?: string; contains?: string };
+  return c.var === expected.var && c.notEquals === expected.notEquals && c.equals === undefined;
+}
+
+/** Nested `hl_note_go` arm, or null when the gate is not in this definition. */
+export function findNamedArm(def: AiFlowDefinition): BranchArm | null {
+  let found: BranchArm | null = null;
+  const walk = (steps: readonly FlowStep[]): void => {
+    for (const s of steps) {
+      const b = s as unknown as BranchLike;
+      for (const arm of b.branches ?? []) {
+        if (arm.id === NAMED_ARM_ID) {
+          found = arm;
+          return;
+        }
+        walk(arm.steps ?? []);
+      }
+      walk((b.else ?? []) as FlowStep[]);
+    }
+  };
+  walk(def.steps);
+  return found;
+}
+
+/**
+ * Replace the claim-page Referrals click with the href selector that matches
+ * both `/referrals` and `/referrals/page/...`.
+ * Returns true when it wrote, false when the step is already patched.
+ * Throws when the note step is missing or its first action is none of the
+ * known Referrals clicks, so a dashboard edit cannot be silently overwritten.
+ */
+export function patchPortalNoteNav(def: AiFlowDefinition): boolean {
+  const note = requirePortalNote(def);
+  const first = note.actions[0];
+  if (isCurrentReferralsNav(first)) return false;
+  if (!isLegacyReferralsNav(first)) {
     throw new Error(
       `${NOTE_STEP_ID} first action is ${first.kind} "${first.target}", not ` +
-        `click_text "Referrals" or the href selector. The flow was edited; re-read it.`
+        `click_text "Referrals" or a Referrals href selector. The flow was edited; re-read it.`
     );
   }
   note.actions[0] = { kind: "click_selector", target: REFERRALS_NAV_SELECTOR };
   return true;
+}
+
+/**
+ * Replace the exact-name list click with HomeLight's row `data-test` plus
+ * first-name `:has-text`, and gate the arm on `lead_first_name`.
+ * Returns the edits it wrote, or [] when already patched.
+ * Throws when the note form actions (opener / fill / submit / proof) are not
+ * the known sequence, so a dashboard edit cannot be silently overwritten.
+ */
+export function patchPortalNoteRow(def: AiFlowDefinition): string[] {
+  const note = requirePortalNote(def);
+  const expected = noteActions();
+  if (note.actions.length !== expected.length) {
+    throw new Error(
+      `${NOTE_STEP_ID} has ${note.actions.length} actions, not ${expected.length}. ` +
+        "The flow was edited; re-read it."
+    );
+  }
+  for (let i = 2; i < expected.length; i++) {
+    const actual = note.actions[i];
+    const want = expected[i];
+    if (
+      actual.kind !== want.kind ||
+      actual.target !== want.target ||
+      (actual.valueTemplate ?? "") !== (want.valueTemplate ?? "")
+    ) {
+      throw new Error(
+        `${NOTE_STEP_ID} action ${i} is ${actual.kind} "${actual.target}", not the known Add Note sequence. ` +
+          "The flow was edited; re-read it."
+      );
+    }
+  }
+
+  const edits: string[] = [];
+  const first = note.actions[0];
+  if (!isCurrentReferralsNav(first)) {
+    if (!isLegacyReferralsNav(first)) {
+      throw new Error(
+        `${NOTE_STEP_ID} first action is ${first.kind} "${first.target}", not a known Referrals click.`
+      );
+    }
+    note.actions[0] = { kind: "click_selector", target: REFERRALS_NAV_SELECTOR };
+    edits.push(`nav: ${first.kind} "${first.target}" -> click_selector "${REFERRALS_NAV_SELECTOR}"`);
+  }
+
+  const second = note.actions[1];
+  if (!second) {
+    throw new Error(`${NOTE_STEP_ID} is missing the row-click action.`);
+  }
+  if (!isCurrentRowClick(second)) {
+    if (!isLegacyNameClick(second)) {
+      throw new Error(
+        `${NOTE_STEP_ID} row action is ${second.kind} "${second.target}", not ` +
+          `click_text "{{vars.lead_name}}" or the row data-test. The flow was edited; re-read it.`
+      );
+    }
+    note.actions[1] = { kind: "click_selector", target: REFERRAL_ROW_SELECTOR };
+    edits.push(`row: ${second.kind} "${second.target}" -> click_selector "${REFERRAL_ROW_SELECTOR}"`);
+  }
+
+  const arm = findNamedArm(def);
+  if (!arm) {
+    throw new Error(`The flow has no ${NAMED_ARM_ID} arm. Apply amy-homelight-portal-note.ts first.`);
+  }
+  if (!sameCondition(arm.condition, NAMED_ARM_CONDITION)) {
+    if (!sameCondition(arm.condition, LEGACY_NAMED_ARM_CONDITION)) {
+      throw new Error(
+        `${NAMED_ARM_ID} condition is ${JSON.stringify(arm.condition)}, not lead_name/lead_first_name. ` +
+          "The flow was edited; re-read it."
+      );
+    }
+    arm.condition = { ...NAMED_ARM_CONDITION };
+    edits.push(`gate: lead_name -> lead_first_name`);
+  }
+
+  return edits;
 }
 
 /**
@@ -211,7 +365,7 @@ export function addPortalNote(def: AiFlowDefinition): string[] {
 
   // The guards and the templated click depend on these; verify the flow still
   // produces them before touching anything.
-  const needed = ["already_claimed", "lead_name", "leadUrl"];
+  const needed = ["already_claimed", "lead_first_name", "leadUrl"];
   const produced = new Set<string>();
   const collect = (steps: readonly FlowStep[]): void => {
     for (const s of steps) {
@@ -251,12 +405,12 @@ export function addPortalNote(def: AiFlowDefinition): string[] {
           {
             id: NAMED_BRANCH_ID,
             type: "branch",
-            question: "Do we know the client's portal name to post an update under?",
+            question: "Do we know the client's first name to find their row?",
             branches: [
               {
                 id: NAMED_ARM_ID,
                 label: "Post the portal note",
-                condition: { var: "lead_name", notEquals: "none" },
+                condition: { ...NAMED_ARM_CONDITION },
                 steps: [
                   {
                     id: NOTE_STEP_ID,

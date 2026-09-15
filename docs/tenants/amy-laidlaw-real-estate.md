@@ -1531,8 +1531,9 @@ Sharp edges),
 `amy-homelight-portal-note.ts` +
 `amy-homelight-portal-note-definition.ts` (Aug 19 2026: after the HomeLight
 Referral flow works a lead, it now posts a progress note on the agent
-dashboard's drawer, the honest `actions_taken` wording, via a templated
-`click_text "{{vars.lead_name}}"` row click; selectors and the reasoning live
+dashboard's drawer, the honest `actions_taken` wording. The original
+`click_text "{{vars.lead_name}}"` row click was replaced by
+`amy-homelight-portal-note-row.ts`; selectors and the reasoning live
 in [homelight-flow.md](homelight-flow.md), pinned by
 `tests/amy-homelight-portal-note.test.ts`),
 `amy-homelight-portal-note-nav.ts` (Sep 12 2026: run `39f53cb7` already
@@ -1542,6 +1543,11 @@ finished the lead work, then failed the last-step portal note on
 `click_selector nav[data-test="navbar"] a[href="/referrals"]`. The matching
 `CLICK_TEXT_APPEAR_MS` bump in `vps/aiflow-render` needs Amy's box
 redeployed. Do not requeue that run),
+`amy-homelight-portal-note-row.ts` (Sep 15 2026: Vince Nguyen, Brandi V.,
+Sharon I. died at `hl_portal_note` on exact `click_text` of the full name
+and a bare `/referrals` href that Next.js aborted. Row click is
+HomeLight's `referralsList-row` + first-name `:has-text`; nav matches
+`/referrals` or `/referrals/page/`. Do not requeue those runs),
 `homelight-claim-then-offer.ts` +
 `homelight-claim-then-offer-definition.ts` (Sep 13 2026: Sonia R., run `76248380`.
 HomeLight's alert+URL 35ms race started the flow on the withdrawal SMS;
