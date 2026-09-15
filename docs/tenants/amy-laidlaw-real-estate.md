@@ -1573,7 +1573,11 @@ a phone. Also restores `hl_portal_note.when` to `claimed_agent notEquals
 none` so a finished no-call run does not die clicking the name on the
 referrals list. Do not requeue those runs. Do not click Claim on a live
 `hmlt.co` URL. A picture of the contact card sent to the coworker does not
-write AiFlow vars),
+write AiFlow vars. Applied Sep 15 2026 after merge of PR #1848
+(`f36f1fe1`). Zero in-flight runs at apply time. Live readback: trunk 28,
+`recall_gate` sits after `wait_hl_call`, `claim_again` clicks "Call me again",
+seller intro gated on `contact_status equals found`, `late2_wait` 15
+minutes, `hl_portal_note.when` is `claimed_agent notEquals none`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
