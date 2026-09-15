@@ -24,9 +24,10 @@
  * done. Restore the roster gate.
  *
  * WHAT THIS CHANGES (no net trunk add):
- *   - After `wait_hl_call` returns `no_call`, pause 1 minute, click Claim
- *     again, and wait a second time. "Call me again" is HomeLight asking for
- *     that retry. A connected second wait still offers the team.
+ *   - After `wait_hl_call` returns `no_call`, pause 1 minute, click
+ *     "Call me again" (the button HomeLight shows after a verified call
+ *     claim; the original "Call me to claim referral" is gone), and wait
+ *     a second time. A connected second wait still offers the team.
  *   - `lead_sms` / `lead_email` fire when `contact_status equals found`, not
  *     when a teammate pressed 1. The late ladder already texts on a found
  *     mailbox read; the first read was skipping the seller.
@@ -69,6 +70,9 @@ export const LEAD_SMS_ID = "lead_sms";
 export const LEAD_EMAIL_ID = "lead_email";
 export const LATE2_WAIT_ID = "late2_wait";
 export const CLAIM_RETRY_ID = "claim_retry";
+export const CLAIM_AGAIN_TARGET = "Call me again";
+export const ORIGINAL_CLAIM_TARGET = "Call me to claim referral";
+export const CLAIM_AGAIN_CONTINUE = "HomeLight";
 
 export const LATE2_WAIT_MINUTES = 15;
 export const RECALL_PAUSE_MINUTES = 1;
@@ -147,13 +151,19 @@ function recallGate(def: Definition): Step {
   const wait2 = cloneStep(wait);
   wait2.id = WAIT2_ID;
   delete wait2.when;
-  const claimAgain = cloneStep(retry);
-  claimAgain.id = CLAIM_AGAIN_ID;
-  delete claimAgain.when;
+  const claimAgain: Step = {
+    id: CLAIM_AGAIN_ID,
+    type: "browse_action",
+    ...(retry.auth ? { auth: retry.auth } : {}),
+    urlVar: retry.urlVar,
+    screenshot: true,
+    continueWhenText: CLAIM_AGAIN_CONTINUE,
+    actions: [{ kind: "click_text", target: CLAIM_AGAIN_TARGET }]
+  };
   return {
     id: RECALL_GATE_ID,
     type: "branch",
-    question: "Did HomeLight's claim call miss our line? Click Claim again.",
+    question: "Did HomeLight's claim call miss our line? Click Call me again.",
     branches: [
       {
         id: RECALL_ARM_ID,

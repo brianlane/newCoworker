@@ -339,8 +339,10 @@ HomeLight's own iPhone nags ("It's been 30 minutes") kept firing because
 we had not completed their contact loop. `lead_sms` waited for a roster
 claim; `late2_wait` slept 60 minutes. Sharon was texted when the details
 email finally arrived (~86 min); Brandi never got a phone. After
-`no_call` the flow now pauses 1 minute, clicks Claim again, and waits a
-second time. Seller intro fires when `contact_status equals found`, not
+`no_call` the flow now pauses 1 minute, clicks "Call me again" (the
+button HomeLight shows after a verified call claim, not the original
+"Call me to claim referral"), and waits a second time. Seller intro
+fires when `contact_status equals found`, not
 when a teammate presses 1. `late2_wait` is 15 minutes. A portal card with
 a phone after a mailbox miss now texts the seller. `hl_portal_note.when`
 is restored to `claimed_agent notEquals none` so the last-step name click

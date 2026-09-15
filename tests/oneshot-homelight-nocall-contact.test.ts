@@ -9,12 +9,15 @@ import { BRIEF_ID, NO_CALL_MSG_ID, OFFER_CALL_ARM_ID, OFFER_GATE_ID, ROUTE_ID, W
 import { PHONE_MISS_ID, PORTAL_ALERT_ID, findStep, type Definition } from "../scripts/oneshot/homelight-text-claim-details-definition";
 import {
   CLAIM_AGAIN_ID,
+  CLAIM_AGAIN_CONTINUE,
+  CLAIM_AGAIN_TARGET,
   CONTACT_FOUND_WHEN,
   LATE2_WAIT_ID,
   LATE2_WAIT_MINUTES,
   LEAD_EMAIL_ID,
   LEAD_SMS_ID,
   NOTE_ID,
+  ORIGINAL_CLAIM_TARGET,
   PORTAL_EMAIL_ID,
   PORTAL_SMS_ID,
   RECALL_ARM_ID,
@@ -106,8 +109,12 @@ describe("homelight-nocall-contact", () => {
       minutes: RECALL_PAUSE_MINUTES
     });
     expect(byId(def, CLAIM_AGAIN_ID).type).toBe("browse_action");
-    expect(byId(def, CLAIM_AGAIN_ID).continueWhenText).toBe("HomeLight");
+    expect(byId(def, CLAIM_AGAIN_ID).continueWhenText).toBe(CLAIM_AGAIN_CONTINUE);
     expect(byId(def, CLAIM_AGAIN_ID).when).toBeUndefined();
+    expect(byId(def, CLAIM_AGAIN_ID).actions).toEqual([
+      { kind: "click_text", target: CLAIM_AGAIN_TARGET }
+    ]);
+    expect(byId(def, CLAIM_AGAIN_ID).actions[0].target).not.toBe(ORIGINAL_CLAIM_TARGET);
     const wait2 = byId(def, WAIT2_ID);
     expect(wait2.type).toBe("wait_for_call");
     expect(wait2.saveAs).toBe("hl_call_outcome");

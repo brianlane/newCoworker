@@ -357,11 +357,13 @@ flaky list name click and died at the last nested step (Vince, Sharon,
 both Brandi runs). The lead work was already done.
 
 **How to apply:** `homelight-nocall-contact.ts`. After `no_call`, pause 1
-minute, click Claim again, wait a second time (`wait_hl_call2` overwrites
-`hl_call_outcome`). Seller intro fires when `contact_status equals found`.
-`late2_wait` is 15 minutes. A portal phone after a mailbox miss texts the
-seller. `hl_portal_note.when` is restored to `claimed_agent notEquals none`.
-Do not requeue those runs. Do not `--click` a live `hmlt.co` URL.
+minute, click "Call me again" (not the original "Call me to claim
+referral", which is gone after a verified call claim), wait a second
+time (`wait_hl_call2` overwrites `hl_call_outcome`). Seller intro fires
+when `contact_status equals found`. `late2_wait` is 15 minutes. A
+portal phone after a mailbox miss texts the seller. `hl_portal_note.when`
+is restored to `claimed_agent notEquals none`. Do not requeue those
+runs. Do not `--click` a live `hmlt.co` URL.
 
 See [[homelight-claim-click-silent-noop]], [[homelight-text-then-link-and-lost-offer]].
 
