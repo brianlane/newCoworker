@@ -377,3 +377,35 @@ not requeue those runs. Do not `--click` a live `hmlt.co` URL.
 
 See [[homelight-claim-click-silent-noop]], [[homelight-text-then-link-and-lost-offer]].
 
+## homelight-claim-calls-cell
+
+**HomeLight's call-mode Claim rings whichever phone is selected on the
+claim page, often a teammate cell, not the AI DID.** Arletta L. (Mesa AZ,
+~$360K, run `61550503`, 2026-09-15). `open` read `claim_mode=call`,
+`already_claimed=no`. Screenshot: "We will call you at" a cell labeled as
+the agent's, orange "Call me to claim referral". `claim_click` completed.
+HomeLight then showed "already claimed by another agent" (the same modal
+Amy saw in the iOS app when she tapped Claim after a doctor call). Email
+~21:53Z said Claimed By Amy Laidlaw: our click registered. HomeLight called
+the cell, not `+1 415 985 1909`, so `wait_hl_call` never saw a start.
+`card` re-extracted `already_claimed=yes` from that overlay, so
+`lost_branch` skipped `save_contact` / `lead_sms` / `late2_portal_sms`.
+`claim_again.continueWhenText: "HomeLight"` treated a miss on the
+referrals list as already satisfied. The team still got the contact at
+the unclaimed-email ladder (~22:07Z). Press-1 is the warm-transfer IVR
+path; this SMS referral is `digital_call`.
+
+The claim-page Edit control is a mobile/office picker, not a freeform
+DID field. The AI number can be selected only if it is already saved as
+Office on the HomeLight profile. This patch does not click Edit.
+
+**How to apply:** `homelight-claim-calls-cell.ts`. `open` gains
+`claim_callback_is_ai` (yes if the selected callback is 415 985 1909, or
+if unsure). `callback_gate` arms on `equals no` so an empty var still
+waits. Else keeps brief / wait / recall / route / no_call_msg. Drop
+`already_claimed` from `card`. `claim_again.continueWhenText` is
+`We're calling you`. Trunk stays 28. Do not requeue Arletta's run. Do
+not `--click` a live `hmlt.co` URL. Apply after merge.
+
+See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]].
+

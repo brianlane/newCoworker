@@ -43,10 +43,9 @@
  */
 
 import {
-  OFFER_CALL_ARM_ID,
-  OFFER_GATE_ID,
   ROUTE_ID,
-  WAIT_ID
+  WAIT_ID,
+  offerCallWorkSteps
 } from "./homelight-claim-then-offer-definition";
 import {
   PORTAL_ALERT_ID,
@@ -108,13 +107,7 @@ function sameWhen(
 }
 
 function offerCallSteps(def: Definition): Step[] {
-  const gate = findStep(def, OFFER_GATE_ID);
-  if (!gate) throw new Error(`no step "${OFFER_GATE_ID}"`);
-  const arm = (gate.branches ?? []).find((b) => b.id === OFFER_CALL_ARM_ID);
-  if (!arm || !Array.isArray(arm.steps)) {
-    throw new Error(`no "${OFFER_CALL_ARM_ID}" arm`);
-  }
-  return arm.steps as Step[];
+  return offerCallWorkSteps(def) as Step[];
 }
 
 function requireStep(def: Definition, id: string, type: string): Step {

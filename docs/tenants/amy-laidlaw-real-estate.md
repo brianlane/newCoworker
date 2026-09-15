@@ -1589,6 +1589,17 @@ write AiFlow vars. Applied Sep 15 2026 after merge of PR #1848
 `recall_gate` sits after `wait_hl_call`, `claim_again` clicks "Call me again",
 seller intro gated on `contact_status equals found`, `late2_wait` 15
 minutes, `hl_portal_note.when` is `claimed_agent notEquals none`),
+`homelight-claim-calls-cell.ts` +
+`homelight-claim-calls-cell-definition.ts` (Sep 15 2026: Arletta L., Mesa AZ,
+~$360K, run `61550503`. Call-mode Claim clicked. HomeLight rang the selected
+profile phone, not the AI DID. The post-click modal said another agent had
+it; email later said Claimed By Amy Laidlaw. `card` overwrote
+`already_claimed`. `claim_again` treated a referrals-list miss as success.
+Waits on the AI DID only when `claim_callback_is_ai` is not `no`; alerts
+the team to pick up the selected phone otherwise; keeps open's
+`already_claimed`; `claim_again.continueWhenText` is `We're calling you`.
+Do not requeue that run. Do not click Claim on a live `hmlt.co` URL. Apply
+after merge),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
