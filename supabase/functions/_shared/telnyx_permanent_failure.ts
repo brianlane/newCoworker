@@ -87,8 +87,12 @@ export function isTelnyxSmsSchemaFailure(status: number, body: string): boolean 
 }
 
 /**
- * Operator-facing reason for a permanent Telnyx SMS 4xx. `target` is the
+ * Operator-facing reason for a Telnyx SMS send failure. `target` is the
  * already-phrased object, e.g. `the text to +16025551212` or `the group text`.
+ *
+ * Transient statuses (408, 429, 5xx) never use the destination copy: a
+ * timeout or carrier 500 is not an undialable number, and sendOfferSms
+ * throws this helper on every failed send (the run retries).
  */
 export function telnyxSmsRejectedOperatorCopy(args: {
   target: string;
@@ -108,6 +112,11 @@ export function telnyxSmsRejectedOperatorCopy(args: {
       `Telnyx rejected the send as a malformed request (code ${TELNYX_SCHEMA_ERROR_CODE}), ` +
       `not as an undialable destination. ${args.target} was not classified as a ` +
       `bad phone number. (${detail})`
+    );
+  }
+  if (!isPermanentTelnyxSmsFailure(args.status)) {
+    return (
+      `Telnyx returned a transient error for ${args.target} and a retry may succeed. (${detail})`
     );
   }
   return (

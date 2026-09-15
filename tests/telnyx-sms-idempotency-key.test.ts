@@ -185,6 +185,23 @@ describe("telnyxSmsRejectedOperatorCopy", () => {
     expect(msg).toContain(to);
     expect(msg).not.toContain("Idempotency-Key");
   });
+
+  it("does not label 408, 429, or 5xx as an undialable destination", () => {
+    // sendOfferSms throws this helper on every failed send, so a transient
+    // status must not reuse the permanent destination sentence.
+    for (const status of [408, 429, 500, 503]) {
+      const msg = telnyxSmsRejectedOperatorCopy({
+        target: `the offer text to ${to}`,
+        status,
+        body: "upstream timeout"
+      });
+      expect(msg.toLowerCase(), `status ${status}`).not.toContain("isn't a real dialable line");
+      expect(msg.toLowerCase(), `status ${status}`).not.toContain("a retry can't fix it");
+      expect(msg).toContain("transient");
+      expect(msg).toContain("retry may succeed");
+      expect(msg).toContain(`telnyx ${status}`);
+    }
+  });
 });
 
 describe("AiFlow worker wires the shared copy, not an all-4xx undialable line", () => {
@@ -195,6 +212,14 @@ describe("AiFlow worker wires the shared copy, not an all-4xx undialable line", 
     expect(worker).toContain('target: `the text to ${toE164}`');
     expect(worker).toContain('target: "the group text"');
     expect(worker).toContain("target: `the offer text to ${to}`");
+  });
+
+  it("sendOfferSms still throws the shared copy on every Telnyx failure (helper now classifies transient)", () => {
+    const offer = worker.slice(worker.indexOf("async function sendOfferSms"));
+    const throwBlock = offer.slice(0, offer.indexOf("await logOutboundSms"));
+    expect(throwBlock).toContain("if (!send.ok)");
+    expect(throwBlock).toContain("telnyxSmsRejectedOperatorCopy");
+    expect(throwBlock).not.toContain("isn't a real dialable line");
   });
 
   it("does not inline the old all-4xx undialable sentence on the Telnyx 4xx path", () => {
