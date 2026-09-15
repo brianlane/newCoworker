@@ -1562,6 +1562,18 @@ alerts, and only fires those alerts when `lead_phone` is still `none`. Do
 not requeue that run. Applied Sep 14 2026 after merge of PR #1845
 (`4ebadb7d`). Vince was still in flight on `unclaimed_wait_3`. Live
 readback: trunk 28, `late2_portal` present, `claim_state` names the team),
+`homelight-nocall-contact.ts` +
+`homelight-nocall-contact-definition.ts` (Sep 15 2026: Sharon I. run
+`89268fa7` and Brandi V. run `62ecd626`. Call-mode, HomeLight showed
+"Call me again" / "We're calling you", `wait_hl_call` recorded
+`no_call`, nobody pressed 1. HomeLight's iPhone nags fired at 30 minutes.
+Seller intro was gated on a roster claim that never came; `late2_wait`
+then slept 60 minutes. Sharon was texted at ~86 minutes; Brandi never got
+a phone. Also restores `hl_portal_note.when` to `claimed_agent notEquals
+none` so a finished no-call run does not die clicking the name on the
+referrals list. Do not requeue those runs. Do not click Claim on a live
+`hmlt.co` URL. A picture of the contact card sent to the coworker does not
+write AiFlow vars),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

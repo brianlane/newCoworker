@@ -330,3 +330,38 @@ not `--click` the live `hmlt.co` URL. Do not requeue that run.
 
 See [[project-homelight-own-claim-read-as-rival]].
 
+## homelight-nocall-contact-delay
+
+**A call-mode HomeLight claim that records `no_call` does not contact the
+seller, and HomeLight then nags Amy's iPhone at 30 minutes.** Sharon I.
+(San Tan Valley, ~$391K, run `89268fa7`) and Brandi V. (Vaccaro, ~$300K,
+run `62ecd626`), 2026-09-14. Both `claim_click` completed.
+`claim_state` was "Call me again" / "We're calling you" (the verified-claim
+success values). `wait_hl_call` (`awaitStartMinutes: 6`) recorded
+`no_call`. `claimed_agent` stayed `none` because claim-then-offer skips
+the press-1 offer on `no_call`. `lead_sms` was still gated on
+`claimed_agent notEquals none`, so the seller intro did not send at the
+first mailbox read. `late2_wait` then slept 60 minutes. Sharon's details
+email arrived in that window and we texted at ~86 minutes. Brandi's
+mailbox and `late2_portal` never produced a phone (`lead_phone=""`).
+HomeLight's own pushes ("New HomeLight Referral", "It's been 30 minutes
+since we've sent you this referral") kept firing. Amy claimed in the
+HomeLight app by hand, which is when the contact card appeared in her
+inbox, then called +1 415 985 1909 herself. A picture of that card sent
+to the coworker cannot write AiFlow vars
+([[project_owner_ask_reaches_the_flows]]).
+
+`homelight-claim-then-offer` also retargeted `hl_portal_note` to
+`claim_mode notEquals none`. Every finished no-call run then tried the
+flaky list name click and died at the last nested step (Vince, Sharon,
+both Brandi runs). The lead work was already done.
+
+**How to apply:** `homelight-nocall-contact.ts`. After `no_call`, pause 1
+minute, click Claim again, wait a second time (`wait_hl_call2` overwrites
+`hl_call_outcome`). Seller intro fires when `contact_status equals found`.
+`late2_wait` is 15 minutes. A portal phone after a mailbox miss texts the
+seller. `hl_portal_note.when` is restored to `claimed_agent notEquals none`.
+Do not requeue those runs. Do not `--click` a live `hmlt.co` URL.
+
+See [[homelight-claim-click-silent-noop]], [[homelight-text-then-link-and-lost-offer]].
+
