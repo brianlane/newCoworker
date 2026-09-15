@@ -305,6 +305,14 @@ Draft, Under Review, Approved, Published, then visible in the directory.
 Changing the MCP snapshot means rescanning the server, submitting a new version
 for review, and publishing the approved one.
 
+**v1.0.0 was approved 2026-09-15.** OpenAI email: the ChatGPT plugin
+(v1.0.0) "has been approved and is ready to publish." App id
+`asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5`. Approval is not a listing. Click
+**Publish** in the OpenAI Platform dashboard (Plugins / ChatGPT plugins). No
+MCP, OAuth, WAF, or sandbox change is required for that click. After Publish,
+the app is searchable by the verbatim name; category placement on the directory
+main pages is not guaranteed (OpenAI "enhanced distribution").
+
 ---
 
 ## Config freeze
@@ -314,9 +322,15 @@ frozen until the review completes. A reviewer tests the snapshot they scanned;
 changing it mid-review is what got the July 2026 Zoom update bounced (README
 "Zoom OAuth: two clients, one app").
 
+v1.0.0's review is complete, so the freeze for that snapshot is lifted. Adding
+or re-annotating a tool still does not appear in the directory until a new
+version is scanned, submitted, approved, and published.
+
 At publish time, flip the dashboard card copy from "paste this URL into
-Developer Mode" to "install from the ChatGPT directory". Before approval the
-pasted URL is the only install path; after it, most users never see a URL.
+Developer Mode" to "install from the ChatGPT directory". Before Publish the
+pasted URL is the only install path; after it, most users never see a URL. Do
+not flip that copy while the status is still Approved-but-unpublished: the
+listing would not exist yet. Keep the URL as a fallback for Developer Mode.
 
 ---
 

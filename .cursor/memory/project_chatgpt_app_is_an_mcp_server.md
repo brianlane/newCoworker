@@ -1,11 +1,11 @@
 ---
 name: project-chatgpt-app-is-an-mcp-server
-description: "A ChatGPT app IS a remote MCP server at /api/mcp/chatgpt; rejected Aug 19 for missing sandbox, rejected Sep 1 because submitted test cases did not match live tool output; reviewer test texts land on Brian's phone AS DESIGNED"
+description: "A ChatGPT app IS a remote MCP server at /api/mcp/chatgpt; v1.0.0 APPROVED Sep 15 2026, not yet Published; rejected Aug 19 for missing sandbox, rejected Sep 1 because submitted test cases did not match live tool output; reviewer test texts land on Brian's phone AS DESIGNED"
 metadata: 
   node_type: memory
   type: project
   originSessionId: 829c625c-bcb6-4c1a-8235-98fab892df47
-  modified: 2026-09-02T20:51:00.000Z
+  modified: 2026-09-15T18:15:00.000Z
 ---
 
 Shipped Aug 11 2026. OpenAI retired `ai-plugin.json`; a ChatGPT app today **is**
@@ -107,6 +107,29 @@ re-scan MCP tools. First Submit click toasted "Failed to save plugin
 changes"; the retry in the same sitting is what landed. Directory prompts
 are: "What is going on with my business today?", "Summarize my recent
 calls.", "Find a customer by name and tell me what you know about them."
+
+**Approved Sep 15 2026.** Email: "ChatGPT Plugin Submission Approved" for
+the ChatGPT app (v1.0.0), app id `asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5`.
+Status is **Approved, ready to publish**, not Published. Approval does not
+list the app. Click **Publish** on
+https://platform.openai.com/apps (Plugins) or the ChatGPT plugins section of
+the dashboard. That is a YOU click, not a code change.
+
+**No MCP, OAuth, WAF, or sandbox change is required for this approval.** The
+server at `/api/mcp/chatgpt` is already live. Changing tools, names, or
+annotations would need a new scan, a new version, and another review before
+the directory listing would pick it up. Leave the Cedar Street Dental sandbox
+in place for the next version. Reviewer test texts to Brian from
+`+16023131823` can still happen while the listing is public, and they are
+still by design.
+
+**After Publish, then flip customer copy.** `docs/CHATGPT-APP.md` already
+names this: dashboard card and `/integrations/chatgpt` currently say "turn on
+developer mode, paste this URL". After the listing is live, lead with
+"install from the ChatGPT directory" and keep the URL as a fallback. Do not
+flip that copy before Publish: the listing would not exist yet. After
+Publish, the app is searchable by the verbatim name; category placement on
+the directory's main pages is not guaranteed.
 
 See [[project-mcp-annotate-what-a-call-sets-in-motion]] and
 [[project-supabase-oauth-server-capabilities]].
