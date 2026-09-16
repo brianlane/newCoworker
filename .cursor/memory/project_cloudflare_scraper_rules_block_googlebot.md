@@ -35,9 +35,11 @@ left unchanged. The
 Anthropic MCP allowlist skip rule (`c9c2f051`, /api/mcp + /.well-known from
 160.79.104.0/21) was untouched, still first in the ruleset; the live Claude
 MCP connector confirmed working post-change. Remaining human step: GSC
-"Validate fix" on the 403 reason ONLY (redirect/canonical reasons are
-intentional per the www cutover; Cursor session d9d1e483, Jul 30, ruled the
-May GSC email needed no action).
+"Validate fix" on the 403 reason ONLY. Apex/www 308s are intentional
+(session d9d1e483, Jul 30). Sep 2026 "alternate page with proper canonical"
+mails on /es URLs are a different bug: see
+project_gsc_es_canonical_self.md; do not Validate that reason until the
+self-canonical + legal-off-sitemap change is live.
 
 Traps for future sessions:
 - **curl against www.newcoworker.com marketing paths returns 403 unless you

@@ -5,18 +5,19 @@ import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero, SectionHeading } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.about");
+  const alternates = await esAlternatesForRequest("/about");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/about"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/about"
+      url: alternates.canonical
     }
   };
 }

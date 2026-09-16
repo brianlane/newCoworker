@@ -16,7 +16,7 @@ import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero, SectionHeading } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 
 /**
  * Public documentation for the "New Coworker OAuth" Zoom Marketplace app:
@@ -29,14 +29,15 @@ import { esAlternates } from "@/lib/i18n/es-routes";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.zoomPage");
+  const alternates = await esAlternatesForRequest("/integrations/zoom");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/integrations/zoom"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/integrations/zoom"
+      url: alternates.canonical
     }
   };
 }

@@ -7,19 +7,20 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { COMPARISONS } from "./data";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.comparePage");
+  const alternates = await esAlternatesForRequest("/compare");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/compare"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/compare"
+      url: alternates.canonical
     }
   };
 }

@@ -12,7 +12,7 @@ import { CtaBanner } from "@/components/marketing/sections";
 import { blogImagePublicUrl } from "@/lib/blog/db";
 import { getPublishedPostBySlugIsr, listRelatedPostsIsr } from "@/lib/blog/public-isr";
 import { renderMarkdown } from "@/lib/blog/markdown";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 // ISR: posts show within a minute of publish without paying a full Node
@@ -37,17 +37,18 @@ export async function generateMetadata({
     155
   );
   const imageUrl = blogImagePublicUrl(post.featured_image_path);
+  const alternates = await esAlternatesForRequest(`/blog/${post.slug}`);
   return {
     // Bare title: the root layout's metadata template already appends
     // " | New Coworker", so a suffix here renders the brand twice.
     title,
     description,
-    alternates: esAlternates(`/blog/${post.slug}`),
+    alternates,
     openGraph: {
       title,
       description,
       type: "article",
-      url: `/blog/${post.slug}`,
+      url: alternates.canonical,
       ...(post.published_at ? { publishedTime: post.published_at } : {}),
       ...(imageUrl ? { images: [{ url: imageUrl }] } : {})
     },

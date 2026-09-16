@@ -12,7 +12,7 @@ import {
   SectionHeading,
   type FaqItem
 } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getPeriodPricing } from "@/lib/plans/tier";
@@ -23,14 +23,15 @@ import { JsonLd } from "@/components/marketing/JsonLd";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.faqPage");
+  const alternates = await esAlternatesForRequest("/faq");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/faq"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/faq"
+      url: alternates.canonical
     }
   };
 }

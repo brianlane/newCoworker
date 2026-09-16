@@ -9,6 +9,7 @@ const EFFECTIVE_DATE = PRIVACY_EFFECTIVE_DATE;
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description: "How New Coworker collects, uses, shares, stores, and protects personal information.",
+  // Binding text is English. /es/privacy is a notice, not a second indexed URL.
   alternates: esAlternates("/privacy")
 };
 

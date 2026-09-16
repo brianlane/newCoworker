@@ -10,7 +10,7 @@ export const LOCALE_COOKIE = "NEXT_LOCALE";
 export const routing = defineRouting({
   locales: [...locales],
   defaultLocale,
-  /** English keeps canonical URLs (/dashboard); Spanish marketing may use /es/... */
+  /** English keeps unprefixed URLs (/dashboard); Spanish marketing may use /es/... */
   localePrefix: "as-needed"
 });
 

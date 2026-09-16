@@ -1,8 +1,12 @@
 /**
  * Public /es/... SEO mirrors for marketing pages. A Spanish URL rewrites to
- * the unprefixed route and pins the NEXT_LOCALE cookie to "es", English URLs
- * stay canonical and untouched (localePrefix: 'as-needed').
+ * the unprefixed route and pins the NEXT_LOCALE cookie to "es". English URLs
+ * stay unprefixed (localePrefix: 'as-needed'). Each locale's HTML canonical
+ * is itself; English is x-default. Legal pages are the exception: they keep
+ * an English canonical even on /es/... and are omitted from the sitemap.
  */
+
+import type { AppLocale } from "@/i18n/routing";
 
 const ES_PREFIX = "/es";
 
@@ -45,22 +49,47 @@ export function isSpanishMarketingPath(pathname: string): boolean {
 }
 
 /**
- * `Metadata.alternates` for a mirrored marketing path: the English URL stays
- * canonical (and x-default), the /es mirror is the Spanish alternate. `path`
- * is the unprefixed route path, e.g. "/pricing" or "/".
+ * Binding legal text stays English. /es/terms and /es/privacy still exist as
+ * human notices, but they must not be advertised as a second indexed URL.
  */
-export function esAlternates(path: string): {
+function isEnglishOnlySitemapPath(path: string): boolean {
+  return path === "/terms" || path === "/privacy" || path.startsWith("/privacy/");
+}
+
+/**
+ * `Metadata.alternates` for a mirrored marketing path. `path` is the
+ * unprefixed route, e.g. "/pricing" or "/". `locale` selects which URL is
+ * this page's canonical. English remains x-default. Legal pages pass "en"
+ * even when the request is /es/... .
+ */
+export function esAlternates(
+  path: string,
+  locale: AppLocale = "en"
+): {
   canonical: string;
   languages: { en: string; es: string; "x-default": string };
 } {
-  return {
-    canonical: path,
-    languages: {
-      en: path,
-      es: path === "/" ? ES_PREFIX : `${ES_PREFIX}${path}`,
-      "x-default": path
-    }
+  const languages = {
+    en: path,
+    es: path === "/" ? ES_PREFIX : `${ES_PREFIX}${path}`,
+    "x-default": path
   };
+  return {
+    canonical: locale === "es" ? languages.es : languages.en,
+    languages
+  };
+}
+
+/**
+ * Paths the sitemap should emit for one route. Legal pages and explicit
+ * enOnly rows emit the English URL only.
+ */
+export function sitemapPathsFor(path: string, enOnly?: boolean): string[] {
+  if (enOnly || isEnglishOnlySitemapPath(path) || !isMirroredMarketingPath(path)) {
+    return [path];
+  }
+  const { languages } = esAlternates(path);
+  return [languages.en, languages.es];
 }
 
 export function stripSpanishPrefix(pathname: string): string {
