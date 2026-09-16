@@ -41,7 +41,6 @@ import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { localeCookieValue, resolveUiLocale } from "@/lib/i18n/resolve-locale";
 import {
   esAlternates,
-  isEnglishOnlySitemapPath,
   isMirroredMarketingPath,
   isSpanishMarketingPath,
   sitemapPathsFor,
@@ -443,12 +442,9 @@ describe("es SEO route helpers", () => {
   });
 
   it("legal pages are English-only in the sitemap even though /es notices exist", () => {
-    expect(isEnglishOnlySitemapPath("/privacy")).toBe(true);
-    expect(isEnglishOnlySitemapPath("/terms")).toBe(true);
-    expect(isEnglishOnlySitemapPath("/privacy/data-deletion")).toBe(true);
-    expect(isEnglishOnlySitemapPath("/pricing")).toBe(false);
     expect(sitemapPathsFor("/privacy")).toEqual(["/privacy"]);
     expect(sitemapPathsFor("/terms")).toEqual(["/terms"]);
+    expect(sitemapPathsFor("/privacy/data-deletion")).toEqual(["/privacy/data-deletion"]);
     expect(sitemapPathsFor("/pricing")).toEqual(["/pricing", "/es/pricing"]);
     expect(sitemapPathsFor("/docs/api")).toEqual(["/docs/api"]);
     expect(sitemapPathsFor("/security/vulnerability-disclosure", true)).toEqual([

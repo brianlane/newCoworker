@@ -52,7 +52,7 @@ export function isSpanishMarketingPath(pathname: string): boolean {
  * Binding legal text stays English. /es/terms and /es/privacy still exist as
  * human notices, but they must not be advertised as a second indexed URL.
  */
-export function isEnglishOnlySitemapPath(path: string): boolean {
+function isEnglishOnlySitemapPath(path: string): boolean {
   return path === "/terms" || path === "/privacy" || path.startsWith("/privacy/");
 }
 
