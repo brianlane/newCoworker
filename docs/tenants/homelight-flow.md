@@ -395,7 +395,10 @@ overwrote `already_claimed` and skipped seller intro. `claim_again` treated
 a referrals-list miss as success because `continueWhenText` was `HomeLight`.
 Now: `claim_callback_is_ai` on `open`, `callback_gate` waits only when that
 is not `no`, `cell_ring_alert` when it is, `already_claimed` stays the
-pre-click read, `claim_again` looks for `We're calling you`. Do not requeue
+pre-click read, `claim_again` looks for `We're calling you`. The unclaimed
+notice skip is first-match under `unclaimed_not_nocall` (nest max 3): text
+keeps `notify_unclaimed`, call-mode on the AI DID keeps `notify_unclaimed_ai`,
+else (call-mode cell) is empty. Do not requeue
 that run. Do not `--click` a live `hmlt.co` URL. Apply after merge. Live
 readback belongs in the applied-dossier follow-up),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet

@@ -1598,6 +1598,9 @@ it; email later said Claimed By Amy Laidlaw. `card` overwrote
 Waits on the AI DID only when `claim_callback_is_ai` is not `no`; alerts
 the team to pick up the selected phone otherwise; keeps open's
 `already_claimed`; `claim_again.continueWhenText` is `We're calling you`.
+The unclaimed notice skip is first-match under `unclaimed_not_nocall`
+(nest max 3): text keeps `notify_unclaimed`, call-mode on the AI DID keeps
+`notify_unclaimed_ai`, else (call-mode cell) is empty.
 Do not requeue that run. Do not click Claim on a live `hmlt.co` URL. Apply
 after merge),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight

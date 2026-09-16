@@ -404,8 +404,11 @@ Office on the HomeLight profile. This patch does not click Edit.
 if unsure). `callback_gate` arms on `equals no` so an empty var still
 waits. Else keeps brief / wait / recall / route / no_call_msg. Drop
 `already_claimed` from `card`. `claim_again.continueWhenText` is
-`We're calling you`. Trunk stays 28. Do not requeue Arletta's run. Do
-not `--click` a live `hmlt.co` URL. Apply after merge.
+`We're calling you`. Unclaimed notice skip is first-match at nest 3:
+text keeps `notify_unclaimed`, call-mode on the AI DID keeps
+`notify_unclaimed_ai`, else (call-mode cell) is empty. Trunk stays 28.
+Do not requeue Arletta's run. Do not `--click` a live `hmlt.co` URL.
+Apply after merge.
 
 See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]].
 

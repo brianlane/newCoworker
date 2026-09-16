@@ -35,10 +35,14 @@ import {
   CELL_ALERT_ID,
   CELL_ALERT_MESSAGE,
   CLAIM_AGAIN_CONTINUE_NEW,
+  CLAIM_MODE_NOT_CALL_WHEN,
+  CALLBACK_NOT_CELL_WHEN,
   OPEN_ID,
   SHIFT_UNSAFE_RESUME_IDS,
+  UNCLAIMED_AI_CALLBACK_ARM_ID,
   UNCLAIMED_CELL_SKIP_ID,
-  UNCLAIMED_WAS_CELL_ARM_ID,
+  UNCLAIMED_TEXT_ARM_ID,
+  NOTIFY_UNCLAIMED_AI_ID,
   patchDefinition
 } from "../scripts/oneshot/homelight-claim-calls-cell-definition";
 import {
@@ -174,6 +178,9 @@ describe("homelight-claim-calls-cell", () => {
     const blobs = [
       callback.question,
       String(callback.branches[0].label),
+      byId(def, UNCLAIMED_CELL_SKIP_ID).question,
+      String(byId(def, UNCLAIMED_CELL_SKIP_ID).branches[0].label),
+      String(byId(def, UNCLAIMED_CELL_SKIP_ID).branches[1].label),
       CELL_ALERT_MESSAGE,
       CALLBACK_FIELD.description
     ];
@@ -209,25 +216,40 @@ describe("homelight-claim-calls-cell", () => {
     );
   });
 
-  it("does not send the not-claimed notice after a cell-callback alert", () => {
+  it("does not send the not-claimed notice after a call-mode cell-callback alert", () => {
     const def = patchedLive();
     const skip = byId(def, UNCLAIMED_CELL_SKIP_ID);
     expect(skip.type).toBe("branch");
-    expect(skip.branches[0].id).toBe(UNCLAIMED_WAS_CELL_ARM_ID);
-    expect(skip.branches[0].condition).toEqual(CALLBACK_CELL_WHEN);
-    expect(skip.branches[0].steps).toEqual([]);
-    expect(skip.else.map((s: Step) => s.id)).toEqual([NOTIFY_UNCLAIMED_ID]);
-    const inner = byId(def, UNCLAIMED_NOT_NOCALL_ID);
-    expect(inner.branches[0].steps.map((s: Step) => s.id)).toEqual([UNCLAIMED_CELL_SKIP_ID]);
-    expect(
-      evaluateStepCondition(
-        { var: "hl_call_outcome", notEquals: "no_call" },
-        { vars: {} }
-      )
-    ).toBe(true);
-    expect(evaluateStepCondition(CALLBACK_CELL_WHEN, { vars: { [CALLBACK_VAR]: "no" } })).toBe(
+    expect(skip.branches).toHaveLength(2);
+    expect(skip.branches[0].id).toBe(UNCLAIMED_TEXT_ARM_ID);
+    expect(skip.branches[0].condition).toEqual(CLAIM_MODE_NOT_CALL_WHEN);
+    expect(skip.branches[0].steps.map((s: Step) => s.id)).toEqual([NOTIFY_UNCLAIMED_ID]);
+    expect(skip.branches[1].id).toBe(UNCLAIMED_AI_CALLBACK_ARM_ID);
+    expect(skip.branches[1].condition).toEqual(CALLBACK_NOT_CELL_WHEN);
+    expect(skip.branches[1].steps.map((s: Step) => s.id)).toEqual([NOTIFY_UNCLAIMED_AI_ID]);
+    expect(skip.else).toEqual([]);
+    const textNotice = byId(def, NOTIFY_UNCLAIMED_ID);
+    const aiNotice = byId(def, NOTIFY_UNCLAIMED_AI_ID);
+    expect(aiNotice.type).toBe("notify_owner");
+    expect(aiNotice.message).toBe(textNotice.message);
+    expect(aiNotice.when).toEqual({ var: "claimed_agent", equals: "none" });
+    expect(evaluateStepCondition(CLAIM_MODE_NOT_CALL_WHEN, { vars: { claim_mode: "text" } })).toBe(
       true
     );
-    expect(evaluateStepCondition(CALLBACK_CELL_WHEN, { vars: {} })).toBe(false);
+    expect(evaluateStepCondition(CLAIM_MODE_NOT_CALL_WHEN, { vars: { claim_mode: "call" } })).toBe(
+      false
+    );
+    expect(evaluateStepCondition(CALLBACK_NOT_CELL_WHEN, { vars: { [CALLBACK_VAR]: "no" } })).toBe(
+      false
+    );
+    expect(evaluateStepCondition(CALLBACK_NOT_CELL_WHEN, { vars: { [CALLBACK_VAR]: "yes" } })).toBe(
+      true
+    );
+    expect(evaluateStepCondition(CALLBACK_NOT_CELL_WHEN, { vars: {} })).toBe(true);
+    expect(
+      evaluateStepCondition(CLAIM_MODE_NOT_CALL_WHEN, {
+        vars: { claim_mode: "text", [CALLBACK_VAR]: "no" }
+      })
+    ).toBe(true);
   });
 });

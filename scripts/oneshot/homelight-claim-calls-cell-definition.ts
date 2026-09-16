@@ -41,9 +41,16 @@
  *   - `claim_again.continueWhenText` "HomeLight" -> "We're calling you"
  *     (the post-click success page). The old marker is on every HomeLight
  *     header, including the referrals list after a miss.
- *   - Wrap `notify_unclaimed` behind `claim_callback_is_ai equals no` so a
- *     cell-callback run is not also told "Not claimed". Empty var fails
- *     `equals no`, so a text claim or an AI-DID wait still gets the notice.
+ *   - Wrap `notify_unclaimed` so a CALL-mode cell-callback run is not also
+ *     told "Not claimed". Schema nest max is 3, and this wrap already sits
+ *     under `unclaimed_notice` then `unclaimed_not_nocall`, so AND cannot
+ *     be another nested branch. First-match at that 3rd level:
+ *     `claim_mode notEquals call` keeps the original notice (text claims,
+ *     even when the profile phone extracted as `no`);
+ *     `claim_callback_is_ai notEquals no` keeps a clone
+ *     (`notify_unclaimed_ai`) for AI-DID waits. Else is empty: call-mode
+ *     AND callback `no`. Empty `claim_callback_is_ai` PASSES `notEquals no`,
+ *     so a skipped extract still gets the notice.
  *     Apply refuses in-flight runs parked on any nested call-arm id: wrapping
  *     adds a `callback_gate` hop, and resume-by-id skips those steps unless
  *     `__branch_callback_gate` was already recorded.
@@ -89,8 +96,12 @@ export const ALREADY_CLAIMED_VAR = "already_claimed";
 /** The AI coworker's HomeLight DID, already in the wait_for_call fromE164. */
 export const AI_DID_DISPLAY = "415 985 1909";
 export const UNCLAIMED_CELL_SKIP_ID = "unclaimed_cell_skip";
-export const UNCLAIMED_WAS_CELL_ARM_ID = "unclaimed_was_cell";
+export const UNCLAIMED_TEXT_ARM_ID = "unclaimed_not_call";
+export const UNCLAIMED_AI_CALLBACK_ARM_ID = "unclaimed_ai_callback";
+export const NOTIFY_UNCLAIMED_AI_ID = "notify_unclaimed_ai";
 export const CLAIM_AGAIN_CONTINUE_NEW = "We're calling you";
+export const CLAIM_MODE_NOT_CALL_WHEN = { var: "claim_mode", notEquals: "call" } as const;
+export const CALLBACK_NOT_CELL_WHEN = { var: CALLBACK_VAR, notEquals: "no" } as const;
 
 export const CALLBACK_CELL_WHEN = { var: CALLBACK_VAR, equals: "no" } as const;
 
@@ -129,7 +140,8 @@ export const SHIFT_UNSAFE_RESUME_IDS = [
   NO_CALL_MSG_ID,
   UNCLAIMED_CELL_SKIP_ID,
   UNCLAIMED_NOT_NOCALL_ID,
-  NOTIFY_UNCLAIMED_ID
+  NOTIFY_UNCLAIMED_ID,
+  NOTIFY_UNCLAIMED_AI_ID
 ] as const;
 
 function cloneStep<T>(step: T): T {
@@ -235,18 +247,25 @@ function retargetClaimAgain(def: Definition, edits: string[]): void {
 }
 
 function wrapUnclaimedNotice(def: Definition, edits: string[]): void {
-  if (findStep(def, UNCLAIMED_CELL_SKIP_ID)) return;
+  if (findStep(def, NOTIFY_UNCLAIMED_AI_ID)) return;
   const inner = requireStep(def, UNCLAIMED_NOT_NOCALL_ID, "branch");
   const arm = (inner.branches ?? []).find((b) => b.id === UNCLAIMED_OFFER_MISSED_ARM_ID);
   if (!arm || !Array.isArray(arm.steps)) {
     throw new Error(`no "${UNCLAIMED_OFFER_MISSED_ARM_ID}" arm`);
   }
-  const existing = arm.steps.slice();
-  if (existing[0]?.id !== NOTIFY_UNCLAIMED_ID) {
+  const skip = findStep(def, UNCLAIMED_CELL_SKIP_ID);
+  let notify: Step;
+  if (skip && Array.isArray(skip.else) && skip.else[0]?.id === NOTIFY_UNCLAIMED_ID) {
+    notify = skip.else[0] as Step;
+  } else if (arm.steps[0]?.id === NOTIFY_UNCLAIMED_ID) {
+    notify = arm.steps[0] as Step;
+  } else {
     throw new Error(
-      `"${UNCLAIMED_OFFER_MISSED_ARM_ID}" should start with "${NOTIFY_UNCLAIMED_ID}", found ${String(existing[0]?.id)}`
+      `"${UNCLAIMED_OFFER_MISSED_ARM_ID}" should start with "${NOTIFY_UNCLAIMED_ID}" or the prior cell skip, found ${String(arm.steps[0]?.id)}`
     );
   }
+  const aiNotice = cloneStep(notify);
+  aiNotice.id = NOTIFY_UNCLAIMED_AI_ID;
   arm.steps = [
     {
       id: UNCLAIMED_CELL_SKIP_ID,
@@ -254,17 +273,23 @@ function wrapUnclaimedNotice(def: Definition, edits: string[]): void {
       question: "Did HomeLight ring a teammate cell instead of a press-1 offer?",
       branches: [
         {
-          id: UNCLAIMED_WAS_CELL_ARM_ID,
-          label: "Cell path: already told the team to pick up",
-          condition: { ...CALLBACK_CELL_WHEN },
-          steps: []
+          id: UNCLAIMED_TEXT_ARM_ID,
+          label: "Text claim: still tell the owner if nobody pressed 1",
+          condition: { ...CLAIM_MODE_NOT_CALL_WHEN },
+          steps: [notify]
+        },
+        {
+          id: UNCLAIMED_AI_CALLBACK_ARM_ID,
+          label: "Call-mode on the AI DID: still tell the owner if nobody pressed 1",
+          condition: { ...CALLBACK_NOT_CELL_WHEN },
+          steps: [aiNotice]
         }
       ],
-      else: existing
+      else: []
     }
   ];
   edits.push(
-    `wrap "${NOTIFY_UNCLAIMED_ID}" so a cell-callback run is not told "not claimed"`
+    `wrap "${NOTIFY_UNCLAIMED_ID}" so a call-mode cell-callback run is not told "not claimed"`
   );
 }
 
