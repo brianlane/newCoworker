@@ -410,11 +410,13 @@ recall / route / no_call_msg. Drop `already_claimed` from `card`.
 is first-match at nest 3: `claim_mode notEquals call` → `notify_unclaimed`;
 `claim_callback_is_ai notEquals no` → `notify_unclaimed_ai`; else empty.
 Trunk stays 28. Applied Sep 16 2026 after merge of PR #1855 (`064edea9`).
-Zero in-flight runs at apply time. The first apply compared the callback to
-415 985 1909 (HomeLight's FROM). Re-apply after the wait-resume engine fix
-so the field names 602 805 3377. Do not re-apply once the live description
-already names that DID (idempotent no-op). Do not requeue Arletta's run.
-Do not `--click` a live `hmlt.co` URL.
+Zero in-flight runs at first apply. The first apply compared the callback to
+415 985 1909 (HomeLight's FROM). Re-applied after merge of PR #1857
+(`6c0f7bf1`) at 2026-09-16T01:10:41Z. Zero in-flight runs at retarget.
+Live description names 602 805 3377, not 415. `wait_hl_call.fromE164`
+stays `+14159851909`. Second dry-run: already applied, nothing to do. Do
+not re-apply. Do not requeue Arletta's run. Do not `--click` a live
+`hmlt.co` URL.
 
 The wait DID attach on Arletta: session `v3:O7FV536k...` from 415, created
 20:49:01Z, AI answered, linked `flow_run` to `61550503`, captured name /
