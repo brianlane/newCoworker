@@ -61,6 +61,25 @@ a key to accept it. Everything downstream follows from that:
   half of all referrals never get a callback, so every added minute is paid by
   those runs for nothing, and missing the call is recoverable on its own since
   the late-contact ladder re-reads HomeLight's email.
+- **A call-mode Claim rings the phone HomeLight currently has selected, which
+  is often a teammate cell, not the AI DID.** Arletta L. (Mesa AZ, ~$360K,
+  run `61550503`, 2026-09-15): `open` read `claim_mode=call` /
+  `already_claimed=no`. The page said it would call the selected profile
+  number. `claim_click` completed. HomeLight then showed "already claimed by
+  another agent" (the same modal Amy later saw in the iOS app). Email said
+  Claimed By Amy Laidlaw, so the click registered. HomeLight rang the cell,
+  not `+1 415 985 1909`, so `wait_hl_call` never saw a start. `card`
+  re-read `already_claimed=yes` from that overlay and skipped seller intro
+  plus `late2_portal_sms`. Press-1 is the warm-transfer IVR path; this SMS
+  referral is `digital_call`. The claim-page Edit control is a mobile/office
+  picker, not a freeform DID field: the AI number can be selected only if it
+  is already saved as Office on the HomeLight profile. Do not click Claim
+  or Decline on a live `hmlt.co` URL. Do not requeue that run.
+  `homelight-claim-calls-cell.ts` extracts `claim_callback_is_ai`, waits
+  only when that is not `no`, alerts the team to pick up the selected phone
+  otherwise, keeps open's `already_claimed` (drops it from `card`), and
+  retargets `claim_again.continueWhenText` from `HomeLight` (present on every
+  header, including the referrals list after a miss) to `We're calling you`.
 - **Requesting the claim callback is not the same as claiming, and the copy
   used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
   "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
@@ -367,6 +386,21 @@ call arm `brief_call -> wait_hl_call -> recall_gate -> route -> no_call_msg`,
 `contact_status equals found`, `late2_wait` 15 minutes, `late2_portal_sms`
 on `lead_phone contains +`, `late2_portal_email` on `lead_email contains @`,
 `hl_portal_note.when` is `claimed_agent notEquals none`),
+`homelight-claim-calls-cell.ts` +
+`homelight-claim-calls-cell-definition.ts` (Sep 15 2026: Arletta L., Mesa AZ,
+~$360K, run `61550503`. Call-mode Claim clicked. HomeLight rang the selected
+profile phone, a teammate cell, not the AI DID. The post-click modal said
+another agent had it; email later said Claimed By Amy Laidlaw. `card`
+overwrote `already_claimed` and skipped seller intro. `claim_again` treated
+a referrals-list miss as success because `continueWhenText` was `HomeLight`.
+Now: `claim_callback_is_ai` on `open`, `callback_gate` waits only when that
+is not `no`, `cell_ring_alert` when it is, `already_claimed` stays the
+pre-click read, `claim_again` looks for `We're calling you`. The unclaimed
+notice skip is first-match under `unclaimed_not_nocall` (nest max 3): text
+keeps `notify_unclaimed`, call-mode on the AI DID keeps `notify_unclaimed_ai`,
+else (call-mode cell) is empty. Do not requeue
+that run. Do not `--click` a live `hmlt.co` URL. Apply after merge. Live
+readback belongs in the applied-dossier follow-up),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -390,6 +424,7 @@ PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 `homelight-text-claim-details.ts`. Sharon I. (Sep 15 2026, run
 `89268fa7`) and Brandi V. (run `62ecd626`): `homelight-nocall-contact.ts`.
 Same day's portal-note row click: `amy-homelight-portal-note-row.ts`.
+Arletta L. (Sep 15 2026, run `61550503`): `homelight-claim-calls-cell.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 

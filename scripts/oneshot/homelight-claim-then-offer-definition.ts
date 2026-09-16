@@ -149,6 +149,34 @@ export function findStep(def: Definition, id: string): Step | undefined {
   return [...walkSteps(def.steps)].find((s) => s.id === id);
 }
 
+/**
+ * The steps that actually wait and offer on a call-mode claim.
+ *
+ * Later patches may wrap this list in a nested branch (`callback_gate` puts
+ * them on its else arm so a skipped wait cannot fire `route`). Look through
+ * one nested branch, including its else, so "already patched" checks still
+ * see `brief_call` then `wait_hl_call`.
+ */
+export function offerCallWorkSteps(def: Definition): Step[] {
+  const gate = requireStep(def, OFFER_GATE_ID, "branch");
+  const callArm = (gate.branches ?? []).find((b) => b.id === OFFER_CALL_ARM_ID);
+  if (!callArm || !Array.isArray(callArm.steps)) {
+    throw new Error(`no "${OFFER_CALL_ARM_ID}" arm`);
+  }
+  const top = callArm.steps as Step[];
+  if (top.some((s) => s.id === WAIT_ID)) return top;
+  for (const step of top) {
+    if (step.type !== "branch") continue;
+    for (const nested of Array.isArray(step.branches) ? step.branches : []) {
+      const steps = (nested.steps ?? []) as Step[];
+      if (steps.some((s) => s.id === WAIT_ID)) return steps;
+    }
+    const elseSteps = (step.else ?? []) as Step[];
+    if (elseSteps.some((s) => s.id === WAIT_ID)) return elseSteps;
+  }
+  throw new Error(`${WAIT_ID} is not in the call arm`);
+}
+
 function requireStep(def: Definition, id: string, type?: string): Step {
   const matches = [...walkSteps(def.steps)].filter((s) => s.id === id);
   if (matches.length !== 1) {
@@ -187,18 +215,18 @@ function assertPatchedShape(def: Definition): void {
     throw new Error(`${OFFER_GATE_ID} is missing the text or call arm`);
   }
   const textIds = (textArm.steps ?? []).map((s) => s.id);
-  const callIds = (callArm.steps ?? []).map((s) => s.id);
+  const callIds = offerCallWorkSteps(def).map((s) => s.id);
   if (textIds[0] !== ROUTE_TEXT_ID) {
     throw new Error(`text arm should start with "${ROUTE_TEXT_ID}", found ${textIds.join(",")}`);
   }
   if (callIds[0] !== BRIEF_ID || callIds[1] !== WAIT_ID) {
     throw new Error(
-      `call arm should start with ${BRIEF_ID}, ${WAIT_ID}; found ${callIds.join(",")}`
+      `call work should start with ${BRIEF_ID}, ${WAIT_ID}; found ${callIds.join(",")}`
     );
   }
   if (callIds[callIds.length - 2] !== ROUTE_ID || callIds[callIds.length - 1] !== NO_CALL_MSG_ID) {
     throw new Error(
-      `call arm should end with ${ROUTE_ID}, ${NO_CALL_MSG_ID}; found ${callIds.join(",")}`
+      `call work should end with ${ROUTE_ID}, ${NO_CALL_MSG_ID}; found ${callIds.join(",")}`
     );
   }
   const elseIds = (gate.else ?? []).map((s) => s.id);
