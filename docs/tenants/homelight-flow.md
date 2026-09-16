@@ -86,6 +86,24 @@ a key to accept it. Everything downstream follows from that:
   `claim_again.continueWhenText` from `HomeLight` to `We're calling you`.
   Hangup now resumes a parked wait as `answered`, and a sweep timeout with
   a linked session is `answered` not `no_call`.
+- **The post-click "already claimed by another agent" overlay is OUR claim.**
+  Debra M. (Mesa AZ, ~$227K, run `aaeb08fb`, 2026-09-16): `open` read
+  `already_claimed=no`, `claim_mode=call`. `claim_click` completed. HomeLight
+  then showed that overlay (the same modal Amy sees in the iOS app after
+  she taps Claim). The click registered: wait attached, inbound answered,
+  contact later landed. `claim_verify` still wrote
+  `claim_state=another agent has it`. `card` screenshotted the overlay,
+  overwriting `open`'s claim page, and `route.attachScreenshot` MMSed it
+  onto the team offer and the unclaimed reminders. The group thought we lost
+  the lead. We had it. Vince already taught `claim_state` that Claimed By
+  Amy Laidlaw is ours; this dialog has no Claimed By row. `homelight-own-claim-overlay.ts`
+  treats that dialog as `claim message sent`, skips `claim_verify` when
+  `claim_mode` is `none` (a true rival we never clicked), stops `card` /
+  `claim_again` from publishing `screenshot_path`, and stops `route` /
+  `route_text` from attaching it. The only screenshot that should go to
+  the team is the contact card (`final_read` / `late2_portal` /
+  `qt_email`). Do not requeue Debra's run. Do not `--click` a live
+  `hmlt.co` URL.
 - **Requesting the claim callback is not the same as claiming, and the copy
   used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
   "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
@@ -416,6 +434,19 @@ trunk 28, flow enabled, `claim_callback_is_ai` names 602 805 3377 not
 415, `wait_hl_call.fromE164` stays `+14159851909`, `callback_gate` else is
 brief_call / wait_hl_call / recall_gate / route / no_call_msg. Second
 dry-run after retarget: already applied, nothing to do),
+`homelight-own-claim-overlay.ts` +
+`homelight-own-claim-overlay-definition.ts` (Sep 16 2026: Debra M., Mesa AZ,
+~$227K, run `aaeb08fb`. Call-mode Claim clicked. HomeLight showed
+"already claimed by another agent". That was OUR claim. `card`
+screenshotted the overlay; `route.attachScreenshot` MMSed it onto the
+team offer as Claim: another agent has it. The already-claimed dialog
+after our click is now `claim message sent`. `claim_verify` only runs
+when `claim_mode notEquals none`. `card` / `claim_again` stop publishing
+`screenshot_path`. `route` / `route_text` stop attaching. Contact-card
+screenshot stays on `final_read` / `late2_portal` / `qt_email`. No
+trunk add. `SHIFT_UNSAFE_RESUME_IDS` is empty (Debra parked on
+`bp_wait`). Do not requeue that run. Do not `--click` a live `hmlt.co`
+URL. Apply after merge: `npx tsx scripts/oneshot/homelight-own-claim-overlay.ts --apply`),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -440,6 +471,7 @@ PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 `89268fa7`) and Brandi V. (run `62ecd626`): `homelight-nocall-contact.ts`.
 Same day's portal-note row click: `amy-homelight-portal-note-row.ts`.
 Arletta L. (Sep 15 2026, run `61550503`): `homelight-claim-calls-cell.ts`.
+Debra M. (Sep 16 2026, run `aaeb08fb`): `homelight-own-claim-overlay.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 
