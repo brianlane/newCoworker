@@ -103,7 +103,10 @@ a key to accept it. Everything downstream follows from that:
   `route_text` from attaching it. The only screenshot that should go to
   the team is the contact card (`final_read` / `late2_portal` /
   `qt_email`). Do not requeue Debra's run. Do not `--click` a live
-  `hmlt.co` URL.
+  `hmlt.co` URL. Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`)
+  at 2026-09-16T19:08:41Z. Live: `claim_state` names Claimed By and the
+  already-claimed dialog, `card.screenshot` gone, `route.attachScreenshot`
+  gone, `qt_email.attachScreenshot` still true.
 - **Requesting the claim callback is not the same as claiming, and the copy
   used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
   "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
@@ -446,7 +449,13 @@ when `claim_mode notEquals none`. `card` / `claim_again` stop publishing
 screenshot stays on `final_read` / `late2_portal` / `qt_email`. No
 trunk add. `SHIFT_UNSAFE_RESUME_IDS` is empty (Debra parked on
 `bp_wait`). Do not requeue that run. Do not `--click` a live `hmlt.co`
-URL. Apply after merge: `npx tsx scripts/oneshot/homelight-own-claim-overlay.ts --apply`),
+URL. Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`) at
+2026-09-16T19:08:41Z. Debra still in flight on `bp_wait` (not a moved
+step). Live readback: trunk 28, flow enabled, `claim_state` names
+Claimed By Amy Laidlaw and the already-claimed dialog, `claim_verify.when`
+is `claim_mode notEquals none`, `card.screenshot` gone,
+`route.attachScreenshot` gone, `qt_email.attachScreenshot` still true.
+Second dry-run: already applied, nothing to do. Do not re-apply),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
