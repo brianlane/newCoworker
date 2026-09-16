@@ -1604,8 +1604,10 @@ The unclaimed notice skip is first-match under `unclaimed_not_nocall`
 `notify_unclaimed_ai`, else (call-mode cell) is empty.
 Do not requeue that run. Do not click Claim on a live `hmlt.co` URL.
 Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). DID retarget
-re-applies after the wait-resume engine fix. Live readback after retarget:
-`claim_callback_is_ai` names 602 805 3377, not 415),
+re-applied after merge of PR #1857 (`6c0f7bf1`) at 2026-09-16T01:10:41Z.
+Zero in-flight runs at retarget. Live readback: trunk 28,
+`claim_callback_is_ai` names 602 805 3377 not 415,
+`wait_hl_call.fromE164` stays `+14159851909`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

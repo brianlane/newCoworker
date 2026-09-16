@@ -409,9 +409,13 @@ notice skip is first-match under `unclaimed_not_nocall` (nest max 3): text
 keeps `notify_unclaimed`, call-mode on the AI DID keeps `notify_unclaimed_ai`,
 else (call-mode cell) is empty. Do not requeue
 that run. Do not `--click` a live `hmlt.co` URL. Applied Sep 16 2026 after
-merge of PR #1855 (`064edea9`). DID retarget ships with the wait-resume
-engine fix. Zero in-flight runs at first apply. Live readback after the
-DID retarget: `claim_callback_is_ai` names 602 805 3377, not 415),
+merge of PR #1855 (`064edea9`). Zero in-flight runs at first apply. DID
+retarget re-applied after merge of PR #1857 (`6c0f7bf1`) at
+2026-09-16T01:10:41Z. Zero in-flight runs at retarget. Live readback:
+trunk 28, flow enabled, `claim_callback_is_ai` names 602 805 3377 not
+415, `wait_hl_call.fromE164` stays `+14159851909`, `callback_gate` else is
+brief_call / wait_hl_call / recall_gate / route / no_call_msg. Second
+dry-run after retarget: already applied, nothing to do),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
