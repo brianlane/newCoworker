@@ -76,7 +76,9 @@ describe("homelight-own-claim-overlay", () => {
 
   it("teaches claim_state that the already-claimed dialog after we clicked is ours", () => {
     expect(CLAIM_STATE_FIELD.description.length).toBeLessThanOrEqual(300);
-    expect(CLAIM_STATE_FIELD.description).toContain("Amy Laidlaw");
+    // Claimed By is required: Amy's name is in the page header on every
+    // portal page, so the name alone would fake a claim on a swallowed click.
+    expect(CLAIM_STATE_FIELD.description).toContain("Claimed By Amy Laidlaw");
     expect(CLAIM_STATE_FIELD.description).toContain("already-claimed dialog");
     expect(CLAIM_STATE_FIELD.description).toContain(STATE_SENT);
     expect(CLAIM_STATE_FIELD.description).toContain(STATE_TAKEN);
