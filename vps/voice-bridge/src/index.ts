@@ -2545,20 +2545,25 @@ function main(): void {
             voicemailBeingLeft: false
           };
           if (intake) {
+            let liveLink: FlowRunLink | null = null;
             try {
               // Re-read rather than reuse the context parsed at attach. Two
               // things change DURING the call: a voice_brief step appends to the
               // note, and a `wait_for_call` step stamps `flow_run` when it parks
               // (about a minute in). The link read at attach is therefore null
               // for exactly the calls this feature exists for.
-              const { data: liveRow } = await supabase
+              const { data: liveRow, error: liveErr } = await supabase
                 .from("voice_handoff_sessions")
                 .select("context")
                 .eq("call_control_id", callControlId)
                 .maybeSingle();
+              if (liveErr) {
+                console.error("voice-bridge: live session re-read", liveErr);
+              }
               const liveCtx = ((liveRow as { context?: Record<string, unknown> } | null)
                 ?.context ?? {}) as Record<string, unknown>;
               alertCtx = extractIntakeAlertContext(liveCtx);
+              liveLink = (liveCtx.flow_run ?? null) as FlowRunLink | null;
               const liveAi = (liveCtx.ai_takeover ?? {}) as Record<string, unknown>;
               const captured = geminiGetLead ? geminiGetLead() : null;
               if (captured && Object.keys(captured).length > 0) {
@@ -2572,17 +2577,19 @@ function main(): void {
                   })
                   .eq("call_control_id", callControlId);
               }
-              // Release a flow parked on this call, using the link as it stands
-              // NOW. Ordered after the write above so the worker can never wake
-              // to a session whose captured fields have not landed yet, this is
-              // why the bridge owns the resume and the call-end webhook does not
-              // (the overdue sweep is the backstop for a bridge that dies here).
-              const liveLink = (liveCtx.flow_run ?? null) as FlowRunLink | null;
+            } catch (err) {
+              console.error("voice-bridge: persist captured lead failed", err);
+            }
+            // Resume even when capture threw. Hangup also resumes wait_for_call
+            // (status-guarded); this is the captured-first path. Keep it out of
+            // the capture try so a GetLead throw cannot strand the parked run
+            // until the 45-minute sweep writes no_call.
+            try {
               if (liveLink && callDirection === "inbound") {
                 await resumeFlowRunWithCallOutcome(supabase, liveLink, "answered");
               }
             } catch (err) {
-              console.error("voice-bridge: persist captured lead / resume failed", err);
+              console.error("voice-bridge: resume wait_for_call failed", err);
             }
           }
           // Only notify when the Gemini bridge actually ran (geminiGetLead is

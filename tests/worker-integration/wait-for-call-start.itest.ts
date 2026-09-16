@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -200,6 +201,60 @@ describe("wait_for_call awaitStartMinutes (real worker)", () => {
     const run = await getRun(db, runId);
     expect(run.status).toBe("done");
     expect((run.context.vars ?? {}).hl_call_outcome).toBe("no_call");
+    expect(await getContactTags(db, biz, LEAD)).toContain("Continued");
+  });
+});
+
+describe("wait_for_call timeout after a finished inbound (real worker)", () => {
+  it("resolves answered when the sweep fires but the linked session already ended", async () => {
+    // HomeLight Referral run 61550503: wait parked on a live 415 inbound, AI
+    // spoke ~10 minutes, hangup did not resume, sweep wrote no_answer, wait
+    // mapped that to no_call. The session was still there with captured details.
+    const biz = await seedBusiness(db, "IT wait timeout answered");
+    await seedContact(db, biz, LEAD);
+    const ccid = `v3:itest-wait-${randomUUID()}`;
+    const { error: sErr } = await db.from("voice_handoff_sessions").insert({
+      call_control_id: ccid,
+      business_id: biz,
+      from_e164: PARTNER,
+      chain_from_e164: PARTNER,
+      status: "ai_intake",
+      context: { ai_takeover: { captured: { name: "Test Seller" } } }
+    });
+    if (sErr) throw new Error(`seed session: ${sErr.message}`);
+
+    const flowId = await createFlow(
+      db,
+      biz,
+      flow([
+        {
+          id: "wait_call",
+          type: "wait_for_call",
+          fromE164: PARTNER,
+          timeoutMinutes: 5,
+          saveAs: "hl_call_outcome"
+        },
+        { id: "tag_after", type: "update_contact", addTags: ["Continued"], phoneVar: "lead_phone" }
+      ])
+    );
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER);
+
+    await tickWorker();
+    const parked = await getRun(db, runId);
+    expect(parked.status).toBe("awaiting_call");
+
+    const { error: doneErr } = await db
+      .from("voice_handoff_sessions")
+      .update({ status: "done" })
+      .eq("call_control_id", ccid);
+    if (doneErr) throw new Error(`end session: ${doneErr.message}`);
+
+    await ageRun(db, runId, { respond_by_at: minutesAgo(1) });
+    await tickWorker();
+
+    const done = await getRun(db, runId);
+    expect(done.status).toBe("done");
+    expect((done.context.vars ?? {}).hl_call_outcome).toBe("answered");
     expect(await getContactTags(db, biz, LEAD)).toContain("Continued");
   });
 });

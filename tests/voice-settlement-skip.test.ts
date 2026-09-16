@@ -50,3 +50,16 @@ describe("telnyx-voice-call-end skips settlement on never-answered hangup", () =
     expect(callEndSrc).toContain("voice_settlement_skipped_never_answered");
   });
 });
+
+describe("telnyx-voice-call-end resumes wait_for_call on inbound AI hangup", () => {
+  it("selects the session context and resumes when flow_run is present", () => {
+    expect(callEndSrc).toContain(
+      'select("call_control_id, status, business_id, from_e164, context")'
+    );
+    expect(callEndSrc).toContain("priorStatus === \"ai_intake\" && sessEnd.context?.flow_run");
+    expect(callEndSrc).toContain(
+      'resumeFlowRunWithCallOutcome(supabase, sessEnd.context.flow_run, "answered")'
+    );
+    expect(callEndSrc).not.toContain("deliberately NOT resumed");
+  });
+});
