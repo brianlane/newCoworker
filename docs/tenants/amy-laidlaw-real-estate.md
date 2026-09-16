@@ -1601,8 +1601,13 @@ the team to pick up the selected phone otherwise; keeps open's
 The unclaimed notice skip is first-match under `unclaimed_not_nocall`
 (nest max 3): text keeps `notify_unclaimed`, call-mode on the AI DID keeps
 `notify_unclaimed_ai`, else (call-mode cell) is empty.
-Do not requeue that run. Do not click Claim on a live `hmlt.co` URL. Apply
-after merge),
+Do not requeue that run. Do not click Claim on a live `hmlt.co` URL.
+Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). Zero in-flight
+runs at apply time. Live readback: trunk 28, `claim_callback_is_ai` on
+`open`, call arm is `callback_gate` (`equals no` -> `cell_ring_alert`,
+else brief / wait / recall / route / no_call_msg), `already_claimed`
+gone from `card`, `claim_again.continueWhenText` is `We're calling you`,
+`unclaimed_cell_skip` first-match under `unclaimed_not_nocall`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

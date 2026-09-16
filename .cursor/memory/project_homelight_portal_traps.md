@@ -407,8 +407,12 @@ waits. Else keeps brief / wait / recall / route / no_call_msg. Drop
 `We're calling you`. Unclaimed notice skip is first-match at nest 3:
 text keeps `notify_unclaimed`, call-mode on the AI DID keeps
 `notify_unclaimed_ai`, else (call-mode cell) is empty. Trunk stays 28.
-Do not requeue Arletta's run. Do not `--click` a live `hmlt.co` URL.
-Apply after merge.
+Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). Zero in-flight
+runs at apply time. Live readback: `claim_callback_is_ai` on `open`,
+call arm is `callback_gate`, `already_claimed` gone from `card`,
+`claim_again.continueWhenText` is `We're calling you`. Do not re-apply
+(idempotent no-op). Do not requeue Arletta's run. Do not `--click` a live
+`hmlt.co` URL.
 
 See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]].
 
