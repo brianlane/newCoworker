@@ -130,6 +130,7 @@ import {
   callOutcomeCompanionVars,
   callOutcomeLabel
 } from "../_shared/ai_flows/call_outcome_meta.ts";
+import { waitCallOutcomeFromResume } from "../_shared/ai_flows/wait_for_call_resume.ts";
 import { callDialGuard } from "../_shared/ai_flows/call_guards.ts";
 import { rotateReachOrder } from "../_shared/ai_flows/reach_rotation.ts";
 import { flowDealsInLeadPhone, ownershipLeadPhone } from "../_shared/ai_flows/claim_owner_gate.ts";
@@ -1640,11 +1641,10 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         save_as: outcome.saveAs,
         respond_by: respondByIso
       });
-      // Persist the parked state; the voice path (bridge transfer tool /
-      // telnyx-voice-call-end hangup handler) resumes the run with the call
-      // outcome in context.vars[saveAs] via the session's flow_run link. The
-      // timeout sweep (resume_overdue_call_waits) re-queues with the
-      // no_answer sentinel at respond_by_at. Attempt giveback like defer,
+      // Persist the parked state; hangup and the voice-bridge teardown resume
+      // the run with the call outcome in context.vars[saveAs] via the session's
+      // flow_run link. The timeout sweep (resume_overdue_call_waits) re-queues
+      // with the no_answer sentinel at respond_by_at. Attempt giveback like defer,
       // waiting on a live call is not a failure.
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
@@ -8484,8 +8484,9 @@ type CallSessionRow = {
  * with what it captured.
  *
  * Three shapes, because the flow and the call race each other:
- *   - a LIVE session   → link the run to it and park (the bridge resumes us at
- *                        teardown, having written the captured fields first);
+ *   - a LIVE session   → link the run to it and park (hangup and the bridge
+ *                        both resume us; hangup may beat the captured write,
+ *                        so the resume path settles one beat if needed);
  *   - a FINISHED one   → the call beat us here; hydrate and carry on;
  *   - none at all      → the AI never took this one (rang humans, no budget);
  *                        `no_call` into saveAs so later steps can branch on it.
@@ -8581,8 +8582,24 @@ async function waitForCallStep(
     return { kind: "ok", result: { ...detail, outcome, captured: names, backfilled: filled } };
   };
 
-  // Coming back from the park: the call is over and the bridge has already
-  // written what it captured, so this pass exists purely to hydrate.
+  // The call's captured fields are written by the bridge during teardown, so a
+  // hangup that resumes us a moment early (or a call that just ended) may not
+  // have them yet. One short beat, once only, so a call that captured nothing
+  // at all still finishes promptly.
+  const settleCaptured = (): StepOutcome | null => {
+    const settleMarker = `${action.marker}_settled`;
+    if (!sess?.context?.ai_takeover?.captured && scope.vars[settleMarker] === undefined) {
+      scope.vars[settleMarker] = "1";
+      return {
+        kind: "defer",
+        resumeAtMs: Date.now() + 60_000,
+        reason: "waiting for the call's captured details to land"
+      };
+    }
+    return null;
+  };
+
+  // Coming back from the park: hangup, the bridge, or the timeout sweep woke us.
   if (action.resumed) {
     const resumedOutcome = typeof scope.vars[action.saveAs] === "string"
       ? (scope.vars[action.saveAs] as string)
@@ -8590,10 +8607,17 @@ async function waitForCallStep(
     // resume_overdue_call_waits is shared with place_ai_call and writes its
     // "no_answer" sentinel on timeout. This step only ever promises
     // answered/no_call, so normalize rather than leak a third value into flows
-    // that branch on it. Hydration still runs: a bridge that wrote its captured
-    // fields but never resumed us is exactly the case the sweep covers.
-    const outcome = !resumedOutcome || resumedOutcome === "no_answer" ? "no_call" : resumedOutcome;
-    return finish(outcome, { resumed: true, timed_out: resumedOutcome === "no_answer" }, sess);
+    // that branch on it. A linked session that already finished is answered:
+    // the sweep means the webhook never woke us, not that the call missed.
+    const { outcome, timedOut } = waitCallOutcomeFromResume({
+      resumedOutcome,
+      sessionStatus: sess?.status
+    });
+    if (outcome === "answered") {
+      const settling = settleCaptured();
+      if (settling) return settling;
+    }
+    return finish(outcome, { resumed: true, timed_out: timedOut }, sess);
   }
 
   const park = (): StepOutcome => ({
@@ -8677,19 +8701,9 @@ async function waitForCallStep(
     return finish("no_call", { waited: false, reason: "no_session" }, null);
   }
 
-  // The call is over. Its captured fields are written by the bridge during
-  // teardown, so a call that ended moments ago may not have them yet, give it
-  // one short beat rather than hydrating an empty blob. Once only, so a call
-  // that captured nothing at all still finishes promptly.
-  const settleMarker = `${action.marker}_settled`;
-  if (!sess.context?.ai_takeover?.captured && scope.vars[settleMarker] === undefined) {
-    scope.vars[settleMarker] = "1";
-    return {
-      kind: "defer",
-      resumeAtMs: Date.now() + 60_000,
-      reason: "waiting for the call's captured details to land"
-    };
-  }
+  // The call is over. Same captured-settle beat as the resume path.
+  const settling = settleCaptured();
+  if (settling) return settling;
   return finish("answered", { waited: false }, sess);
 }
 

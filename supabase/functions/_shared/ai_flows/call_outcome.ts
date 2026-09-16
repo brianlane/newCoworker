@@ -2,14 +2,20 @@
  * Resume a batch-flow run parked by a `place_ai_call` step (status
  * `awaiting_call`) with the call's outcome.
  *
- * Writers (both status-guarded, so only the FIRST outcome lands):
+ * Writers (status-guarded, so only the FIRST outcome lands):
  *   - telnyx-voice-call-end on the outbound leg's hangup ("transferred" /
  *     "answered" / "no_answer", derived from the session's transfer_initiated
  *     stamp and the reservation's answer_issued_at);
+ *   - telnyx-voice-call-end on an inbound AI-intake hangup when a
+ *     `wait_for_call` step stamped `flow_run` ("answered"). The bridge also
+ *     writes this, after captured fields; hangup is the timely backstop when
+ *     teardown never resumes. The wait step settles one beat if capture has
+ *     not landed yet.
  *   - the VPS voice bridge the moment its live-transfer tool connects the
  *     callee to a human ("transferred", immediate, because a transferred
- *     human conversation can outlive the run's wait ceiling). The bridge is a
- *     separate Node codebase, so it carries its own copy of this write (see
+ *     human conversation can outlive the run's wait ceiling), and at inbound
+ *     teardown ("answered"). The bridge is a separate Node codebase, so it
+ *     carries its own copy of this write (see
  *     vps/voice-bridge/src/index.ts resumeFlowRunWithCallOutcome), keep the
  *     two in lockstep like the chat-spend-cap mirrors.
  *

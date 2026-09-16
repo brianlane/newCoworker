@@ -10,6 +10,7 @@ import {
   capturedSpoken,
   capturedVarSuffix
 } from "../supabase/functions/_shared/ai_flows/call_capture";
+import { waitCallOutcomeFromResume } from "../supabase/functions/_shared/ai_flows/wait_for_call_resume";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
 const PARTNER = "+14159851909";
@@ -294,5 +295,35 @@ describe("capturedCallVars", () => {
     expect(capturedSpoken(vars, "call_", "phone")).toBe("+16025550100");
     expect(capturedSpoken(vars, "call_", "email")).toBe("");
     expect(capturedSpoken({}, "call_", "phone")).toBe("");
+  });
+});
+
+describe("waitCallOutcomeFromResume", () => {
+  it("maps a sweep timeout to no_call when no session was linked", () => {
+    expect(waitCallOutcomeFromResume({ resumedOutcome: "no_answer" })).toEqual({
+      outcome: "no_call",
+      timedOut: true
+    });
+    expect(waitCallOutcomeFromResume({ resumedOutcome: "" })).toEqual({
+      outcome: "no_call",
+      timedOut: false
+    });
+  });
+
+  it("keeps a bridge or hangup answered outcome", () => {
+    expect(
+      waitCallOutcomeFromResume({ resumedOutcome: "answered", sessionStatus: "done" })
+    ).toEqual({ outcome: "answered", timedOut: false });
+  });
+
+  it("treats a timed-out wait as answered when the inbound session already existed", () => {
+    // HomeLight Referral run 61550503: wait parked on the 415 inbound, AI
+    // spoke ~10 minutes, hangup did not resume, sweep wrote no_answer.
+    expect(
+      waitCallOutcomeFromResume({ resumedOutcome: "no_answer", sessionStatus: "done" })
+    ).toEqual({ outcome: "answered", timedOut: true });
+    expect(
+      waitCallOutcomeFromResume({ resumedOutcome: "no_answer", sessionStatus: "ai_intake" })
+    ).toEqual({ outcome: "answered", timedOut: true });
   });
 });

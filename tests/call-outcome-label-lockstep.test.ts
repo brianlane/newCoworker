@@ -42,4 +42,10 @@ describe("bridge outcome-label mirror stays in lockstep", () => {
     expect(BRIDGE_SRC).toContain("`${saveAs}_label`");
     expect(BRIDGE_SRC).toContain("callOutcomeLabelMirror(outcome)");
   });
+
+  it("resumes wait_for_call even when persisting captured fields throws", () => {
+    expect(BRIDGE_SRC).toContain('console.error("voice-bridge: persist captured lead failed"');
+    expect(BRIDGE_SRC).toContain('console.error("voice-bridge: resume wait_for_call failed"');
+    expect(BRIDGE_SRC).not.toContain("persist captured lead / resume failed");
+  });
 });

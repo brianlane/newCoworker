@@ -1629,7 +1629,7 @@ async function handleHandoffLifecycle(
   if (!callControlId) return { handled: false, response: jsonOk("ignored_hangup") };
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
-    .select("call_control_id, status, business_id, from_e164")
+    .select("call_control_id, status, business_id, from_e164, context")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (!sessRow) return { handled: false, response: jsonOk("ignored_hangup") };
@@ -1637,19 +1637,23 @@ async function handleHandoffLifecycle(
     status?: string;
     business_id?: string;
     from_e164?: string;
+    context?: { flow_run?: FlowRunLink | null } | null;
   };
   const priorStatus = String(sessEnd.status ?? "");
-  // A run parked on this call by a `wait_for_call` step is deliberately NOT
-  // resumed here. The bridge owns that resume because it writes the captured
-  // lead fields first, and this webhook races its teardown: resuming from here
-  // could wake the worker against a session whose capture blob has not landed,
-  // losing the seller's phone number, which is the whole point of the step. A
-  // bridge that dies before it gets there is covered by resume_overdue_call_waits
-  // (the same no-webhook backstop place_ai_call relies on for its transfers).
   await supabase
     .from("voice_handoff_sessions")
     .update({ status: "done" })
     .eq("call_control_id", callControlId);
+  // A run parked on this call by a `wait_for_call` step. The bridge also
+  // resumes at teardown after writing captured fields; this webhook is the
+  // timely path when that write never happens (HomeLight Referral run
+  // 61550503: AI spoke ~10 minutes, sweep later wrote no_call). Status-guarded
+  // so a bridge that already woke the run is a no-op. The wait step settles
+  // one beat if capture has not landed yet, which is why this is safe to fire
+  // before teardown.
+  if (priorStatus === "ai_intake" && sessEnd.context?.flow_run) {
+    await resumeFlowRunWithCallOutcome(supabase, sessEnd.context.flow_run, "answered");
+  }
   // The A-leg hangup is the handoff chain's terminal event, record the
   // call-log row for the human-only outcomes. `bridged` means a human step
   // answered (answered forwarded call); `ringing`/`done` mean nobody did and
