@@ -107,13 +107,18 @@ export const STATE_UNCONFIRMED = "NOT CONFIRMED, claim by hand now";
 
 /** Schema caps extraction field descriptions at 300 chars; the test pins it.
  *  Name the team: "Taken by another agent" without that sentence reads our own
- *  Claimed By as a rival (Vince N., run e09b3f18, same trap as already_claimed). */
+ *  Claimed By as a rival (Vince N., run e09b3f18, same trap as already_claimed).
+ *  Keep the words "Claimed By": Amy's name sits in the logged-in header on
+ *  every portal page, so "Amy Laidlaw or her team" alone fakes a claim on a
+ *  swallowed click (button still there, no overlay). The post-click
+ *  "already claimed by another agent" dialog is also ours (Debra M., run
+ *  aaeb08fb): that modal has no Claimed By row. */
 export const CLAIM_STATE_FIELD = {
   name: "claim_state",
   description:
     `Claim state. Pick up now/We're calling you/Call me again: ${STATE_CALLING}. ` +
-    `Claimed By Amy Laidlaw or her team, or our message sent: ${STATE_SENT}. ` +
-    `A different brokerage: ${STATE_TAKEN}. ` +
+    `Claimed By Amy Laidlaw or her team, our message sent, or already-claimed dialog after we clicked: ${STATE_SENT}. ` +
+    `Other brokerage: ${STATE_TAKEN}. ` +
     `Unused or unsure: ${STATE_UNCONFIRMED}.`
 };
 

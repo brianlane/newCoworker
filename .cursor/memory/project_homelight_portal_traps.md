@@ -311,8 +311,9 @@ run `85d1bd1f`, Aug 11).
 **How to apply:** `CLAIM_STATE_FIELD` in `homelight-verified-claim.ts` now
 says Claimed By Amy Laidlaw or her team (or our message sent) is
 `claim message sent`; a different brokerage is `another agent has it`.
-`homelight-text-claim-details.ts` writes that onto `claim_verify` and
-`claim_verify2`. Do not requeue Vince's run.
+The post-click overlay is the same lesson: see
+[[homelight-own-claim-overlay]]. `homelight-text-claim-details.ts` writes
+that onto `claim_verify` and `claim_verify2`. Do not requeue Vince's run.
 
 ## homelight-text-claim-details-on-portal
 
@@ -426,5 +427,40 @@ Hangup now resumes a parked wait as `answered`. A sweep timeout with a
 linked session is `answered` too. `wait_hl_call.fromE164` stays 415
 (HomeLight's caller ID).
 
-See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]].
+See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]],
+[[homelight-own-claim-overlay]].
+
+## homelight-own-claim-overlay
+
+**HomeLight's post-click "already claimed by another agent" dialog is OUR
+claim.** Debra M. (Mesa AZ, ~$227K, run `aaeb08fb`, 2026-09-16). `open`
+read `already_claimed=no`, `claim_mode=call`. `claim_click` completed.
+HomeLight then showed that overlay (the same modal Amy sees in the iOS
+app after she taps Claim). The click registered: wait attached, the inbound
+answered, contact later landed, email would have said Claimed By Amy
+Laidlaw. `claim_verify` still wrote `claim_state=another agent has it`
+because the field treated the dialog as a rival. `card` then published
+`screenshot: true` of the overlay, overwriting `open`'s claim page, and
+`route.attachScreenshot` MMSed it onto the team offer and the "still
+unclaimed" reminders. The group thought we lost the lead. We had it.
+
+Vince N. already taught `claim_state` that Claimed By Amy Laidlaw is
+ours. This dialog has no Claimed By row. Arletta L. already dropped
+`already_claimed` from `card` so the overlay cannot skip seller intro.
+The screenshot and the copy were the remaining hole.
+
+**How to apply:** `homelight-own-claim-overlay.ts`. The already-claimed
+dialog after our Claim click is `claim message sent`. A Claimed By row
+naming a different brokerage is still `another agent has it`.
+`claim_verify` only runs when `claim_mode notEquals none` so a true
+rival (Sonia, we never clicked) is not relabeled as ours. `card` and
+`claim_again` stop publishing `screenshot_path`. `route` and
+`route_text` stop attaching that shot as MMS. The only screenshot that
+should go to the team is the contact card, which `final_read` /
+`late2_portal` still capture and `qt_email` attaches once details exist.
+No trunk add. `SHIFT_UNSAFE_RESUME_IDS` is empty: Debra was parked on
+`bp_wait`. Do not requeue Debra's run. Do not `--click` a live
+`hmlt.co` URL.
+
+See [[homelight-claim-state-own-claim-as-rival]], [[homelight-claim-calls-cell]].
 

@@ -1608,6 +1608,18 @@ re-applied after merge of PR #1857 (`6c0f7bf1`) at 2026-09-16T01:10:41Z.
 Zero in-flight runs at retarget. Live readback: trunk 28,
 `claim_callback_is_ai` names 602 805 3377 not 415,
 `wait_hl_call.fromE164` stays `+14159851909`),
+`homelight-own-claim-overlay.ts` +
+`homelight-own-claim-overlay-definition.ts` (Sep 16 2026: Debra M., Mesa AZ,
+~$227K, run `aaeb08fb`. Call-mode Claim clicked. HomeLight showed
+"already claimed by another agent". That was OUR claim. `card`
+screenshotted the overlay; `route` MMSed it onto the team offer as
+Claim: another agent has it. The already-claimed dialog after our click
+is now `claim message sent`. `claim_verify` only runs when
+`claim_mode notEquals none`. Overlay screenshot is not published or
+attached; contact card stays on `qt_email`. No trunk add. Do not
+requeue that run. Do not click Claim on a live `hmlt.co` URL.
+Apply after merge:
+`npx tsx scripts/oneshot/homelight-own-claim-overlay.ts --apply`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
