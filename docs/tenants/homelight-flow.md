@@ -67,19 +67,25 @@ a key to accept it. Everything downstream follows from that:
   `already_claimed=no`. The page said it would call the selected profile
   number. `claim_click` completed. HomeLight then showed "already claimed by
   another agent" (the same modal Amy later saw in the iOS app). Email said
-  Claimed By Amy Laidlaw, so the click registered. HomeLight rang the cell,
-  not `+1 415 985 1909`, so `wait_hl_call` never saw a start. `card`
-  re-read `already_claimed=yes` from that overlay and skipped seller intro
-  plus `late2_portal_sms`. Press-1 is the warm-transfer IVR path; this SMS
-  referral is `digital_call`. The claim-page Edit control is a mobile/office
-  picker, not a freeform DID field: the AI number can be selected only if it
-  is already saved as Office on the HomeLight profile. Do not click Claim
-  or Decline on a live `hmlt.co` URL. Do not requeue that run.
-  `homelight-claim-calls-cell.ts` extracts `claim_callback_is_ai`, waits
-  only when that is not `no`, alerts the team to pick up the selected phone
-  otherwise, keeps open's `already_claimed` (drops it from `card`), and
-  retargets `claim_again.continueWhenText` from `HomeLight` (present on every
-  header, including the referrals list after a miss) to `We're calling you`.
+  Claimed By Amy Laidlaw, so the click registered. `wait_hl_call` looks up
+  HomeLight's FROM (`+14159851909`), not the DID. The 415 inbound DID arrive
+  on this run: session created 20:49:01Z, AI answered and pressed 1, spoke
+  until 20:58:56Z, captured name/address/price, and `voice_link_call_run`
+  linked the wait. Hangup did not resume `wait_for_call` (the webhook used
+  to skip that on purpose). The 45-minute sweep wrote `no_answer`, which
+  wait mapped to `no_call`. `card` also re-read `already_claimed=yes` from
+  the overlay. Press-1 is the warm-transfer IVR path; this SMS referral is
+  `digital_call`. The claim-page Edit control is a mobile/office picker, not
+  a freeform DID field: the AI number can be selected only if it is already
+  saved as Office on the HomeLight profile (602 805 3377, not 415). Do not
+  click Claim or Decline on a live `hmlt.co` URL. Do not requeue that run.
+  `homelight-claim-calls-cell.ts` extracts `claim_callback_is_ai` against the
+  AI DID (from `telnyx_sms_from_e164`), waits only when that is not `no`,
+  alerts the team to pick up the selected phone otherwise, keeps open's
+  `already_claimed` (drops it from `card`), and retargets
+  `claim_again.continueWhenText` from `HomeLight` to `We're calling you`.
+  Hangup now resumes a parked wait as `answered`, and a sweep timeout with
+  a linked session is `answered` not `no_call`.
 - **Requesting the claim callback is not the same as claiming, and the copy
   used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
   "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
@@ -389,23 +395,23 @@ on `lead_phone contains +`, `late2_portal_email` on `lead_email contains @`,
 `homelight-claim-calls-cell.ts` +
 `homelight-claim-calls-cell-definition.ts` (Sep 15 2026: Arletta L., Mesa AZ,
 ~$360K, run `61550503`. Call-mode Claim clicked. HomeLight rang the selected
-profile phone, a teammate cell, not the AI DID. The post-click modal said
-another agent had it; email later said Claimed By Amy Laidlaw. `card`
-overwrote `already_claimed` and skipped seller intro. `claim_again` treated
-a referrals-list miss as success because `continueWhenText` was `HomeLight`.
-Now: `claim_callback_is_ai` on `open`, `callback_gate` waits only when that
-is not `no`, `cell_ring_alert` when it is, `already_claimed` stays the
+profile phone, a teammate cell, not the AI DID 602 805 3377. The post-click
+modal said another agent had it; email later said Claimed By Amy Laidlaw.
+`card` overwrote `already_claimed` and skipped seller intro. `claim_again`
+treated a referrals-list miss as success because `continueWhenText` was
+`HomeLight`. The first apply compared the selected callback to 415 985 1909
+(HomeLight's FROM, which `wait_hl_call.fromE164` uses), so call-mode almost
+always took `cell_ring_alert`. Now: `claim_callback_is_ai` on `open` is the
+AI DID from `telnyx_sms_from_e164`, `callback_gate` waits only when that is
+not `no`, `cell_ring_alert` when it is, `already_claimed` stays the
 pre-click read, `claim_again` looks for `We're calling you`. The unclaimed
 notice skip is first-match under `unclaimed_not_nocall` (nest max 3): text
 keeps `notify_unclaimed`, call-mode on the AI DID keeps `notify_unclaimed_ai`,
 else (call-mode cell) is empty. Do not requeue
 that run. Do not `--click` a live `hmlt.co` URL. Applied Sep 16 2026 after
-merge of PR #1855 (`064edea9`). Zero in-flight runs at apply time. Live
-readback: trunk 28, `claim_callback_is_ai` on `open`, call arm is
-`callback_gate` (`equals no` -> `cell_ring_alert`, else brief / wait /
-recall / route / no_call_msg), `already_claimed` gone from `card`,
-`claim_again.continueWhenText` is `We're calling you`, `unclaimed_cell_skip`
-first-match under `unclaimed_not_nocall`),
+merge of PR #1855 (`064edea9`). DID retarget ships with the wait-resume
+engine fix. Zero in-flight runs at first apply. Live readback after the
+DID retarget: `claim_callback_is_ai` names 602 805 3377, not 415),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the

@@ -386,9 +386,11 @@ claim page, often a teammate cell, not the AI DID.** Arletta L. (Mesa AZ,
 the agent's, orange "Call me to claim referral". `claim_click` completed.
 HomeLight then showed "already claimed by another agent" (the same modal
 Amy saw in the iOS app when she tapped Claim after a doctor call). Email
-~21:53Z said Claimed By Amy Laidlaw: our click registered. HomeLight called
-the cell, not `+1 415 985 1909`, so `wait_hl_call` never saw a start.
-`card` re-extracted `already_claimed=yes` from that overlay, so
+~21:53Z said Claimed By Amy Laidlaw: our click registered. `wait_hl_call`
+looks up HomeLight's FROM (`+14159851909`), not the DID. On this run the
+415 inbound DID arrive: the AI answered, pressed 1, spoke ~10 minutes,
+and the wait linked. Hangup did not resume it, so the sweep recorded
+`no_call`. `card` re-extracted `already_claimed=yes` from that overlay, so
 `lost_branch` skipped `save_contact` / `lead_sms` / `late2_portal_sms`.
 `claim_again.continueWhenText: "HomeLight"` treated a miss on the
 referrals list as already satisfied. The team still got the contact at
@@ -400,19 +402,27 @@ DID field. The AI number can be selected only if it is already saved as
 Office on the HomeLight profile. This patch does not click Edit.
 
 **How to apply:** `homelight-claim-calls-cell.ts`. `open` gains
-`claim_callback_is_ai` (yes if the selected callback is 415 985 1909, or
-if unsure). `callback_gate` arms on `equals no` so an empty var still
-waits. Else keeps brief / wait / recall / route / no_call_msg. Drop
-`already_claimed` from `card`. `claim_again.continueWhenText` is
-`We're calling you`. Unclaimed notice skip is first-match at nest 3:
-text keeps `notify_unclaimed`, call-mode on the AI DID keeps
-`notify_unclaimed_ai`, else (call-mode cell) is empty. Trunk stays 28.
-Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). Zero in-flight
-runs at apply time. Live readback: `claim_callback_is_ai` on `open`,
-call arm is `callback_gate`, `already_claimed` gone from `card`,
-`claim_again.continueWhenText` is `We're calling you`. Do not re-apply
-(idempotent no-op). Do not requeue Arletta's run. Do not `--click` a live
-`hmlt.co` URL.
+`claim_callback_is_ai` (yes if the selected callback is the AI DID
+602 805 3377 from `telnyx_sms_from_e164`, or if unsure). `callback_gate`
+arms on `equals no` so an empty var still waits. Else keeps brief / wait /
+recall / route / no_call_msg. Drop `already_claimed` from `card`.
+`claim_again.continueWhenText` is `We're calling you`. Unclaimed notice skip
+is first-match at nest 3: `claim_mode notEquals call` → `notify_unclaimed`;
+`claim_callback_is_ai notEquals no` → `notify_unclaimed_ai`; else empty.
+Trunk stays 28. Applied Sep 16 2026 after merge of PR #1855 (`064edea9`).
+Zero in-flight runs at apply time. The first apply compared the callback to
+415 985 1909 (HomeLight's FROM). Re-apply after the wait-resume engine fix
+so the field names 602 805 3377. Do not re-apply once the live description
+already names that DID (idempotent no-op). Do not requeue Arletta's run.
+Do not `--click` a live `hmlt.co` URL.
+
+The wait DID attach on Arletta: session `v3:O7FV536k...` from 415, created
+20:49:01Z, AI answered, linked `flow_run` to `61550503`, captured name /
+Mesa / $360k, transcript 20:49:05Z-20:58:56Z inbound. Hangup used to skip
+`wait_for_call` resume. Sweep at 21:35 wrote `no_answer` → `no_call`.
+Hangup now resumes a parked wait as `answered`. A sweep timeout with a
+linked session is `answered` too. `wait_hl_call.fromE164` stays 415
+(HomeLight's caller ID).
 
 See [[homelight-claim-click-silent-noop]], [[homelight-nocall-contact-delay]].
 

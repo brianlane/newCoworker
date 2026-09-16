@@ -43,6 +43,8 @@ import {
   UNCLAIMED_CELL_SKIP_ID,
   UNCLAIMED_TEXT_ARM_ID,
   NOTIFY_UNCLAIMED_AI_ID,
+  callbackField,
+  formatAiDidDisplay,
   patchDefinition
 } from "../scripts/oneshot/homelight-claim-calls-cell-definition";
 import {
@@ -56,9 +58,9 @@ import {
  * homelight-claim-calls-cell.ts.
  *
  * 2026-09-15: Arletta L. (Mesa AZ, ~$360K, run 61550503). Call-mode, the
- * claim page selected a teammate cell not 415 985 1909, claim_click
+ * claim page selected a teammate cell not the AI DID 602 805 3377, claim_click
  * completed, card overwrote already_claimed from the post-click modal,
- * wait sat on the AI DID, claim_again treated a referrals-list miss as
+ * wait sat on HomeLight's FROM (415), claim_again treated a referrals-list miss as
  * success.
  */
 
@@ -115,6 +117,7 @@ describe("homelight-claim-calls-cell", () => {
     expect(field).toEqual(CALLBACK_FIELD);
     expect(CALLBACK_FIELD.description.length).toBeLessThanOrEqual(300);
     expect(CALLBACK_FIELD.description).toContain(AI_DID_DISPLAY);
+    expect(CALLBACK_FIELD.description).not.toContain("415");
     expect(CALLBACK_FIELD.description).toMatch(/Send message/i);
     expect(CALLBACK_FIELD.description.toLowerCase()).not.toContain("receptionist");
     expect(CALLBACK_FIELD.description).not.toMatch(/\u2014/);
@@ -251,5 +254,22 @@ describe("homelight-claim-calls-cell", () => {
         vars: { claim_mode: "text", [CALLBACK_VAR]: "no" }
       })
     ).toBe(true);
+  });
+
+  it("formats the live Telnyx DID the way the claim page shows it", () => {
+    expect(formatAiDidDisplay("+16028053377")).toBe("602 805 3377");
+    expect(formatAiDidDisplay("6028053377")).toBe("602 805 3377");
+    expect(formatAiDidDisplay("")).toBe("");
+  });
+
+  it("retargets a 415 callback field to the AI DID without wrapping again", () => {
+    const def = patchedLive();
+    const open = byId(def, OPEN_ID);
+    const idx = open.fields.findIndex((f: { name?: string }) => f.name === CALLBACK_VAR);
+    open.fields[idx] = callbackField("415 985 1909");
+    const edits = patchDefinition(def);
+    expect(edits).toEqual([`retarget "${CALLBACK_VAR}" to the AI DID ${AI_DID_DISPLAY}`]);
+    expect(open.fields[idx]).toEqual(CALLBACK_FIELD);
+    expect(findStep(def, CALLBACK_GATE_ID)).toBeTruthy();
   });
 });

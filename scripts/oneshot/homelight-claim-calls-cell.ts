@@ -33,8 +33,10 @@ import {
 import { loadEnv } from "../../debug/_shared.ts";
 import { recordOneshotApplied } from "./_ledger";
 import {
+  AI_DID_DISPLAY,
   CALLBACK_GATE_ID,
   SHIFT_UNSAFE_RESUME_IDS,
+  formatAiDidDisplay,
   patchDefinition,
   type Definition
 } from "./homelight-claim-calls-cell-definition";
@@ -66,6 +68,22 @@ function requireEnv(name: string, fallback?: string): string {
 function argValue(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? (process.argv[i + 1] ?? fallback) : fallback;
+}
+
+async function loadAiDidDisplay(db: SupabaseClient, businessId: string): Promise<string> {
+  const { data, error } = await db
+    .from("business_telnyx_settings")
+    .select("telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) {
+    console.error(`DID lookup failed: ${error.message}`);
+    process.exit(1);
+  }
+  const e164 =
+    typeof data?.telnyx_sms_from_e164 === "string" ? data.telnyx_sms_from_e164.trim() : "";
+  const display = formatAiDidDisplay(e164);
+  return display || AI_DID_DISPLAY;
 }
 
 type FlowRow = { id: string; name: string; enabled: boolean; definition: AiFlowDefinition };
@@ -205,9 +223,10 @@ async function main(): Promise<void> {
 
   const previous = JSON.parse(JSON.stringify(flow.definition)) as AiFlowDefinition;
   const next = JSON.parse(JSON.stringify(flow.definition)) as Definition;
+  const aiDidDisplay = await loadAiDidDisplay(db, businessId);
   let edits: string[];
   try {
-    edits = patchDefinition(next);
+    edits = patchDefinition(next, { aiDidDisplay });
   } catch (err) {
     console.error(
       `Unexpected shape for "${flow.name}" (${flow.id}): ` +

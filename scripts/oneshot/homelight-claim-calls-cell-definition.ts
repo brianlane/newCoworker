@@ -7,17 +7,15 @@
  * `61550503-622a-46a3-97b4-9165ae03e949`. Inbound `hmlt.co` at 20:48Z.
  * `open` read `claim_mode=call`, `already_claimed=no`. The claim page said
  * it would call the number currently selected on Amy's HomeLight profile
- * (a cell, not +1 415 985 1909). `claim_click` completed. HomeLight then
- * showed "already claimed by another agent" (the same modal Amy saw later
- * in the iOS app). `card` re-extracted `already_claimed=yes` from that
- * overlay and overwrote open's `no`. Email later said Claimed By Amy
- * Laidlaw: our click registered. The voice flow never rang because
- * HomeLight called the cell, not the AI DID. `wait_hl_call` still sat on
- * +1 415 985 1909. `claim_again` never clicked: `continueWhenText:
- * "HomeLight"` matches the referrals-list header, so a miss counted as
- * already satisfied. `lost_branch` then skipped `save_contact` /
- * `lead_sms` / `late2_portal_sms`. The team still got the contact at the
- * unclaimed-email ladder (~22:07Z). Press-1 is the other path (warm
+ * (a cell, not the AI DID `+1 602 805 3377`). `claim_click` completed.
+ * HomeLight then showed "already claimed by another agent" (the same modal
+ * Amy saw later in the iOS app). `card` re-extracted `already_claimed=yes`
+ * from that overlay and overwrote open's `no`. Email later said Claimed
+ * By Amy Laidlaw: our click registered. `wait_hl_call` looks up HomeLight's
+ * FROM (`+1 415 985 1909`), not the DID. The first patch compared the selected
+ * callback to 415, which is HomeLight's caller ID, not Amy's number, so
+ * call-mode almost always took `cell_ring_alert`. Office on the HomeLight
+ * profile should be 602 805 3377. Press-1 is the other path (warm
  * transfer IVR, `is_warm_transfer`). This SMS referral is `digital_call`.
  *
  * HomeLight's claim-page Edit control is a mobile/office picker, not a
@@ -26,8 +24,10 @@
  *
  * WHAT THIS CHANGES (no net trunk add):
  *   - `open` gains `claim_callback_is_ai` (yes/no). yes if the selected
- *     callback is 415 985 1909, or if the model cannot tell (keeps the
- *     wait path for in-flight runs that never extracted the field).
+ *     callback is the AI DID (602 805 3377, from telnyx_sms_from_e164),
+ *     or if the model cannot tell (keeps the wait path for in-flight runs
+ *     that never extracted the field). Do not compare to 415 985 1909:
+ *     that is HomeLight's FROM, which `wait_hl_call.fromE164` uses.
  *   - Nest the call arm behind `callback_gate`. Arm on
  *     `claim_callback_is_ai equals no`: `cell_ring_alert` (pick up the
  *     claim-page phone; coworker already clicked Claim). Else: the existing
@@ -93,8 +93,8 @@ export const CALLBACK_CELL_ARM_ID = "callback_cell";
 export const CELL_ALERT_ID = "cell_ring_alert";
 export const CALLBACK_VAR = "claim_callback_is_ai";
 export const ALREADY_CLAIMED_VAR = "already_claimed";
-/** The AI coworker's HomeLight DID, already in the wait_for_call fromE164. */
-export const AI_DID_DISPLAY = "415 985 1909";
+/** The AI coworker's DID as shown on HomeLight's claim page. Not 415: that is HomeLight's FROM. */
+export const AI_DID_DISPLAY = "602 805 3377";
 export const UNCLAIMED_CELL_SKIP_ID = "unclaimed_cell_skip";
 export const UNCLAIMED_TEXT_ARM_ID = "unclaimed_not_call";
 export const UNCLAIMED_AI_CALLBACK_ARM_ID = "unclaimed_ai_callback";
@@ -105,18 +105,32 @@ export const CALLBACK_NOT_CELL_WHEN = { var: CALLBACK_VAR, notEquals: "no" } as 
 
 export const CALLBACK_CELL_WHEN = { var: CALLBACK_VAR, equals: "no" } as const;
 
+/** NANP DID to the spaced form HomeLight's claim page shows, e.g. +16028053377 -> 602 805 3377. */
+export function formatAiDidDisplay(e164: string): string {
+  const digits = e164.replace(/\D/g, "");
+  const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (national.length === 10) {
+    return `${national.slice(0, 3)} ${national.slice(3, 6)} ${national.slice(6)}`;
+  }
+  return e164.trim();
+}
+
 /**
  * Schema caps extraction field descriptions at 300 chars. Default to yes
  * when unsure so in-flight runs and ambiguous pages still wait on the DID.
  */
-export const CALLBACK_FIELD = {
-  name: CALLBACK_VAR,
-  description:
-    `Is the selected claim-callback the AI coworker's HomeLight number (${AI_DID_DISPLAY})? ` +
-    "Answer yes if the page will call that number, if it is a Send message / prefers " +
-    "texting page, or if you cannot tell. Answer no only if it shows a different phone. " +
-    "One lowercase word."
-};
+export function callbackField(didDisplay: string = AI_DID_DISPLAY) {
+  return {
+    name: CALLBACK_VAR,
+    description:
+      `Is the selected claim-callback the AI coworker's number (${didDisplay})? ` +
+      "Answer yes if the page will call that number, if it is a Send message / prefers " +
+      "texting page, or if you cannot tell. Answer no only if it shows a different phone. " +
+      "One lowercase word."
+  };
+}
+
+export const CALLBACK_FIELD = callbackField();
 
 export const CELL_ALERT_MESSAGE =
   "HomeLight is ringing the phone currently selected on the claim page for " +
@@ -166,14 +180,24 @@ function callArm(def: Definition): { id?: string; steps?: Step[] } {
   return arm as { id?: string; steps?: Step[] };
 }
 
-function addCallbackField(def: Definition, edits: string[]): void {
+function addCallbackField(def: Definition, edits: string[], didDisplay: string): void {
   const open = requireStep(def, OPEN_ID, "browse_extract");
   const fields = Array.isArray(open.fields) ? open.fields : [];
-  if (fields.some((f) => f?.name === CALLBACK_VAR)) return;
+  const field = callbackField(didDisplay);
+  const idx = fields.findIndex((f) => f?.name === CALLBACK_VAR);
+  if (idx >= 0) {
+    const current = fields[idx];
+    if (current?.description !== field.description) {
+      fields[idx] = { ...field };
+      open.fields = fields;
+      edits.push(`retarget "${CALLBACK_VAR}" to the AI DID ${didDisplay}`);
+    }
+    return;
+  }
   if (!fields.some((f) => f?.name === "claim_mode")) {
     throw new Error(`"${OPEN_ID}" is missing claim_mode; not the HomeLight Referral flow`);
   }
-  open.fields = [...fields, { ...CALLBACK_FIELD }];
+  open.fields = [...fields, { ...field }];
   edits.push(`add "${CALLBACK_VAR}" to "${OPEN_ID}"`);
 }
 
@@ -293,9 +317,13 @@ function wrapUnclaimedNotice(def: Definition, edits: string[]): void {
   );
 }
 
-export function patchDefinition(def: Definition): string[] {
+export function patchDefinition(
+  def: Definition,
+  opts?: { aiDidDisplay?: string }
+): string[] {
   const edits: string[] = [];
-  addCallbackField(def, edits);
+  const didDisplay = opts?.aiDidDisplay?.trim() || AI_DID_DISPLAY;
+  addCallbackField(def, edits, didDisplay);
   wrapCallArm(def, edits);
   dropCardAlreadyClaimed(def, edits);
   retargetClaimAgain(def, edits);

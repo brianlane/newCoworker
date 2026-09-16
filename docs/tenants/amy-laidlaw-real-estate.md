@@ -1592,22 +1592,20 @@ minutes, `hl_portal_note.when` is `claimed_agent notEquals none`),
 `homelight-claim-calls-cell.ts` +
 `homelight-claim-calls-cell-definition.ts` (Sep 15 2026: Arletta L., Mesa AZ,
 ~$360K, run `61550503`. Call-mode Claim clicked. HomeLight rang the selected
-profile phone, not the AI DID. The post-click modal said another agent had
-it; email later said Claimed By Amy Laidlaw. `card` overwrote
+profile phone, not the AI DID 602 805 3377. The post-click modal said another
+agent had it; email later said Claimed By Amy Laidlaw. `card` overwrote
 `already_claimed`. `claim_again` treated a referrals-list miss as success.
-Waits on the AI DID only when `claim_callback_is_ai` is not `no`; alerts
-the team to pick up the selected phone otherwise; keeps open's
+The first apply compared the selected callback to 415 985 1909 (HomeLight's
+FROM). Waits on the AI DID only when `claim_callback_is_ai` is not `no`;
+alerts the team to pick up the selected phone otherwise; keeps open's
 `already_claimed`; `claim_again.continueWhenText` is `We're calling you`.
 The unclaimed notice skip is first-match under `unclaimed_not_nocall`
 (nest max 3): text keeps `notify_unclaimed`, call-mode on the AI DID keeps
 `notify_unclaimed_ai`, else (call-mode cell) is empty.
 Do not requeue that run. Do not click Claim on a live `hmlt.co` URL.
-Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). Zero in-flight
-runs at apply time. Live readback: trunk 28, `claim_callback_is_ai` on
-`open`, call arm is `callback_gate` (`equals no` -> `cell_ring_alert`,
-else brief / wait / recall / route / no_call_msg), `already_claimed`
-gone from `card`, `claim_again.continueWhenText` is `We're calling you`,
-`unclaimed_cell_skip` first-match under `unclaimed_not_nocall`),
+Applied Sep 16 2026 after merge of PR #1855 (`064edea9`). DID retarget
+re-applies after the wait-resume engine fix. Live readback after retarget:
+`claim_callback_is_ai` names 602 805 3377, not 415),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
