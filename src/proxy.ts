@@ -121,8 +121,8 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   noteAiTraffic(request, event);
 
   // --- /es/... SEO mirrors for public marketing pages ---
-  // Rewrite to the canonical unprefixed route and pin the locale cookie to
-  // Spanish. English URLs are untouched; the UI never sniffs Accept-Language.
+  // Rewrite to the unprefixed route and pin the locale cookie to
+  // Spanish. English URLs stay unprefixed; the UI never sniffs Accept-Language.
   if (isSpanishMarketingPath(pathname)) {
     const canonicalPath = stripSpanishPrefix(pathname);
     // Same limiter as the canonical English path, /es/login POSTs must not
@@ -152,7 +152,15 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     }
     const rewriteUrl = request.nextUrl.clone();
     rewriteUrl.pathname = canonicalPath;
-    const rewrite = NextResponse.rewrite(rewriteUrl);
+    // Forward the original /es/... path so generateMetadata can self-canonical
+    // the Spanish URL. cookies.set on the rewrite is the UI locale; crawlers
+    // often send no cookie, and a leftover Spanish cookie on an English URL
+    // must not flip that page's canonical.
+    const rewriteHeaders = new Headers(request.headers);
+    rewriteHeaders.set("x-pathname", `${pathname}${request.nextUrl.search}`);
+    const rewrite = NextResponse.rewrite(rewriteUrl, {
+      request: { headers: rewriteHeaders }
+    });
     rewrite.cookies.set(LOCALE_COOKIE, "es", {
       path: "/",
       sameSite: "lax",

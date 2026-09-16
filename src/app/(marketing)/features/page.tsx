@@ -47,19 +47,20 @@ import {
   SectionHeading,
   type Feature
 } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.featuresPage");
+  const alternates = await esAlternatesForRequest("/features");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/features"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/features"
+      url: alternates.canonical
     }
   };
 }

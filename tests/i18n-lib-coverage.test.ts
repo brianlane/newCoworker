@@ -41,8 +41,10 @@ import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { localeCookieValue, resolveUiLocale } from "@/lib/i18n/resolve-locale";
 import {
   esAlternates,
+  isEnglishOnlySitemapPath,
   isMirroredMarketingPath,
   isSpanishMarketingPath,
+  sitemapPathsFor,
   SPANISH_MARKETING_PREFIXES,
   stripSpanishPrefix
 } from "@/lib/i18n/es-routes";
@@ -418,9 +420,13 @@ describe("es SEO route helpers", () => {
     expect(SPANISH_MARKETING_PREFIXES).toContain("/compare");
   });
 
-  it("esAlternates keeps English canonical and points es at the /es mirror", () => {
+  it("esAlternates self-canonicals the requested locale; English is x-default", () => {
     expect(esAlternates("/")).toEqual({
       canonical: "/",
+      languages: { en: "/", es: "/es", "x-default": "/" }
+    });
+    expect(esAlternates("/", "es")).toEqual({
+      canonical: "/es",
       languages: { en: "/", es: "/es", "x-default": "/" }
     });
     expect(esAlternates("/compare/gohighlevel")).toEqual({
@@ -431,6 +437,23 @@ describe("es SEO route helpers", () => {
         "x-default": "/compare/gohighlevel"
       }
     });
+    expect(esAlternates("/compare/gohighlevel", "es").canonical).toBe(
+      "/es/compare/gohighlevel"
+    );
+  });
+
+  it("legal pages are English-only in the sitemap even though /es notices exist", () => {
+    expect(isEnglishOnlySitemapPath("/privacy")).toBe(true);
+    expect(isEnglishOnlySitemapPath("/terms")).toBe(true);
+    expect(isEnglishOnlySitemapPath("/privacy/data-deletion")).toBe(true);
+    expect(isEnglishOnlySitemapPath("/pricing")).toBe(false);
+    expect(sitemapPathsFor("/privacy")).toEqual(["/privacy"]);
+    expect(sitemapPathsFor("/terms")).toEqual(["/terms"]);
+    expect(sitemapPathsFor("/pricing")).toEqual(["/pricing", "/es/pricing"]);
+    expect(sitemapPathsFor("/docs/api")).toEqual(["/docs/api"]);
+    expect(sitemapPathsFor("/security/vulnerability-disclosure", true)).toEqual([
+      "/security/vulnerability-disclosure"
+    ]);
   });
 });
 

@@ -5,7 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero, SectionHeading } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 
 /**
  * Public documentation for the New Coworker app in ChatGPT. This page is the
@@ -20,14 +20,15 @@ import { esAlternates } from "@/lib/i18n/es-routes";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.chatgptPage");
+  const alternates = await esAlternatesForRequest("/integrations/chatgpt");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/integrations/chatgpt"),
+    alternates,
     openGraph: {
       title: t("metaTitle"),
       description: t("metaDescription"),
-      url: "/integrations/chatgpt"
+      url: alternates.canonical
     }
   };
 }

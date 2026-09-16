@@ -23,7 +23,7 @@ import {
   getComparison,
   type RowVerdict
 } from "../data";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
@@ -43,14 +43,15 @@ export async function generateMetadata({
   const entry = getComparison((await params).slug);
   if (!entry) return {};
   const t = await getTranslations(`marketing.compare.${entry.i18nKey}`);
+  const alternates = await esAlternatesForRequest(`/compare/${entry.slug}`);
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates(`/compare/${entry.slug}`),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: `/compare/${entry.slug}`
+      url: alternates.canonical
     }
   };
 }

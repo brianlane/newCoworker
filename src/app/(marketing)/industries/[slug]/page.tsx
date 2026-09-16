@@ -13,7 +13,7 @@ import {
 } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { getIndustry, INDUSTRIES } from "../data";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
@@ -32,14 +32,15 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   const tIndustries = await getTranslations("marketing.industries");
   const name = tIndustries(`${industry.i18nKey}.name`);
   const teaser = tIndustries(`${industry.i18nKey}.teaser`);
+  const alternates = await esAlternatesForRequest(`/industries/${industry.slug}`);
   return {
     title: t("detailMetaTitle", { name }),
     description: teaser,
-    alternates: esAlternates(`/industries/${industry.slug}`),
+    alternates,
     openGraph: {
       title: t("detailOgTitle", { name }),
       description: teaser,
-      url: `/industries/${industry.slug}`
+      url: alternates.canonical
     }
   };
 }

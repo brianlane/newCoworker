@@ -10,6 +10,7 @@ const EFFECTIVE_DATE = TERMS_EFFECTIVE_DATE;
 export const metadata: Metadata = {
   title: "Terms of Service",
   description: "The legal terms governing use of the New Coworker website, software, and related services.",
+  // Binding text is English. /es/terms is a notice, not a second indexed URL.
   alternates: esAlternates("/terms")
 };
 

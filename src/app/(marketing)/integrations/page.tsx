@@ -29,18 +29,19 @@ import {
   SectionHeading,
   StatBand
 } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.integrationsPage");
+  const alternates = await esAlternatesForRequest("/integrations");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/integrations"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/integrations"
+      url: alternates.canonical
     }
   };
 }

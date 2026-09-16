@@ -8,7 +8,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { ContactForm } from "@/components/marketing/ContactForm";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { PageHero } from "@/components/marketing/sections";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
 const CONTACT_PAGE_JSON_LD = {
@@ -27,14 +27,15 @@ export const revalidate = 3600;
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.contactPage");
+  const alternates = await esAlternatesForRequest("/contact");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/contact"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "/contact"
+      url: alternates.canonical
     }
   };
 }

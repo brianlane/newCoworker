@@ -4934,9 +4934,14 @@ fails CI if `messages/en.json` and `messages/es.json` ever diverge.
   language.
 
 **SEO/routing:** Spanish marketing mirrors live at `/es/...` (rewritten in
-[src/proxy.ts](src/proxy.ts), which also pins the `NEXT_LOCALE` cookie);
-English URLs and metadata stay canonical. Metadata is translated via
-`generateMetadata` + catalog keys.
+[src/proxy.ts](src/proxy.ts), which also pins the `NEXT_LOCALE` cookie).
+English URLs stay unprefixed. Each locale's HTML canonical is itself
+(English is `x-default`); the rewrite forwards the original path as
+`x-pathname` so a leftover Spanish cookie on `/pricing` cannot tell
+Google that the English URL is a duplicate. Binding legal pages
+(`/terms`, `/privacy`) stay English-canonical and are omitted from the
+sitemap as `/es` twins. Metadata is translated via `generateMetadata` +
+catalog keys.
 
 ## Start every session from the context pack
 

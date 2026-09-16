@@ -9,6 +9,7 @@ export const metadata: Metadata = {
   title: "Data Deletion Instructions",
   description:
     "How to request deletion of your personal data from New Coworker, including data received through Facebook and Instagram lead forms.",
+  // Binding text is English. No /es twin is advertised in the sitemap.
   alternates: esAlternates("/privacy/data-deletion")
 };
 

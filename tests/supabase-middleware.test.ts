@@ -95,6 +95,7 @@ describe("proxy", () => {
     expect(res.headers.get("x-middleware-rewrite")).toContain("/pricing");
     expect(res.headers.get("x-middleware-rewrite")).not.toContain("/es/");
     expect(res.cookies.get("NEXT_LOCALE")?.value).toBe("es");
+    expect(res.headers.get("x-middleware-request-x-pathname")).toBe("/es/pricing");
   });
 
   it("rate-limits /es mirrors like their canonical paths (AUTH bucket for /es/login POST)", async () => {

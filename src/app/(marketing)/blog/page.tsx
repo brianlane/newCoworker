@@ -6,7 +6,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero } from "@/components/marketing/sections";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
 import { BLOG_CATEGORIES, BLOG_PAGE_SIZE, type BlogCategory } from "@/lib/blog/db";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import {
   countPublishedPostsIsr,
   listPublishedCategoriesIsr,
@@ -20,11 +20,12 @@ export const revalidate = 60;
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.blogPage");
+  const alternates = await esAlternatesForRequest("/blog");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
     alternates: {
-      ...esAlternates("/blog"),
+      ...alternates,
       types: { "application/rss+xml": "/blog/feed.xml" }
     },
     openGraph: {
@@ -32,7 +33,7 @@ export async function generateMetadata(): Promise<Metadata> {
       // brand itself. `metaTitle` deliberately does not.
       title: t("ogTitle"),
       description: t("metaDescription"),
-      url: "/blog"
+      url: alternates.canonical
     }
   };
 }

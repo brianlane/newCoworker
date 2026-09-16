@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { FileSearch, Lock, ServerCog } from "lucide-react";
 import { getTranslations } from "next-intl/server";
-import { esAlternates } from "@/lib/i18n/es-routes";
+import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero } from "@/components/marketing/sections";
@@ -20,14 +20,15 @@ import { CtaBanner, PageHero } from "@/components/marketing/sections";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.securityPage");
+  const alternates = await esAlternatesForRequest("/security");
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
-    alternates: esAlternates("/security"),
+    alternates,
     openGraph: {
       title: t("ogTitle"),
       description: t("metaDescription"),
-      url: "/security"
+      url: alternates.canonical
     }
   };
 }
