@@ -1618,8 +1618,11 @@ is now `claim message sent`. `claim_verify` only runs when
 `claim_mode notEquals none`. Overlay screenshot is not published or
 attached; contact card stays on `qt_email`. No trunk add. Do not
 requeue that run. Do not click Claim on a live `hmlt.co` URL.
-Apply after merge:
-`npx tsx scripts/oneshot/homelight-own-claim-overlay.ts --apply`),
+Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`) at
+2026-09-16T19:08:41Z. Debra still in flight on `bp_wait`. Live readback:
+trunk 28, `claim_state` names Claimed By and the already-claimed dialog,
+`card.screenshot` gone, `route.attachScreenshot` gone,
+`qt_email.attachScreenshot` still true. Second dry-run: already applied),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

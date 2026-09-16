@@ -459,7 +459,11 @@ rival (Sonia, we never clicked) is not relabeled as ours. `card` and
 should go to the team is the contact card, which `final_read` /
 `late2_portal` still capture and `qt_email` attaches once details exist.
 No trunk add. `SHIFT_UNSAFE_RESUME_IDS` is empty: Debra was parked on
-`bp_wait`. Do not requeue Debra's run. Do not `--click` a live
+`bp_wait`. Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`) at
+2026-09-16T19:08:41Z. Live readback: `claim_state` names Claimed By and
+the already-claimed dialog, `card.screenshot` gone, `route.attachScreenshot`
+gone, `qt_email.attachScreenshot` still true. Second dry-run: already
+applied. Do not re-apply. Do not requeue Debra's run. Do not `--click` a live
 `hmlt.co` URL.
 
 See [[homelight-claim-state-own-claim-as-rival]], [[homelight-claim-calls-cell]].
