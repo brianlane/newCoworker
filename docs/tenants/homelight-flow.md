@@ -399,8 +399,13 @@ pre-click read, `claim_again` looks for `We're calling you`. The unclaimed
 notice skip is first-match under `unclaimed_not_nocall` (nest max 3): text
 keeps `notify_unclaimed`, call-mode on the AI DID keeps `notify_unclaimed_ai`,
 else (call-mode cell) is empty. Do not requeue
-that run. Do not `--click` a live `hmlt.co` URL. Apply after merge. Live
-readback belongs in the applied-dossier follow-up),
+that run. Do not `--click` a live `hmlt.co` URL. Applied Sep 16 2026 after
+merge of PR #1855 (`064edea9`). Zero in-flight runs at apply time. Live
+readback: trunk 28, `claim_callback_is_ai` on `open`, call arm is
+`callback_gate` (`equals no` -> `cell_ring_alert`, else brief / wait /
+recall / route / no_call_msg), `already_claimed` gone from `card`,
+`claim_again.continueWhenText` is `We're calling you`, `unclaimed_cell_skip`
+first-match under `unclaimed_not_nocall`),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
