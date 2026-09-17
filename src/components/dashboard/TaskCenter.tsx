@@ -292,7 +292,7 @@ function TaskCard({
 
       {/* Collected info + rolling summary */}
       {task.summary?.trim() && (
-        <p className="whitespace-pre-wrap rounded-md bg-deep-ink/30 px-2.5 py-1.5 text-xs text-parchment/60">
+        <p className="whitespace-pre-wrap break-words rounded-md bg-deep-ink/30 px-2.5 py-1.5 text-xs text-parchment/60">
           {task.summary}
         </p>
       )}

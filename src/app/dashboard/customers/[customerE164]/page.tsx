@@ -492,7 +492,7 @@ export default async function CustomerDetailPage({ params }: Props) {
               </>
             )}
           </p>
-          <pre className="text-sm text-parchment/80 whitespace-pre-wrap font-sans leading-relaxed">
+          <pre className="text-sm text-parchment/80 whitespace-pre-wrap break-words font-sans leading-relaxed">
             {memory.summary_md}
           </pre>
         </Card>

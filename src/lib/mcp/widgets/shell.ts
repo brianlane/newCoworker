@@ -44,7 +44,7 @@ button{font:inherit;cursor:pointer;border:1px solid var(--line);background:trans
 button:hover{border-color:var(--accent)}
 button[disabled]{opacity:.55;cursor:default}
 .slot{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.msg{padding:8px 10px;border-radius:10px;max-width:85%;white-space:pre-wrap;word-break:break-word}
+.msg{padding:8px 10px;border-radius:10px;max-width:85%;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 .in{align-self:flex-start;border:1px solid var(--line)}
 .out{align-self:flex-end;background:var(--accent);color:var(--on-accent)}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--muted)}

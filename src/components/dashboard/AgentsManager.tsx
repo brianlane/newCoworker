@@ -489,7 +489,7 @@ export function AgentsManager({
 
       {error && (
         <Card className="border-spark-orange/40 bg-spark-orange/5">
-          <p className="text-sm text-spark-orange whitespace-pre-wrap">{error}</p>
+          <p className="text-sm text-spark-orange whitespace-pre-wrap break-words">{error}</p>
         </Card>
       )}
       {notice && (
@@ -661,7 +661,7 @@ export function AgentsManager({
                             )}
                             {run.status === "succeeded" && (
                               <>
-                                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/40 p-2 text-xs text-parchment/80">
+                                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-deep-ink/40 p-2 text-xs text-parchment/80">
                                   {run.output_md}
                                 </pre>
                                 <div className="flex flex-wrap gap-2">

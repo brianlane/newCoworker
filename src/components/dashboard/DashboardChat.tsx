@@ -15,7 +15,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
 import { Badge } from "@/components/ui/Badge";
-import { ChatMarkdown, chatImageFromLine } from "@/components/ui/ChatMarkdown";
+import { ChatMarkdown, chatImageFromLine, CHAT_TEXT_WRAP_CLASS } from "@/components/ui/ChatMarkdown";
 import { parseEnvelope } from "@/lib/client/api-envelope";
 import {
   useDashboardChatTransport,
@@ -385,6 +385,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                   key={m.id}
                   className={[
                     "flex flex-col max-w-[88%] rounded-xl px-3 py-2",
+                    CHAT_TEXT_WRAP_CLASS,
                     m.role === "user"
                       ? "self-end bg-signal-teal/15 border border-signal-teal/30 text-parchment"
                       : "self-start bg-parchment/5 border border-parchment/10 text-parchment"
@@ -402,7 +403,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     {m.role === "assistant" ? (
                       <ChatMarkdown text={m.content} />
                     ) : (
-                      <p className="whitespace-pre-wrap">
+                      <p className={`whitespace-pre-wrap ${CHAT_TEXT_WRAP_CLASS}`}>
                         {m.content.split("\n").map((line, li) => {
                           // Owner-attached images (same-origin proxy markdown)
                           // render as thumbnails instead of raw markdown text.

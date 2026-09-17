@@ -261,7 +261,7 @@ export function ContactNotesPanel(props: Props) {
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-1 text-sm text-parchment/90 whitespace-pre-wrap leading-relaxed">
+                  <p className="mt-1 text-sm text-parchment/90 whitespace-pre-wrap break-words leading-relaxed">
                     {note.body}
                   </p>
                 )}

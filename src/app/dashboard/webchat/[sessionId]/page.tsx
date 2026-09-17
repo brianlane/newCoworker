@@ -12,6 +12,7 @@ import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { CHAT_TEXT_WRAP_CLASS } from "@/lib/chat-markdown";
 import {
   getWebchatSessionById,
   listWebchatMessages
@@ -79,7 +80,7 @@ export default async function WebchatSessionPage({
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm whitespace-pre-wrap ${CHAT_TEXT_WRAP_CLASS} ${
                   m.role === "user"
                     ? "bg-claw-green/15 text-parchment ml-auto"
                     : m.role === "assistant"

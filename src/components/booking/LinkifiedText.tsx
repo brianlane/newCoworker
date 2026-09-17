@@ -16,7 +16,7 @@ export function LinkifiedText({ text }: { text: string }) {
             href={seg.value}
             target="_blank"
             rel="noopener noreferrer"
-            className="underline text-claw-green hover:opacity-90"
+            className="underline break-all text-claw-green hover:opacity-90"
           >
             {seg.value}
           </a>
