@@ -3,7 +3,7 @@
  *
  * GET /api/dashboard/tasks?businessId=<uuid>&scope=mine|all|unowned
  *   → { tasks: TaskCardData[], employees: {id,name}[], myEmployeeId,
- *       implicitOwnerEmployeeId }
+ *       implicitOwnerEmployeeId, clipped }
  *
  * A task = a lead in motion: a contact with non-terminal AiFlow runs and/or
  * lead-state tags. Each card combines the five Task Center facets:
@@ -69,11 +69,21 @@ const querySchema = z.object({
   scope: z.enum(["mine", "all", "unowned"]).default("all")
 });
 
-/** Most leads one response carries; newest activity first. */
-const MAX_TASKS = 60;
+/**
+ * Most leads one response carries; newest activity first.
+ *
+ * 60 was a Task Center "in motion" bound. The pipeline board reuses this
+ * feed, so a tenant with hundreds of tagged leads (outreach, imports) only
+ * saw the newest 60 and empty later columns. 1000 is the Data API's
+ * single-page ceiling; past it the response sets `clipped` so the board can
+ * say so instead of looking like a complete All-leads view.
+ */
+export const MAX_TASKS = 1000;
 const MAX_RUNS = 200;
 const REASONING_PER_TASK = 3;
 const ACTIVITY_PER_TASK = 3;
+/** Parallel lookups for per-lead reasoning, so 1000 cards do not open 1000 sockets. */
+const REASONING_CONCURRENCY = 20;
 
 type RunRow = {
   id: string;
@@ -108,6 +118,27 @@ export type TaskReasoningView = {
   replyPreview: string | null;
   at: string;
 };
+
+/**
+ * Run `fn` over `items` with at most `concurrency` in flight. The index
+ * increment is synchronous so workers cannot claim the same item.
+ */
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) return;
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+}
 
 export type TaskCardData = {
   e164: string;
@@ -252,12 +283,38 @@ export async function GET(request: Request) {
         runsByLead.delete(phone);
       }
     }
+    // One-person team whose only member is the owner: their unclaimed leads
+    // are theirs, so scope=mine returns those leads instead of an empty
+    // board. Resolved HERE so the tagged-contact window can narrow in SQL
+    // (an owned lead older than the newest-N business-wide tagged contacts
+    // would otherwise never reach the mine filter).
+    const implicitOwner = await resolveImplicitContactOwner(businessId, db);
     // Tagged contacts without an active run round out the board. Cap keeps
-    // the page bounded for tag-heavy tenants.
-    for (const c of await listTaggedContacts<ContactRow>(lookup, {
+    // the page bounded for tag-heavy tenants; a probe past the cap sets
+    // `clipped` so All leads never looks complete when it is not.
+    const taggedOwner =
+      scope === "mine" && myEmployeeId
+        ? {
+            employeeId: myEmployeeId,
+            includeUnowned: implicitOwner?.id === myEmployeeId
+          }
+        : null;
+    const tagged = await listTaggedContacts<ContactRow>(lookup, {
       columns: CONTACT_COLUMNS,
-      limit: MAX_TASKS
-    })) {
+      limit: MAX_TASKS,
+      owner: taggedOwner
+    });
+    let taggedClipped = false;
+    if (tagged.length === MAX_TASKS) {
+      const extra = await listTaggedContacts<ContactRow>(lookup, {
+        columns: CONTACT_COLUMNS,
+        limit: 1,
+        offset: MAX_TASKS,
+        owner: taggedOwner
+      });
+      taggedClipped = extra.length > 0;
+    }
+    for (const c of tagged) {
       if (!contactsByPhone.has(c.customer_e164)) contactsByPhone.set(c.customer_e164, c);
     }
     // A lead can be in motion with NO contact row yet (the flow hasn't filed
@@ -290,11 +347,6 @@ export async function GET(request: Request) {
       name: m.name
     }));
     const employeeNameById = new Map(employees.map((m) => [m.id, m.name]));
-    // One-person team whose only member is the owner: their unclaimed leads
-    // are theirs, so the cards name them and scope=mine returns those leads
-    // instead of an empty board. The roster select above carries only
-    // id + name, so this reads the roster's own columns.
-    const implicitOwner = await resolveImplicitContactOwner(businessId, db);
 
     // 5) Goal checkpoints recorded on the shown runs.
     const goalsByRun = new Map<string, GoalTimelineEntry[]>();
@@ -329,40 +381,36 @@ export async function GET(request: Request) {
     // card reads its primary AND its aliases (keyed back to the primary).
     const reasoningByPhone = new Map<string, TaskReasoningView[]>();
     const allPhones = [...contactsByPhone.keys()];
-    if (allPhones.length > 0) {
-      await Promise.all(
-        allPhones.map(async (phone) => {
-          const numbers = [phone, ...(contactsByPhone.get(phone)?.alias_e164s ?? [])];
-          const { data, error } = await db
-            .from("ai_reply_reasoning")
-            .select("intent, rationale, escalated, reply_preview, created_at")
-            .eq("business_id", businessId)
-            .in("contact_e164", numbers)
-            .order("created_at", { ascending: false })
-            .limit(REASONING_PER_TASK);
-          if (error) throw new Error(`tasks: reasoning: ${error.message}`);
-          const rows = (data ?? []) as Array<{
-            intent: string;
-            rationale: string;
-            escalated: boolean;
-            reply_preview: string | null;
-            created_at: string;
-          }>;
-          if (rows.length > 0) {
-            reasoningByPhone.set(
-              phone,
-              rows.map((row) => ({
-                intent: row.intent,
-                rationale: row.rationale,
-                escalated: row.escalated,
-                replyPreview: row.reply_preview,
-                at: row.created_at
-              }))
-            );
-          }
-        })
-      );
-    }
+    await mapPool(allPhones, REASONING_CONCURRENCY, async (phone) => {
+      const numbers = [phone, ...(contactsByPhone.get(phone)?.alias_e164s ?? [])];
+      const { data, error } = await db
+        .from("ai_reply_reasoning")
+        .select("intent, rationale, escalated, reply_preview, created_at")
+        .eq("business_id", businessId)
+        .in("contact_e164", numbers)
+        .order("created_at", { ascending: false })
+        .limit(REASONING_PER_TASK);
+      if (error) throw new Error(`tasks: reasoning: ${error.message}`);
+      const rows = (data ?? []) as Array<{
+        intent: string;
+        rationale: string;
+        escalated: boolean;
+        reply_preview: string | null;
+        created_at: string;
+      }>;
+      if (rows.length > 0) {
+        reasoningByPhone.set(
+          phone,
+          rows.map((row) => ({
+            intent: row.intent,
+            rationale: row.rationale,
+            escalated: row.escalated,
+            replyPreview: row.reply_preview,
+            at: row.created_at
+          }))
+        );
+      }
+    });
 
     // Display names (owner/employee overlays + manual labels win).
     const contactNames = await resolveContactNames(businessId, allPhones, db).catch(
@@ -383,7 +431,13 @@ export async function GET(request: Request) {
     const activityByPhone = await getActivityForContacts(
       businessId,
       activityNumbers,
-      { perContact: ACTIVITY_PER_TASK, contactNames },
+      {
+        perContact: ACTIVITY_PER_TASK,
+        contactNames,
+        // Default scan is 200 across ALL leads; with hundreds of cards that
+        // starves everyone after the first chatty few. Size it to the board.
+        scanLimit: Math.min(1000, Math.max(200, activityNumbers.length * ACTIVITY_PER_TASK))
+      },
       db
     ).catch(() => new Map<string, ActivityItem[]>());
 
@@ -509,6 +563,7 @@ export async function GET(request: Request) {
       tasks: scoped.slice(0, MAX_TASKS),
       employees,
       myEmployeeId,
+      clipped: taggedClipped || scoped.length > MAX_TASKS,
       // One-person team whose only member is the owner: the stored owner
       // column would resolve straight back to them, so the quick editor
       // drops its "Unassigned" choice (a control that would do nothing).
