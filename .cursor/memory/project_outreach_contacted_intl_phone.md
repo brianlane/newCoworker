@@ -22,3 +22,5 @@ Fix: compact separators on a leading `+` inside `coerceDialableE164`, and
 route `fireLifecycleStage` / `prospectContactKey` / draft writes through it.
 A row already stamped `contacted_stage_at` will not be retried; move the
 card with `fireLifecycleStage(compactE164, "contacted")`.
+
+(CI retrigger after Bugbot budget increase — 2026-09-17.)
