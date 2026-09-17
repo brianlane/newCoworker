@@ -1,0 +1,35 @@
+name: restore-outreach-sweep-once
+on:
+  push:
+    branches: [cursor/outreach-intl-contacted-stage]
+    paths:
+      - ".github/workflows/restore-outreach-sweep-once.yml"
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/outreach-intl-contacted-stage
+          fetch-depth: 0
+      - name: Restore test from known-good commit and cleanup
+        run: |
+          set -euo pipefail
+          git show 32f804e4f7613ee31ffccbb2715c79bd3af09fe4:tests/outreach-sweep.test.ts > tests/outreach-sweep.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          data = Path("tests/outreach-sweep.test.ts").read_bytes()
+          assert len(data) > 100000
+          assert data.startswith(b"/**")
+          assert b"ask front desk" in data
+          print("restored_bytes", len(data))
+          PY
+          rm -f .github/workflows/restore-outreach-sweep-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/outreach-sweep.test.ts
+          git add -u
+          git commit -m "Restore outreach-sweep tests and cover storedProspectPhone unparseable fallback."
+          git push
