@@ -3,7 +3,7 @@
  * clip off the edge of the Ask AI companion (flex min-width:auto, no
  * overflow-wrap). The parser also turns http(s) markdown links into
  * tokens so "[Google Calendar link](https://...)" is a short label, not
- * a raw URL that overflowed the 400px panel.
+ * a raw URL that overflowed the companion panel.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -203,13 +203,13 @@ function walkSource(dir: string, acc: string[] = []): string[] {
 }
 
 describe("chat wrap surfaces", () => {
-  it("doubles the companion panel from 400px to 800px", () => {
+  it("keeps the companion panel at 400px", () => {
     const src = readFileSync(
       join(ROOT, "src/components/dashboard/companion/CompanionPanel.tsx"),
       "utf8"
     );
-    expect(src).toContain("sm:w-[800px]");
-    expect(src).not.toContain("sm:w-[400px]");
+    expect(src).toContain("sm:w-[400px]");
+    expect(src).not.toContain("sm:w-[800px]");
   });
 
   it("puts CHAT_TEXT_WRAP_CLASS on every owner-facing chat bubble", () => {

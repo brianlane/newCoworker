@@ -62,7 +62,7 @@ export function CompanionPanel({ businessId, onClose }: PanelProps) {
       <div
         role="dialog"
         aria-label={t("panel.title")}
-        className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-parchment/10 bg-deep-ink shadow-2xl sm:w-[800px]"
+        className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-parchment/10 bg-deep-ink shadow-2xl sm:w-[400px]"
       >
         <div className="flex items-center justify-between gap-2 border-b border-parchment/10 px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">
