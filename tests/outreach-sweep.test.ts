@@ -1,1 +1,1 @@
-{{file:/workspace/CONTENT_ONLY.ts}}
+file:///workspace/PUSH_CONTENT.txt
