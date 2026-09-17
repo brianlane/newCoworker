@@ -1,1 +1,1 @@
-{{file:/workspace/uploads/outreach-sweep-fixed.ts}}
+@/workspace/uploads/outreach-sweep-fixed.ts
