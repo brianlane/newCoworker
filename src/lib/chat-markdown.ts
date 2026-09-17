@@ -52,7 +52,29 @@ export function chatImageFromLine(line: string): { alt: string; src: string } | 
 }
 
 const INLINE_RE =
-  /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>"']+))/g;
+  /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|\[([^\]]+)\]\((https?:\/\/[^\s]+)|(https?:\/\/[^\s<>"']+))/g;
+
+/**
+ * Markdown `[label](https://...)` closer is the first `)` that does not
+ * close a `(` inside the URL, so Wikipedia-style /Foo_(bar) paths stay
+ * intact. Returns null when the captured run never reaches that closer
+ * (unbalanced, so this is not a finished markdown link).
+ */
+function markdownHrefFromCaptured(captured: string): string | null {
+  let depth = 0;
+  for (let i = 0; i < captured.length; i++) {
+    const ch = captured[i];
+    if (ch === "(") {
+      depth++;
+    } else if (ch === ")") {
+      if (depth === 0) {
+        return captured.slice(0, i);
+      }
+      depth--;
+    }
+  }
+  return null;
+}
 
 export function tokenizeInlineMarkdown(text: string): InlineToken[] {
   const tokens: InlineToken[] = [];
@@ -81,7 +103,18 @@ export function tokenizeInlineMarkdown(text: string): InlineToken[] {
     } else if (match[4]) {
       tokens.push({ type: "code", value: match[4] });
     } else if (match[5] && match[6]) {
-      tokens.push({ type: "link", href: match[6], label: match[5] });
+      const href = markdownHrefFromCaptured(match[6]);
+      const opener = `[${match[5]}](`;
+      if (!href) {
+        tokens.push({ type: "text", value: opener });
+        lastIndex = match.index + opener.length;
+        INLINE_RE.lastIndex = lastIndex;
+        continue;
+      }
+      tokens.push({ type: "link", href, label: match[5] });
+      lastIndex = match.index + opener.length + href.length + 1;
+      INLINE_RE.lastIndex = lastIndex;
+      continue;
     } else {
       // Last alternative is a bare http(s) URL. Keep trailing punctuation
       // in the following text token, same rule as booking-page linkify, so

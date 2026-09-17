@@ -100,7 +100,16 @@ describe("tokenizeInlineMarkdown", () => {
     ]);
   });
 
-  it("keeps balanced path parens on a bare URL and peels an extra one", () => {
+  it("keeps balanced path parens on a markdown link and a bare URL", () => {
+    expect(
+      tokenizeInlineMarkdown("[wiki](https://en.wikipedia.org/wiki/Foo_(bar))")
+    ).toEqual([
+      {
+        type: "link",
+        href: "https://en.wikipedia.org/wiki/Foo_(bar)",
+        label: "wiki"
+      }
+    ]);
     expect(tokenizeInlineMarkdown("https://en.wikipedia.org/wiki/Foo_(bar)")).toEqual([
       {
         type: "link",
@@ -112,6 +121,17 @@ describe("tokenizeInlineMarkdown", () => {
       { type: "text", value: "(" },
       { type: "link", href: "https://example.com/", label: "https://example.com/" },
       { type: "text", value: ")" }
+    ]);
+  });
+
+  it("leaves an unclosed markdown link as text so the URL can autolink", () => {
+    expect(tokenizeInlineMarkdown("[wiki](https://en.wikipedia.org/wiki/Foo_(bar")).toEqual([
+      { type: "text", value: "[wiki](" },
+      {
+        type: "link",
+        href: "https://en.wikipedia.org/wiki/Foo_(bar",
+        label: "https://en.wikipedia.org/wiki/Foo_(bar"
+      }
     ]);
   });
 });
