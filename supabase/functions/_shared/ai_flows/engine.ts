@@ -454,17 +454,29 @@ function scanPhoneMatches(text: string, defaultCountry: PhoneCountry): PhoneMatc
  */
 export function coerceDialableE164(raw: string, opts?: PhoneExtractionOpts): string | null {
   const trimmed = raw.trim();
+  // Places and connector drafts store formatted international numbers
+  // ("+61 415 972 868"). isE164 rejects the spaces, and the NANP fallback
+  // cannot see a non-+1 country code, so compact separators on a leading +
+  // before those gates. Compacted E.164 is what contacts.customer_e164 holds.
+  const candidate = compactPlusPrefix(trimmed);
   // Country code 52 gets the same national-plan strictness as +1: exactly 10
   // national digits (the legacy 521 mobile form canonicalizes down), so a
   // malformed +52 value fails here instead of at the carrier.
-  if (trimmed.startsWith("+52")) return normalizeMxToE164(trimmed);
-  if (trimmed.startsWith("+1") || !isE164(trimmed)) {
-    if (opts?.defaultCountry === "MX" && !hasExplicitNanpShape(trimmed)) {
-      return normalizeMxToE164(trimmed);
+  if (candidate.startsWith("+52")) return normalizeMxToE164(candidate);
+  if (candidate.startsWith("+1") || !isE164(candidate)) {
+    if (opts?.defaultCountry === "MX" && !hasExplicitNanpShape(candidate)) {
+      return normalizeMxToE164(candidate);
     }
-    return normalizeNanpToE164(trimmed);
+    return normalizeNanpToE164(candidate);
   }
-  return trimmed;
+  return candidate;
+}
+
+/** "+61 415 972 868" / "+61-415-972-868" -> "+61415972868". Identity otherwise. */
+function compactPlusPrefix(raw: string): string {
+  if (!raw.startsWith("+")) return raw;
+  const digits = raw.slice(1).replace(/\D/g, "");
+  return digits ? `+${digits}` : raw;
 }
 
 /** Extract candidate phone numbers from free text as E.164 (deduped, in text order). */

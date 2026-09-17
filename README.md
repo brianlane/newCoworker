@@ -2300,6 +2300,15 @@ they collect at the head of an oldest-first capped queue and starve every
 prospect behind them whose contact DOES exist, which is the same starvation the
 column was added to prevent, arriving by a different door.
 
+The lookup uses `coerceDialableE164`, not `isE164` then NANP. Places and
+connector drafts store formatted international numbers (`+61 415 972 868`).
+The filing flow often writes the compact E.164 contact key. The old
+short-circuit rejected the spaces, the NANP fallback cannot see a non-+1
+country code, and the reconcile treated an already-filed prospect as "no
+contact" until the 30-minute grace ran out, then stamped `contacted_stage_at`
+and left them on New Lead. Compact the leading-plus form first so the two
+paths resolve the same row.
+
 Three more properties make it safe to repeat: `applyLifecycleStage` is
 forward-only, so a prospect already at Contacted costs one read and no write and
 one who has replied is never dragged back; the stage must exist, so a tenant who

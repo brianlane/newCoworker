@@ -106,6 +106,10 @@ describe("prospectContactKey", () => {
     expect(prospectContactKey("+14809995302")).toBe("+14809995302");
   });
 
+  it("compacts a formatted international number to the contact key", () => {
+    expect(prospectContactKey("+61 415 972 868")).toBe("+61415972868");
+  });
+
   it("answers null for nothing usable", () => {
     expect(prospectContactKey(null)).toBeNull();
     expect(prospectContactKey("   ")).toBeNull();
