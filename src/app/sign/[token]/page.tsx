@@ -70,7 +70,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
               Download original
             </a>
           </div>
-          <pre className="mt-3 max-h-[28rem] overflow-y-auto whitespace-pre-wrap font-sans text-sm leading-relaxed text-parchment/90">
+          <pre className="mt-3 max-h-[28rem] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-parchment/90">
             {displayContent}
           </pre>
         </section>

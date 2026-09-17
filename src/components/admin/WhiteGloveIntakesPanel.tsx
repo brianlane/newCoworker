@@ -172,11 +172,11 @@ function ApplyIntakeSection({
               : "couldn't be parsed, kept as text in memory only"}
           </p>
           <p className="text-parchment/40">soul.md block:</p>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
             {plan.soulBlock}
           </pre>
           <p className="text-parchment/40">memory.md block:</p>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
             {plan.memoryBlock}
           </pre>
         </div>

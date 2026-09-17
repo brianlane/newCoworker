@@ -15,7 +15,7 @@ import { phiAccessRequestContext, recordPhiAccess } from "@/lib/hipaa/access-log
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
+import { ChatMarkdown, CHAT_TEXT_WRAP_CLASS } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import { mapSmsLinksByOutboundLogIds } from "@/lib/db/sms-links";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
@@ -212,6 +212,7 @@ export default async function SmsThreadPage({
                 <div
                   className={[
                     "max-w-[85%] min-w-0 break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                    CHAT_TEXT_WRAP_CLASS,
                     isInbound
                       ? "bg-parchment/10 text-parchment"
                       : "bg-claw-green/20 text-parchment"

@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
-import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
+import { ChatMarkdown, CHAT_TEXT_WRAP_CLASS } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import {
   composeOwnerPhone,
@@ -1259,6 +1259,7 @@ function QuestionnaireForm({
                       key={`${message.role}-${index}`}
                       className={[
                         "rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-[0_10px_30px_rgba(0,0,0,0.14)]",
+                        CHAT_TEXT_WRAP_CLASS,
                         message.role === "assistant"
                           ? "mr-12 border border-signal-teal/12 bg-signal-teal/10 text-parchment"
                           : "ml-12 border border-claw-green/12 bg-claw-green/10 text-parchment/90"
@@ -1274,12 +1275,12 @@ function QuestionnaireForm({
                       </div>
                       {message.role === "assistant"
                         ? <ChatMarkdown text={message.content} />
-                        : <p>{message.content}</p>
+                        : <p className={`whitespace-pre-wrap ${CHAT_TEXT_WRAP_CLASS}`}>{message.content}</p>
                       }
                     </div>
                   ))}
                   {pendingUserMessage && (
-                    <div className="ml-12 rounded-2xl border border-claw-green/12 bg-claw-green/10 px-4 py-3 text-sm leading-relaxed text-parchment/90 shadow-[0_10px_30px_rgba(0,0,0,0.14)]">
+                    <div className={`ml-12 rounded-2xl border border-claw-green/12 bg-claw-green/10 px-4 py-3 text-sm leading-relaxed text-parchment/90 shadow-[0_10px_30px_rgba(0,0,0,0.14)] ${CHAT_TEXT_WRAP_CLASS}`}>
                       <div className="mb-1 flex items-center justify-between gap-3">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
                           {t("youLabel")}
@@ -1288,7 +1289,7 @@ function QuestionnaireForm({
                           {formatMessageTimestamp(pendingUserMessage.timestamp)}
                         </span>
                       </div>
-                      <p>{pendingUserMessage.content}</p>
+                      <p className={`whitespace-pre-wrap ${CHAT_TEXT_WRAP_CLASS}`}>{pendingUserMessage.content}</p>
                     </div>
                   )}
                   {chatLoading && (form.assistantChat?.messages.length ?? 0) > 0 && (

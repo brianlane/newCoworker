@@ -504,7 +504,7 @@ export default async function MemoryGraphAdminPage({
                       {/* Line-by-line so attributed claims read amber at a
                           glance: a customer-provided detail on a NON-amber
                           line is the laundering failure mode to hunt for. */}
-                      <pre className="whitespace-pre-wrap rounded border border-parchment/10 bg-ink/60 p-2 text-xs text-parchment/70">
+                      <pre className="whitespace-pre-wrap break-words rounded border border-parchment/10 bg-ink/60 p-2 text-xs text-parchment/70">
                         {event.graph_context
                           ? event.graph_context.split("\n").map((line, i) => (
                               <span
@@ -523,7 +523,7 @@ export default async function MemoryGraphAdminPage({
                         Ranked memory ({event.memory_selected} blocks
                         {event.memory_fallback ? ", fallback" : ""})
                       </p>
-                      <pre className="whitespace-pre-wrap rounded border border-parchment/10 bg-ink/60 p-2 text-xs text-parchment/70">
+                      <pre className="whitespace-pre-wrap break-words rounded border border-parchment/10 bg-ink/60 p-2 text-xs text-parchment/70">
                         {event.memory_context || "(empty)"}
                       </pre>
                     </div>

@@ -69,7 +69,7 @@ export default async function MemoryPage() {
                   })}
                 </summary>
                 <p className="mt-2 text-xs text-parchment/50">{t("memoryArchiveHint")}</p>
-                <pre className="mt-3 max-h-96 overflow-y-auto whitespace-pre-wrap rounded-lg border border-parchment/10 bg-ink/40 p-3 text-xs text-parchment/50">
+                <pre className="mt-3 max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-parchment/10 bg-ink/40 p-3 text-xs text-parchment/50">
                   {config.memory_archive_md}
                 </pre>
               </details>

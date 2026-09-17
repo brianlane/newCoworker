@@ -123,7 +123,7 @@ export async function GET(request: Request) {
   .hdr button { background: none; border: 0; color: #fff; font-size: 20px; line-height: 1; cursor: pointer; padding: 4px; opacity: .85; }
   .hdr button:hover { opacity: 1; }
   .msgs { flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #f8fafc; }
-  .m { max-width: 82%; padding: 9px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
+  .m { max-width: 82%; min-width: 0; padding: 9px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; word-wrap: break-word; }
   .m.a { background: #fff; border: 1px solid #e2e8f0; color: #0f172a; align-self: flex-start; border-bottom-left-radius: 4px; }
   .m.u { background: var(--accent); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
   .m.sys { background: transparent; color: #94a3b8; font-size: 12px; align-self: center; text-align: center; }

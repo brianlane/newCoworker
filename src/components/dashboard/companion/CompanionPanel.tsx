@@ -14,7 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { History, MessageSquare, Plus, Sparkles, X } from "lucide-react";
-import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
+import { ChatMarkdown, CHAT_TEXT_WRAP_CLASS } from "@/components/ui/ChatMarkdown";
 import {
   useDashboardChatTransport,
   type ChatDraft
@@ -314,6 +314,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                 key={message.id}
                 className={[
                   "flex max-w-[92%] flex-col rounded-xl px-3 py-2",
+                  CHAT_TEXT_WRAP_CLASS,
                   message.role === "user"
                     ? "self-end border border-signal-teal/30 bg-signal-teal/15 text-parchment"
                     : "self-start border border-parchment/10 bg-parchment/5 text-parchment"
@@ -323,7 +324,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                   {message.role === "assistant" ? (
                     <ChatMarkdown text={message.content} />
                   ) : (
-                    <p className="whitespace-pre-wrap">{message.content}</p>
+                    <p className={`whitespace-pre-wrap ${CHAT_TEXT_WRAP_CLASS}`}>{message.content}</p>
                   )}
                 </div>
               </div>
