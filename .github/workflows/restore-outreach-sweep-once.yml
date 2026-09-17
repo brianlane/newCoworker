@@ -19,8 +19,9 @@ jobs:
           python3 - <<'PY'
           import base64, gzip
           from pathlib import Path
-          a = Path("tests/.restore/b64_a.txt").read_text().strip()
-          b = Path("tests/.restore/b64_b.txt").read_text().strip()
+          root = Path("tests/.restore")
+          a = "".join(p.read_text().strip() for p in sorted(root.glob("b64_a_*.txt")))
+          b = "".join(p.read_text().strip() for p in sorted(root.glob("b64_b_*.txt")))
           data = gzip.decompress(base64.b64decode(a + b))
           assert len(data) > 100000
           assert data.startswith(b"/**")
