@@ -2051,8 +2051,19 @@ describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
       domain: "wolfgangscooling.com",
       vertical: "hvac",
       website: "https://wolfgangscooling.com",
-      phone: "(480) 555-0100"
+      phone: "+14805550100"
     });
+  });
+
+  it("stores a formatted international phone as the E.164 contact key", async () => {
+    const ledger = createLedger();
+    await upsertProspectDraft(
+      BIZ,
+      { ...input, phone: "+61 415 972 868" },
+      baseDeps()
+    );
+    const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(row.phone).toBe("+61415972868");
   });
 
   it("stores blank optional fields as null, never as empty strings", async () => {
@@ -2063,6 +2074,19 @@ describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
     const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(row.phone).toBeNull();
     expect(row.website).toBeNull();
+  });
+
+  it("keeps an unparseable phone as given so extract can still try", async () => {
+    // storedProspectPhone falls back to the trimmed raw when coerceDialableE164
+    // returns null — that branch must stay covered at the 100% gate.
+    const ledger = createLedger();
+    await upsertProspectDraft(
+      BIZ,
+      { ...input, phone: "ask front desk" },
+      baseDeps()
+    );
+    const [row] = (ledger.insertDraftedProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(row.phone).toBe("ask front desk");
   });
 
   it("puts the booking link in this one draft when the caller asks, and records that it did", async () => {
@@ -2277,7 +2301,7 @@ describe("upsertProspectDraft (a connector handed us a written pitch)", () => {
       );
       const [, , , patch2] = (ledger2.tryTransitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(patch2).toMatchObject({
-        phone: "(480) 555-0199",
+        phone: "+14805550199",
         website: "https://new.example",
         vertical: "plumbing",
         city: "Tempe AZ"

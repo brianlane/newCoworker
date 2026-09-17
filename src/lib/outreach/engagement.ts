@@ -44,10 +44,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
-import {
-  isE164,
-  normalizeNanpToE164
-} from "../../../supabase/functions/_shared/ai_flows/engine";
+import { coerceDialableE164 } from "../../../supabase/functions/_shared/ai_flows/engine";
 import {
   contactAliasOrFilter,
   emailIlikePattern,
@@ -89,13 +86,15 @@ export type EngagementResult = {
 
 /**
  * The prospect's phone as a contact key, or null when it will not normalize.
- * Same normalization `fireLifecycleStage` applies, so this resolves the same
- * contact the Contacted stage was written to.
+ * Same `coerceDialableE164` `fireLifecycleStage` applies, so this resolves
+ * the same contact the Contacted stage was written to, including formatted
+ * international numbers ("+61 415 972 868") the ledger stores from Places
+ * or a connector draft.
  */
 export function prospectContactKey(phone: string | null | undefined): string | null {
   const raw = (phone ?? "").trim();
   if (!raw) return null;
-  return isE164(raw) ? raw : normalizeNanpToE164(raw);
+  return coerceDialableE164(raw);
 }
 
 /**

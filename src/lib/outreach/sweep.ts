@@ -53,6 +53,7 @@ import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
+import { coerceDialableE164 } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { findEngagedProspects } from "./engagement";
 import { logger } from "@/lib/logger";
 import {
@@ -1530,6 +1531,22 @@ export type DraftUpsertResult =
 const REPITCHABLE_STATUSES: ReadonlySet<OutreachProspectStatus> = new Set(["discovered", "drafted"]);
 
 /**
+ * Store a prospect phone as the E.164 contact key when we can, so the later
+ * Contacted reconcile matches the row the outreach flow files.
+ *
+ * Connector drafts and Places numbers arrive formatted ("+61 415 972 868",
+ * "(480) 555-0100"). The filing flow's extract step often strips that to
+ * E.164; the reconcile used to look up the raw ledger string and miss.
+ * Unparseable values stay as given rather than being dropped: a number we
+ * cannot coerce is still enough for the extract step to try.
+ */
+function storedProspectPhone(raw: string | null | undefined): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  return coerceDialableE164(trimmed) ?? trimmed;
+}
+
+/**
  * File a draft somebody else wrote: an owner's connector (Claude, ChatGPT,
  * Grok over /api/mcp) handing us a prospect and a pitch, instead of the sweep
  * discovering one. The row lands in the same review queue, through the same
@@ -1599,7 +1616,7 @@ export async function upsertProspectDraft(
   // (on lower(email)) and findProspectByEmail's equality read agree.
   const email = input.email.trim().toLowerCase();
   const paragraphs = splitParagraphs(text);
-  const phone = input.phone?.trim() ?? "";
+  const phone = storedProspectPhone(input.phone);
   const website = input.website?.trim() ?? "";
   const vertical = input.vertical?.trim() ?? "";
   const city = input.city.trim();
@@ -1630,8 +1647,9 @@ export async function upsertProspectDraft(
       email,
       // Null rather than blank when the caller had no number, so "has a
       // phone" stays a single question downstream (the flow hand-off gates
-      // contact filing on it).
-      phone: phone || null,
+      // contact filing on it). Canonical E.164 when the value is a phone,
+      // so the Contacted reconcile can find the contact the flow files.
+      phone,
       website: website || null,
       vertical,
       city,

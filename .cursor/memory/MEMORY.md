@@ -15,6 +15,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Telnyx Idempotency-Key charset](project_telnyx_idempotency_key.md) - only [A-Za-z0-9_-]{1,255}; AiFlow colon keys 400/10015, not an undialable number; encode at the shared SMS client
 - [Telnyx spend Sep 2026](project_telnyx_spend_sep2026.md) - Aug usage $58.89 vs Jul $30.78; Sep 1 auto-recharge was MRC; Sep 10 15:15 UTC recharge was on par (9d after Sep 1, usage $2.76/day, 10DLC did not hit prepaid); Amy offer fan-out; do not cut Standard SMS 5000→3000; Truly DID released 2026-09-08
 - [Intl SMS state](project_intl_sms_state.md) - MX SMS never delivered; long codes can't originate non-NANP; non-US/CA skips
+- [Outreach Contacted intl phone](project_outreach_contacted_intl_phone.md) - formatted +61 from Places/MCP fails isE164 then NANP; coerceDialableE164 must compact first; stamped contacted_stage_at will not retry
 - [Legal gap-closure plan](project_legal_gap_closure_plan.md) - SHIPPED Aug 1-2; counsel items still open
 - [Zapier publish state](project_zapier_publish_state.md) - APPROVED + listed Aug 5; trust zapier-platform history over CLI
 - [Self-reply loop: the send-as alias trap](project_self_reply_loop_alias_trap.md) - own mail arrives inbound; sources return the account, not the alias

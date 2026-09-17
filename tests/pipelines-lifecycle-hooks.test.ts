@@ -42,6 +42,14 @@ describe("fireLifecycleStage", () => {
     expect(applyLifecycleStage.mock.calls[0][2]).toBe("+16026160662");
   });
 
+  it("compacts a formatted international number to the contact key", async () => {
+    // Bloom Digital, HQ 2026-09-17: Places/MCP stored "+61 415 972 868",
+    // the filing flow wrote +61415972868, and this wrapper's isE164-then-NANP
+    // short-circuit returned no_contact, so they sat in New Lead.
+    await fireLifecycleStage(BIZ, "+61 415 972 868", "contacted", opts);
+    expect(applyLifecycleStage.mock.calls[0][2]).toBe("+61415972868");
+  });
+
   it("is a silent no-op on a missing phone", async () => {
     for (const phone of ["", "   ", null, undefined]) {
       expect(await fireLifecycleStage(BIZ, phone, "booked", opts)).toBe("no_contact");

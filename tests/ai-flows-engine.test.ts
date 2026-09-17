@@ -1420,6 +1420,18 @@ describe("coerceDialableE164", () => {
     expect(coerceDialableE164("+447911123456")).toBe("+447911123456");
     expect(coerceDialableE164("+492046781")).toBe("+492046781");
   });
+  it("compacts separators on an explicit country-code prefix", () => {
+    // Places / connector drafts store formatted international numbers.
+    // Spaces fail isE164, and the NANP fallback cannot see +61 / +44, so
+    // this used to return null and leave an already-filed prospect on New Lead.
+    expect(coerceDialableE164("+61 415 972 868")).toBe("+61415972868");
+    expect(coerceDialableE164("+61-415-972-868")).toBe("+61415972868");
+    expect(coerceDialableE164("+44 7911 123456")).toBe("+447911123456");
+  });
+  it("still rejects a plus with no digits", () => {
+    expect(coerceDialableE164("+")).toBeNull();
+    expect(coerceDialableE164("+abc")).toBeNull();
+  });
   it("rejects +1 numbers that cannot exist (the KYP Aug 1 2026 lead)", () => {
     // 13 national digits: passes isE164's structural check, never dialable.
     expect(coerceDialableE164("+16133439985030")).toBeNull();
