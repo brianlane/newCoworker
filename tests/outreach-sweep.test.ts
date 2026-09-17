@@ -1,1 +1,1 @@
-PROBE_BEFORE_FULL_RESTORE
+{{file:/workspace/CONTENT_ONLY.ts}}
