@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_REPLACE
+file:///workspace/CONTENT_ONLY.ts
