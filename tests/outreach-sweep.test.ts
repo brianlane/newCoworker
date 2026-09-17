@@ -1,1 +1,1 @@
-file:///workspace/CONTENT_ONLY.ts
+$include:/workspace/CONTENT_ONLY.ts
