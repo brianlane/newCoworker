@@ -1216,7 +1216,7 @@ describe("dashboard route vps reads", () => {
         : result;
       chains.push(record);
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "neq", "is", "in", "or", "order", "limit"]) {
+      for (const m of ["select", "eq", "neq", "is", "in", "or", "order", "limit", "range"]) {
         chain[m] = vi.fn((...args: unknown[]) => {
           record.calls.push([m, args]);
           return chain;
@@ -1514,6 +1514,40 @@ describe("dashboard route vps reads", () => {
           emails: ["a@b.com"]
         })
       ).rejects.toThrow("tasks: contacts by email: boom");
+    });
+
+    it("probes tagged contacts past the cap with range/offset, not a bigger limit", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      const { db } = trackedDb({ data: [], error: null });
+      await listTaggedContacts<{ customer_e164: string; updated_at: string }>(ctx(true, db), {
+        columns: ["customer_e164", "updated_at"],
+        limit: 1,
+        offset: 1000
+      });
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "contacts",
+        columns: ["customer_e164", "updated_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "tags", op: "neq", value: "{}" }
+        ],
+        order: [{ column: "updated_at", ascending: false }],
+        limit: 1,
+        offset: 1000
+      });
+
+      const central = trackedDb({
+        data: [{ customer_e164: PHONE, updated_at: "2026-07-01T00:00:00Z" }],
+        error: null
+      });
+      const rows = await listTaggedContacts<{ customer_e164: string; updated_at: string }>(
+        ctx(false, central.db),
+        { columns: ["customer_e164", "updated_at"], limit: 1, offset: 1000 }
+      );
+      expect(rows).toHaveLength(1);
+      expect(readMovedRows).toHaveBeenCalledTimes(1);
+      expect(argsFor(central.chains, "contacts", "range")).toEqual([[1000, 1000]]);
+      expect(argsFor(central.chains, "contacts", "limit")).toEqual([]);
     });
 
     it("checks a linked contact's existence against the box, failing loudly", async () => {

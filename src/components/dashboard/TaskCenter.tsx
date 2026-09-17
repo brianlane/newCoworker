@@ -377,8 +377,10 @@ export function TaskCenter({
   /** Manager+ (manage_aiflows), gates the Dismiss-task action. */
   canDismissRuns: boolean;
 }) {
+  const t = useTranslations("dashboard.tasksData");
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
+  const [clipped, setClipped] = useState(false);
   const [employees, setEmployees] = useState<RosterOption[]>([]);
   const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -399,20 +401,24 @@ export function TaskCenter({
             tasks: TaskCardData[];
             employees: RosterOption[];
             implicitOwnerEmployeeId: string | null;
+            clipped?: boolean;
           };
           error?: { message?: string };
         };
         if (!res.ok || !json.ok || !json.data) {
           setError(json.error?.message ?? "Couldn't load tasks");
           setTasks(null);
+          setClipped(false);
         } else {
           setTasks(json.data.tasks);
+          setClipped(json.data.clipped === true);
           setEmployees(json.data.employees ?? []);
           setImplicitOwnerEmployeeId(json.data.implicitOwnerEmployeeId ?? null);
         }
       } catch {
         setError("Couldn't load tasks");
         setTasks(null);
+        setClipped(false);
       } finally {
         setLoading(false);
       }
@@ -471,6 +477,10 @@ export function TaskCenter({
         <Card>
           <p className="text-sm text-spark-orange">{error}</p>
         </Card>
+      )}
+
+      {clipped && tasks && tasks.length > 0 && (
+        <p className="text-xs text-parchment/40">{t("clippedBanner", { shown: tasks.length })}</p>
       )}
 
       {!error && tasks !== null && tasks.length === 0 && !(scope === "mine" && !hasLinkedEmployee) && (

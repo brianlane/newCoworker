@@ -2874,6 +2874,7 @@
       "viewData": "Datos",
       "loading": "Cargando leads…",
       "loadFailed": "No se pudieron cargar los leads",
+      "clippedBanner": "Se muestran los {shown} leads actualizados más recientemente. Los leads etiquetados más antiguos siguen en Contactos.",
       "scopeMine": "Mis leads",
       "scopeAll": "Todos los leads",
       "refresh": "Actualizar",

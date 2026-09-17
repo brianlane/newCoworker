@@ -104,6 +104,7 @@ export function PipelineBoard({
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
+  const [clipped, setClipped] = useState(false);
   const [employees, setEmployees] = useState<RosterOption[]>([]);
   const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
   /** The roster member this login IS; null hides every Claim button. */
@@ -141,11 +142,13 @@ export function PipelineBoard({
               employees: RosterOption[];
               myEmployeeId: string | null;
               implicitOwnerEmployeeId: string | null;
+              clipped?: boolean;
             }>(r)
           )
         ]);
         setPipelines(pipelinesData.pipelines);
         setTasks(tasksData.tasks);
+        setClipped(tasksData.clipped === true);
         setEmployees(tasksData.employees ?? []);
         setMyEmployeeId(tasksData.myEmployeeId ?? null);
         setImplicitOwnerEmployeeId(tasksData.implicitOwnerEmployeeId ?? null);
@@ -158,6 +161,7 @@ export function PipelineBoard({
         setError(e instanceof Error ? e.message : "Couldn't load the board");
         setPipelines(null);
         setTasks(null);
+        setClipped(false);
       } finally {
         setLoading(false);
       }
@@ -527,7 +531,7 @@ export function PipelineBoard({
                   </button>
                 </div>
                 {!isCollapsed && (
-                  <div className="space-y-2 px-2 pb-2">
+                  <div className="max-h-[calc(100vh-16rem)] space-y-2 overflow-y-auto px-2 pb-2">
                     {cards.length === 0 && (
                       <p className="px-1 py-3 text-center text-[11px] text-parchment/30">
                         Drop a lead here
@@ -560,6 +564,10 @@ export function PipelineBoard({
             );
           })}
         </div>
+      )}
+
+      {clipped && tasks && tasks.length > 0 && (
+        <p className="text-xs text-parchment/40">{t("clippedBanner", { shown: tasks.length })}</p>
       )}
 
       {pipeline && offBoardCount > 0 && (

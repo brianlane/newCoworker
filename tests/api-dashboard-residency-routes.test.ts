@@ -54,7 +54,8 @@ vi.mock("@/lib/documents/db", () => ({
 }));
 vi.mock("@/lib/vps/sync-vault", () => ({ syncVaultToVpsAndLog: vi.fn(async () => undefined) }));
 
-import { GET as tasksGET } from "@/app/api/dashboard/tasks/route";
+import { GET as tasksGET, MAX_TASKS } from "@/app/api/dashboard/tasks/route";
+import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { GET as leadsDataGET } from "@/app/api/dashboard/leads-data/route";
 import { GET as scheduleGET } from "@/app/api/dashboard/messages/schedule/route";
 import { PATCH as documentPATCH } from "@/app/api/dashboard/documents/[documentId]/route";
@@ -100,9 +101,13 @@ function centralDb(tables: Record<string, unknown[]> = {}) {
 
 /** readMovedRows stub dispatching per moved table. */
 function boxRows(rowsByTable: Record<string, unknown[]>) {
-  vi.mocked(readMovedRows).mockImplementation(
-    async (_biz, request) => (rowsByTable[(request as { table: string }).table] ?? []) as never
-  );
+  vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
+    const req = request as { table: string; limit?: number; offset?: number };
+    const all = rowsByTable[req.table] ?? [];
+    const offset = req.offset ?? 0;
+    const end = req.limit != null ? offset + req.limit : undefined;
+    return all.slice(offset, end) as never;
+  });
 }
 
 /** Every box request made for one moved table. */
@@ -247,6 +252,73 @@ describe("GET /api/dashboard/tasks on a residency tenant", () => {
     const res = await tasksGET(new Request(`http://x/?businessId=${BIZ}`));
     expect(res.status).toBe(500);
     expect((await res.json()).ok).toBe(false);
+  });
+
+  it("returns every tagged contact, not a 60-lead slice", async () => {
+    expect(MAX_TASKS).toBeGreaterThan(60);
+    const many = Array.from({ length: 80 }, (_, i) =>
+      contactRow({
+        customer_e164: `+1${6025550000 + i}`,
+        alias_e164s: [],
+        display_name: `Lead ${i}`,
+        tags: ["Contacted"]
+      })
+    );
+    centralDb({ ai_flow_runs: [] });
+    boxRows({ contacts: many, ai_flows: [] });
+
+    const data = await jsonOf(await tasksGET(new Request(`http://x/?businessId=${BIZ}`)));
+    expect(data.tasks).toHaveLength(80);
+    expect(data.clipped).toBe(false);
+    expect(data.tasks.map((t: { e164: string }) => t.e164)).toContain("+16025550000");
+    expect(data.tasks.map((t: { e164: string }) => t.e164)).toContain("+16025550079");
+  });
+
+  it("sets clipped when tagged contacts exist past the cap", async () => {
+    const many = Array.from({ length: MAX_TASKS + 1 }, (_, i) =>
+      contactRow({
+        customer_e164: `+1${6025550000 + i}`,
+        alias_e164s: [],
+        display_name: `Lead ${i}`,
+        tags: ["Contacted"]
+      })
+    );
+    centralDb({ ai_flow_runs: [] });
+    boxRows({ contacts: many, ai_flows: [] });
+
+    const data = await jsonOf(await tasksGET(new Request(`http://x/?businessId=${BIZ}`)));
+    expect(data.tasks).toHaveLength(MAX_TASKS);
+    expect(data.clipped).toBe(true);
+    const taggedReads = boxRequests("contacts").filter((r) =>
+      (r as { filters?: Array<{ column: string }> }).filters?.some((f) => f.column === "tags")
+    );
+    expect(taggedReads).toHaveLength(2);
+    expect(taggedReads[1]).toMatchObject({ limit: 1, offset: MAX_TASKS });
+  });
+
+  it("narrows the tagged-contact window to mine in SQL", async () => {
+    vi.mocked(resolveCallerEmployeeId).mockResolvedValue("emp-1");
+    centralDb({ ai_flow_runs: [] });
+    boxRows({
+      contacts: [contactRow({ owner_employee_id: "emp-1" })],
+      ai_flows: []
+    });
+
+    const data = await jsonOf(
+      await tasksGET(new Request(`http://x/?businessId=${BIZ}&scope=mine`))
+    );
+    expect(data.tasks).toHaveLength(1);
+    const taggedReads = boxRequests("contacts").filter((r) =>
+      (r as { filters?: Array<{ column: string }> }).filters?.some((f) => f.column === "tags")
+    );
+    expect(taggedReads[0]).toMatchObject({
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "tags", op: "neq", value: "{}" },
+        { column: "owner_employee_id", op: "eq", value: "emp-1" }
+      ],
+      limit: MAX_TASKS
+    });
   });
 });
 

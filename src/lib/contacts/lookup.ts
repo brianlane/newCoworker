@@ -137,6 +137,12 @@ export async function listTaggedContacts<Row extends { updated_at: string }>(
     columns: readonly string[];
     limit: number;
     /**
+     * Skip this many newest-first rows. The Tasks board uses it to probe
+     * one row past its cap, so a tenant sitting exactly on the cap is not
+     * reported as truncated.
+     */
+    offset?: number;
+    /**
      * scope=mine narrowing; omitted or null = every tagged contact.
      * `includeUnowned` is the one-person-roster case, where the implicit
      * owner rule makes unclaimed leads theirs too.
@@ -146,6 +152,7 @@ export async function listTaggedContacts<Row extends { updated_at: string }>(
 ): Promise<Row[]> {
   const { businessId, db, vpsReadMode, label } = ctx;
   const owner = args.owner ?? null;
+  const offset = args.offset ?? 0;
   if (vpsReadMode) {
     // `neq("tags", "{}")` crosses unchanged: the box compiles `neq` to `<>`
     // with a bound parameter, so Postgres reads the "{}" bind as the empty
@@ -161,7 +168,8 @@ export async function listTaggedContacts<Row extends { updated_at: string }>(
           ...extra
         ],
         order: [{ column: "updated_at", ascending: false }],
-        limit: args.limit
+        limit: args.limit,
+        ...(offset > 0 ? { offset } : {})
       });
     if (!owner) return await boxRead([]);
     const mineFilter: DataApiFilter = {
@@ -191,9 +199,15 @@ export async function listTaggedContacts<Row extends { updated_at: string }>(
       ? query.or(`owner_employee_id.eq.${owner.employeeId},owner_employee_id.is.null`)
       : query.eq("owner_employee_id", owner.employeeId);
   }
-  const { data, error } = await query
-    .order("updated_at", { ascending: false })
-    .limit(args.limit);
+  query = query.order("updated_at", { ascending: false });
+  // `.limit(n)` is the zero-offset form. A probe past the board cap has to
+  // use `.range()`, because the Data API's silent 1000-row cap would swallow a
+  // `.limit(1001)` used as "is there one more?".
+  const paged =
+    offset > 0
+      ? query.range(offset, offset + args.limit - 1)
+      : query.limit(args.limit);
+  const { data, error } = await paged;
   if (error) throw new Error(`${label}: tagged contacts: ${error.message}`);
   return (data as unknown as Row[] | null) ?? [];
 }
