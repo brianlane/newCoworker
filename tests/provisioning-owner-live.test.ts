@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import {
-  isProvisioningStatusLive,
-  onboardSuccessLiveFromPoll
-} from "@/lib/provisioning/owner-live";
+import { onboardSuccessLiveFromPoll } from "@/lib/provisioning/owner-live";
 import { shouldShowProvisioningProgress } from "@/lib/provisioning/progress";
+
+function ownerLive(
+  provisioning: Parameters<typeof onboardSuccessLiveFromPoll>[0]["provisioning"]
+): boolean {
+  return onboardSuccessLiveFromPoll({ provisioning });
+}
 
 /**
  * Same mapping GET /api/provisioning/status uses for `complete` / `failed`.
@@ -20,30 +23,30 @@ function provisioningStatusPayload(
   };
 }
 
-describe("isProvisioningStatusLive", () => {
+describe("onboardSuccessLiveFromPoll (provisioning payload)", () => {
   it("is false when provisioning is not complete (dashboard still shows the bar)", () => {
-    expect(isProvisioningStatusLive({ complete: false, failed: false })).toBe(false);
+    expect(ownerLive({ complete: false, failed: false })).toBe(false);
   });
 
   it("is true when provisioning is complete and not failed (dashboard hides the bar)", () => {
-    expect(isProvisioningStatusLive({ complete: true, failed: false })).toBe(true);
+    expect(ownerLive({ complete: true, failed: false })).toBe(true);
   });
 
   it("treats omitted failed as not-failed when complete is true", () => {
-    expect(isProvisioningStatusLive({ complete: true })).toBe(true);
+    expect(ownerLive({ complete: true })).toBe(true);
   });
 
   it("is false when complete is true but failed is true (deploy error, online for recovery)", () => {
-    expect(isProvisioningStatusLive({ complete: true, failed: true })).toBe(false);
+    expect(ownerLive({ complete: true, failed: true })).toBe(false);
   });
 
   it("is false when the payload is missing", () => {
-    expect(isProvisioningStatusLive(null)).toBe(false);
-    expect(isProvisioningStatusLive(undefined)).toBe(false);
+    expect(ownerLive(null)).toBe(false);
+    expect(ownerLive(undefined)).toBe(false);
   });
 
   it("is false when complete is omitted", () => {
-    expect(isProvisioningStatusLive({ failed: false })).toBe(false);
+    expect(ownerLive({ failed: false })).toBe(false);
   });
 });
 
@@ -111,7 +114,7 @@ describe("owner live copy aligns with shouldShowProvisioningProgress", () => {
       logStatus: "thinking" as const
     };
     expect(shouldShowProvisioningProgress("online", latest)).toBe(true);
-    expect(isProvisioningStatusLive(provisioningStatusPayload("online", latest))).toBe(false);
+    expect(ownerLive(provisioningStatusPayload("online", latest))).toBe(false);
   });
 
   it("turns on when online at 100% (dashboard hides the bar)", () => {
@@ -122,7 +125,7 @@ describe("owner live copy aligns with shouldShowProvisioningProgress", () => {
       logStatus: "success" as const
     };
     expect(shouldShowProvisioningProgress("online", latest)).toBe(false);
-    expect(isProvisioningStatusLive(provisioningStatusPayload("online", latest))).toBe(true);
+    expect(ownerLive(provisioningStatusPayload("online", latest))).toBe(true);
   });
 
   it("turns on when high_load at 100% (same hide-bar gate as dashboard)", () => {
@@ -133,7 +136,7 @@ describe("owner live copy aligns with shouldShowProvisioningProgress", () => {
       logStatus: "success" as const
     };
     expect(shouldShowProvisioningProgress("high_load", latest)).toBe(false);
-    expect(isProvisioningStatusLive(provisioningStatusPayload("high_load", latest))).toBe(true);
+    expect(ownerLive(provisioningStatusPayload("high_load", latest))).toBe(true);
   });
 
   it("stays off on a terminal deploy error even though the dashboard hides the in-progress bar", () => {
@@ -144,11 +147,11 @@ describe("owner live copy aligns with shouldShowProvisioningProgress", () => {
       logStatus: "error" as const
     };
     expect(shouldShowProvisioningProgress("online", latest)).toBe(false);
-    expect(isProvisioningStatusLive(provisioningStatusPayload("online", latest))).toBe(false);
+    expect(ownerLive(provisioningStatusPayload("online", latest))).toBe(false);
   });
 
   it("turns on when online with no provisioning rows (dashboard treats that as already ready)", () => {
     expect(shouldShowProvisioningProgress("online", null)).toBe(false);
-    expect(isProvisioningStatusLive(provisioningStatusPayload("online", null))).toBe(true);
+    expect(ownerLive(provisioningStatusPayload("online", null))).toBe(true);
   });
 });

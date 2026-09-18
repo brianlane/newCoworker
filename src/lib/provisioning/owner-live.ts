@@ -24,9 +24,10 @@ export type ProvisioningStatusLivePayload = {
 
 /**
  * True when `/api/provisioning/status` says the owner UI is dashboard-ready
- * and not in the terminal failure state.
+ * and not in the terminal failure state. Unexported: knip --production
+ * treats a test-only export as dead code wearing coverage.
  */
-export function isProvisioningStatusLive(
+function isProvisioningStatusLive(
   provisioning: ProvisioningStatusLivePayload | null | undefined
 ): boolean {
   return provisioning?.complete === true && provisioning?.failed !== true;
