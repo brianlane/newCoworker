@@ -68,7 +68,7 @@ import {
   markConnectionNeedsReauth,
   stampConnectionHealthy
 } from "@/lib/connections/reauth";
-import { isPermanentConnectionAuthError } from "@/lib/connections/reauth-copy";
+import { isPermanentConnectionAuthError, connectionPausedUntilCopy } from "@/lib/connections/reauth-copy";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -1224,7 +1224,7 @@ export async function pollCalendarTriggers(
                 source: "aiflow",
                 level: "warn",
                 event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
-                message: "Paused until Vagaro is reconnected.",
+                message: connectionPausedUntilCopy("Vagaro"),
                 payload: { connection_id: conn.connectionId, provider: "vagaro" }
               });
               continue;
@@ -1301,7 +1301,7 @@ export async function pollCalendarTriggers(
                 source: "aiflow",
                 level: "warn",
                 event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
-                message: "Paused until Acuity is reconnected.",
+                message: connectionPausedUntilCopy("Acuity"),
                 payload: { connection_id: conn.connectionId, provider: "acuity" }
               });
               continue;

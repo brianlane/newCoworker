@@ -10,14 +10,14 @@
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
+import { connectionPausedWorkKey, type ConnectionReauthProviderLabel } from "@/lib/connections/reauth-copy";
 
 type ConnectionReauthBannerItem = {
   id: string;
-  provider: string;
+  provider: ConnectionReauthProviderLabel;
   accountLabel: string;
   lastHealthyLabel: string | null;
   reconnectPath: string;
-  pausedWork: string;
 };
 
 type Props = {
@@ -31,17 +31,18 @@ export function ConnectionReauthBanner({ banners }: Props) {
   return (
     <div className="mb-6 space-y-3">
       {banners.map((banner) => {
+        const pausedWork = t(`pausedWork.${connectionPausedWorkKey(banner.provider)}`);
         const body = banner.lastHealthyLabel
           ? t("bodyWithLastCheck", {
               account: banner.accountLabel,
               provider: banner.provider,
-              pausedWork: banner.pausedWork,
+              pausedWork,
               when: banner.lastHealthyLabel
             })
           : t("bodyNoLastCheck", {
               account: banner.accountLabel,
               provider: banner.provider,
-              pausedWork: banner.pausedWork
+              pausedWork
             });
         return (
           <div

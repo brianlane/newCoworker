@@ -133,13 +133,11 @@ async function sendReauthEmail(
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
   const labels = labelsForReauthRow(table, row);
   const lastHealthyLabel = formatConnectionLastHealthy(row.last_healthy_at);
-  const pausedWork = connectionPausedWork(labels.provider);
   const copy = buildConnectionReauthEmail({
     provider: labels.provider,
     accountLabel: labels.accountLabel,
     connectionId: row.id,
     slug: labels.slug,
-    pausedWork,
     lastHealthyLabel
   });
   try {
@@ -162,7 +160,6 @@ async function sendReauthEmail(
           accountLabel: labels.accountLabel,
           connectionId: row.id,
           slug: labels.slug,
-          pausedWork,
           lastHealthyLabel,
           locale
         });

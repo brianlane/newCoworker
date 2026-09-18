@@ -150,6 +150,7 @@ export async function getActiveCaldavConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveCaldavConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;

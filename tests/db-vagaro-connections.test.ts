@@ -152,6 +152,7 @@ describe("getActiveVagaroConnectionId", () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
     expect(await getActiveVagaroConnectionId(BIZ, makeDb(c))).toBe("vg-1");
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
 
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: null });

@@ -161,6 +161,7 @@ describe("getActiveCaldavConnectionId", () => {
     c.maybeSingle.mockResolvedValue({ data: { id: "cd-1" }, error: null });
     expect(await getActiveCaldavConnectionId(BIZ, makeDb(c))).toBe("cd-1");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
 
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: null });

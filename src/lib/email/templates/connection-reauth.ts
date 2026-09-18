@@ -16,6 +16,7 @@ import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 import {
+  connectionPausedWorkKey,
   connectionReconnectPath,
   type ConnectionReauthProviderLabel
 } from "@/lib/connections/reauth-copy";
@@ -25,7 +26,6 @@ export type ConnectionReauthEmailInput = {
   accountLabel: string;
   connectionId: string;
   slug: string;
-  pausedWork: string;
   lastHealthyLabel?: string | null;
   locale?: AppLocale;
 };
@@ -45,10 +45,11 @@ export function buildConnectionReauthEmail(
 ): ConnectionReauthEmailCopy {
   const locale = input.locale ?? defaultLocale;
   const copy = emailMessagesForLocale(locale).connectionReauth;
+  const pausedWork = copy.pausedWork[connectionPausedWorkKey(input.provider)];
   const vars = {
     account: input.accountLabel,
     provider: input.provider,
-    pausedWork: input.pausedWork
+    pausedWork
   };
   const lastHealthy = input.lastHealthyLabel?.trim() || null;
 

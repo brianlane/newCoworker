@@ -2,9 +2,12 @@
  * Shared reconnect copy: provider + account, never "token rejected".
  */
 import { describe, expect, it } from "vitest";
+import es from "../messages/es.json";
+import en from "../messages/en.json";
 import {
   connectionPausedUntilCopy,
   connectionPausedWork,
+  connectionPausedWorkKey,
   connectionReauthBannerBody,
   connectionReconnectPath,
   formatConnectionLastHealthy,
@@ -182,5 +185,44 @@ describe("connectionPausedWork", () => {
     expect(connectionPausedWork("Facebook")).toContain("Lead forms");
     expect(connectionPausedWork("Slack")).toContain("Slack alerts");
     expect(connectionPausedWork("WhatsApp")).toContain("WhatsApp messages");
+  });
+
+  it("maps every provider onto a catalog key used by both locales", () => {
+    const keys = [
+      "Google",
+      "Microsoft 365",
+      "Workspace",
+      "Zoom",
+      "Acuity",
+      "CalDAV",
+      "Vagaro",
+      "Facebook",
+      "Slack",
+      "WhatsApp"
+    ] as const;
+    expect(keys.map(connectionPausedWorkKey)).toEqual([
+      "google",
+      "microsoft",
+      "workspace",
+      "zoom",
+      "acuity",
+      "caldav",
+      "vagaro",
+      "facebook",
+      "slack",
+      "whatsapp"
+    ]);
+    const enWork = en.dashboard.connectionReauth.pausedWork;
+    const esWork = es.dashboard.connectionReauth.pausedWork;
+    const emailEn = en.emails.connectionReauth.pausedWork;
+    const emailEs = es.emails.connectionReauth.pausedWork;
+    for (const provider of keys) {
+      const key = connectionPausedWorkKey(provider);
+      expect(enWork[key]).toBe(connectionPausedWork(provider));
+      expect(emailEn[key]).toBe(connectionPausedWork(provider));
+      expect(esWork[key].length).toBeGreaterThan(8);
+      expect(emailEs[key]).toBe(esWork[key]);
+      expect(esWork[key]).not.toBe(enWork[key]);
+    }
   });
 });

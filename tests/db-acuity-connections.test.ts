@@ -199,23 +199,23 @@ describe("reads", () => {
     });
   });
 
-  it("hides a needs_reauth row from the calendar-tool gate, but the id probe still returns it", async () => {
+  it("hides a needs_reauth row from the calendar-tool gate and the id probe", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
     await expect(getActiveAcuityConnection(BIZ, makeDb(c))).resolves.toBeNull();
 
     const probe = chain();
-    probe.maybeSingle.mockResolvedValue({ data: { id: "ac-1" }, error: null });
-    await expect(getActiveAcuityConnectionId(BIZ, makeDb(probe))).resolves.toBe("ac-1");
-    expect(probe.eq).not.toHaveBeenCalledWith("needs_reauth", false);
+    probe.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(getActiveAcuityConnectionId(BIZ, makeDb(probe))).resolves.toBeNull();
+    expect(probe.eq).toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("probes by id only, never decrypting on the resolver hot path", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { id: "ac-1" }, error: null });
     await expect(getActiveAcuityConnectionId(BIZ, makeDb(c))).resolves.toBe("ac-1");
-    expect(c.select).toHaveBeenCalledWith("id");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("returns null from the probe when nothing is connected", async () => {

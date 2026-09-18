@@ -181,6 +181,7 @@ export async function getActiveAcuityConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveAcuityConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;

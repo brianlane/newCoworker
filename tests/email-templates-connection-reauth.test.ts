@@ -3,7 +3,6 @@
  */
 import { describe, expect, it } from "vitest";
 import { buildConnectionReauthEmail } from "@/lib/email/templates/connection-reauth";
-import { connectionPausedWork } from "@/lib/connections/reauth-copy";
 import es from "../messages/es.json";
 
 const CONN = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -15,7 +14,6 @@ describe("buildConnectionReauthEmail", () => {
       accountLabel: "Acme Zoom",
       connectionId: CONN,
       slug: "zoom",
-      pausedWork: connectionPausedWork("Zoom"),
       lastHealthyLabel: "Sep 16, 2026, 5:01 AM"
     });
     expect(copy.subject).toBe("Zoom needs to be reconnected");
@@ -40,7 +38,6 @@ describe("buildConnectionReauthEmail", () => {
       accountLabel: "james@kyp.test",
       connectionId: CONN,
       slug: "google",
-      pausedWork: connectionPausedWork("Google"),
       lastHealthyLabel: null
     });
     expect(copy.subject).toBe("Google needs to be reconnected");
@@ -56,7 +53,6 @@ describe("buildConnectionReauthEmail", () => {
       accountLabel: "Acme Zoom",
       connectionId: CONN,
       slug: "zoom",
-      pausedWork: connectionPausedWork("Zoom"),
       lastHealthyLabel: "16 sept 2026",
       locale: "es"
     });
@@ -65,5 +61,7 @@ describe("buildConnectionReauthEmail", () => {
       es.emails.connectionReauth.subject.replace("{provider}", "Zoom")
     );
     expect(copy.body).toContain("Acme Zoom");
+    expect(copy.body).toContain(es.emails.connectionReauth.pausedWork.zoom);
+    expect(copy.body).not.toContain("Meetings and transcripts");
   });
 });

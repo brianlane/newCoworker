@@ -68,6 +68,44 @@ function workspaceIntegrationsSlug(providerConfigKey: string): string {
   return "workspace";
 }
 
+/** Catalog key under dashboard.connectionReauth.pausedWork / emails.connectionReauth.pausedWork. */
+export function connectionPausedWorkKey(
+  provider: ConnectionReauthProviderLabel
+):
+  | "google"
+  | "microsoft"
+  | "workspace"
+  | "zoom"
+  | "acuity"
+  | "caldav"
+  | "vagaro"
+  | "facebook"
+  | "slack"
+  | "whatsapp" {
+  switch (provider) {
+    case "Google":
+      return "google";
+    case "Microsoft 365":
+      return "microsoft";
+    case "Workspace":
+      return "workspace";
+    case "Zoom":
+      return "zoom";
+    case "Acuity":
+      return "acuity";
+    case "CalDAV":
+      return "caldav";
+    case "Vagaro":
+      return "vagaro";
+    case "Facebook":
+      return "facebook";
+    case "Slack":
+      return "slack";
+    case "WhatsApp":
+      return "whatsapp";
+  }
+}
+
 export function connectionPausedWork(provider: ConnectionReauthProviderLabel): string {
   switch (provider) {
     case "Google":

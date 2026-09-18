@@ -2324,7 +2324,19 @@
       "reconnect": "Reconnect",
       "bodyWithLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}, last successful check: {when}.",
       "bodyNoLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}.",
-      "pausedUntilReconnect": "Paused until {provider} is reconnected."
+      "pausedUntilReconnect": "Paused until {provider} is reconnected.",
+      "pausedWork": {
+        "google": "Mail and calendar for that account are paused",
+        "microsoft": "Mail and calendar for that account are paused",
+        "workspace": "Mail and calendar for that account are paused",
+        "zoom": "Meetings and transcripts for that account are paused",
+        "acuity": "Calendar follow-ups and booking checks for that account are paused",
+        "caldav": "Calendar booking checks for that account are paused",
+        "vagaro": "Calendar follow-ups and booking checks for that account are paused",
+        "facebook": "Lead forms, Messenger, Instagram, and scheduled posts for that account are paused",
+        "slack": "Slack alerts for that workspace are paused",
+        "whatsapp": "WhatsApp messages for that account are paused"
+      }
     },
     "integrationsSlack": {
       "title": "Slack",
@@ -3612,6 +3624,18 @@
       "intro": "{account}'s {provider} connection stopped working.",
       "lastCheck": "Last successful check: {when}.",
       "paused": "{pausedWork} until it is reconnected. Missed hours are not backfilled.",
+      "pausedWork": {
+        "google": "Mail and calendar for that account are paused",
+        "microsoft": "Mail and calendar for that account are paused",
+        "workspace": "Mail and calendar for that account are paused",
+        "zoom": "Meetings and transcripts for that account are paused",
+        "acuity": "Calendar follow-ups and booking checks for that account are paused",
+        "caldav": "Calendar booking checks for that account are paused",
+        "vagaro": "Calendar follow-ups and booking checks for that account are paused",
+        "facebook": "Lead forms, Messenger, Instagram, and scheduled posts for that account are paused",
+        "slack": "Slack alerts for that workspace are paused",
+        "whatsapp": "WhatsApp messages for that account are paused"
+      },
       "action": "Reconnect that {provider} account from your dashboard. The new grant is saved on the same connection, so you will not create a duplicate.",
       "cta": "Reconnect {provider}",
       "summary": "{provider} needs to be reconnected: {account}",
