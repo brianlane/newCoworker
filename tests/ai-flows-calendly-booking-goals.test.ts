@@ -33,7 +33,6 @@ import {
   BOOKING_GOAL_INVITEE_FETCH_CAP,
   BOOKING_GOAL_RUN_STATUSES,
   BOOKING_GOAL_YOUNG_RUN_MINUTES,
-  BOOKING_SWEEP_PAUSED_REAUTH_EVENT,
   bookingCreatedRecently,
   bookingStartsInFuture,
   definitionWatchesBookingGoal,
@@ -468,7 +467,7 @@ describe("sweepCalendlyBookingGoals", () => {
     expect(d.request).not.toHaveBeenCalled();
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: BOOKING_SWEEP_PAUSED_REAUTH_EVENT,
+        event: "ai_flow_booking_goal_sweep_paused_reauth",
         message: "Paused until Calendly is reconnected."
       })
     );
@@ -484,7 +483,7 @@ describe("sweepCalendlyBookingGoals", () => {
     expect(result.swept).toBe(1);
     expect(d.request).not.toHaveBeenCalled();
     expect(recordSystemLog).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: BOOKING_SWEEP_PAUSED_REAUTH_EVENT })
+      expect.objectContaining({ event: "ai_flow_booking_goal_sweep_paused_reauth" })
     );
   });
 

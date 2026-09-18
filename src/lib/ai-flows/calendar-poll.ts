@@ -59,8 +59,8 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { isCalendlyTokenRejected } from "@/lib/calendly/reauth-copy";
 import {
-  isCalendlyTokenRejected,
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
@@ -125,7 +125,7 @@ export const CALENDAR_POLL_OWNER_ALERT_EVENT = "ai_flow_calendar_owner_alerted";
  * Distinct from `ai_flow_calendar_poll_failed`: nothing is broken in a
  * retryable way, the token is dead, follow-ups stay paused until Reconnect.
  */
-export const CALENDAR_POLL_PAUSED_REAUTH_EVENT = "ai_flow_calendar_poll_paused_reauth";
+const CALENDAR_POLL_PAUSED_REAUTH_EVENT = "ai_flow_calendar_poll_paused_reauth";
 
 /** Failure details that mean "the calendar connection itself is broken". */
 const CONNECTION_FAILURE_DETAILS = [

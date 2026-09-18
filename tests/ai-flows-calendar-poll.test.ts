@@ -24,8 +24,6 @@ vi.mock("@/lib/ai-flows/vagaro-poll", () => ({
   fetchVagaroCandidateEvents: vi.fn()
 }));
 vi.mock("@/lib/calendly/reauth", () => ({
-  isCalendlyTokenRejected: (err: unknown) =>
-    err instanceof Error && err.message === "calendly_token_rejected",
   markCalendlyConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true })),
   stampCalendlyConnectionHealthy: vi.fn(async () => undefined)
 }));
@@ -38,7 +36,6 @@ import {
   CALENDAR_END_LOOKBACK_MINUTES,
   CALENDAR_POLL_MAX_EVENTS,
   CALENDAR_POLL_OWNER_ALERT_EVENT,
-  CALENDAR_POLL_PAUSED_REAUTH_EVENT,
   CALENDAR_POLL_TICK_EVENT,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
@@ -1005,7 +1002,7 @@ describe("pollCalendarTriggers", () => {
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+        event: "ai_flow_calendar_poll_paused_reauth",
         message: "Paused until Calendly is reconnected."
       })
     );
@@ -1023,7 +1020,7 @@ describe("pollCalendarTriggers", () => {
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({ event: CALENDAR_POLL_PAUSED_REAUTH_EVENT })
+      expect.objectContaining({ event: "ai_flow_calendar_poll_paused_reauth" })
     );
     expect(recordSystemLog).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })

@@ -1,14 +1,13 @@
 /**
- * Calendly reconnect copy: account labels, paused-trigger wording, banner
- * sentences, last-check formatting. Pure; no DB.
+ * Calendly reconnect copy: account labels, paused-trigger wording, last-check
+ * formatting. Pure; no DB.
  */
 import { describe, expect, it } from "vitest";
 import {
-  CALENDLY_CALENDAR_PAUSED_COPY,
   calendlyAccountLabel,
   calendlyCalendarPausedCopy,
-  calendlyReauthBannerBody,
   calendlyReconnectPath,
+  calendlyUiPauseCopy,
   flowHasCalendarTrigger,
   formatCalendlyLastHealthy,
   isCalendlyTokenRejected
@@ -35,32 +34,25 @@ describe("calendlyAccountLabel", () => {
 });
 
 describe("formatCalendlyLastHealthy", () => {
+  const iso = "2026-09-16T12:01:00.000Z";
+
   it("formats a usable ISO and returns null for missing or garbage", () => {
-    expect(formatCalendlyLastHealthy("2026-09-16T12:01:00.000Z", "en-US")).toMatch(/Sep/);
-    expect(formatCalendlyLastHealthy("2026-09-16T12:01:00.000Z", "en-US")).toMatch(/2026/);
+    expect(formatCalendlyLastHealthy(iso, "en-US")).toMatch(/Sep/);
+    expect(formatCalendlyLastHealthy(iso, "en-US")).toMatch(/2026/);
     expect(formatCalendlyLastHealthy(null)).toBeNull();
     expect(formatCalendlyLastHealthy("not-a-date")).toBeNull();
   });
-});
 
-describe("calendlyReauthBannerBody", () => {
-  it("names the account, says follow-ups are paused, and includes the last check", () => {
-    const withWhen = calendlyReauthBannerBody({
-      accountLabel: "James Lee",
-      lastHealthyLabel: "Sep 16, 2026, 5:01 AM"
-    });
-    expect(withWhen).toContain("James Lee's Calendly needs a reconnect");
-    expect(withWhen).toContain("Calendar follow-ups and booking checks for that account are paused");
-    expect(withWhen).toContain("last successful check: Sep 16, 2026, 5:01 AM");
-    expect(withWhen.toLowerCase()).not.toContain("token");
-    expect(withWhen.toLowerCase()).not.toContain("rejected");
+  it("uses the business timezone when given one (KYP is America/Phoenix)", () => {
+    expect(formatCalendlyLastHealthy(iso, "en-US", "America/Phoenix")).toBe(
+      "Sep 16, 2026, 5:01 AM"
+    );
+    expect(formatCalendlyLastHealthy(iso, "en-US", "UTC")).toBe("Sep 16, 2026, 12:01 PM");
+  });
 
-    const noWhen = calendlyReauthBannerBody({
-      accountLabel: "James Lee",
-      lastHealthyLabel: null
-    });
-    expect(noWhen).toContain("are paused.");
-    expect(noWhen).not.toContain("last successful check");
+  it("falls back to UTC on an invalid IANA zone; blank tz uses the runtime default", () => {
+    expect(formatCalendlyLastHealthy(iso, "en-US", "Not/AZone")).toBe("Sep 16, 2026, 12:01 PM");
+    expect(formatCalendlyLastHealthy(iso, "en-US", "  ")).toMatch(/Sep/);
   });
 });
 
@@ -68,13 +60,37 @@ describe("calendlyCalendarPausedCopy", () => {
   it("pauses the trigger only when every Calendly account needs reconnect", () => {
     expect(
       calendlyCalendarPausedCopy({ hasHealthyCalendly: false, hasCalendlyNeedingReauth: true })
-    ).toBe(CALENDLY_CALENDAR_PAUSED_COPY);
+    ).toBe("Paused until Calendly is reconnected.");
     expect(
       calendlyCalendarPausedCopy({ hasHealthyCalendly: true, hasCalendlyNeedingReauth: true })
     ).toBeNull();
     expect(
       calendlyCalendarPausedCopy({ hasHealthyCalendly: false, hasCalendlyNeedingReauth: false })
     ).toBeNull();
+  });
+});
+
+describe("calendlyUiPauseCopy", () => {
+  const paused = "Paused until Calendly is reconnected.";
+
+  it("keeps the Calendly pause when follow-ups use Calendly or nothing is connected", () => {
+    expect(
+      calendlyUiPauseCopy({ pausedCopy: paused, resolvedCalendarProvider: "calendly" })
+    ).toBe(paused);
+    expect(calendlyUiPauseCopy({ pausedCopy: paused, resolvedCalendarProvider: null })).toBe(
+      paused
+    );
+    expect(calendlyUiPauseCopy({ pausedCopy: paused })).toBe(paused);
+  });
+
+  it("hides the Calendly pause when another calendar provider is the book", () => {
+    expect(
+      calendlyUiPauseCopy({ pausedCopy: paused, resolvedCalendarProvider: "google" })
+    ).toBeNull();
+    expect(
+      calendlyUiPauseCopy({ pausedCopy: paused, resolvedCalendarProvider: "vagaro" })
+    ).toBeNull();
+    expect(calendlyUiPauseCopy({ pausedCopy: null, resolvedCalendarProvider: "calendly" })).toBeNull();
   });
 });
 

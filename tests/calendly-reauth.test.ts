@@ -15,11 +15,18 @@ vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/db/businesses", () => ({
+  getBusinessTimezone: vi.fn(async () => "America/Phoenix")
+}));
+vi.mock("@/lib/db/calendly-connections", () => ({
+  calendlyCalendarPauseState: vi.fn()
+}));
+vi.mock("@/lib/voice-tools/connections", () => ({
+  resolveCalendarConnection: vi.fn()
+}));
 
 import {
-  CALENDLY_REAUTH_KIND,
-  CALENDLY_REAUTH_MAX_EMAILS,
-  CALENDLY_REAUTH_REMINDER_MS,
+  calendlyDashboardPauseCopy,
   listCalendlyReauthBannerState,
   markCalendlyConnectionNeedsReauth,
   processCalendlyReauthReminders,
@@ -28,11 +35,17 @@ import {
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
+import { getBusinessTimezone } from "@/lib/db/businesses";
+import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CONN_A = "aaaaaaaa-1111-4111-8111-111111111111";
 const CONN_B = "bbbbbbbb-1111-4111-8111-111111111111";
 const NOW = Date.parse("2026-09-17T02:11:00.000Z");
+const CALENDLY_REAUTH_KIND = "calendly_needs_reauth";
+const CALENDLY_REAUTH_MAX_EMAILS = 2;
+const CALENDLY_REAUTH_REMINDER_MS = 24 * 60 * 60 * 1000;
 
 type Chain = {
   select: ReturnType<typeof vi.fn>;
@@ -120,7 +133,10 @@ describe("markCalendlyConnectionNeedsReauth", () => {
     expect(dispatched.ctaPath).toContain(CONN_A);
     expect(dispatched.summary).toContain("James Lee");
     expect(dispatched.emailTemplate?.("en").subject).toBe("Calendly needs a reconnect");
+    expect(dispatched.emailTemplate?.("en").body).toContain("5:01 AM");
     expect(dispatched.emailTemplate?.("en").body.toLowerCase()).not.toContain("token rejected");
+    expect(dispatched.emailTemplate?.("es").body).toContain("5:01");
+    expect(getBusinessTimezone).toHaveBeenCalledWith(BIZ);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "calendly_connection_needs_reauth",
@@ -429,7 +445,7 @@ describe("listCalendlyReauthBannerState", () => {
     expect(banners).toHaveLength(1);
     expect(banners[0].accountLabel).toBe("James Lee");
     expect(banners[0].reconnectPath).toContain(CONN_A);
-    expect(banners[0].bannerBody).toContain("James Lee");
+    expect(banners[0].lastHealthyAt).toBe("2026-09-16T12:01:00.000Z");
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
     expect(c.eq).toHaveBeenCalledWith("needs_reauth", true);
   });
@@ -447,5 +463,86 @@ describe("listCalendlyReauthBannerState", () => {
 
     defaultClientSpy.mockReturnValue(makeDb(() => empty));
     expect(await listCalendlyReauthBannerState(BIZ)).toEqual([]);
+  });
+});
+
+describe("reauth email timezone", () => {
+  async function flipAndDispatch(over: {
+    getTimezone?: (businessId: string) => Promise<string | null>;
+  }) {
+    const read = chain();
+    read.maybeSingle.mockResolvedValue({ data: row(), error: null });
+    const write = chain();
+    write.maybeSingle
+      .mockResolvedValueOnce({ data: row({ needs_reauth: true }), error: null })
+      .mockResolvedValueOnce({ data: { id: CONN_A }, error: null });
+    let n = 0;
+    const db = { from: vi.fn(() => ((n += 1) === 1 ? read : write)) } as never;
+    await markCalendlyConnectionNeedsReauth(CONN_A, {
+      client: db,
+      now: () => NOW,
+      getTimezone: over.getTimezone
+    });
+    return vi.mocked(dispatchUrgentNotification).mock.calls[0][0];
+  }
+
+  it("falls back to UTC when the business timezone is missing", async () => {
+    const dispatched = await flipAndDispatch({ getTimezone: async () => null });
+    expect(dispatched.emailTemplate?.("en").body).toContain("12:01 PM");
+  });
+
+  it("falls back to UTC when the timezone lookup throws or is blank", async () => {
+    const thrown = await flipAndDispatch({
+      getTimezone: async () => {
+        throw new Error("timezone down");
+      }
+    });
+    expect(thrown.emailTemplate?.("en").body).toContain("12:01 PM");
+
+    vi.mocked(dispatchUrgentNotification).mockClear();
+    const blank = await flipAndDispatch({ getTimezone: async () => "  " });
+    expect(blank.emailTemplate?.("en").body).toContain("12:01 PM");
+  });
+});
+
+describe("calendlyDashboardPauseCopy", () => {
+  const paused = "Paused until Calendly is reconnected.";
+
+  it("shows the pause only when Calendly is the resolved calendar (or none)", async () => {
+    expect(
+      await calendlyDashboardPauseCopy(BIZ, {
+        pauseState: async () => ({ pausedCopy: paused, needingReauth: [] }),
+        resolveCalendar: async () =>
+          ({ provider: "calendly", providerConfigKey: "calendly-direct", connectionId: CONN_A })
+      })
+    ).toBe(paused);
+    expect(
+      await calendlyDashboardPauseCopy(BIZ, {
+        pauseState: async () => ({ pausedCopy: paused, needingReauth: [] }),
+        resolveCalendar: async () => null
+      })
+    ).toBe(paused);
+    expect(
+      await calendlyDashboardPauseCopy(BIZ, {
+        pauseState: async () => ({ pausedCopy: paused, needingReauth: [] }),
+        resolveCalendar: async () =>
+          ({ provider: "google", providerConfigKey: "google-calendar", connectionId: "g1" })
+      })
+    ).toBeNull();
+  });
+
+  it("uses the default pause-state and calendar resolvers", async () => {
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: paused,
+      needingReauth: []
+    } as never);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "v1"
+    } as never);
+    expect(await calendlyDashboardPauseCopy(BIZ)).toBeNull();
+    expect(calendlyCalendarPauseState).toHaveBeenCalledWith(BIZ);
+    expect(resolveCalendarConnection).toHaveBeenCalledWith(BIZ);
   });
 });

@@ -174,7 +174,7 @@ export async function loadIntegrationsContext(
 }
 
 /** Per-tile display status for the hub grid, computed from loaded state. */
-export function calendlyTileStatus(
+function calendlyTileStatus(
   connections: IntegrationsContext["calendlyConnections"]
 ): IntegrationStatus {
   const disconnected: IntegrationStatus = { state: "disconnected", label: "Not connected" };

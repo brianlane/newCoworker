@@ -4,16 +4,20 @@
  * Persistent dashboard banner while a Calendly PAT needs reconnect.
  * Not a modal: it stays until the connection is healthy again. Reconnect
  * deep-links into the existing paste-token form on THAT connection row.
+ *
+ * Last-check is formatted here (browser local timezone) so it agrees with
+ * the connections card. The server passes the ISO stamp, not a UTC label.
  */
 
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
+import { formatCalendlyLastHealthy } from "@/lib/calendly/reauth-copy";
 
-export type CalendlyReauthBannerItem = {
+type CalendlyReauthBannerItem = {
   id: string;
   accountLabel: string;
-  lastHealthyLabel: string | null;
+  lastHealthyAt: string | null;
   reconnectPath: string;
 };
 
@@ -28,10 +32,11 @@ export function CalendlyReauthBanner({ banners }: Props) {
   return (
     <div className="mb-6 space-y-3">
       {banners.map((banner) => {
-        const body = banner.lastHealthyLabel
+        const lastHealthyLabel = formatCalendlyLastHealthy(banner.lastHealthyAt);
+        const body = lastHealthyLabel
           ? t("bodyWithLastCheck", {
               account: banner.accountLabel,
-              when: banner.lastHealthyLabel
+              when: lastHealthyLabel
             })
           : t("bodyNoLastCheck", { account: banner.accountLabel });
         return (

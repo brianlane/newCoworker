@@ -75,8 +75,8 @@ import {
   goalStepMatches
 } from "../../../supabase/functions/_shared/ai_flows/goal_events";
 import type { FlowStep } from "../../../supabase/functions/_shared/ai_flows/types";
+import { isCalendlyTokenRejected } from "@/lib/calendly/reauth-copy";
 import {
-  isCalendlyTokenRejected,
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
@@ -90,7 +90,7 @@ export type { BookingGoalFireDeps, BookingGoalFireResult };
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Marker event when the sweep is paused because every Calendly PAT needs reconnect. */
-export const BOOKING_SWEEP_PAUSED_REAUTH_EVENT = "ai_flow_booking_goal_sweep_paused_reauth";
+const BOOKING_SWEEP_PAUSED_REAUTH_EVENT = "ai_flow_booking_goal_sweep_paused_reauth";
 
 /** Page size for the goal-flow listing, paged so no flow is silently skipped. */
 export const BOOKING_GOAL_FLOW_PAGE = 100;

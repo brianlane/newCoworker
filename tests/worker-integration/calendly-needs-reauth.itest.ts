@@ -30,7 +30,6 @@ import {
   saveCalendlyConnection
 } from "@/lib/db/calendly-connections";
 import {
-  CALENDLY_CALENDAR_PAUSED_COPY,
   listCalendlyReauthBannerState,
   markCalendlyConnectionNeedsReauth,
   processCalendlyReauthReminders,
@@ -138,7 +137,7 @@ describe("calendly_connections needs_reauth (real schema)", () => {
       dispatch: dispatchOk() as never
     });
     const pauseAllBroken = await calendlyCalendarPauseState(businessId, db as never);
-    expect(pauseAllBroken.pausedCopy).toBe(CALENDLY_CALENDAR_PAUSED_COPY);
+    expect(pauseAllBroken.pausedCopy).toBe("Paused until Calendly is reconnected.");
   });
 
   it("reconnect writes the new token onto the SAME row and clears banner/email state", async () => {

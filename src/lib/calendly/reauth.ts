@@ -11,35 +11,27 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { getBusinessTimezone } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 import { buildCalendlyReauthEmail } from "@/lib/email/templates/calendly-reauth";
+import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   calendlyAccountLabel,
-  calendlyReauthBannerBody,
   calendlyReconnectPath,
+  calendlyUiPauseCopy,
   formatCalendlyLastHealthy
-} from "@/lib/calendly/reauth-copy";
-
-export {
-  CALENDLY_CALENDAR_PAUSED_COPY,
-  calendlyAccountLabel,
-  calendlyCalendarPausedCopy,
-  calendlyReauthBannerBody,
-  calendlyReconnectPath,
-  flowHasCalendarTrigger,
-  formatCalendlyLastHealthy,
-  isCalendlyTokenRejected
 } from "@/lib/calendly/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** notifications.kind for the product email + dashboard row. */
-export const CALENDLY_REAUTH_KIND = "calendly_needs_reauth";
+const CALENDLY_REAUTH_KIND = "calendly_needs_reauth";
 
 /** Once on the flip, once more after a day, then never. */
-export const CALENDLY_REAUTH_MAX_EMAILS = 2;
+const CALENDLY_REAUTH_MAX_EMAILS = 2;
 
-export const CALENDLY_REAUTH_REMINDER_MS = 24 * 60 * 60 * 1000;
+const CALENDLY_REAUTH_REMINDER_MS = 24 * 60 * 60 * 1000;
 
 const REAUTH_EMAIL_COLUMNS =
   "id,business_id,account_name,account_email,last_healthy_at," +
@@ -60,6 +52,13 @@ export type CalendlyReauthDeps = {
   client?: SupabaseClient;
   dispatch?: typeof dispatchUrgentNotification;
   now?: () => number;
+  /** IANA timezone for the last-check stamp in the product email. */
+  getTimezone?: (businessId: string) => Promise<string | null>;
+};
+
+type CalendlyDashboardPauseDeps = {
+  pauseState?: typeof calendlyCalendarPauseState;
+  resolveCalendar?: typeof resolveCalendarConnection;
 };
 
 export type MarkCalendlyNeedsReauthResult = {
@@ -73,13 +72,35 @@ function emailCount(row: Pick<ReauthEmailRow, "reauth_email_count">): number {
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+function stampLocale(locale: string): string {
+  return locale === "es" ? "es" : "en-US";
+}
+
+async function businessTimeZone(
+  businessId: string,
+  deps: CalendlyReauthDeps
+): Promise<string> {
+  try {
+    const tz = await (deps.getTimezone ?? getBusinessTimezone)(businessId);
+    if (typeof tz === "string" && tz.trim().length > 0) return tz.trim();
+  } catch {
+    // A timezone lookup must never block the reconnect email.
+  }
+  return "UTC";
+}
+
 async function sendReauthEmail(
   row: ReauthEmailRow,
   deps: CalendlyReauthDeps
 ): Promise<boolean> {
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
   const accountLabel = calendlyAccountLabel(row);
-  const lastHealthyLabel = formatCalendlyLastHealthy(row.last_healthy_at);
+  const timeZone = await businessTimeZone(row.business_id, deps);
+  const lastHealthyLabel = formatCalendlyLastHealthy(
+    row.last_healthy_at,
+    "en-US",
+    timeZone
+  );
   const copy = buildCalendlyReauthEmail({
     accountLabel,
     connectionId: row.id,
@@ -102,7 +123,11 @@ async function sendReauthEmail(
         const localized = buildCalendlyReauthEmail({
           accountLabel,
           connectionId: row.id,
-          lastHealthyLabel,
+          lastHealthyLabel: formatCalendlyLastHealthy(
+            row.last_healthy_at,
+            stampLocale(locale),
+            timeZone
+          ),
           locale
         });
         return {
@@ -294,9 +319,8 @@ export async function listCalendlyReauthBannerState(
   Array<{
     id: string;
     accountLabel: string;
-    lastHealthyLabel: string | null;
+    lastHealthyAt: string | null;
     reconnectPath: string;
-    bannerBody: string;
   }>
 > {
   const db = client ?? (await createSupabaseServiceClient());
@@ -317,14 +341,33 @@ export async function listCalendlyReauthBannerState(
     last_healthy_at: string | null;
   }>).map((row) => {
     const accountLabel = calendlyAccountLabel(row);
-    const lastHealthyLabel = formatCalendlyLastHealthy(row.last_healthy_at);
     return {
       id: row.id,
       accountLabel,
-      lastHealthyLabel,
-      reconnectPath: calendlyReconnectPath(row.id),
-      bannerBody: calendlyReauthBannerBody({ accountLabel, lastHealthyLabel })
+      lastHealthyAt: row.last_healthy_at,
+      reconnectPath: calendlyReconnectPath(row.id)
     };
+  });
+}
+
+/**
+ * Owner-facing pause copy for calendar-triggered flows. Null unless every
+ * Calendly account needs reconnect AND calendar follow-ups actually use
+ * Calendly (or there is no calendar connected at all).
+ */
+export async function calendlyDashboardPauseCopy(
+  businessId: string,
+  deps: CalendlyDashboardPauseDeps = {}
+): Promise<string | null> {
+  const pauseState = deps.pauseState ?? calendlyCalendarPauseState;
+  const resolveCalendar = deps.resolveCalendar ?? resolveCalendarConnection;
+  const [pause, conn] = await Promise.all([
+    pauseState(businessId),
+    resolveCalendar(businessId)
+  ]);
+  return calendlyUiPauseCopy({
+    pausedCopy: pause.pausedCopy,
+    resolvedCalendarProvider: conn?.provider ?? null
   });
 }
 

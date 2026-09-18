@@ -357,19 +357,12 @@ export async function saveCalendlyConnection(
   };
 }
 
-/** Flagged connections for the dashboard banner and paused-trigger copy. */
-export async function listCalendlyConnectionsNeedingReauth(
-  businessId: string,
-  client?: SupabaseClient
-): Promise<PublicCalendlyConnectionRow[]> {
-  const rows = await listPublicCalendlyConnections(businessId, client);
-  return rows.filter((r) => r.needs_reauth);
-}
-
 /**
  * Whether calendar-triggered flows on this business should show
  * "Paused until Calendly is reconnected." True only when at least one
- * Calendly row needs reconnect AND no healthy Calendly remains.
+ * Calendly row needs reconnect AND no healthy Calendly remains. The
+ * dashboard still gates this on the resolved calendar provider so a
+ * Google/Vagaro book does not show a Calendly pause.
  */
 export async function calendlyCalendarPauseState(
   businessId: string,

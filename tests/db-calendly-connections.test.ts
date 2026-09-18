@@ -30,8 +30,7 @@ import {
   setCalendlyConnectionActive,
   setCalendlyConnectionUserUri,
   toPublicCalendlyConnection,
-  calendlyCalendarPauseState,
-  listCalendlyConnectionsNeedingReauth
+  calendlyCalendarPauseState
 } from "@/lib/db/calendly-connections";
 
 type Chain = {
@@ -277,7 +276,7 @@ describe("toPublicCalendlyConnection", () => {
   });
 });
 
-describe("calendlyCalendarPauseState / listCalendlyConnectionsNeedingReauth", () => {
+describe("calendlyCalendarPauseState", () => {
   it("lists flagged rows and pauses only when no healthy Calendly remains", async () => {
     const rows = [
       storedRow({ needs_reauth: true, account_name: "James Lee" }),
@@ -292,9 +291,6 @@ describe("calendlyCalendarPauseState / listCalendlyConnectionsNeedingReauth", ()
     const mixed = await calendlyCalendarPauseState(BIZ, makeDb(chain({ data: rows, error: null })));
     expect(mixed.pausedCopy).toBeNull();
     expect(mixed.needingReauth.map((r) => r.id)).toEqual([CONN_A]);
-    expect(await listCalendlyConnectionsNeedingReauth(BIZ, makeDb(chain({ data: rows, error: null })))).toHaveLength(
-      1
-    );
 
     const onlyBroken = [
       storedRow({ needs_reauth: true }),
@@ -482,7 +478,6 @@ describe("default client resolution", () => {
     defaultClientSpy.mockReturnValue(makeDb(listChain));
     expect(await listCalendlyConnections(BIZ)).toEqual([]);
     expect(await listPublicCalendlyConnections(BIZ)).toEqual([]);
-    expect(await listCalendlyConnectionsNeedingReauth(BIZ)).toEqual([]);
     expect(await calendlyCalendarPauseState(BIZ)).toEqual({
       pausedCopy: null,
       needingReauth: []

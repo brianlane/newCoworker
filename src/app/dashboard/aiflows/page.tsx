@@ -12,7 +12,7 @@ import { browseActionAllowedForTier } from "@/lib/plans/browse-action";
 import { listDismissedCardKeys } from "@/lib/dashboard/dismissed-cards";
 import { Card } from "@/components/ui/Card";
 import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
-import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { calendlyDashboardPauseCopy } from "@/lib/calendly/reauth";
 
 export const dynamic = "force-dynamic";
 
@@ -51,10 +51,8 @@ export default async function AiFlowsPage({ searchParams }: Props) {
 
   const flows = businessId ? await listAiFlows(businessId) : [];
   const tCalendly = await getTranslations("dashboard.calendlyReauth");
-  const calendarPausedCopy =
-    businessId && (await calendlyCalendarPauseState(businessId)).pausedCopy
-      ? tCalendly("pausedUntilReconnect")
-      : null;
+  const paused = businessId ? await calendlyDashboardPauseCopy(businessId) : null;
+  const calendarPausedCopy = paused ? tCalendly("pausedUntilReconnect") : null;
   // Dismissals are the signed-in user's own, so an admin in view-as sees the
   // cards they kept, not the tenant owner's choices.
   const dismissedCards = await listDismissedCardKeys(user.userId);

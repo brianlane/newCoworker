@@ -11,7 +11,7 @@ import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
-import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { calendlyDashboardPauseCopy } from "@/lib/calendly/reauth";
 import { AiFlowHistory } from "@/components/dashboard/AiFlowHistory";
 
 export const dynamic = "force-dynamic";
@@ -41,10 +41,8 @@ export default async function AiFlowViewPage({ params }: Props) {
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
   const tCalendly = await getTranslations("dashboard.calendlyReauth");
-  const calendarPausedCopy =
-    businessId && (await calendlyCalendarPauseState(businessId)).pausedCopy
-      ? tCalendly("pausedUntilReconnect")
-      : null;
+  const paused = businessId ? await calendlyDashboardPauseCopy(businessId) : null;
+  const calendarPausedCopy = paused ? tCalendly("pausedUntilReconnect") : null;
 
   // Only offer "View runs" when this flow has actually been triggered/run at
   // least once, a cheap single-row probe scoped to this flow.

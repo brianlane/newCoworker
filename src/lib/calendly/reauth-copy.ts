@@ -1,10 +1,10 @@
 /**
  * Pure Calendly reconnect copy: account labels, paused-trigger wording,
- * banner sentences, last-check formatting. No DB, so the dashboard and the
- * email template can share one phrasing without importing the notifier.
+ * last-check formatting. No DB, so the dashboard and the email template
+ * can share one phrasing without importing the notifier.
  */
 
-export const CALENDLY_CALENDAR_PAUSED_COPY = "Paused until Calendly is reconnected.";
+const CALENDLY_CALENDAR_PAUSED_COPY = "Paused until Calendly is reconnected.";
 
 /** App-relative deep link that opens Reconnect on one connection row. */
 export function calendlyReconnectPath(connectionId: string): string {
@@ -26,34 +26,28 @@ export function calendlyAccountLabel(row: {
 /** Last successful check as a short owner-facing stamp, or null if unusable. */
 export function formatCalendlyLastHealthy(
   iso: string | null | undefined,
-  locale = "en-US"
+  locale = "en-US",
+  timeZone?: string | null
 ): string | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toLocaleString(locale, {
+  const options: Intl.DateTimeFormatOptions = {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit"
-  });
-}
-
-export type CalendlyReauthBannerInput = {
-  accountLabel: string;
-  lastHealthyLabel: string | null;
-};
-
-/** Persistent dashboard banner body. Honest, no "token rejected". */
-export function calendlyReauthBannerBody(input: CalendlyReauthBannerInput): string {
-  const paused =
-    `${input.accountLabel}'s Calendly needs a reconnect. ` +
-    "Calendar follow-ups and booking checks for that account are paused";
-  if (input.lastHealthyLabel) {
-    return `${paused}, last successful check: ${input.lastHealthyLabel}.`;
+  };
+  const tz = timeZone?.trim() || undefined;
+  if (!tz) {
+    return new Date(ms).toLocaleString(locale, options);
   }
-  return `${paused}.`;
+  try {
+    return new Date(ms).toLocaleString(locale, { ...options, timeZone: tz });
+  } catch {
+    return new Date(ms).toLocaleString(locale, { ...options, timeZone: "UTC" });
+  }
 }
 
 /**
@@ -68,6 +62,24 @@ export function calendlyCalendarPausedCopy(args: {
     return CALENDLY_CALENDAR_PAUSED_COPY;
   }
   return null;
+}
+
+/**
+ * Dashboard trigger-status pause copy. Calendar follow-ups actually run
+ * on whichever provider `resolveCalendarConnection` returns (Vagaro,
+ * Acuity, Google, Outlook, CalDAV beat Calendly). Showing "Paused until
+ * Calendly is reconnected" on those tenants would be a lie: their
+ * follow-ups are not paused. Null provider (nothing connected) still
+ * shows the Calendly pause, because that is why there is no calendar.
+ */
+export function calendlyUiPauseCopy(args: {
+  pausedCopy: string | null;
+  resolvedCalendarProvider?: string | null;
+}): string | null {
+  if (!args.pausedCopy) return null;
+  const provider = args.resolvedCalendarProvider?.trim() || null;
+  if (provider && provider !== "calendly") return null;
+  return args.pausedCopy;
 }
 
 export function isCalendlyTokenRejected(err: unknown): boolean {
