@@ -87,6 +87,29 @@ describe("GET /api/provisioning/status", () => {
     expect(json.data.failed).toBe(false);
   });
 
+  it("sets complete false for online when latest percent is still in progress", async () => {
+    // businesses.status flips to online before recordProvisioningProgress(100).
+    // Owner UI must not treat "online" as dashboard-ready.
+    vi.mocked(getBusiness).mockResolvedValue(mockBusiness("online"));
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValue({
+      percent: 40,
+      updatedAt: "2026-01-01T00:00:00Z",
+      phase: "remote_deploy_starting",
+      logStatus: "thinking"
+    });
+
+    const res = await GET(
+      new Request(`http://localhost/api/provisioning/status?businessId=${BID}`)
+    );
+    const json = (await res.json()) as {
+      ok: boolean;
+      data: { complete: boolean; failed: boolean; percent: number };
+    };
+    expect(json.data.complete).toBe(false);
+    expect(json.data.failed).toBe(false);
+    expect(json.data.percent).toBe(40);
+  });
+
   it("sets complete and failed when latest provisioning row is error (e.g. deploy-client.sh failed)", async () => {
     vi.mocked(getBusiness).mockResolvedValue(mockBusiness("online"));
     vi.mocked(getLatestProvisioningStatus).mockResolvedValue({

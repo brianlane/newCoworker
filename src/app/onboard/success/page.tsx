@@ -16,6 +16,7 @@ import {
 import type { AppLocale } from "@/i18n/routing";
 import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
+import { onboardSuccessLiveFromPoll } from "@/lib/provisioning/owner-live";
 
 type SuccessStatus =
   | "verifying_payment"
@@ -136,15 +137,17 @@ function OnboardSuccessContent() {
 
     // Provisioning is server-side (Stripe webhook → orchestrator). It
     // typically completes in 2–5 minutes but can take longer. We poll
-    // /api/business/status purely to detect the "online" terminal, the
-    // real percent + failure UI comes from the embedded
-    // CoworkerProvisioningProgress widget below, which polls
-    // /api/provisioning/status on its own. Previously this polled for
-    // only 2 minutes and then stopped silently, leaving slow tenants
-    // stranded on a fake step list with no escape hatch. We now keep
-    // polling indefinitely while the user is on this page, and the UI
-    // always exposes a "Go to dashboard" button so the user is never
-    // trapped regardless of provisioning latency.
+    // /api/business/status for the business id and session (401), then
+    // /api/provisioning/status for the same `complete`/`failed` flags the
+    // dashboard uses to hide the progress bar. `businesses.status ===
+    // "online"` is not the live gate: the orchestrator flips that row
+    // before (and even without) recording 100%, so the dashboard can
+    // still show ~40% for minutes. Previously this polled for only 2
+    // minutes and then stopped silently, leaving slow tenants stranded
+    // on a fake step list with no escape hatch. We now keep polling
+    // indefinitely while the user is on this page, and the UI always
+    // exposes a "Go to dashboard" button so the user is never trapped
+    // regardless of provisioning latency.
     async function pollOnce() {
       try {
         const res = await fetch("/api/business/status");
@@ -155,10 +158,25 @@ function OnboardSuccessContent() {
         }
 
         const json = await res.json();
-        if (typeof json.data?.id === "string") {
-          setBusinessId((prev) => prev ?? json.data.id);
+        const idFromStatus = typeof json.data?.id === "string" ? json.data.id : null;
+        if (idFromStatus) {
+          setBusinessId((prev) => prev ?? idFromStatus);
         }
-        if (json.data?.status === "online") {
+        const id = idFromStatus ?? businessId;
+        if (!id) return;
+
+        const provRes = await fetch(
+          `/api/provisioning/status?businessId=${encodeURIComponent(id)}`
+        );
+        if (!provRes.ok) return;
+        const provJson = await provRes.json();
+        const provisioning = provJson.ok === true ? provJson.data : null;
+        if (
+          onboardSuccessLiveFromPoll({
+            businessStatus: typeof json.data?.status === "string" ? json.data.status : null,
+            provisioning
+          })
+        ) {
           setStatus("online");
           if (interval) clearInterval(interval);
         }
@@ -173,7 +191,7 @@ function OnboardSuccessContent() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [status]);
+  }, [status, businessId]);
 
   async function handleCreatePassword(event: FormEvent) {
     event.preventDefault();
