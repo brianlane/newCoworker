@@ -118,64 +118,39 @@ const ALL_REAUTH_TABLES: ConnectionReauthTable[] = [
   "whatsapp_connections"
 ];
 
+const STATIC_REAUTH_LABELS: Record<
+  Exclude<ConnectionReauthTable, "workspace_oauth_connections">,
+  { provider: ConnectionReauthProviderLabel; slug: string }
+> = {
+  zoom_connections: { provider: "Zoom", slug: "zoom" },
+  acuity_connections: { provider: "Acuity", slug: "acuity" },
+  caldav_connections: { provider: "CalDAV", slug: "caldav" },
+  vagaro_connections: { provider: "Vagaro", slug: "vagaro" },
+  meta_connections: { provider: "Facebook", slug: "meta" },
+  slack_connections: { provider: "Slack", slug: "slack" },
+  whatsapp_connections: { provider: "WhatsApp", slug: "whatsapp" }
+};
+
 export function labelsForReauthRow(table: ConnectionReauthTable, row: ReauthEmailRow): {
   provider: ConnectionReauthProviderLabel;
   slug: string;
   accountLabel: string;
 } {
-  switch (table) {
-    case "workspace_oauth_connections": {
-      const key = row.provider_config_key ?? "";
-      const provider = workspaceProviderLabel(key);
-      return {
-        provider,
-        slug: workspaceIntegrationsSlug(key),
-        accountLabel: connectionAccountLabel(provider, row)
-      };
-    }
-    case "zoom_connections":
-      return {
-        provider: "Zoom",
-        slug: "zoom",
-        accountLabel: connectionAccountLabel("Zoom", row)
-      };
-    case "acuity_connections":
-      return {
-        provider: "Acuity",
-        slug: "acuity",
-        accountLabel: connectionAccountLabel("Acuity", row)
-      };
-    case "caldav_connections":
-      return {
-        provider: "CalDAV",
-        slug: "caldav",
-        accountLabel: connectionAccountLabel("CalDAV", row)
-      };
-    case "vagaro_connections":
-      return {
-        provider: "Vagaro",
-        slug: "vagaro",
-        accountLabel: connectionAccountLabel("Vagaro", row)
-      };
-    case "meta_connections":
-      return {
-        provider: "Facebook",
-        slug: "meta",
-        accountLabel: connectionAccountLabel("Facebook", row)
-      };
-    case "slack_connections":
-      return {
-        provider: "Slack",
-        slug: "slack",
-        accountLabel: connectionAccountLabel("Slack", row)
-      };
-    case "whatsapp_connections":
-      return {
-        provider: "WhatsApp",
-        slug: "whatsapp",
-        accountLabel: connectionAccountLabel("WhatsApp", row)
-      };
+  if (table === "workspace_oauth_connections") {
+    const key = row.provider_config_key ?? "";
+    const provider = workspaceProviderLabel(key);
+    return {
+      provider,
+      slug: workspaceIntegrationsSlug(key),
+      accountLabel: connectionAccountLabel(provider, row)
+    };
   }
+  const { provider, slug } = STATIC_REAUTH_LABELS[table];
+  return {
+    provider,
+    slug,
+    accountLabel: connectionAccountLabel(provider, row)
+  };
 }
 
 function emailCount(row: Pick<ReauthEmailRow, "reauth_email_count">): number {

@@ -336,6 +336,7 @@ describe("db/workspace-oauth-connections direct rows", () => {
         refreshToken: "rt-plain",
         tokenExpiresAt: "2026-08-11T10:00:00Z",
         isActive: true,
+        needsReauth: false,
         updatedAt: "2026-08-01T00:00:00Z"
       });
     });
@@ -383,6 +384,19 @@ describe("db/workspace-oauth-connections direct rows", () => {
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       const row = await getWorkspaceConnectionSecrets(ROW_ID);
       expect(row?.isActive).toBe(false);
+    });
+
+    it("reports needs_reauth without hiding the row, so the token manager can skip it", async () => {
+      const db = {
+        ...mockDb(),
+        maybeSingle: vi
+          .fn()
+          .mockResolvedValue({ data: storedRow({ needs_reauth: true }), error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const row = await getWorkspaceConnectionSecrets(ROW_ID);
+      expect(row?.needsReauth).toBe(true);
+      expect(row?.isActive).toBe(true);
     });
 
     it("throws on a query error", async () => {

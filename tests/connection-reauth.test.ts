@@ -153,9 +153,9 @@ describe("Calendly #1868 still holds", () => {
       })
       .mockResolvedValueOnce({ data: { id: ZOOM_A }, error: null });
     let n = 0;
-    const db = { from: vi.fn(() => ((n += 1) === 1 ? read : write)) } as never;
+    const db = { from: vi.fn(() => ((n += 1) === 1 ? read : write)) };
     const result = await markCalendlyConnectionNeedsReauth(ZOOM_A, {
-      client: db,
+      client: db as never,
       now: () => NOW
     });
     expect(result).toEqual({ flipped: true, emailed: true });
@@ -181,10 +181,10 @@ describe("markConnectionNeedsReauth (Zoom)", () => {
         calls += 1;
         return calls === 1 ? read : write;
       })
-    } as never;
+    };
 
     const result = await markConnectionNeedsReauth("zoom_connections", ZOOM_A, {
-      client: db,
+      client: db as never,
       now: () => NOW
     });
     expect(result).toEqual({ flipped: true, emailed: true });
@@ -421,8 +421,16 @@ describe("labelsForReauthRow", () => {
       })
     ).toMatchObject({ provider: "Workspace", slug: "workspace" });
     expect(
+      labelsForReauthRow("workspace_oauth_connections", {
+        ...googleRow(),
+        provider_config_key: null
+      })
+    ).toMatchObject({ provider: "Workspace", slug: "workspace" });
+    expect(
       labelsForReauthRow("acuity_connections", {
         ...zoomRow(),
+        account_name: null,
+        account_email: null,
         user_id: "12345"
       })
     ).toMatchObject({ provider: "Acuity", slug: "acuity", accountLabel: "12345" });
@@ -686,5 +694,16 @@ describe("stampConnectionHealthy / list / reminders error paths", () => {
       emailed: 0
     });
     expect(defaultClientSpy).toHaveBeenCalled();
+  });
+
+  it("defaults reminder now to Date.now and treats a null list as empty", async () => {
+    const empty = chain();
+    empty.limit.mockResolvedValue({ data: null, error: null });
+    const db = { from: vi.fn(() => empty) } as never;
+    expect(await processConnectionReauthReminders({ client: db })).toEqual({
+      considered: 0,
+      emailed: 0
+    });
+    expect(await listConnectionReauthBannerState(BIZ, db)).toEqual([]);
   });
 });

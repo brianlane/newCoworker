@@ -61,6 +61,7 @@ beforeEach(() => {
   vi.mocked(getSlackConnection).mockResolvedValue(CONNECTED as never);
   vi.mocked(slackAllowedForBusiness).mockResolvedValue(true);
   vi.mocked(slackPostMessage).mockResolvedValue({ ok: true, ts: "1.2", channel: "C-1" });
+  vi.mocked(markConnectionNeedsReauth).mockResolvedValue({ flipped: true, emailed: true });
 });
 
 describe("deliverSlackAlert", () => {

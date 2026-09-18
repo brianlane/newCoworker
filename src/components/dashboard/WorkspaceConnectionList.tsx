@@ -41,6 +41,7 @@ type Props = {
    * unhelpful: the row they would remove is the one their AiFlows are bound
    * to, and removing it is exactly what the reconnect path exists to avoid.
    */
+  connectBlocked?: boolean;
   /**
    * Href that starts a first-party reconnect for THIS tile (Google or
    * Microsoft). The reconnect writes onto the same row; it is not a new seat.
@@ -191,7 +192,6 @@ export function WorkspaceConnectionList({
                       variant="secondary"
                       size="sm"
                       onClick={() => {
-                        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
                         window.location.href = reconnectHref;
                       }}
                     >

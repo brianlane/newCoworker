@@ -795,6 +795,24 @@ describe("pollCalendarTriggers", () => {
     expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
   });
 
+  it("Acuity: a failed needs_reauth flip still pauses the tick", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockRejectedValue({
+      code: "auth_failed",
+      status: 401
+    });
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res.enqueued).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_PAUSED_REAUTH_EVENT })
+    );
+  });
+
   it("Acuity: a permanent auth reject flips needs_reauth; a 5xx does not", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue({
       provider: "acuity",

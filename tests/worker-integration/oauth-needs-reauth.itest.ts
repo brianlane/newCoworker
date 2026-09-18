@@ -135,7 +135,9 @@ describe("oauth connection needs_reauth (real schema)", () => {
       now: () => Date.parse("2026-09-17T02:11:00.000Z")
     });
     expect(flipped).toEqual({ flipped: true, emailed: true });
-    expect(dispatch.mock.calls[0][0].kind).toBe(CONNECTION_REAUTH_KIND);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: CONNECTION_REAUTH_KIND })
+    );
 
     const { data: zoom, error } = await db
       .from("zoom_connections")

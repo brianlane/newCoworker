@@ -28,6 +28,7 @@ import {
   getActiveCaldavConnection,
   upsertCaldavConnection
 } from "@/lib/db/caldav-connections";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 import {
   CaldavApiError,
   createCaldavEvent,
@@ -148,6 +149,13 @@ describe("getCaldavBusyBlocks", () => {
         result: { ok: false, detail: "calendar_not_connected" }
       });
     }
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    vi.mocked(fetchCaldavBusy).mockRejectedValue(new CaldavApiError("auth_failed", "nope"));
+    await expect(getCaldavBusyBlocks(BIZ, WINDOW_START, WINDOW_END)).resolves.toEqual({
+      ok: false,
+      result: { ok: false, detail: "calendar_not_connected" }
+    });
   });
 
   it("maps other failures to calendar_lookup_failed", async () => {

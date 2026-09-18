@@ -36,6 +36,10 @@ const connRow = (id: string, providerConfigKey: string): WorkspaceOAuthConnectio
   transport: "nango",
   is_active: true,
   oauth_scope: null,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   created_at: "2026-07-22T00:00:00Z",
   updated_at: "2026-07-22T00:00:00Z"
 });

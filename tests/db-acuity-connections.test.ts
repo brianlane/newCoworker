@@ -82,6 +82,10 @@ const STORED = {
   suppress_provider_emails: true,
   webhook_registration: {},
   is_active: true,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z"
 };

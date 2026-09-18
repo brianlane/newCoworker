@@ -410,6 +410,18 @@ describe("deliverWhatsApp", () => {
     expect(markConnectionNeedsReauth).toHaveBeenCalledWith("whatsapp_connections", "wc-1");
 
     vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    const textDeadAgain = makeDeps({
+      sendText: vi.fn(async () => {
+        throw dead;
+      })
+    });
+    expect(await deliverWhatsApp(INPUT, textDeadAgain)).toEqual({
+      ok: false,
+      reason: "connection_inactive",
+      detail: "whatsapp_needs_reauth"
+    });
+
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
     const tmplDead = makeDeps({
       getConversation: vi.fn(async () => null),
       sendTemplate: vi.fn(async () => {

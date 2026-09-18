@@ -83,6 +83,8 @@ describe("reportMetaCallFailure", () => {
     expect(await reportMetaCallFailure(BIZ, DEAD_TOKEN, { surface: "x" })).toBe(false);
     expect(mark).not.toHaveBeenCalled();
   });
+
+  it("returns false when the row was already flagged", async () => {
     mark.mockResolvedValue({ flipped: false, emailed: false });
     expect(await reportMetaCallFailure(BIZ, DEAD_TOKEN, { surface: "capi_upload" })).toBe(false);
     expect(mark).toHaveBeenCalled();
