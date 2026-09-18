@@ -1,7 +1,7 @@
 /**
  * Tests for the direct Zoom API client (src/lib/zoom/client.ts): the
  * refresh-managing token accessor (rotation persistence, single-flight,
- * invalid_grant deactivation) and the resolver-compatible request contract.
+ * invalid_grant needs_reauth) and the resolver-compatible request contract.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

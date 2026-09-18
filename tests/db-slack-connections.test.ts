@@ -367,5 +367,14 @@ describe("setSlackConnectionActive / deleteSlackConnection / deauthorize", () =>
         makeDb(chain({ data: null, error: { message: "e" } }))
       )
     ).rejects.toThrow(/markSlackConnectionDeauthorizedByTeamId: e/);
+    await expect(
+      markSlackConnectionDeauthorizedByTeamId(
+        "T-1",
+        makeDb(
+          chain({ data: { id: "sc-1" }, error: null }),
+          chain({ data: null, error: { message: "update boom" } })
+        )
+      )
+    ).rejects.toThrow(/markSlackConnectionDeauthorizedByTeamId: update boom/);
   });
 });

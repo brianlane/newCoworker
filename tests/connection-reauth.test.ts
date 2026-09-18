@@ -281,6 +281,15 @@ describe("stampConnectionHealthy", () => {
     expect(write.eq).toHaveBeenCalledWith("needs_reauth", false);
   });
 
+  it("defaults stamp now to Date.now when none is passed", async () => {
+    const write = chain();
+    write.maybeSingle.mockResolvedValue({ data: { id: ZOOM_A }, error: null });
+    const db = { from: vi.fn(() => write) } as never;
+    await stampConnectionHealthy("zoom_connections", ZOOM_A, { client: db });
+    const patch = write.update.mock.calls[0][0] as { last_healthy_at: string };
+    expect(Date.parse(patch.last_healthy_at)).toBeGreaterThan(NOW - 60_000);
+  });
+
   it("is a no-op when the row is already flagged (dead grant is not healthy)", async () => {
     const write = chain();
     write.maybeSingle.mockResolvedValue({ data: null, error: null });

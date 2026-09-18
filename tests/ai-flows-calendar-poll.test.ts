@@ -761,6 +761,25 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
+  it("Vagaro: calendar_not_connected pauses without flipping needs_reauth", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockRejectedValueOnce(
+      new Error("calendar_not_connected")
+    );
+    await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+        message: "Paused until Vagaro is reconnected."
+      })
+    );
+  });
+
   it("Vagaro: a failed needs_reauth flip still pauses the tick", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue({
       provider: "vagaro",

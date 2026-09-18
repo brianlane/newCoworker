@@ -7,7 +7,7 @@
  *
  *   - the stored refresh token must survive a refresh untouched, and the granted
  *     scope must not be blanked when Google omits it;
- *   - `invalid_grant` must deactivate, and `invalid_client` must NOT, because the
+ *   - `invalid_grant` must flag needs_reauth, and `invalid_client` must NOT, because the
  *     second is what a botched secret rotation looks like and would otherwise
  *     take every tenant down at once;
  *   - null means "not connected", which is what the proxy turns into
