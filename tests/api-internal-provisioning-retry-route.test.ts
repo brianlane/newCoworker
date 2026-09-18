@@ -12,6 +12,9 @@ vi.mock("@/lib/provisioning/progress", () => ({ getLatestProvisioningStatus: vi.
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/subscriptions", () => ({ getSubscription: vi.fn(), updateSubscription: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn(async () => ({})) }));
+vi.mock("@/lib/billing/heal-plan-change-aftereffects", () => ({
+  healPlanChangeAftereffects: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -20,6 +23,9 @@ import { POST } from "@/app/api/internal/provisioning-retry/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { retryStalledProvisioningJob } from "@/lib/provisioning/jobs";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { scanAndAlertStuckProvisioning } from "@/lib/provisioning/stuck-alert";
+import { healPlanChangeAftereffects } from "@/lib/billing/heal-plan-change-aftereffects";
+import { logger } from "@/lib/logger";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/provisioning-retry", {
@@ -37,6 +43,8 @@ describe("api/internal/provisioning-retry route", () => {
       vpsId: "1900001",
       hostingerBillingSubscriptionId: null
     } as never);
+    vi.mocked(scanAndAlertStuckProvisioning).mockResolvedValue({ alerted: [] });
+    vi.mocked(healPlanChangeAftereffects).mockResolvedValue({ scanned: 0, actions: [] });
   });
 
   it("403s without a valid cron bearer", async () => {
@@ -87,6 +95,31 @@ describe("api/internal/provisioning-retry route", () => {
 
     expect(orchestrateProvisioning).toHaveBeenCalledWith(
       expect.objectContaining({ hostingerTerm: null })
+    );
+  });
+
+  it("runs the plan-change aftereffects heal each tick", async () => {
+    vi.mocked(healPlanChangeAftereffects).mockResolvedValue({
+      scanned: 1,
+      actions: [{ businessId: "biz-kin", action: "reclaimed_pooled_vm", detail: "1936826" }]
+    });
+    const res = await POST(makeRequest());
+    expect(healPlanChangeAftereffects).toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.data.planChangeHeal.actions[0].action).toBe("reclaimed_pooled_vm");
+    expect(logger.info).toHaveBeenCalledWith(
+      "plan-change aftereffects heal",
+      expect.objectContaining({ scanned: 1 })
+    );
+  });
+
+  it("continues the watchdog tick when the plan-change heal throws", async () => {
+    vi.mocked(healPlanChangeAftereffects).mockRejectedValueOnce(new Error("heal boom"));
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "plan-change aftereffects heal failed",
+      expect.objectContaining({ error: "heal boom" })
     );
   });
 });

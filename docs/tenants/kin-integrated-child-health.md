@@ -1,12 +1,14 @@
 # KIN Integrated Child Health (Kingsley Moyo)
 
-Business id: `a912aff5-dd87-49fb-ad6a-477acefb66c0`. Standard tier, monthly,
-signed up self-serve 2026-08-24 after a re-issued payment link (the first
-checkout was abandoned Aug 21; the payment-link tooling in PR #1591 exists
-because of this account). Box `srv1936826` (KVM 2; adopted after the Aug 28
-term-renewal purchase, old pool box `srv1864812` retired). Timezone
-America/Edmonton. Priority support until ~2026-09-23 (James-referral deal:
-white-glove and build fees waived, 30 days priority support).
+Business id: `a912aff5-dd87-49fb-ad6a-477acefb66c0`. Paid Standard → Starter
+monthly on 2026-09-18 (Stripe `sub_1UH3YqFv205jOP2fKIp4fEvy`); until the
+plan-change heal lands, `businesses.tier` may still read `standard`. Signed up
+self-serve 2026-08-24 after a re-issued payment link (the first checkout was
+abandoned Aug 21; the payment-link tooling in PR #1591 exists because of this
+account). Box `srv1936826` (KVM 2; adopted after the Aug 28 term-renewal
+purchase, old pool box `srv1864812` retired). Timezone America/Edmonton.
+Priority support until ~2026-09-23 (James-referral deal: white-glove and
+build fees waived, 30 days priority support).
 
 ## Identity
 
@@ -230,6 +232,16 @@ they are a distinct human.
   `wait_for_reply` stamped `suppress_reply` on every inbound, so a lead who
   answered the last nudge got silence. The engine now mutes only when the
   flow set `suppressDefaultReply`. KIN's cadence does not.
+- **2026-09-18 Standard → Starter left the live box pooled with no
+  replacement.** Paid monthly change. `upgrade_switch` returned vm 1936826
+  to the pool (~8:25 AM PT) while `businesses.hostinger_vps_id` still pointed
+  at it, `businesses.tier` stayed `standard`, and no inventory row was
+  assigned. Voice-bridge last heartbeat 2026-09-18T15:24:37Z; inbound calls
+  failed. The worker had started at 8:24:46 with no assigned box. Generic
+  heal on the provisioning-retry watchdog reclaims a pooled VM the business
+  still points at (never stealing a row assigned to someone else), starts
+  it, waits for a voice-bridge heartbeat, and copies `subscriptions.tier`
+  onto `businesses.tier`. Do not hardcode this business id.
 
 ## One-shots
 
@@ -280,3 +292,7 @@ they are a distinct human.
 - 2026-09-05: Brian confirmed the enabled state is intentional and the
   wording-approval gate is no longer blocking; this dossier's stale "stays
   disabled" wording corrected (15 runs on the flow at that point).
+- 2026-09-18: paid Standard → Starter monthly. Change-plan pooled vm 1936826
+  (`upgrade_switch`) and did not assign a replacement; `businesses.tier`
+  stayed `standard`; voice bridge went stale; inbound calls failed. See
+  Sharp edges.

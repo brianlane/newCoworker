@@ -12,10 +12,12 @@ const { orchestrateProvisioningMock } = vi.hoisted(() => ({
 
 const {
   getBusinessMock,
-  setBusinessCustomerProfileMock
+  setBusinessCustomerProfileMock,
+  updateBusinessEntitlementTierMock
 } = vi.hoisted(() => ({
   getBusinessMock: vi.fn(),
-  setBusinessCustomerProfileMock: vi.fn()
+  setBusinessCustomerProfileMock: vi.fn(),
+  updateBusinessEntitlementTierMock: vi.fn()
 }));
 
 const {
@@ -105,7 +107,8 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: getBusinessMock,
-  setBusinessCustomerProfile: setBusinessCustomerProfileMock
+  setBusinessCustomerProfile: setBusinessCustomerProfileMock,
+  updateBusinessEntitlementTier: updateBusinessEntitlementTierMock
 }));
 
 vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
@@ -179,12 +182,22 @@ vi.mock("@/lib/email/ops-notify", () => ({
   sendOpsTermAlignmentEmail: sendOpsTermAlignmentEmailMock
 }));
 
-const { releaseVpsToPoolMock } = vi.hoisted(() => ({
-  releaseVpsToPoolMock: vi.fn().mockResolvedValue(undefined)
+const { releaseVpsToPoolMock, getVpsInventoryByVmIdMock } = vi.hoisted(() => ({
+  releaseVpsToPoolMock: vi.fn().mockResolvedValue(undefined),
+  getVpsInventoryByVmIdMock: vi.fn()
 }));
 
 vi.mock("@/lib/db/vps-inventory", () => ({
-  releaseVpsToPool: releaseVpsToPoolMock
+  releaseVpsToPool: releaseVpsToPoolMock,
+  getVpsInventoryByVmId: getVpsInventoryByVmIdMock
+}));
+
+const { waitForVoiceBridgeHeartbeatMock } = vi.hoisted(() => ({
+  waitForVoiceBridgeHeartbeatMock: vi.fn()
+}));
+
+vi.mock("@/lib/provisioning/voice-bridge-cutover", () => ({
+  waitForVoiceBridgeHeartbeat: waitForVoiceBridgeHeartbeatMock
 }));
 
 const { retireVpsSshKeysForVpsMock } = vi.hoisted(() => ({
@@ -199,6 +212,7 @@ import {
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
+import { logger } from "@/lib/logger";
 
 function makeSession(overrides: Partial<Stripe.Checkout.Session> = {}): Stripe.Checkout.Session {
   return {
@@ -217,6 +231,45 @@ function makeSession(overrides: Partial<Stripe.Checkout.Session> = {}): Stripe.C
     },
     ...overrides
   } as Stripe.Checkout.Session;
+}
+
+/** Unpinned Standard (deployed kvm8) → Starter (kvm1): the size-changing path. */
+function mockUnpinnedStandardBusiness() {
+  getBusinessMock.mockResolvedValue({
+    id: "biz-1",
+    owner_email: "owner@example.com",
+    hostinger_vps_id: "1001",
+    customer_profile_id: "prof-1",
+    status: "online",
+    vps_size: null
+  });
+  getSubscriptionMock.mockResolvedValue({
+    id: "sub-row-old",
+    business_id: "biz-1",
+    stripe_subscription_id: "sub_old",
+    hostinger_billing_subscription_id: "billing_old",
+    customer_profile_id: "prof-1",
+    tier: "standard",
+    billing_period: "monthly",
+    status: "active",
+    created_at: "2026-01-01T00:00:00.000Z",
+    cancel_at_period_end: false
+  });
+}
+
+function starterMonthlySession(
+  overrides: Partial<Stripe.Checkout.Session> = {}
+): Stripe.Checkout.Session {
+  return makeSession({
+    metadata: {
+      businessId: "biz-1",
+      previousSubscriptionId: "sub-row-old",
+      tier: "starter",
+      billingPeriod: "monthly",
+      lifecycleAction: "changePlan"
+    },
+    ...overrides
+  });
 }
 
 beforeEach(() => {
@@ -263,6 +316,20 @@ beforeEach(() => {
   incrementLifetimeSubscriptionCountMock.mockResolvedValue(undefined);
   decrementLifetimeSubscriptionCountMock.mockResolvedValue(2);
   setBusinessCustomerProfileMock.mockResolvedValue(undefined);
+  updateBusinessEntitlementTierMock.mockImplementation(async (_id: string, t: string) => ({
+    id: "biz-1",
+    tier: t
+  }));
+  getVpsInventoryByVmIdMock.mockResolvedValue({
+    vm_id: 2002,
+    state: "assigned",
+    assigned_business_id: "biz-1"
+  });
+  waitForVoiceBridgeHeartbeatMock.mockResolvedValue({
+    healthy: true,
+    heartbeatAt: "2026-09-18T16:00:00.000Z",
+    restarted: false
+  });
   ensureCommitmentScheduleMock.mockResolvedValue(null);
 
   hostingerGetVmMock.mockImplementation(async (id: number) => ({
@@ -294,7 +361,8 @@ beforeEach(() => {
   orchestrateProvisioningMock.mockResolvedValue({
     vpsId: "2002",
     tunnelUrl: "https://biz-1.example.com",
-    hostingerBillingSubscriptionId: "billing_new"
+    hostingerBillingSubscriptionId: "billing_new",
+    deploySucceeded: true
   });
 
   stripeRetrieveMock.mockImplementation(async (id: string) => ({
@@ -308,24 +376,15 @@ beforeEach(() => {
 });
 
 describe("runChangePlanFromCheckout", () => {
-  it("backs up old VPS, provisions new, restores data, and tears down old Stripe + Hostinger", async () => {
+  it("Starter → Standard same-size writes businesses.tier and does not pool the live box", async () => {
     await runChangePlanFromCheckout(makeSession(), "evt_1");
 
-    expect(backupBusinessDataMock).toHaveBeenCalledWith(
-      expect.objectContaining({ businessId: "biz-1", vpsHost: "10.0.0.1" })
-    );
-
-    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        businessId: "biz-1",
-        tier: "standard",
-        ownerEmail: "owner@example.com"
-      })
-    );
-
-    expect(restoreBusinessDataMock).toHaveBeenCalledWith(
-      expect.objectContaining({ businessId: "biz-1", vpsHost: "10.0.0.2" })
-    );
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(backupBusinessDataMock).not.toHaveBeenCalled();
+    expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(sendOpsPlanChangeEmailMock).not.toHaveBeenCalled();
+    expect(sendOpsVpsDeletionEmailMock).not.toHaveBeenCalled();
 
     expect(createSubscriptionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -334,54 +393,23 @@ describe("runChangePlanFromCheckout", () => {
         billing_period: "annual",
         status: "active",
         stripe_subscription_id: "sub_new",
-        hostinger_billing_subscription_id: "billing_new",
+        hostinger_billing_subscription_id: "billing_old",
         customer_profile_id: "prof-1"
       })
     );
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "standard");
+    expect(waitForVoiceBridgeHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsId: "1001" })
+    );
+    expect(getVpsInventoryByVmIdMock).toHaveBeenCalledWith(1001);
 
     expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
     expect(setBusinessCustomerProfileMock).toHaveBeenCalledWith("biz-1", "prof-1");
-
     expect(ensureCommitmentScheduleMock).toHaveBeenCalledWith(
       expect.objectContaining({ subscriptionId: "sub_new", tier: "standard", billingPeriod: "annual" })
     );
-
-    // Old Stripe teardown (schedule release + cancel).
     expect(stripeScheduleReleaseMock).toHaveBeenCalledWith("sched_old");
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
-
-    expect(hostingerCreateSnapshotMock).toHaveBeenCalledWith(1001);
-    expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
-
-    // Old Hostinger billing auto-renew disabled + manual deletion requested.
-    expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
-    expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        businessId: "biz-1",
-        virtualMachineId: 1001,
-        hostingerBillingSubscriptionId: "billing_old",
-        cancelReason: "upgrade_switch",
-        refundIssued: false
-      })
-    );
-
-    // Hardware escalation start was announced to ops before the migration:
-    // old box resolves by DEPLOYED sizing (no pin + starter → kvm2 legacy
-    // default), target by forward-looking tier default (standard → kvm2 since
-    // the Jul 2026 flip).
-    expect(sendOpsPlanChangeEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        businessId: "biz-1",
-        fromTier: "starter",
-        toTier: "standard",
-        billingPeriod: "annual",
-        oldVirtualMachineId: 1001,
-        fromHardware: "kvm2",
-        toHardware: "kvm2"
-      })
-    );
-
-    // Old subscription row marked canceled with upgrade_switch reason.
     expect(updateSubscriptionMock).toHaveBeenCalledWith(
       "sub-row-old",
       expect.objectContaining({
@@ -389,26 +417,117 @@ describe("runChangePlanFromCheckout", () => {
         cancel_reason: "upgrade_switch"
       })
     );
-
-    // Fleet economics Phase B: the replaced box goes back to the reuse
-    // pool. No vps_size pin on the business + starter old tier → kvm2.
-    expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        vmId: 1001,
-        plan: "kvm2",
-        hostingerBillingSubscriptionId: "billing_old"
-      })
-    );
-
-    // A plan-change cutover is a hardware move like any other: the old box's
-    // key row is retired so fleet sweeps stop SSHing into it, and so the
-    // pooled box carries no active key for its previous tenant.
-    expect(retireVpsSshKeysForVpsMock).toHaveBeenCalledWith("1001");
-
     expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "cs_test_123" }),
       "evt_1"
     );
+  });
+
+  it("unpinned Standard → Starter migrates onto a new assigned box, then pools the old one", async () => {
+    mockUnpinnedStandardBusiness();
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_size_change");
+
+    expect(backupBusinessDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsHost: "10.0.0.1" })
+    );
+    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-1",
+        tier: "starter",
+        ownerEmail: "owner@example.com"
+      })
+    );
+    expect(restoreBusinessDataMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsHost: "10.0.0.2" })
+    );
+    expect(createSubscriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tier: "starter",
+        hostinger_billing_subscription_id: "billing_new"
+      })
+    );
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+    expect(waitForVoiceBridgeHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsId: "2002" })
+    );
+    expect(getVpsInventoryByVmIdMock).toHaveBeenCalledWith(2002);
+    expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
+    expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+    expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-1",
+        virtualMachineId: 1001,
+        cancelReason: "upgrade_switch",
+        refundIssued: false
+      })
+    );
+    expect(sendOpsPlanChangeEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromTier: "standard",
+        toTier: "starter",
+        fromHardware: "kvm8",
+        toHardware: "kvm1"
+      })
+    );
+    expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+      expect.objectContaining({ vmId: 1001, hostingerBillingSubscriptionId: "billing_old" })
+    );
+    expect(retireVpsSshKeysForVpsMock).toHaveBeenCalledWith("1001");
+  });
+
+  it("does not pool the live box when provision returns the same VM id (KIN)", async () => {
+    mockUnpinnedStandardBusiness();
+    orchestrateProvisioningMock.mockResolvedValueOnce({
+      vpsId: "1001",
+      tunnelUrl: "https://biz-1.example.com",
+      hostingerBillingSubscriptionId: "billing_new",
+      deploySucceeded: true
+    });
+    getVpsInventoryByVmIdMock.mockResolvedValueOnce({
+      vm_id: 1001,
+      state: "assigned",
+      assigned_business_id: "biz-1"
+    });
+
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_same_id");
+
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+    expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(sendOpsVpsDeletionEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("does not pool the old box when the new VM's inventory is still available", async () => {
+    mockUnpinnedStandardBusiness();
+    getVpsInventoryByVmIdMock.mockResolvedValueOnce({
+      vm_id: 2002,
+      state: "available",
+      assigned_business_id: null
+    });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_unassigned");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+  });
+
+  it("does not pool the old box when deploySucceeded is false or the bridge is stale", async () => {
+    mockUnpinnedStandardBusiness();
+    orchestrateProvisioningMock.mockResolvedValueOnce({
+      vpsId: "2002",
+      tunnelUrl: "https://biz-1.example.com",
+      hostingerBillingSubscriptionId: "billing_new",
+      deploySucceeded: false
+    });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_deploy_fail");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+
+    mockUnpinnedStandardBusiness();
+    waitForVoiceBridgeHeartbeatMock.mockResolvedValueOnce({
+      healthy: false,
+      heartbeatAt: null,
+      restarted: true
+    });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_stale_bridge");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
   });
 
   it("re-attempts pack grants on idempotent webhook retry", async () => {
@@ -453,14 +572,11 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   describe("old-VPS pool return (fleet economics Phase B)", () => {
-    it("labels a non-starter old box kvm8 (old tier default, not the new pin)", async () => {
-      // The vps_size pin describes the box being provisioned NOW; the
-      // released box is the OLD hardware. Even with a kvm2 pin driving the
-      // new provision, a standard→starter downgrade releases a kvm8 box.
+    it("kvm2-pinned Standard → Starter keeps the live box (KIN, same hardware)", async () => {
       getBusinessMock.mockResolvedValue({
         id: "biz-1",
         owner_email: "owner@example.com",
-        hostinger_vps_id: "1001",
+        hostinger_vps_id: "1936826",
         customer_profile_id: "prof-1",
         status: "online",
         vps_size: "kvm2"
@@ -489,8 +605,66 @@ describe("runChangePlanFromCheckout", () => {
         }),
         "evt_pool_1"
       );
-      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 1001, plan: "kvm8" })
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+      expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+      expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+      expect(waitForVoiceBridgeHeartbeatMock).toHaveBeenCalledWith(
+        expect.objectContaining({ businessId: "biz-1", vpsId: "1936826" })
+      );
+      expect(getVpsInventoryByVmIdMock).toHaveBeenCalledWith(1936826);
+    });
+
+    it("does not treat a same-size change as complete when the pointed-at VM is pooled (KIN)", async () => {
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: "1936826",
+        customer_profile_id: "prof-1",
+        status: "online",
+        vps_size: "kvm2"
+      });
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: "billing_old",
+        customer_profile_id: "prof-1",
+        tier: "standard",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+      getVpsInventoryByVmIdMock.mockResolvedValue({
+        vm_id: 1936826,
+        state: "available",
+        assigned_business_id: null
+      });
+      await runChangePlanFromCheckout(
+        makeSession({
+          metadata: {
+            businessId: "biz-1",
+            previousSubscriptionId: "sub-row-old",
+            tier: "starter",
+            billingPeriod: "monthly",
+            lifecycleAction: "changePlan"
+          }
+        }),
+        "evt_pooled_pointer"
+      );
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+      expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+      expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+      expect(logger.error).toHaveBeenCalledWith(
+        "changePlan: not treating as complete; assignment or voice-bridge heartbeat still outstanding",
+        expect.objectContaining({
+          oldVmId: 1936826,
+          inventoryState: "available",
+          inventoryAssignedBusinessId: null,
+          migrateVps: false
+        })
       );
     });
 
@@ -498,12 +672,13 @@ describe("runChangePlanFromCheckout", () => {
       // A kvm1 box whose purchase-time inventory record failed must not be
       // seeded into the pool as kvm2, the teardown asks Hostinger for the
       // released box's real plan.
+      mockUnpinnedStandardBusiness();
       hostingerGetVmMock.mockImplementation(async (id: number) => ({
         id,
         plan: id === 1001 ? "KVM 1" : "KVM 8",
         ipv4: [{ address: id === 1001 ? "10.0.0.1" : "10.0.0.2" }]
       }));
-      await runChangePlanFromCheckout(makeSession(), "evt_pool_plan");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_pool_plan");
       expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
         expect.objectContaining({ vmId: 1001, plan: "kvm1" })
       );
@@ -512,21 +687,23 @@ describe("runChangePlanFromCheckout", () => {
     it("falls back to the old tier default when the teardown plan lookup fails", async () => {
       // IP resolves (backup/restore) run BEFORE the teardown; only the
       // post-stop plan lookup throws here.
+      mockUnpinnedStandardBusiness();
       hostingerGetVmMock.mockImplementation(async (id: number) => {
         if (hostingerStopVirtualMachineMock.mock.calls.length > 0 && id === 1001) {
           throw new Error("hostinger 500");
         }
         return { id, ipv4: [{ address: id === 1001 ? "10.0.0.1" : "10.0.0.2" }] };
       });
-      await runChangePlanFromCheckout(makeSession(), "evt_pool_planfail");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_pool_planfail");
       expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 1001, plan: "kvm2" })
+        expect.objectContaining({ vmId: 1001, plan: "kvm8" })
       );
     });
 
     it("continues the plan change when the pool return fails", async () => {
+      mockUnpinnedStandardBusiness();
       releaseVpsToPoolMock.mockRejectedValueOnce(new Error("pool down"));
-      await runChangePlanFromCheckout(makeSession(), "evt_pool_4");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_pool_4");
       // Best-effort: the ops deletion email and old-sub cancel still ran.
       expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalled();
       expect(updateSubscriptionMock).toHaveBeenCalledWith(
@@ -538,8 +715,9 @@ describe("runChangePlanFromCheckout", () => {
     it("continues the plan change, and still pools the box, when the key retire fails", async () => {
       // The customer has already paid for this change: a stale bookkeeping
       // row must not derail it, and must not skip the pool return either.
+      mockUnpinnedStandardBusiness();
       retireVpsSshKeysForVpsMock.mockRejectedValueOnce(new Error("postgrest down"));
-      await runChangePlanFromCheckout(makeSession(), "evt_pool_5");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_pool_5");
       expect(releaseVpsToPoolMock).toHaveBeenCalledWith(expect.objectContaining({ vmId: 1001 }));
       expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalled();
     });
@@ -700,31 +878,29 @@ describe("runChangePlanFromCheckout", () => {
       expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
     });
 
-    it("tier changes still take the full migration path", async () => {
-      // Default fixture: old starter/monthly → session standard/annual.
+    it("same-size Starter → Standard is entitlement-only (no hardware move)", async () => {
       await runChangePlanFromCheckout(makeSession(), "evt_tier_change_full_path");
-      expect(orchestrateProvisioningMock).toHaveBeenCalled();
-      expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
+      expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "standard");
     });
 
-    it("tier change with no old billing id still stops the VM and emails the ops deletion request", async () => {
-      // Regression (Bugbot): a missing billing id (e.g. provisioning-time
-      // lookup failed) must not suppress the ops email, the orphaned box
-      // would otherwise keep running with nobody asked to delete it.
+    it("size-changing tier change with no old billing id still stops the VM and emails ops", async () => {
+      mockUnpinnedStandardBusiness();
       getSubscriptionMock.mockResolvedValue({
         id: "sub-row-old",
         business_id: "biz-1",
         stripe_subscription_id: "sub_old",
         hostinger_billing_subscription_id: null,
         customer_profile_id: "prof-1",
-        tier: "starter",
+        tier: "standard",
         billing_period: "monthly",
         status: "active",
         created_at: "2026-01-01T00:00:00.000Z",
         cancel_at_period_end: false
       });
 
-      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_vm_only");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_tier_change_vm_only");
 
       expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
       expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
@@ -762,13 +938,15 @@ describe("runChangePlanFromCheckout", () => {
       // migration path, step 7 cancels billing_old, so pinning it to the new
       // active row would reference dead billing while the new VPS's real
       // billing id goes untracked.
+      mockUnpinnedStandardBusiness();
       orchestrateProvisioningMock.mockResolvedValueOnce({
         vpsId: "2002",
         tunnelUrl: "https://biz-1.example.com",
-        hostingerBillingSubscriptionId: null
+        hostingerBillingSubscriptionId: null,
+        deploySucceeded: true
       });
 
-      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_null_billing");
+      await runChangePlanFromCheckout(starterMonthlySession(), "evt_tier_change_null_billing");
 
       expect(createSubscriptionMock).toHaveBeenCalledWith(
         expect.objectContaining({ hostinger_billing_subscription_id: null })
@@ -1021,28 +1199,23 @@ describe("runChangePlanFromCheckout", () => {
 
     it("tier changes never send the contract-switch summary email", async () => {
       await runChangePlanFromCheckout(makeSession(), "evt_tier_change_no_summary");
-      expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
-        expect.objectContaining({ billingPeriod: "annual", skipPoolAdopt: false })
-      );
       expect(sendOpsTermAlignmentEmailMock).not.toHaveBeenCalled();
     });
   });
 
-  it("forwards the business's vps_size hardware pin into the new provisioning run", async () => {
+  it("a kvm2 pin keeps Starter → Standard on the same box (entitlements move, hardware stays)", async () => {
     getBusinessMock.mockResolvedValueOnce({
       id: "biz-1",
       owner_email: "owner@example.com",
       hostinger_vps_id: "1001",
       customer_profile_id: "prof-1",
       status: "online",
-      // Operator pinned this business to KVM2 hardware, a tier change must
-      // keep the pin (entitlements move, hardware stays).
       vps_size: "kvm2"
     });
     await runChangePlanFromCheckout(makeSession(), "evt_vps_size_pin");
-    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
-      expect.objectContaining({ businessId: "biz-1", tier: "standard", vpsSize: "kvm2" })
-    );
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "standard");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
   });
 
   it("aborts if the business is missing and cancels the fresh Stripe sub", async () => {
@@ -1154,7 +1327,8 @@ describe("runChangePlanFromCheckout", () => {
     upsertCustomerProfileMock.mockRejectedValueOnce(new Error("profile upsert failed"));
     hostingerCreateSnapshotMock.mockRejectedValueOnce(new Error("snapshot failed"));
 
-    await runChangePlanFromCheckout(makeSession(), "evt_profile_snapshot_failures");
+    mockUnpinnedStandardBusiness();
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_profile_snapshot_failures");
 
     expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
     expect(createSubscriptionMock).toHaveBeenCalled();
@@ -1177,9 +1351,10 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("continues change-plan when old or new VM IP lookup fails", async () => {
+    mockUnpinnedStandardBusiness();
     hostingerGetVmMock.mockRejectedValue(new Error("vm lookup failed"));
 
-    await runChangePlanFromCheckout(makeSession(), "evt_vm_lookup_fail");
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_vm_lookup_fail");
 
     expect(backupBusinessDataMock).not.toHaveBeenCalled();
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
@@ -1187,13 +1362,14 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("skips change-plan restore when the new provisioning id is not numeric", async () => {
+    mockUnpinnedStandardBusiness();
     orchestrateProvisioningMock.mockResolvedValueOnce({
       vpsId: "not-a-number",
       tunnelUrl: "https://biz-1.example.com",
       hostingerBillingSubscriptionId: "billing_new"
     });
 
-    await runChangePlanFromCheckout(makeSession(), "evt_change_new_vps_not_numeric");
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_change_new_vps_not_numeric");
 
     expect(backupBusinessDataMock).toHaveBeenCalled();
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
@@ -1290,8 +1466,9 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("continues teardown even if backup fails", async () => {
+    mockUnpinnedStandardBusiness();
     backupBusinessDataMock.mockRejectedValueOnce(new Error("ssh blew up"));
-    await runChangePlanFromCheckout(makeSession(), "evt_5");
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_5");
     expect(orchestrateProvisioningMock).toHaveBeenCalled();
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).toHaveBeenCalled();
@@ -1424,7 +1601,8 @@ describe("runChangePlanFromCheckout", () => {
     ensureCommitmentScheduleMock.mockRejectedValueOnce(new Error("schedule failed"));
     hostingerStopVirtualMachineMock.mockRejectedValueOnce(new Error("stop failed"));
 
-    await runChangePlanFromCheckout(makeSession(), "evt_change_best_effort_failures");
+    mockUnpinnedStandardBusiness();
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_change_best_effort_failures");
 
     expect(createSubscriptionMock).toHaveBeenCalled();
     expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
@@ -1446,7 +1624,8 @@ describe("runChangePlanFromCheckout", () => {
       };
     });
 
-    await runChangePlanFromCheckout(makeSession(), "evt_change_restore_lookup_fail");
+    mockUnpinnedStandardBusiness();
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_change_restore_lookup_fail");
 
     expect(createSubscriptionMock).toHaveBeenCalledWith(
       expect.objectContaining({ stripe_subscription_id: "sub_new" })
@@ -1455,9 +1634,10 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("cancels the fresh Stripe sub if new provisioning throws before touching old subscription", async () => {
+    mockUnpinnedStandardBusiness();
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
 
-    await runChangePlanFromCheckout(makeSession(), "evt_7");
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_7");
 
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
@@ -1472,9 +1652,10 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("aborts without cancelling Stripe when provisioning throws and no new Stripe sub id is on the session", async () => {
+    mockUnpinnedStandardBusiness();
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
 
-    await runChangePlanFromCheckout(makeSession({ subscription: null }), "evt_7b");
+    await runChangePlanFromCheckout(starterMonthlySession({ subscription: null }), "evt_7b");
 
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).not.toHaveBeenCalled();
@@ -1500,7 +1681,7 @@ describe("runChangePlanFromCheckout", () => {
       stripe_subscription_id: "sub_old",
       hostinger_billing_subscription_id: "billing_old",
       customer_profile_id: null,
-      tier: "starter",
+      tier: "standard",
       billing_period: "monthly",
       status: "active",
       created_at: "2026-01-01T00:00:00.000Z",
@@ -1509,7 +1690,7 @@ describe("runChangePlanFromCheckout", () => {
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
 
     await runChangePlanFromCheckout(
-      makeSession({ customer_details: null, customer_email: null }),
+      starterMonthlySession({ customer_details: null, customer_email: null }),
       "evt_change_no_profile"
     );
 
@@ -1637,7 +1818,8 @@ describe("runChangePlanFromCheckout", () => {
 
     await runChangePlanFromCheckout(makeSession(), "evt_id_collision");
 
-    expect(orchestrateProvisioningMock).toHaveBeenCalled();
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
   });
 
   it("does NOT short-circuit when the linked row is non-active (e.g. mid-cancellation)", async () => {
@@ -1658,7 +1840,37 @@ describe("runChangePlanFromCheckout", () => {
 
     await runChangePlanFromCheckout(makeSession(), "evt_canceled_link");
 
-    expect(orchestrateProvisioningMock).toHaveBeenCalled();
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("logs when businesses.tier write, heartbeat wait, or inventory lookup throws", async () => {
+    updateBusinessEntitlementTierMock.mockRejectedValueOnce(new Error("tier write failed"));
+    await runChangePlanFromCheckout(makeSession(), "evt_tier_write_fail");
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(updateSubscriptionMock).toHaveBeenCalled();
+
+    waitForVoiceBridgeHeartbeatMock.mockRejectedValueOnce(new Error("ssh timeout"));
+    await runChangePlanFromCheckout(makeSession(), "evt_heartbeat_throw");
+    expect(createSubscriptionMock).toHaveBeenCalled();
+
+    mockUnpinnedStandardBusiness();
+    getVpsInventoryByVmIdMock.mockRejectedValueOnce(new Error("inventory down"));
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_inventory_throw");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+  });
+
+  it("warns when there is no numeric VM id to wait on for the voice bridge", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "pending",
+      customer_profile_id: "prof-1",
+      status: "online"
+    });
+    await runChangePlanFromCheckout(makeSession(), "evt_no_heartbeat_vm");
+    expect(waitForVoiceBridgeHeartbeatMock).not.toHaveBeenCalled();
+    expect(createSubscriptionMock).toHaveBeenCalled();
   });
 });
 
