@@ -23,7 +23,10 @@ export function calendlyAccountLabel(row: {
   return "Calendly";
 }
 
-/** Last successful check as a short owner-facing stamp, or null if unusable. */
+/** Last successful check as a short owner-facing stamp, or null if unusable.
+ * Pass timeZone "UTC" for SSR/first paint so it matches across Node and the
+ * browser; omit it after hydration so the viewer's local zone wins.
+ */
 export function formatCalendlyLastHealthy(
   iso: string | null | undefined,
   locale = "en-US",

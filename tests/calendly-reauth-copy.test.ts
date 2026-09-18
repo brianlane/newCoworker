@@ -47,6 +47,7 @@ describe("formatCalendlyLastHealthy", () => {
     expect(formatCalendlyLastHealthy(iso, "en-US", "America/Phoenix")).toBe(
       "Sep 16, 2026, 5:01 AM"
     );
+    // Explicit UTC is the banner's SSR / first-paint snapshot.
     expect(formatCalendlyLastHealthy(iso, "en-US", "UTC")).toBe("Sep 16, 2026, 12:01 PM");
   });
 
