@@ -18,7 +18,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceConnectionSecrets: vi.fn(),
-  setWorkspaceConnectionActive: vi.fn(),
   updateWorkspaceConnectionAccessToken: vi.fn()
 }));
 vi.mock("@/lib/connections/reauth", () => ({
@@ -32,7 +31,6 @@ vi.mock("@/lib/google/oauth", async (importOriginal) => {
 
 import {
   getWorkspaceConnectionSecrets,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionAccessToken
 } from "@/lib/db/workspace-oauth-connections";
 import { GoogleOAuthError, refreshGoogleTokens } from "@/lib/google/oauth";
@@ -61,7 +59,6 @@ function secrets(over: Partial<Parameters<typeof Object.assign>[0]> = {}) {
 
 beforeEach(() => {
   vi.mocked(getWorkspaceConnectionSecrets).mockReset();
-  vi.mocked(setWorkspaceConnectionActive).mockReset();
   vi.mocked(updateWorkspaceConnectionAccessToken).mockReset();
   vi.mocked(refreshGoogleTokens).mockReset();
   vi.mocked(markConnectionNeedsReauth).mockReset();
@@ -164,7 +161,6 @@ describe("getGoogleAccessToken", () => {
     );
     await expect(getGoogleAccessToken(ROW, NOW)).resolves.toBeNull();
     expect(markConnectionNeedsReauth).toHaveBeenCalledWith("workspace_oauth_connections", ROW);
-    expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
   });
 
   it("does not present a dead token once the row is flagged needs_reauth", async () => {
@@ -185,7 +181,7 @@ describe("getGoogleAccessToken", () => {
       new GoogleOAuthError("request_failed", "Google token endpoint failed (401: invalid_client)", 401)
     );
     await expect(getGoogleAccessToken(ROW, NOW)).rejects.toThrow(/invalid_client/);
-    expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
   });
 
   it("propagates a transient refresh failure without deactivating", async () => {
@@ -196,7 +192,7 @@ describe("getGoogleAccessToken", () => {
       new GoogleOAuthError("upstream_timeout", "Google token endpoint timed out")
     );
     await expect(getGoogleAccessToken(ROW, NOW)).rejects.toThrow(/timed out/);
-    expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
   });
 
   it("still returns the fresh token when the write does not land", async () => {

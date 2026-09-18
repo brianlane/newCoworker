@@ -3,7 +3,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  connectionAccountLabel,
   connectionPausedUntilCopy,
   connectionPausedWork,
   connectionReauthBannerBody,
@@ -11,47 +10,63 @@ import {
   formatConnectionLastHealthy,
   isSlackTokenDead,
   isPermanentConnectionAuthError,
-  withReauthColumnDefaults,
-  workspaceIntegrationsSlug,
-  workspaceProviderLabel
+  labelsForReauthRow,
+  withReauthColumnDefaults
 } from "@/lib/connections/reauth-copy";
 
-describe("workspaceProviderLabel", () => {
+describe("labelsForReauthRow", () => {
   it("maps Google and Microsoft keys, and nothing else, to the owner-facing name", () => {
-    expect(workspaceProviderLabel("google")).toBe("Google");
-    expect(workspaceProviderLabel("gmail")).toBe("Google");
-    expect(workspaceProviderLabel("google-calendar")).toBe("Google");
-    expect(workspaceProviderLabel("outlook")).toBe("Microsoft 365");
-    expect(workspaceProviderLabel("outlook-calendar")).toBe("Microsoft 365");
-    expect(workspaceIntegrationsSlug("google")).toBe("google");
-    expect(workspaceIntegrationsSlug("outlook")).toBe("microsoft");
-    expect(workspaceProviderLabel("salesforce")).toBe("Workspace");
-    expect(workspaceIntegrationsSlug("salesforce")).toBe("workspace");
+    expect(labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "google" })).toMatchObject({
+      provider: "Google",
+      slug: "google"
+    });
+    expect(labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "gmail" })).toMatchObject({
+      provider: "Google",
+      slug: "google"
+    });
+    expect(
+      labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "google-calendar" })
+    ).toMatchObject({ provider: "Google", slug: "google" });
+    expect(labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "outlook" })).toMatchObject({
+      provider: "Microsoft 365",
+      slug: "microsoft"
+    });
+    expect(
+      labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "outlook-calendar" })
+    ).toMatchObject({ provider: "Microsoft 365", slug: "microsoft" });
+    expect(
+      labelsForReauthRow("workspace_oauth_connections", { provider_config_key: "salesforce" })
+    ).toMatchObject({ provider: "Workspace", slug: "workspace" });
   });
-});
 
-describe("connectionAccountLabel", () => {
   it("prefers the name the owner already knows the account by", () => {
     expect(
-      connectionAccountLabel("Zoom", { account_name: "Acme Zoom", account_email: "z@a.test" })
+      labelsForReauthRow("zoom_connections", { account_name: "Acme Zoom", account_email: "z@a.test" })
+        .accountLabel
     ).toBe("Acme Zoom");
-    expect(connectionAccountLabel("Google", { account_email: "james@kyp.test" })).toBe(
-      "james@kyp.test"
-    );
-    expect(connectionAccountLabel("Slack", { team_name: "KYP" })).toBe("KYP");
-    expect(connectionAccountLabel("Facebook", { page_name: "KYP Ads" })).toBe("KYP Ads");
-    expect(connectionAccountLabel("WhatsApp", { display_phone_number: "+1 555-0100" })).toBe(
-      "+1 555-0100"
-    );
-    expect(connectionAccountLabel("CalDAV", { username: "james@icloud.com" })).toBe(
-      "james@icloud.com"
+    expect(
+      labelsForReauthRow("workspace_oauth_connections", {
+        provider_config_key: "google",
+        account_email: "james@kyp.test"
+      }).accountLabel
+    ).toBe("james@kyp.test");
+    expect(labelsForReauthRow("slack_connections", { team_name: "KYP" }).accountLabel).toBe("KYP");
+    expect(labelsForReauthRow("meta_connections", { page_name: "KYP Ads" }).accountLabel).toBe(
+      "KYP Ads"
     );
     expect(
-      connectionAccountLabel("Google", {
+      labelsForReauthRow("whatsapp_connections", { display_phone_number: "+1 555-0100" }).accountLabel
+    ).toBe("+1 555-0100");
+    expect(
+      labelsForReauthRow("caldav_connections", { username: "james@icloud.com" }).accountLabel
+    ).toBe("james@icloud.com");
+    expect(
+      labelsForReauthRow("workspace_oauth_connections", {
+        provider_config_key: "google",
         metadata: { provider_account_display_name: "James Lee" }
-      })
+      }).accountLabel
     ).toBe("James Lee");
-    expect(connectionAccountLabel("Zoom", {})).toBe("Zoom");
+    expect(labelsForReauthRow("zoom_connections", {}).accountLabel).toBe("Zoom");
   });
 });
 

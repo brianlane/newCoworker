@@ -17,35 +17,14 @@ import {
   CONNECTION_REAUTH_KIND,
   CONNECTION_REAUTH_MAX_EMAILS,
   CONNECTION_REAUTH_REMINDER_MS,
-  connectionAccountLabel,
   connectionPausedWork,
   connectionReauthBannerBody,
   connectionReconnectPath,
   formatConnectionLastHealthy,
-  workspaceIntegrationsSlug,
-  workspaceProviderLabel,
+  labelsForReauthRow,
   type ConnectionReauthProviderLabel,
   type ConnectionReauthTable
 } from "@/lib/connections/reauth-copy";
-
-export {
-  CONNECTION_REAUTH_KIND,
-  CONNECTION_REAUTH_MAX_EMAILS,
-  CONNECTION_REAUTH_REMINDER_MS,
-  clearedReauthFields,
-  connectionAccountLabel,
-  connectionPausedUntilCopy,
-  connectionPausedWork,
-  connectionReauthBannerBody,
-  connectionReconnectPath,
-  formatConnectionLastHealthy,
-  isPermanentConnectionAuthError,
-  isSlackTokenDead,
-  workspaceIntegrationsSlug,
-  workspaceProviderLabel
-} from "@/lib/connections/reauth-copy";
-
-export type { ConnectionReauthProviderLabel, ConnectionReauthTable } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -84,7 +63,7 @@ export type MarkConnectionNeedsReauthResult = {
   emailed: boolean;
 };
 
-export type ConnectionReauthBannerItem = {
+type ConnectionReauthBannerItem = {
   id: string;
   table: ConnectionReauthTable;
   provider: ConnectionReauthProviderLabel;
@@ -117,41 +96,6 @@ const ALL_REAUTH_TABLES: ConnectionReauthTable[] = [
   "slack_connections",
   "whatsapp_connections"
 ];
-
-const STATIC_REAUTH_LABELS: Record<
-  Exclude<ConnectionReauthTable, "workspace_oauth_connections">,
-  { provider: ConnectionReauthProviderLabel; slug: string }
-> = {
-  zoom_connections: { provider: "Zoom", slug: "zoom" },
-  acuity_connections: { provider: "Acuity", slug: "acuity" },
-  caldav_connections: { provider: "CalDAV", slug: "caldav" },
-  vagaro_connections: { provider: "Vagaro", slug: "vagaro" },
-  meta_connections: { provider: "Facebook", slug: "meta" },
-  slack_connections: { provider: "Slack", slug: "slack" },
-  whatsapp_connections: { provider: "WhatsApp", slug: "whatsapp" }
-};
-
-export function labelsForReauthRow(table: ConnectionReauthTable, row: ReauthEmailRow): {
-  provider: ConnectionReauthProviderLabel;
-  slug: string;
-  accountLabel: string;
-} {
-  if (table === "workspace_oauth_connections") {
-    const key = row.provider_config_key ?? "";
-    const provider = workspaceProviderLabel(key);
-    return {
-      provider,
-      slug: workspaceIntegrationsSlug(key),
-      accountLabel: connectionAccountLabel(provider, row)
-    };
-  }
-  const { provider, slug } = STATIC_REAUTH_LABELS[table];
-  return {
-    provider,
-    slug,
-    accountLabel: connectionAccountLabel(provider, row)
-  };
-}
 
 function emailCount(row: Pick<ReauthEmailRow, "reauth_email_count">): number {
   const n = row.reauth_email_count;

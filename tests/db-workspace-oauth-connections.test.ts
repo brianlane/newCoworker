@@ -4,7 +4,6 @@ import {
   flipWorkspaceConnectionToDirect,
   getWorkspaceConnectionSecrets,
   insertDirectWorkspaceConnection,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionAccessToken,
   updateWorkspaceConnectionTokens,
   getWorkspaceOAuthConnection,
@@ -572,30 +571,6 @@ describe("db/workspace-oauth-connections direct rows", () => {
           expiresAt: new Date("2026-08-11T11:00:00Z")
         })
       ).rejects.toThrow("nope");
-    });
-  });
-
-  describe("setWorkspaceConnectionActive", () => {
-    it("flips the flag", async () => {
-      const db = {
-        ...mockDb(),
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ error: null })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-      await setWorkspaceConnectionActive(ROW_ID, false);
-      expect((db.update.mock.calls[0][0] as { is_active: boolean }).is_active).toBe(false);
-    });
-
-    it("throws on a query error", async () => {
-      const db = {
-        ...mockDb(),
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ error: { message: "bad" } })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-      await expect(setWorkspaceConnectionActive(ROW_ID, true)).rejects.toThrow("bad");
     });
   });
 

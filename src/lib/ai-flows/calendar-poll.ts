@@ -64,11 +64,12 @@ import {
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
+import { isCalendlyTokenRejected } from "@/lib/calendly/reauth-copy";
 import {
-  isPermanentConnectionAuthError,
   markConnectionNeedsReauth,
   stampConnectionHealthy
 } from "@/lib/connections/reauth";
+import { isPermanentConnectionAuthError } from "@/lib/connections/reauth-copy";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,

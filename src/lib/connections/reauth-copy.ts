@@ -52,7 +52,7 @@ export function connectionReconnectPath(
   return `/dashboard/integrations/${slug}?reconnect=${encodeURIComponent(connectionId)}`;
 }
 
-export function workspaceProviderLabel(providerConfigKey: string): ConnectionReauthProviderLabel {
+function workspaceProviderLabel(providerConfigKey: string): ConnectionReauthProviderLabel {
   const k = providerConfigKey.toLowerCase();
   if (k.startsWith("google") || k === "gmail") return "Google";
   if (k.includes("outlook") || k.includes("microsoft") || k === "onedrive") {
@@ -61,7 +61,7 @@ export function workspaceProviderLabel(providerConfigKey: string): ConnectionRea
   return "Workspace";
 }
 
-export function workspaceIntegrationsSlug(providerConfigKey: string): string {
+function workspaceIntegrationsSlug(providerConfigKey: string): string {
   const label = workspaceProviderLabel(providerConfigKey);
   if (label === "Microsoft 365") return "microsoft";
   if (label === "Google") return "google";
@@ -90,7 +90,7 @@ export function connectionPausedWork(provider: ConnectionReauthProviderLabel): s
   }
 }
 
-export function connectionAccountLabel(
+function connectionAccountLabel(
   provider: ConnectionReauthProviderLabel,
   row: {
     account_name?: string | null;
@@ -170,6 +170,57 @@ export function connectionReauthBannerBody(input: ConnectionReauthBannerInput): 
 
 export function connectionPausedUntilCopy(provider: ConnectionReauthProviderLabel): string {
   return `Paused until ${provider} is reconnected.`;
+}
+
+const STATIC_REAUTH_LABELS: Record<
+  Exclude<ConnectionReauthTable, "workspace_oauth_connections">,
+  { provider: ConnectionReauthProviderLabel; slug: string }
+> = {
+  zoom_connections: { provider: "Zoom", slug: "zoom" },
+  acuity_connections: { provider: "Acuity", slug: "acuity" },
+  caldav_connections: { provider: "CalDAV", slug: "caldav" },
+  vagaro_connections: { provider: "Vagaro", slug: "vagaro" },
+  meta_connections: { provider: "Facebook", slug: "meta" },
+  slack_connections: { provider: "Slack", slug: "slack" },
+  whatsapp_connections: { provider: "WhatsApp", slug: "whatsapp" }
+};
+
+/** Provider name, integrations slug, and account label for a flagged row. */
+export function labelsForReauthRow(
+  table: ConnectionReauthTable,
+  row: {
+    account_name?: string | null;
+    account_email?: string | null;
+    page_name?: string | null;
+    team_name?: string | null;
+    username?: string | null;
+    calendar_name?: string | null;
+    display_phone_number?: string | null;
+    user_id?: string | null;
+    client_id?: string | null;
+    metadata?: Record<string, unknown> | null;
+    provider_config_key?: string | null;
+  }
+): {
+  provider: ConnectionReauthProviderLabel;
+  slug: string;
+  accountLabel: string;
+} {
+  if (table === "workspace_oauth_connections") {
+    const key = row.provider_config_key ?? "";
+    const provider = workspaceProviderLabel(key);
+    return {
+      provider,
+      slug: workspaceIntegrationsSlug(key),
+      accountLabel: connectionAccountLabel(provider, row)
+    };
+  }
+  const { provider, slug } = STATIC_REAUTH_LABELS[table];
+  return {
+    provider,
+    slug,
+    accountLabel: connectionAccountLabel(provider, row)
+  };
 }
 
 export function isSlackTokenDead(error: string | null | undefined): boolean {

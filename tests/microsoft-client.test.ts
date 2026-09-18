@@ -12,7 +12,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceConnectionSecrets: vi.fn(),
-  setWorkspaceConnectionActive: vi.fn(),
   updateWorkspaceConnectionTokens: vi.fn()
 }));
 vi.mock("@/lib/connections/reauth", () => ({
@@ -26,7 +25,6 @@ vi.mock("@/lib/microsoft/oauth", async (importOriginal) => {
 
 import {
   getWorkspaceConnectionSecrets,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionTokens
 } from "@/lib/db/workspace-oauth-connections";
 import { MicrosoftOAuthError, refreshMicrosoftTokens } from "@/lib/microsoft/oauth";
@@ -242,7 +240,6 @@ describe("getMicrosoftAccessToken", () => {
         "workspace_oauth_connections",
         ROW_ID
       );
-      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
     it("does NOT deactivate when another instance already rotated the token", async () => {
@@ -256,7 +253,7 @@ describe("getMicrosoftAccessToken", () => {
         );
 
       await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBe("at-winner");
-      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+      expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
     });
 
     it("flags needs_reauth when the re-read row is gone", async () => {
@@ -269,7 +266,6 @@ describe("getMicrosoftAccessToken", () => {
         "workspace_oauth_connections",
         ROW_ID
       );
-      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
     it("flags needs_reauth when the re-read row is inactive", async () => {
@@ -282,7 +278,6 @@ describe("getMicrosoftAccessToken", () => {
         "workspace_oauth_connections",
         ROW_ID
       );
-      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
     it("flags needs_reauth when the re-read row already needs reconnect", async () => {
@@ -309,7 +304,7 @@ describe("getMicrosoftAccessToken", () => {
     );
 
     await expect(getMicrosoftAccessToken(ROW_ID, NOW)).rejects.toThrow("timed out");
-    expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
   });
 
   it("clears the single-flight entry after a failure so the next call retries", async () => {

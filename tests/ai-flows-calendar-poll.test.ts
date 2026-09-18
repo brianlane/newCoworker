@@ -85,6 +85,7 @@ import {
 import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
+const CALENDAR_POLL_PAUSED_REAUTH_EVENT = "ai_flow_calendar_poll_paused_reauth";
 
 const googleConn = {
   provider: "google" as const,

@@ -360,21 +360,6 @@ export async function updateWorkspaceConnectionAccessToken(
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
-/** Soft-disable / re-enable (set false when a refresh returns invalid_grant). */
-export async function setWorkspaceConnectionActive(
-  id: string,
-  isActive: boolean,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("workspace_oauth_connections")
-    .update({ is_active: isActive, updated_at: new Date().toISOString() })
-    .eq("id", id);
-
-  if (error) throw new Error(`setWorkspaceConnectionActive: ${error.message}`);
-}
-
 export type UpsertDirectWorkspaceConnectionInput = {
   businessId: string;
   providerConfigKey: string;

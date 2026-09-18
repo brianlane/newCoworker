@@ -11,7 +11,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 
-export type ConnectionReauthBannerItem = {
+type ConnectionReauthBannerItem = {
   id: string;
   provider: string;
   accountLabel: string;

@@ -25,23 +25,25 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
-  CONNECTION_REAUTH_KIND,
-  CONNECTION_REAUTH_MAX_EMAILS,
-  CONNECTION_REAUTH_REMINDER_MS,
-  labelsForReauthRow,
   listConnectionReauthBannerState,
   markConnectionNeedsReauth,
   processConnectionReauthReminders,
   stampConnectionHealthy
 } from "@/lib/connections/reauth";
-import { clearedReauthFields } from "@/lib/connections/reauth-copy";
+import {
+  CONNECTION_REAUTH_KIND,
+  CONNECTION_REAUTH_MAX_EMAILS,
+  CONNECTION_REAUTH_REMINDER_MS,
+  clearedReauthFields,
+  labelsForReauthRow
+} from "@/lib/connections/reauth-copy";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { markCalendlyConnectionNeedsReauth } from "@/lib/calendly/reauth";
 import {
   CALENDLY_REAUTH_KIND,
-  CALENDLY_REAUTH_MAX_EMAILS,
-  markCalendlyConnectionNeedsReauth
-} from "@/lib/calendly/reauth";
+  CALENDLY_REAUTH_MAX_EMAILS
+} from "@/lib/calendly/reauth-copy";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ZOOM_A = "aaaaaaaa-1111-4111-8111-111111111111";

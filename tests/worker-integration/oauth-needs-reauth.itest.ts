@@ -30,15 +30,17 @@ import {
 } from "@/lib/db/zoom-connections";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import {
-  CONNECTION_REAUTH_KIND,
-  CONNECTION_REAUTH_REMINDER_MS,
   listConnectionReauthBannerState,
   markConnectionNeedsReauth,
   processConnectionReauthReminders
 } from "@/lib/connections/reauth";
-import { CALENDLY_REAUTH_KIND } from "@/lib/calendly/reauth";
+import {
+  CONNECTION_REAUTH_KIND,
+  CONNECTION_REAUTH_REMINDER_MS,
+  clearedReauthFields
+} from "@/lib/connections/reauth-copy";
+import { CALENDLY_REAUTH_KIND } from "@/lib/calendly/reauth-copy";
 import { recordSystemLog } from "@/lib/db/system-logs";
-import { clearedReauthFields } from "@/lib/connections/reauth-copy";
 
 function dispatchOk() {
   return vi.fn(async () => ({
