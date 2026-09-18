@@ -18,6 +18,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -45,6 +46,15 @@ type StoredMetaConnectionRow = {
    * own pause switch: this one means the credential died.
    */
   token_invalid_at: string | null;
+  /**
+   * Permanent auth rejection (Meta code 190). Distinct from is_active:
+   * Disable is the owner's pause; needs_reauth is the product telling them
+   * to reconnect. token_invalid_at still answers "since when".
+   */
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   /** IG professional account linked to the Page (null when none). */
   instagram_account_id: string | null;
   instagram_username: string | null;
@@ -74,8 +84,9 @@ export type PublicMetaConnectionRow = Omit<
   has_page_token: boolean;
   /**
    * Meta is refusing this connection's token and the owner must reconnect.
-   * Derived so the card never has to know about the column, and kept
-   * separate from is_active, which is the owner's own pause switch.
+   * Derived from needs_reauth (and the older token_invalid_at stamp) so the
+   * card never has to know about either column. Kept separate from
+   * is_active, which is the owner's own pause switch.
    */
   needs_reconnect: boolean;
 };
@@ -83,6 +94,7 @@ export type PublicMetaConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,status,user_token_encrypted,page_id,page_name," +
   "page_token_encrypted,account_name,meta_user_id,token_invalid_at," +
+  "needs_reauth,last_healthy_at,reauth_email_count,reauth_email_last_sent_at," +
   "instagram_account_id,instagram_username," +
   "dataset_id,capi_enabled,is_active,created_at,updated_at";
 
@@ -102,12 +114,14 @@ function toDecryptedRow(row: StoredMetaConnectionRow): MetaConnectionRow {
 export function toPublicMetaConnection(
   row: StoredMetaConnectionRow
 ): PublicMetaConnectionRow {
-  const { user_token_encrypted, page_token_encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const stored = hydrated as unknown as StoredMetaConnectionRow;
+  const { user_token_encrypted, page_token_encrypted, ...rest } = stored;
   void user_token_encrypted;
   return {
     ...rest,
     has_page_token: (page_token_encrypted ?? "").length > 0,
-    needs_reconnect: Boolean(row.token_invalid_at)
+    needs_reconnect: stored.needs_reauth === true || Boolean(stored.token_invalid_at)
   };
 }
 
@@ -158,6 +172,7 @@ export async function getActiveMetaConnectionByPageId(
     .eq("page_id", pageId)
     .eq("status", "active")
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveMetaConnectionByPageId: ${error.message}`);
   if (!data) return null;
@@ -181,6 +196,7 @@ export async function getActiveMetaConnectionByInstagramId(
     .eq("instagram_account_id", instagramAccountId)
     .eq("status", "active")
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveMetaConnectionByInstagramId: ${error.message}`);
   if (!data) return null;
@@ -262,7 +278,8 @@ export async function savePendingMetaConnection(
     ...(input.metaUserId ? { meta_user_id: input.metaUserId } : {}),
     instagram_account_id: null,
     instagram_username: null,
-    is_active: true
+    is_active: true,
+    ...clearedReauthFields(new Date().toISOString())
   };
 
   if (!existing) {
@@ -325,6 +342,7 @@ export async function activateMetaConnection(
       instagram_username: input.instagramUsername ?? null,
       dataset_id: input.datasetId ?? null,
       token_invalid_at: null,
+      ...clearedReauthFields(new Date().toISOString()),
       is_active: true,
       updated_at: new Date().toISOString()
     })

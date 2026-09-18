@@ -29,6 +29,7 @@ type CaldavConnection = {
   calendar_url: string | null;
   calendar_name: string | null;
   is_active: boolean;
+  needs_reauth?: boolean;
   has_password: boolean;
   created_at: string;
   updated_at: string;
@@ -127,8 +128,16 @@ export function CaldavIntegrationCard({ businessId, initialConnection }: Props) 
             check real availability and book appointments straight onto it.
           </p>
         </div>
-        <Badge variant={connection ? "success" : "neutral"}>
-          {connection ? "Connected" : "Not connected"}
+        <Badge
+          variant={
+            connection?.needs_reauth
+              ? "high_load"
+              : connection
+                ? "success"
+                : "neutral"
+          }
+        >
+          {connection?.needs_reauth ? "Needs reconnect" : connection ? "Connected" : "Not connected"}
         </Badge>
       </div>
 
@@ -146,9 +155,21 @@ export function CaldavIntegrationCard({ businessId, initialConnection }: Props) 
               </>
             ) : null}
           </div>
+          {connection.needs_reauth ? (
+            <p className="text-xs text-spark-orange">
+              CalDAV needs to be reconnected. Calendar booking checks for this account are
+              paused.
+            </p>
+          ) : null}
+
           <div className="flex gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(true)}>
-              Update credentials
+            <Button
+              type="button"
+              variant={connection.needs_reauth ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setShowForm(true)}
+            >
+              {connection.needs_reauth ? "Reconnect" : "Update credentials"}
             </Button>
             <Button
               type="button"

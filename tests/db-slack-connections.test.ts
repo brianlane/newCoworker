@@ -24,6 +24,9 @@ vi.mock("@/lib/integrations/secrets", () => ({
     return m[1] === "UNDECRYPTABLE" ? null : m[1];
   })
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 import {
   deleteSlackConnection,
@@ -142,6 +145,12 @@ describe("getActiveSlackConnection", () => {
       await getActiveSlackConnection(
         BIZ,
         makeDb(chain({ data: { ...STORED, bot_token_encrypted: "" }, error: null }))
+      )
+    ).toBeNull();
+    expect(
+      await getActiveSlackConnection(
+        BIZ,
+        makeDb(chain({ data: { ...STORED, needs_reauth: true }, error: null }))
       )
     ).toBeNull();
     expect(
@@ -309,7 +318,12 @@ describe("default service client fallbacks", () => {
     defaultClientSpy.mockReturnValueOnce(makeDb(chain({ data: null, error: null })));
     await deleteSlackConnection(BIZ);
 
-    defaultClientSpy.mockReturnValueOnce(makeDb(chain({ data: null, error: null })));
+    defaultClientSpy.mockReturnValueOnce(
+      makeDb(
+        chain({ data: { id: "sc-1" }, error: null }),
+        chain({ data: null, error: null })
+      )
+    );
     await markSlackConnectionDeauthorizedByTeamId("T-1");
   });
 });
@@ -335,13 +349,18 @@ describe("setSlackConnectionActive / deleteSlackConnection / deauthorize", () =>
     ).rejects.toThrow(/deleteSlackConnection: e/);
   });
 
-  it("wipes the dead token and deactivates by team id", async () => {
-    const c = chain({ data: null, error: null });
-    await markSlackConnectionDeauthorizedByTeamId("T-1", makeDb(c));
-    expect((c as { update: ReturnType<typeof vi.fn> }).update).toHaveBeenCalledWith(
+  it("wipes the dead token, deactivates by team id, then flags needs_reauth", async () => {
+    const read = chain({ data: { id: "sc-1" }, error: null });
+    const write = chain({ data: null, error: null });
+    await markSlackConnectionDeauthorizedByTeamId("T-1", makeDb(read, write));
+    expect((write as { update: ReturnType<typeof vi.fn> }).update).toHaveBeenCalledWith(
       expect.objectContaining({ is_active: false, bot_token_encrypted: "" })
     );
-    expect((c as { eq: ReturnType<typeof vi.fn> }).eq).toHaveBeenCalledWith("team_id", "T-1");
+    expect((write as { eq: ReturnType<typeof vi.fn> }).eq).toHaveBeenCalledWith("team_id", "T-1");
+    const { markConnectionNeedsReauth } = await import("@/lib/connections/reauth");
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("slack_connections", "sc-1", {
+      client: expect.anything()
+    });
     await expect(
       markSlackConnectionDeauthorizedByTeamId(
         "T-1",

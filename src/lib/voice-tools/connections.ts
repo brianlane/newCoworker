@@ -113,10 +113,10 @@ const MAIL_SCOPES: Record<"google" | "microsoft", readonly string[]> = {
  * Deliberately conservative: it answers false ONLY when the row proves it
  * cannot. Two rules, and the second is the one that matters.
  *
- * 1. A soft-disabled row cannot serve anything. The token manager sets
- *    `is_active = false` when a provider answers `invalid_grant`, so resolving
- *    one hands out a connection that is known dead. Worse, it does so INSTEAD of
- *    falling through to a working connection the tenant also has.
+ * 1. A soft-disabled or needs_reauth row cannot serve anything. Owner Disable
+ *    sets `is_active = false`. A permanent `invalid_grant` sets `needs_reauth`,
+ *    so resolving one would hand out a connection that is known dead. Worse, it
+ *    would do so INSTEAD of falling through to a working sibling mailbox.
  *
  * 2. A row whose granted scope lacks the capability cannot serve it. Granular
  *    consent means an owner can untick Gmail and keep Calendar, and one live
@@ -138,6 +138,7 @@ function canServe(row: WorkspaceRow, need: "mail" | "any"): boolean {
   // known", and a truthiness check would quietly reject a row that merely did
   // not carry the field.
   if (row.is_active === false) return false;
+  if (row.needs_reauth === true) return false;
   if (need === "any") return true;
   const granted = row.oauth_scope;
   if (typeof granted !== "string" || granted.length === 0) return true;

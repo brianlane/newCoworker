@@ -2319,6 +2319,13 @@
       "bodyNoLastCheck": "Calendly de {account} necesita reconectarse. Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa.",
       "pausedUntilReconnect": "En pausa hasta que se reconecte Calendly."
     },
+    "connectionReauth": {
+      "title": "{provider} necesita reconectarse",
+      "reconnect": "Reconectar",
+      "bodyWithLastCheck": "{provider} de {account} necesita reconectarse. {pausedWork}, última revisión correcta: {when}.",
+      "bodyNoLastCheck": "{provider} de {account} necesita reconectarse. {pausedWork}.",
+      "pausedUntilReconnect": "En pausa hasta que se reconecte {provider}."
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Lleva a tu coworker a Slack: los avisos llegan al canal que elijas, justo donde ya trabaja tu equipo.",
@@ -3598,6 +3605,17 @@
       "cta": "Reconectar Calendly",
       "summary": "Calendly necesita reconectarse: {account}",
       "sms": "[REDACTED]: Calendly de {account} necesita reconectarse. Los seguimientos de calendario están en pausa hasta que lo reconectes en Integraciones."
+    },
+    "connectionReauth": {
+      "subject": "{provider} necesita reconectarse",
+      "heading": "{provider} necesita reconectarse",
+      "intro": "La conexión de {provider} de {account} dejó de funcionar.",
+      "lastCheck": "Última revisión correcta: {when}.",
+      "paused": "{pausedWork} hasta que se reconecte. Las horas perdidas no se recuperan.",
+      "action": "Reconecta esa cuenta de {provider} desde tu panel. El acceso nuevo se guarda en la misma conexión, así que no crearás un duplicado.",
+      "cta": "Reconectar {provider}",
+      "summary": "{provider} necesita reconectarse: {account}",
+      "sms": "[REDACTED]: {provider} de {account} necesita reconectarse. Ábrelo en Integraciones para reconectarlo."
     },
     "ncSignoff": "- El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",

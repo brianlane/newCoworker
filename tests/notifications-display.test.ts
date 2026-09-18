@@ -211,6 +211,97 @@ describe("notifications/display", () => {
       });
     });
 
+    it("routes a Zoom reconnect alert to the same-row deep link", () => {
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: {
+            connection_id: UUID,
+            table: "zoom_connections",
+            provider: "Zoom"
+          }
+        })
+      ).toEqual({
+        href: `/dashboard/integrations/zoom?reconnect=${UUID}`,
+        label: "Reconnect Zoom"
+      });
+    });
+
+    it("routes other connection reconnect alerts by table, provider, or Integrations", () => {
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: {
+            connection_id: UUID,
+            table: "workspace_oauth_connections",
+            provider: "Google"
+          }
+        })
+      ).toEqual({
+        href: `/dashboard/integrations/google?reconnect=${UUID}`,
+        label: "Reconnect Google"
+      });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: {
+            connection_id: UUID,
+            table: "workspace_oauth_connections",
+            provider: "Microsoft 365"
+          }
+        })
+      ).toEqual({
+        href: `/dashboard/integrations/microsoft?reconnect=${UUID}`,
+        label: "Reconnect Microsoft 365"
+      });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "slack_connections", provider: "Slack" }
+        })
+      ).toEqual({
+        href: "/dashboard/integrations/slack",
+        label: "Reconnect Slack"
+      });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "whatsapp_connections", provider: "WhatsApp", connection_id: UUID }
+        })
+      ).toMatchObject({
+        href: `/dashboard/integrations/whatsapp?reconnect=${UUID}`,
+        label: "Reconnect WhatsApp"
+      });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "acuity_connections", provider: "Acuity", connection_id: UUID }
+        })
+      ).toMatchObject({ href: expect.stringContaining("/acuity?reconnect=") });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "caldav_connections", provider: "CalDAV", connection_id: UUID }
+        })
+      ).toMatchObject({ href: expect.stringContaining("/caldav?reconnect=") });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "vagaro_connections", provider: "Vagaro", connection_id: UUID }
+        })
+      ).toMatchObject({ href: expect.stringContaining("/vagaro?reconnect=") });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
+          payload: { table: "meta_connections", provider: "Facebook", connection_id: UUID }
+        })
+      ).toMatchObject({ href: expect.stringContaining("/meta?reconnect=") });
+      expect(notificationLink({ kind: "connection_needs_reauth", payload: {} })).toEqual({
+        href: "/dashboard/integrations",
+        label: "Reconnect"
+      });
+    });
+
     it("routes connection alerts to Integrations", () => {
       for (const kind of ["byon_port", "byon_activation", "calendar_connection_broken"]) {
         expect(notificationLink({ kind, payload: {} })).toEqual({

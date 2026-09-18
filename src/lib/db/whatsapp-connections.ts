@@ -15,6 +15,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -41,6 +42,10 @@ type StoredWhatsAppConnectionRow = {
   access_token_encrypted: string;
   templates: WhatsAppTemplatesState | null;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -61,7 +66,8 @@ export type PublicWhatsAppConnectionRow = Omit<
 
 const ALL_COLUMNS =
   "id,business_id,waba_id,phone_number_id,display_phone_number," +
-  "access_token_encrypted,templates,is_active,created_at,updated_at";
+  "access_token_encrypted,templates,is_active,needs_reauth,last_healthy_at," +
+  "reauth_email_count,reauth_email_last_sent_at,created_at,updated_at";
 
 function toDecryptedRow(row: StoredWhatsAppConnectionRow): WhatsAppConnectionRow {
   const { access_token_encrypted: encrypted, ...rest } = row;
@@ -71,7 +77,9 @@ function toDecryptedRow(row: StoredWhatsAppConnectionRow): WhatsAppConnectionRow
 export function toPublicWhatsAppConnection(
   row: StoredWhatsAppConnectionRow
 ): PublicWhatsAppConnectionRow {
-  const { access_token_encrypted: _encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const { access_token_encrypted: _encrypted, ...rest } =
+    hydrated as unknown as StoredWhatsAppConnectionRow;
   void _encrypted;
   return rest;
 }
@@ -127,6 +135,7 @@ export async function getActiveWhatsAppConnectionByPhoneNumberId(
     .select(ALL_COLUMNS)
     .eq("phone_number_id", phoneNumberId)
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) {
     throw new Error(`getActiveWhatsAppConnectionByPhoneNumberId: ${error.message}`);
@@ -157,6 +166,7 @@ export async function listActiveWhatsAppConnectionsByWabaId(
     .select(ALL_COLUMNS)
     .eq("waba_id", id)
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .limit(200);
   if (error) throw new Error(`listActiveWhatsAppConnectionsByWabaId: ${error.message}`);
   return ((data ?? []) as unknown as StoredWhatsAppConnectionRow[]).map(toDecryptedRow);
@@ -237,6 +247,7 @@ export async function saveWhatsAppConnection(
         access_token_encrypted: encryptIntegrationSecret(token),
         templates: input.templates,
         is_active: true,
+        ...clearedReauthFields(new Date().toISOString()),
         updated_at: new Date().toISOString()
       },
       { onConflict: "business_id" }

@@ -16,6 +16,7 @@
  */
 
 import { getActiveVagaroConnection, type VagaroConnectionRow } from "@/lib/db/vagaro-connections";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 import {
   createVagaroAppointment,
   deleteVagaroAppointment,
@@ -26,6 +27,11 @@ import {
   type VagaroService
 } from "@/lib/vagaro/client";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
+
+function vagaroAuthFailed(connectionId: string): CalendarToolResult {
+  void markConnectionNeedsReauth("vagaro_connections", connectionId).catch(() => undefined);
+  return { ok: false, detail: "vagaro_auth_failed" };
+}
 
 /** Match the other providers: offer at most 3 candidate slots. */
 const MAX_SLOTS = 3;
@@ -127,7 +133,7 @@ export async function findVagaroSlots(
     };
   } catch (err) {
     if (err instanceof VagaroApiError && err.code === "auth_failed") {
-      return { ok: false, detail: "vagaro_auth_failed" };
+      return vagaroAuthFailed(conn.id);
     }
     throw err;
   }
@@ -186,7 +192,7 @@ export async function bookVagaroAppointment(
     };
   } catch (err) {
     if (err instanceof VagaroApiError && err.code === "auth_failed") {
-      return { ok: false, detail: "vagaro_auth_failed" };
+      return vagaroAuthFailed(conn.id);
     }
     throw err;
   }
@@ -226,7 +232,7 @@ export async function rescheduleVagaroAppointment(
     };
   } catch (err) {
     if (err instanceof VagaroApiError && err.code === "auth_failed") {
-      return { ok: false, detail: "vagaro_auth_failed" };
+      return vagaroAuthFailed(conn.id);
     }
     throw err;
   }
@@ -247,7 +253,7 @@ export async function cancelVagaroAppointment(
     };
   } catch (err) {
     if (err instanceof VagaroApiError && err.code === "auth_failed") {
-      return { ok: false, detail: "vagaro_auth_failed" };
+      return vagaroAuthFailed(conn.id);
     }
     throw err;
   }

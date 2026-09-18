@@ -21,6 +21,10 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   setWorkspaceConnectionActive: vi.fn(),
   updateWorkspaceConnectionAccessToken: vi.fn()
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(),
+  stampConnectionHealthy: vi.fn()
+}));
 vi.mock("@/lib/google/oauth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/google/oauth")>();
   return { ...actual, refreshGoogleTokens: vi.fn() };
@@ -32,6 +36,7 @@ import {
   updateWorkspaceConnectionAccessToken
 } from "@/lib/db/workspace-oauth-connections";
 import { GoogleOAuthError, refreshGoogleTokens } from "@/lib/google/oauth";
+import { markConnectionNeedsReauth, stampConnectionHealthy } from "@/lib/connections/reauth";
 import {
   GOOGLE_TOKEN_REFRESH_MARGIN_MS,
   getGoogleAccessToken,
@@ -48,6 +53,7 @@ function secrets(over: Partial<Parameters<typeof Object.assign>[0]> = {}) {
     refreshToken: "rt-stored",
     tokenExpiresAt: new Date(NOW + 3_600_000).toISOString(),
     isActive: true,
+    needsReauth: false,
     updatedAt: new Date(NOW).toISOString(),
     ...over
   };
@@ -58,7 +64,10 @@ beforeEach(() => {
   vi.mocked(setWorkspaceConnectionActive).mockReset();
   vi.mocked(updateWorkspaceConnectionAccessToken).mockReset();
   vi.mocked(refreshGoogleTokens).mockReset();
-  vi.mocked(updateWorkspaceConnectionAccessToken).mockResolvedValue(true);
+  vi.mocked(markConnectionNeedsReauth).mockReset();
+  vi.mocked(markConnectionNeedsReauth).mockResolvedValue({ flipped: true, emailed: true });
+  vi.mocked(stampConnectionHealthy).mockReset();
+  vi.mocked(stampConnectionHealthy).mockResolvedValue(undefined);
   resetGoogleRefreshStateForTests();
 });
 
@@ -79,8 +88,10 @@ describe("getGoogleAccessToken", () => {
       expiresAt: new Date(NOW + 3_600_000),
       grantedScope: "openid"
     });
+    vi.mocked(updateWorkspaceConnectionAccessToken).mockResolvedValue(true);
     await expect(getGoogleAccessToken(ROW, NOW)).resolves.toBe("at-fresh");
     expect(refreshGoogleTokens).toHaveBeenCalledWith("rt-stored");
+    expect(stampConnectionHealthy).toHaveBeenCalledWith("workspace_oauth_connections", ROW);
   });
 
   it("presents the stored refresh token and never writes a new one", async () => {
@@ -144,7 +155,7 @@ describe("getGoogleAccessToken", () => {
     expect(refreshGoogleTokens).toHaveBeenCalledTimes(1);
   });
 
-  it("deactivates the row and returns null on invalid_grant", async () => {
+  it("flags needs_reauth and returns null on invalid_grant", async () => {
     vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(
       secrets({ tokenExpiresAt: new Date(NOW).toISOString() }) as never
     );
@@ -152,7 +163,16 @@ describe("getGoogleAccessToken", () => {
       new GoogleOAuthError("invalid_grant", "Token has been expired or revoked", 400)
     );
     await expect(getGoogleAccessToken(ROW, NOW)).resolves.toBeNull();
-    expect(setWorkspaceConnectionActive).toHaveBeenCalledWith(ROW, false);
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("workspace_oauth_connections", ROW);
+    expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+  });
+
+  it("does not present a dead token once the row is flagged needs_reauth", async () => {
+    vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(
+      secrets({ needsReauth: true }) as never
+    );
+    await expect(getGoogleAccessToken(ROW, NOW)).resolves.toBeNull();
+    expect(refreshGoogleTokens).not.toHaveBeenCalled();
   });
 
   it("does NOT deactivate on invalid_client, and propagates it", async () => {
@@ -210,6 +230,21 @@ describe("getGoogleAccessToken", () => {
     vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(
       secrets({ tokenExpiresAt: "not-a-date" }) as never
     );
+    vi.mocked(refreshGoogleTokens).mockResolvedValue({
+      accessToken: "at-fresh",
+      refreshToken: null,
+      expiresAt: new Date(NOW + 3_600_000),
+      grantedScope: null
+    });
+    await expect(getGoogleAccessToken(ROW, NOW)).resolves.toBe("at-fresh");
+  });
+
+  it("still returns the fresh token when last_healthy_at cannot stamp", async () => {
+    vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(
+      secrets({ tokenExpiresAt: new Date(NOW).toISOString() }) as never
+    );
+    vi.mocked(updateWorkspaceConnectionAccessToken).mockResolvedValue(true);
+    vi.mocked(stampConnectionHealthy).mockRejectedValueOnce(new Error("stamp down"));
     vi.mocked(refreshGoogleTokens).mockResolvedValue({
       accessToken: "at-fresh",
       refreshToken: null,

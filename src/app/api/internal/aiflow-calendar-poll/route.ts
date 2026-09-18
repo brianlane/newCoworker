@@ -21,6 +21,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
 import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
 import { processCalendlyReauthReminders } from "@/lib/calendly/reauth";
+import { processConnectionReauthReminders } from "@/lib/connections/reauth";
 import { handleObservedCancellation, sweepWaitlist } from "@/lib/calendar-tools/waitlist-fill";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
@@ -59,10 +60,20 @@ export async function POST(request: Request): Promise<Response> {
       console.error("aiflow-calendar-poll calendly reauth reminders", err);
       return null;
     });
+    const connectionReauth = await processConnectionReauthReminders().catch((err) => {
+      console.error("aiflow-calendar-poll connection reauth reminders", err);
+      return null;
+    });
     // Waitlist maintenance rides the same tick: expire lapsed entries and
     // pass expired offer holds to the next candidate. Never throws.
     const waitlist = await sweepWaitlist();
-    return successResponse({ ...result, bookingGoals, waitlist, calendlyReauth });
+    return successResponse({
+      ...result,
+      bookingGoals,
+      waitlist,
+      calendlyReauth,
+      connectionReauth
+    });
   } catch (err) {
     return handleRouteError(err);
   }

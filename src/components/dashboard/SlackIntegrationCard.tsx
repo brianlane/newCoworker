@@ -32,6 +32,7 @@ type SlackConnection = {
   alert_channel_id: string | null;
   alert_channel_name: string | null;
   is_active: boolean;
+  needs_reauth?: boolean;
   has_bot_token: boolean;
   created_at: string;
   updated_at: string;
@@ -63,7 +64,11 @@ export function SlackIntegrationCard({ businessId, initialConnection, tierAllowe
   const [savingChannel, setSavingChannel] = useState(false);
   const [removing, setRemoving] = useState(false);
 
-  const connectedAndActive = !!connection && connection.is_active && connection.has_bot_token;
+  const connectedAndActive =
+    !!connection &&
+    connection.is_active &&
+    connection.has_bot_token &&
+    connection.needs_reauth !== true;
   const connectHref = `/api/integrations/slack/connect?businessId=${encodeURIComponent(businessId)}`;
 
   const loadChannels = useCallback(async () => {
@@ -156,7 +161,15 @@ export function SlackIntegrationCard({ businessId, initialConnection, tierAllowe
         </div>
         <Badge
           className="whitespace-nowrap"
-          variant={connectedAndActive ? "success" : connection ? "pending" : "neutral"}
+          variant={
+            connection?.needs_reauth
+              ? "high_load"
+              : connectedAndActive
+                ? "success"
+                : connection
+                  ? "pending"
+                  : "neutral"
+          }
         >
           {connectedAndActive
             ? t("statusConnected")

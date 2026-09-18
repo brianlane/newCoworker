@@ -15,6 +15,10 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   setWorkspaceConnectionActive: vi.fn(),
   updateWorkspaceConnectionTokens: vi.fn()
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(),
+  stampConnectionHealthy: vi.fn()
+}));
 vi.mock("@/lib/microsoft/oauth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/microsoft/oauth")>();
   return { ...actual, refreshMicrosoftTokens: vi.fn() };
@@ -26,6 +30,7 @@ import {
   updateWorkspaceConnectionTokens
 } from "@/lib/db/workspace-oauth-connections";
 import { MicrosoftOAuthError, refreshMicrosoftTokens } from "@/lib/microsoft/oauth";
+import { markConnectionNeedsReauth, stampConnectionHealthy } from "@/lib/connections/reauth";
 import {
   getMicrosoftAccessToken,
   MICROSOFT_TOKEN_REFRESH_MARGIN_MS,
@@ -42,6 +47,7 @@ const secrets = (over: Record<string, unknown> = {}) => ({
   // Comfortably valid unless a case overrides it.
   tokenExpiresAt: new Date(NOW + 3_600_000).toISOString(),
   isActive: true,
+  needsReauth: false,
   updatedAt: "2026-08-01T00:00:00Z",
   ...over
 });
@@ -58,6 +64,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetMicrosoftRefreshStateForTests();
   vi.mocked(updateWorkspaceConnectionTokens).mockResolvedValue(true);
+  vi.mocked(markConnectionNeedsReauth).mockResolvedValue({ flipped: true, emailed: true });
+  vi.mocked(stampConnectionHealthy).mockResolvedValue(undefined);
 });
 
 describe("getMicrosoftAccessToken", () => {
@@ -70,6 +78,12 @@ describe("getMicrosoftAccessToken", () => {
   it("returns null for a soft-disabled row", async () => {
     vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(secrets({ isActive: false }));
     await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
+  });
+
+  it("returns null for a needs_reauth row", async () => {
+    vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(secrets({ needsReauth: true }));
+    await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
+    expect(refreshMicrosoftTokens).not.toHaveBeenCalled();
   });
 
   it("returns the stored token while it is comfortably valid", async () => {
@@ -88,6 +102,7 @@ describe("getMicrosoftAccessToken", () => {
 
     await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBe("at-new");
     expect(refreshMicrosoftTokens).toHaveBeenCalledWith("rt-old");
+    expect(stampConnectionHealthy).toHaveBeenCalledWith("workspace_oauth_connections", ROW_ID);
   });
 
   it("refreshes an already-expired token", async () => {
@@ -190,6 +205,25 @@ describe("getMicrosoftAccessToken", () => {
     await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBe("at-new");
   });
 
+  it("falls back to its own token when the fence loses and the winner needs reconnect", async () => {
+    vi.mocked(getWorkspaceConnectionSecrets)
+      .mockResolvedValueOnce(secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() }))
+      .mockResolvedValueOnce(secrets({ needsReauth: true }));
+    vi.mocked(refreshMicrosoftTokens).mockResolvedValue(rotated);
+    vi.mocked(updateWorkspaceConnectionTokens).mockResolvedValue(false);
+
+    await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBe("at-new");
+  });
+
+  it("still returns the rotated token when last_healthy_at cannot stamp", async () => {
+    vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(
+      secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() })
+    );
+    vi.mocked(refreshMicrosoftTokens).mockResolvedValue(rotated);
+    vi.mocked(stampConnectionHealthy).mockRejectedValueOnce(new Error("stamp down"));
+    await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBe("at-new");
+  });
+
   describe("invalid_grant", () => {
     const dead = new MicrosoftOAuthError("invalid_grant", "grant is dead");
 
@@ -197,14 +231,18 @@ describe("getMicrosoftAccessToken", () => {
       vi.mocked(refreshMicrosoftTokens).mockRejectedValue(dead);
     });
 
-    it("deactivates the connection when the grant is genuinely revoked", async () => {
+    it("flags needs_reauth when the grant is genuinely revoked", async () => {
       vi.mocked(getWorkspaceConnectionSecrets)
         .mockResolvedValueOnce(secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() }))
         // Re-read shows the same row: nobody else rotated, so it really is dead.
         .mockResolvedValueOnce(secrets());
 
       await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
-      expect(setWorkspaceConnectionActive).toHaveBeenCalledWith(ROW_ID, false);
+      expect(markConnectionNeedsReauth).toHaveBeenCalledWith(
+        "workspace_oauth_connections",
+        ROW_ID
+      );
+      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
     it("does NOT deactivate when another instance already rotated the token", async () => {
@@ -221,22 +259,42 @@ describe("getMicrosoftAccessToken", () => {
       expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
-    it("deactivates when the re-read row is gone", async () => {
+    it("flags needs_reauth when the re-read row is gone", async () => {
       vi.mocked(getWorkspaceConnectionSecrets)
         .mockResolvedValueOnce(secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() }))
         .mockResolvedValueOnce(null);
 
       await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
-      expect(setWorkspaceConnectionActive).toHaveBeenCalledWith(ROW_ID, false);
+      expect(markConnectionNeedsReauth).toHaveBeenCalledWith(
+        "workspace_oauth_connections",
+        ROW_ID
+      );
+      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
     });
 
-    it("deactivates when the re-read row is inactive", async () => {
+    it("flags needs_reauth when the re-read row is inactive", async () => {
       vi.mocked(getWorkspaceConnectionSecrets)
         .mockResolvedValueOnce(secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() }))
         .mockResolvedValueOnce(secrets({ isActive: false, updatedAt: "2026-08-09T00:00:00Z" }));
 
       await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
-      expect(setWorkspaceConnectionActive).toHaveBeenCalledWith(ROW_ID, false);
+      expect(markConnectionNeedsReauth).toHaveBeenCalledWith(
+        "workspace_oauth_connections",
+        ROW_ID
+      );
+      expect(setWorkspaceConnectionActive).not.toHaveBeenCalled();
+    });
+
+    it("flags needs_reauth when the re-read row already needs reconnect", async () => {
+      vi.mocked(getWorkspaceConnectionSecrets)
+        .mockResolvedValueOnce(secrets({ tokenExpiresAt: new Date(NOW - 1).toISOString() }))
+        .mockResolvedValueOnce(secrets({ needsReauth: true, updatedAt: "2026-08-09T00:00:00Z" }));
+
+      await expect(getMicrosoftAccessToken(ROW_ID, NOW)).resolves.toBeNull();
+      expect(markConnectionNeedsReauth).toHaveBeenCalledWith(
+        "workspace_oauth_connections",
+        ROW_ID
+      );
     });
   });
 

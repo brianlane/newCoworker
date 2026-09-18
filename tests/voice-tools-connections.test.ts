@@ -42,7 +42,7 @@ const businessId = "11111111-1111-4111-8111-111111111111";
 function fakeRow(
   provider_config_key: string,
   connection_id = `cx-${provider_config_key}`,
-  over: { is_active?: boolean; oauth_scope?: string | null } = {}
+  over: { is_active?: boolean; oauth_scope?: string | null; needs_reauth?: boolean } = {}
 ) {
   // Realistic defaults: a live row with no recorded scope, which is what every
   // Nango row looks like. Cases that exercise the capability gate override them.
@@ -50,6 +50,7 @@ function fakeRow(
     provider_config_key,
     connection_id,
     is_active: over.is_active ?? true,
+    needs_reauth: over.needs_reauth ?? false,
     oauth_scope: over.oauth_scope ?? null
   } as never;
 }
@@ -413,11 +414,12 @@ describe("canServe gating in email resolution", () => {
     });
   });
 
-  it("skips a soft-disabled row and falls through to a working one", async () => {
-    // The token manager sets is_active=false on invalid_grant. Resolving it hands
-    // out a known-dead connection, and does so instead of the tenant's other one.
+  it("skips a needs_reauth row and falls through to a working sibling", async () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      fakeRow("google", "cx-google", { is_active: false, oauth_scope: "https://www.googleapis.com/auth/gmail.modify" }),
+      fakeRow("google", "cx-google", {
+        needs_reauth: true,
+        oauth_scope: "https://www.googleapis.com/auth/gmail.modify"
+      }),
       fakeRow("outlook", "cx-outlook")
     ]);
     const conn = await resolveEmailConnection(businessId);

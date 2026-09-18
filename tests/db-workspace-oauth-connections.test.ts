@@ -607,6 +607,8 @@ describe("db/workspace-oauth-connections direct rows", () => {
       const written = db.insert.mock.calls[0][0] as Record<string, unknown>;
       expect(written.transport).toBe("direct");
       expect(written.is_active).toBe(true);
+      expect(written.needs_reauth).toBe(false);
+      expect(written.reauth_email_count).toBe(0);
       expect(decryptIntegrationSecret(written.access_token_encrypted as string)).toBe("at-plain");
     });
 
@@ -645,6 +647,8 @@ describe("db/workspace-oauth-connections direct rows", () => {
       const written = db.update.mock.calls[0][0] as Record<string, unknown>;
       expect(written.transport).toBe("direct");
       expect(written.is_active).toBe(true);
+      expect(written.needs_reauth).toBe(false);
+      expect(written.reauth_email_count).toBe(0);
       expect(written.connection_id).toBe("direct:new");
       // App-owned metadata the caller merged in survives the flip.
       expect(written.metadata).toEqual(args.metadata);

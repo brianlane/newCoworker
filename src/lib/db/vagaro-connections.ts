@@ -17,6 +17,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -32,6 +33,10 @@ type StoredVagaroConnectionRow = {
   default_service_id: string | null;
   default_employee_id: string | null;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -60,7 +65,8 @@ export type PublicVagaroConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,client_id,client_secret_encrypted,api_base_url," +
   "webhook_verification_token,default_service_id,default_employee_id," +
-  "is_active,created_at,updated_at";
+  "is_active,needs_reauth,last_healthy_at,reauth_email_count,reauth_email_last_sent_at," +
+  "created_at,updated_at";
 
 function toDecryptedRow(row: StoredVagaroConnectionRow): VagaroConnectionRow {
   const { client_secret_encrypted: encrypted, ...rest } = row;
@@ -76,7 +82,8 @@ function toDecryptedRow(row: StoredVagaroConnectionRow): VagaroConnectionRow {
 export function toPublicVagaroConnection(
   row: StoredVagaroConnectionRow
 ): PublicVagaroConnectionRow {
-  const { client_secret_encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const { client_secret_encrypted, ...rest } = hydrated as unknown as StoredVagaroConnectionRow;
   return { ...rest, has_secret: client_secret_encrypted.length > 0 };
 }
 
@@ -102,7 +109,7 @@ export async function getActiveVagaroConnection(
   client?: SupabaseClient
 ): Promise<VagaroConnectionRow | null> {
   const row = await getVagaroConnection(businessId, client);
-  return row && row.is_active ? row : null;
+  return row && row.is_active && row.needs_reauth !== true ? row : null;
 }
 
 /**
@@ -238,6 +245,7 @@ export async function upsertVagaroConnection(
     updated_at: new Date().toISOString(),
     ...(apiBaseUrl === null ? {} : { api_base_url: apiBaseUrl }),
     ...(secret ? { client_secret_encrypted: encryptIntegrationSecret(secret) } : {}),
+    ...(secret ? clearedReauthFields(new Date().toISOString()) : {}),
     ...(input.isActive === undefined ? {} : { is_active: input.isActive })
   };
   const { data, error } = await db

@@ -32,6 +32,8 @@ import {
   WHATSAPP_STOCK_TEMPLATES,
   WHATSAPP_TEMPLATE_LANGUAGE_ES
 } from "@/lib/meta/client";
+import { isMetaTokenDead } from "@/lib/meta/client";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 import { getContactLanguage } from "@/lib/db/contact-language";
 import {
   appendMessengerMessage,
@@ -178,7 +180,7 @@ export async function deliverWhatsApp(
   if (!connection) {
     return { ok: false, reason: "not_connected" };
   }
-  if (!connection.accessToken || !connection.is_active) {
+  if (!connection.accessToken || !connection.is_active || connection.needs_reauth) {
     return { ok: false, reason: "connection_inactive" };
   }
 
@@ -230,6 +232,15 @@ export async function deliverWhatsApp(
       const sent = await sendText(connection.phone_number_id, connection.accessToken, waId, text);
       messageId = sent.messageId;
     } catch (err) {
+      if (isMetaTokenDead(err)) {
+        await markConnectionNeedsReauth("whatsapp_connections", connection.id).catch((markErr) => {
+          logger.warn("deliverWhatsApp: needs_reauth flip failed", {
+            businessId: input.businessId,
+            error: String(markErr)
+          });
+        });
+        return { ok: false, reason: "connection_inactive", detail: "whatsapp_needs_reauth" };
+      }
       return {
         ok: false,
         reason: "send_failed",
@@ -292,6 +303,15 @@ export async function deliverWhatsApp(
       });
       messageId = sent.messageId;
     } catch (err) {
+      if (isMetaTokenDead(err)) {
+        await markConnectionNeedsReauth("whatsapp_connections", connection.id).catch((markErr) => {
+          logger.warn("deliverWhatsApp: needs_reauth flip failed", {
+            businessId: input.businessId,
+            error: String(markErr)
+          });
+        });
+        return { ok: false, reason: "connection_inactive", detail: "whatsapp_needs_reauth" };
+      }
       return {
         ok: false,
         reason: "send_failed",

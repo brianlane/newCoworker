@@ -2319,6 +2319,13 @@
       "bodyNoLastCheck": "{account}'s Calendly needs a reconnect. Calendar follow-ups and booking checks for that account are paused.",
       "pausedUntilReconnect": "Paused until Calendly is reconnected."
     },
+    "connectionReauth": {
+      "title": "{provider} needs to be reconnected",
+      "reconnect": "Reconnect",
+      "bodyWithLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}, last successful check: {when}.",
+      "bodyNoLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}.",
+      "pausedUntilReconnect": "Paused until {provider} is reconnected."
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Bring your coworker into Slack: alerts land in a channel you pick, right where your team already works.",
@@ -3598,6 +3605,17 @@
       "cta": "Reconnect Calendly",
       "summary": "Calendly needs a reconnect: {account}",
       "sms": "[REDACTED]: {account}'s Calendly needs a reconnect. Calendar follow-ups are paused until you reconnect it on the Integrations page."
+    },
+    "connectionReauth": {
+      "subject": "{provider} needs to be reconnected",
+      "heading": "{provider} needs to be reconnected",
+      "intro": "{account}'s {provider} connection stopped working.",
+      "lastCheck": "Last successful check: {when}.",
+      "paused": "{pausedWork} until it is reconnected. Missed hours are not backfilled.",
+      "action": "Reconnect that {provider} account from your dashboard. The new grant is saved on the same connection, so you will not create a duplicate.",
+      "cta": "Reconnect {provider}",
+      "summary": "{provider} needs to be reconnected: {account}",
+      "sms": "[REDACTED]: {account}'s {provider} needs to be reconnected. Open Integrations to reconnect it."
     },
     "ncSignoff": "- The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",

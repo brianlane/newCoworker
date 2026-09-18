@@ -12,6 +12,9 @@ vi.mock("@/lib/db/slack-connections", () => ({
   getActiveSlackConnection: vi.fn(),
   getSlackConnection: vi.fn()
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn()
+}));
 vi.mock("@/lib/slack/tier-gate", () => ({ slackAllowedForBusiness: vi.fn() }));
 vi.mock("@/lib/slack/client", () => ({ slackPostMessage: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -27,6 +30,7 @@ import {
 } from "@/lib/db/slack-connections";
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
 import { slackPostMessage } from "@/lib/slack/client";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -43,6 +47,10 @@ const CONNECTED = {
   alert_channel_id: "C-1",
   alert_channel_name: "leads",
   is_active: true,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   installed_by_user_id: null,
   created_at: "",
   updated_at: ""
@@ -90,6 +98,15 @@ describe("deliverSlackAlert", () => {
 
     vi.mocked(getSlackConnection).mockResolvedValue({
       ...CONNECTED,
+      needs_reauth: true
+    } as never);
+    expect(await deliverSlackAlert({ businessId: BIZ, text: "x" })).toMatchObject({
+      reason: "needs_reconnect"
+    });
+    expect(slackPostMessage).not.toHaveBeenCalled();
+
+    vi.mocked(getSlackConnection).mockResolvedValue({
+      ...CONNECTED,
       alert_channel_id: null
     } as never);
     expect(await deliverSlackAlert({ businessId: BIZ, text: "x" })).toMatchObject({
@@ -114,6 +131,22 @@ describe("deliverSlackAlert", () => {
       ok: false,
       reason: "send_failed",
       detail: "channel_not_found"
+    });
+
+    vi.mocked(slackPostMessage).mockResolvedValue({ ok: false, error: "token_revoked" });
+    expect(await deliverSlackAlert({ businessId: BIZ, text: "x" })).toEqual({
+      ok: false,
+      reason: "needs_reconnect",
+      detail: "token_revoked"
+    });
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("slack_connections", "sc-1");
+
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    vi.mocked(slackPostMessage).mockResolvedValue({ ok: false, error: "invalid_auth" });
+    expect(await deliverSlackAlert({ businessId: BIZ, text: "x" })).toEqual({
+      ok: false,
+      reason: "needs_reconnect",
+      detail: "invalid_auth"
     });
 
     vi.mocked(slackPostMessage).mockRejectedValue(new Error("socket hang up"));

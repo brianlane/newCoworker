@@ -148,6 +148,10 @@ describe("getActiveCaldavConnection", () => {
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: STORED, error: null });
     expect((await getActiveCaldavConnection(BIZ, makeDb(c2)))?.id).toBe("cd-1");
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
+    expect(await getActiveCaldavConnection(BIZ, makeDb(c3))).toBeNull();
   });
 });
 

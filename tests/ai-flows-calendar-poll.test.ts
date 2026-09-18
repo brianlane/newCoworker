@@ -27,6 +27,14 @@ vi.mock("@/lib/calendly/reauth", () => ({
   markCalendlyConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true })),
   stampCalendlyConnectionHealthy: vi.fn(async () => undefined)
 }));
+vi.mock("@/lib/connections/reauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/connections/reauth")>();
+  return {
+    ...actual,
+    markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true })),
+    stampConnectionHealthy: vi.fn(async () => undefined)
+  };
+});
 vi.mock("@/lib/db/calendly-connections", () => ({
   calendlyCalendarPauseState: vi.fn(async () => ({ pausedCopy: null, needingReauth: [] }))
 }));
@@ -70,6 +78,10 @@ import {
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
+import {
+  markConnectionNeedsReauth,
+  stampConnectionHealthy
+} from "@/lib/connections/reauth";
 import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -726,6 +738,152 @@ describe("pollCalendarTriggers", () => {
     );
     expect(res).toMatchObject({ events: 0, enqueued: 0 });
     expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
+  });
+
+  it("Vagaro: a permanent auth reject flips needs_reauth and does not throw", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockRejectedValue({
+      code: "auth_failed",
+      status: 401
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res.enqueued).toBe(0);
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("vagaro_connections", "cx-vagaro");
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+        message: "Paused until Vagaro is reconnected."
+      })
+    );
+  });
+
+  it("Vagaro: a failed needs_reauth flip still pauses the tick", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockRejectedValue({
+      code: "auth_failed",
+      status: 401
+    });
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res.enqueued).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_PAUSED_REAUTH_EVENT })
+    );
+  });
+
+  it("Vagaro: a transient 5xx does not flip needs_reauth", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockRejectedValue({
+      code: "auth_failed",
+      status: 503
+    });
+    await expect(
+      pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]))
+    ).resolves.toMatchObject({ enqueued: 0 });
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
+  });
+
+  it("Acuity: a permanent auth reject flips needs_reauth; a 5xx does not", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockRejectedValueOnce({
+      code: "auth_failed",
+      status: 401
+    });
+    await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("acuity_connections", "cx-acuity");
+
+    vi.mocked(markConnectionNeedsReauth).mockClear();
+    vi.mocked(fetchAcuityCandidateEvents).mockRejectedValueOnce({
+      code: "request_failed",
+      status: 500
+    });
+    await expect(
+      pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]))
+    ).resolves.toMatchObject({ enqueued: 0 });
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
+  });
+
+  it("stamps last_healthy_at after a successful Vagaro poll", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockResolvedValue({ events: [], overflowed: false });
+    await pollCalendarTriggers(dbWith([flowRow("f-created", createdTrigger())]));
+    expect(stampConnectionHealthy).toHaveBeenCalledWith("vagaro_connections", "cx-vagaro");
+  });
+
+  it("does not fail the Vagaro poll when last_healthy_at cannot stamp", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockResolvedValue({ events: [], overflowed: false });
+    vi.mocked(stampConnectionHealthy).mockRejectedValueOnce(new Error("stamp down"));
+    await expect(
+      pollCalendarTriggers(dbWith([flowRow("f-created", createdTrigger())]))
+    ).resolves.toMatchObject({ enqueued: 0 });
+  });
+
+  it("Acuity: calendar_not_connected pauses without flipping needs_reauth", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockRejectedValueOnce(
+      new Error("calendar_not_connected")
+    );
+    await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(markConnectionNeedsReauth).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+        message: "Paused until Acuity is reconnected."
+      })
+    );
+  });
+
+  it("stamps last_healthy_at after a successful Acuity poll", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockResolvedValue({ events: [], overflowed: false });
+    await pollCalendarTriggers(dbWith([flowRow("f-created", createdTrigger())]));
+    expect(stampConnectionHealthy).toHaveBeenCalledWith("acuity_connections", "cx-acuity");
+  });
+
+  it("does not fail the Acuity poll when last_healthy_at cannot stamp", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockResolvedValue({ events: [], overflowed: false });
+    vi.mocked(stampConnectionHealthy).mockRejectedValueOnce(new Error("stamp down"));
+    await expect(
+      pollCalendarTriggers(dbWith([flowRow("f-created", createdTrigger())]))
+    ).resolves.toMatchObject({ enqueued: 0 });
   });
 
   it("skips a pushed-event enqueue when the event's calendar is not watched", async () => {

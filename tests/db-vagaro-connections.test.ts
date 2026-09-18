@@ -139,6 +139,12 @@ describe("getActiveVagaroConnection", () => {
     c.maybeSingle.mockResolvedValue({ data: STORED, error: null });
     expect((await getActiveVagaroConnection(BIZ, makeDb(c)))?.id).toBe("vg-1");
   });
+
+  it("skips a needs_reauth row so the dead token is not used", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
+    expect(await getActiveVagaroConnection(BIZ, makeDb(c))).toBeNull();
+  });
 });
 
 describe("getActiveVagaroConnectionId", () => {
@@ -251,6 +257,21 @@ describe("upsertVagaroConnection", () => {
     );
     const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
     expect(inserted.api_base_url).toBe("https://api.vagaro.com");
+  });
+
+  it("clears needs_reauth when a new secret is saved on the same row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
+    c.single.mockResolvedValue({ data: STORED, error: null });
+    await upsertVagaroConnection(
+      { businessId: BIZ, clientId: "client-abc", clientSecret: "new-secret" },
+      makeDb(c)
+    );
+    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.needs_reauth).toBe(false);
+    expect(patch.reauth_email_count).toBe(0);
+    expect(patch.reauth_email_last_sent_at).toBeNull();
+    expect(patch.last_healthy_at).toEqual(expect.any(String));
   });
 
   it("updates in place, keeping the stored secret AND regional URL when omitted", async () => {

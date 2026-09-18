@@ -188,6 +188,20 @@ function calendlyTileStatus(
   };
 }
 
+function tileNeedsReconnect(row: { needs_reauth?: boolean } | null | undefined): boolean {
+  return row?.needs_reauth === true;
+}
+
+function connectedOrReconnect(
+  row: { needs_reauth?: boolean } | null,
+  connected: IntegrationStatus,
+  disconnected: IntegrationStatus
+): IntegrationStatus {
+  if (!row) return disconnected;
+  if (tileNeedsReconnect(row)) return { state: "attention", label: "Needs reconnect" };
+  return connected;
+}
+
 export function computeIntegrationStatuses(
   ctx: IntegrationsContext
 ): Record<IntegrationSlug, IntegrationStatus> {
@@ -196,27 +210,33 @@ export function computeIntegrationStatuses(
 
   const metaStatus: IntegrationStatus = !ctx.metaConnection
     ? disconnected
-    : ctx.metaConnection.status === "active"
-      ? connected
-      : { state: "attention", label: "Almost there" };
+    : ctx.metaConnection.needs_reconnect || ctx.metaConnection.needs_reauth
+      ? { state: "attention", label: "Needs reconnect" }
+      : ctx.metaConnection.status === "active"
+        ? connected
+        : { state: "attention", label: "Almost there" };
 
   const zoomStatus: IntegrationStatus = !ctx.zoomConnection
     ? disconnected
-    : ctx.zoomConnection.is_active
-      ? connected
-      : { state: "attention", label: "Needs reconnect" };
+    : ctx.zoomConnection.needs_reauth || !ctx.zoomConnection.is_active
+      ? { state: "attention", label: "Needs reconnect" }
+      : connected;
 
   const whatsappStatus: IntegrationStatus = !ctx.whatsappConnection
     ? disconnected
-    : ctx.whatsappConnection.is_active
-      ? connected
-      : { state: "attention", label: "Paused" };
+    : ctx.whatsappConnection.needs_reauth
+      ? { state: "attention", label: "Needs reconnect" }
+      : ctx.whatsappConnection.is_active
+        ? connected
+        : { state: "attention", label: "Paused" };
 
   const slackStatus: IntegrationStatus = !ctx.slackConnection
     ? disconnected
-    : ctx.slackConnection.is_active && ctx.slackConnection.has_bot_token
-      ? connected
-      : { state: "attention", label: "Needs reconnect" };
+    : ctx.slackConnection.needs_reauth ||
+        !ctx.slackConnection.is_active ||
+        !ctx.slackConnection.has_bot_token
+      ? { state: "attention", label: "Needs reconnect" }
+      : connected;
 
   // Telegram has no separate "has token" flag: an empty credential IS the
   // needs-reconnect state, and the public read deliberately never returns
@@ -261,10 +281,18 @@ export function computeIntegrationStatuses(
     ctx.workspaceConnections,
     (r) => r.provider_config_key
   );
-  const countStatus = (n: number): IntegrationStatus =>
-    n === 0
-      ? disconnected
-      : { state: "connected", label: n === 1 ? "Connected" : `${n} connected` };
+  const countStatus = (
+    rows: Array<{ needs_reauth?: boolean }>
+  ): IntegrationStatus => {
+    if (rows.length === 0) return disconnected;
+    if (rows.some((r) => r.needs_reauth === true)) {
+      return { state: "attention", label: "Needs reconnect" };
+    }
+    return {
+      state: "connected",
+      label: rows.length === 1 ? "Connected" : `${rows.length} connected`
+    };
+  };
 
   // Removing a connector inside Claude or ChatGPT tells us nothing, so a long
   // silence is the only signal we get that one is gone. "Gone quiet" rather
@@ -279,13 +307,13 @@ export function computeIntegrationStatuses(
   };
 
   return {
-    google: countStatus(families.google.length),
-    microsoft: countStatus(families.microsoft.length),
-    workspace: countStatus(families.other.length),
-    vagaro: ctx.vagaroConnection ? connected : disconnected,
-    acuity: ctx.acuityConnection ? connected : disconnected,
+    google: countStatus(families.google),
+    microsoft: countStatus(families.microsoft),
+    workspace: countStatus(families.other),
+    vagaro: connectedOrReconnect(ctx.vagaroConnection, connected, disconnected),
+    acuity: connectedOrReconnect(ctx.acuityConnection, connected, disconnected),
     calendly: calendlyTileStatus(ctx.calendlyConnections),
-    caldav: ctx.caldavConnection ? connected : disconnected,
+    caldav: connectedOrReconnect(ctx.caldavConnection, connected, disconnected),
     meta: metaStatus,
     whatsapp: whatsappStatus,
     zoom: zoomStatus,

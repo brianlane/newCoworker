@@ -20,6 +20,9 @@ vi.mock("@/lib/caldav/client", async () => {
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() }
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 import {
   getActiveCaldavConnection,

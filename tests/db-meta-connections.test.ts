@@ -618,7 +618,7 @@ describe("setMetaTokenInvalid (the dead-token flag)", () => {
 });
 
 describe("needs_reconnect is derived, never stored twice", () => {
-  it("is true exactly when token_invalid_at is set", () => {
+  it("is true when token_invalid_at is set OR needs_reauth is set", () => {
     const base = { ...ACTIVE, page_token_encrypted: "enc(x)" };
     expect(
       toPublicMetaConnection({ ...base, token_invalid_at: null } as never).needs_reconnect
@@ -627,6 +627,13 @@ describe("needs_reconnect is derived, never stored twice", () => {
       toPublicMetaConnection({
         ...base,
         token_invalid_at: "2026-08-18T00:00:00Z"
+      } as never).needs_reconnect
+    ).toBe(true);
+    expect(
+      toPublicMetaConnection({
+        ...base,
+        token_invalid_at: null,
+        needs_reauth: true
       } as never).needs_reconnect
     ).toBe(true);
   });

@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 const getActiveAcuityConnectionMock = vi.fn();
 vi.mock("@/lib/db/acuity-connections", () => ({

@@ -17,6 +17,7 @@ import {
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
 import { isPrivateOrLoopbackHost } from "@/lib/db/custom-integrations";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -29,6 +30,10 @@ type StoredCaldavConnectionRow = {
   calendar_url: string | null;
   calendar_name: string | null;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -48,7 +53,8 @@ export type PublicCaldavConnectionRow = Omit<
 
 const ALL_COLUMNS =
   "id,business_id,server_url,username,password_encrypted,calendar_url," +
-  "calendar_name,is_active,created_at,updated_at";
+  "calendar_name,is_active,needs_reauth,last_healthy_at,reauth_email_count," +
+  "reauth_email_last_sent_at,created_at,updated_at";
 
 export class CaldavConnectionValidationError extends Error {
   constructor(message: string) {
@@ -100,7 +106,8 @@ function toDecryptedRow(row: StoredCaldavConnectionRow): CaldavConnectionRow {
 export function toPublicCaldavConnection(
   row: StoredCaldavConnectionRow
 ): PublicCaldavConnectionRow {
-  const { password_encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const { password_encrypted, ...rest } = hydrated as unknown as StoredCaldavConnectionRow;
   return { ...rest, has_password: password_encrypted.length > 0 };
 }
 
@@ -126,7 +133,7 @@ export async function getActiveCaldavConnection(
   client?: SupabaseClient
 ): Promise<CaldavConnectionRow | null> {
   const row = await getCaldavConnection(businessId, client);
-  return row && row.is_active ? row : null;
+  return row && row.is_active && row.needs_reauth !== true ? row : null;
 }
 
 /**
@@ -230,7 +237,10 @@ export async function upsertCaldavConnection(
     ...(username === undefined ? {} : { username }),
     ...(password === undefined
       ? {}
-      : { password_encrypted: encryptIntegrationSecret(password) }),
+      : {
+          password_encrypted: encryptIntegrationSecret(password),
+          ...clearedReauthFields(new Date().toISOString())
+        }),
     ...("calendarUrl" in input ? { calendar_url: input.calendarUrl ?? null } : {}),
     ...("calendarName" in input ? { calendar_name: input.calendarName ?? null } : {}),
     ...(input.isActive === undefined ? {} : { is_active: input.isActive })

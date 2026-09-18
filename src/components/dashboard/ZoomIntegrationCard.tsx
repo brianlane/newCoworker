@@ -38,6 +38,7 @@ type ZoomConnection = {
   account_email: string | null;
   account_name: string | null;
   is_active: boolean;
+  needs_reauth?: boolean;
   auto_import_transcripts: boolean;
   has_tokens: boolean;
   created_at: string;
@@ -67,7 +68,8 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
   >(null);
 
   const connectHref = `/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`;
-  const connectedAndActive = !!connection && connection.is_active;
+  const needsReauth = !!connection && connection.needs_reauth === true;
+  const connectedAndActive = !!connection && connection.is_active && !needsReauth;
   const [togglingAutoImport, setTogglingAutoImport] = useState(false);
 
   function startConnect() {
@@ -181,13 +183,17 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
         </div>
         <Badge
           className="whitespace-nowrap"
-          variant={connectedAndActive ? "success" : connection ? "pending" : "neutral"}
+          variant={
+            needsReauth ? "high_load" : connectedAndActive ? "success" : connection ? "pending" : "neutral"
+          }
         >
-          {connectedAndActive
-            ? "Connected"
-            : connection
-              ? "Needs reconnect"
-              : "Not connected"}
+          {needsReauth
+            ? "Needs reconnect"
+            : connectedAndActive
+              ? "Connected"
+              : connection
+                ? "Needs reconnect"
+                : "Not connected"}
         </Badge>
       </div>
 
@@ -209,10 +215,12 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
             ) : (
               "Zoom account connected."
             )}
-            {!connection.is_active ? (
+            {!connection.is_active || needsReauth ? (
               <span className="text-spark-orange">
                 {" "}
-                Access was revoked or expired, reconnect to resume.
+                {needsReauth
+                  ? "Zoom needs to be reconnected. Meetings and transcripts for this account are paused."
+                  : "Access was revoked or expired, reconnect to resume."}
               </span>
             ) : null}
           </div>
@@ -285,7 +293,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
             </div>
           ) : null}
           <div className="flex gap-2">
-            {!connection.is_active ? (
+            {!connection.is_active || needsReauth ? (
               <Button type="button" variant="secondary" size="sm" onClick={startConnect}>
                 Reconnect
               </Button>

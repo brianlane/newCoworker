@@ -131,6 +131,12 @@ describe("getVagaroAccessToken", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_client" }));
     await expect(getVagaroAccessToken(CONN)).rejects.toMatchObject({ code: "auth_failed" });
 
+    fetchMock.mockResolvedValueOnce(jsonResponse(503, { error: "unavailable" }));
+    await expect(getVagaroAccessToken(CONN)).rejects.toMatchObject({
+      code: "request_failed",
+      status: 503
+    });
+
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
     await expect(getVagaroAccessToken(CONN)).rejects.toMatchObject({ code: "auth_failed" });
   });

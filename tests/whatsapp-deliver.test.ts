@@ -10,6 +10,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 vi.mock("@/lib/telnyx/assign-did", () => ({
   coerceOwnerPhoneToE164: (phone: string | null) =>
@@ -25,6 +28,8 @@ import {
 } from "@/lib/whatsapp/deliver";
 import type { WhatsAppConnectionRow } from "@/lib/db/whatsapp-connections";
 import type { MessengerConversationRow } from "@/lib/messenger/db";
+import { MetaApiError } from "@/lib/meta/client";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CONV_ID = "22222222-2222-4222-8222-222222222222";
@@ -42,6 +47,10 @@ const CONNECTION: WhatsAppConnectionRow = {
     nc_contact_followup: { status: "APPROVED", language: "en_US" }
   },
   is_active: true,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   created_at: "2026-07-16T00:00:00Z",
   updated_at: "2026-07-16T00:00:00Z"
 };
@@ -136,6 +145,13 @@ describe("deliverWhatsApp", () => {
       getConnection: vi.fn(async () => ({ ...CONNECTION, is_active: false }))
     });
     expect(await deliverWhatsApp(INPUT, paused)).toEqual({
+      ok: false,
+      reason: "connection_inactive"
+    });
+    const needsReauth = makeDeps({
+      getConnection: vi.fn(async () => ({ ...CONNECTION, needs_reauth: true }))
+    });
+    expect(await deliverWhatsApp(INPUT, needsReauth)).toEqual({
       ok: false,
       reason: "connection_inactive"
     });
@@ -376,6 +392,34 @@ describe("deliverWhatsApp", () => {
       ok: false,
       reason: "send_failed",
       detail: "template string failure"
+    });
+  });
+
+  it("flags needs_reauth when Meta says the token is dead (code 190)", async () => {
+    const dead = new MetaApiError("request_failed", "Session has expired", 400, 190);
+    const textDead = makeDeps({
+      sendText: vi.fn(async () => {
+        throw dead;
+      })
+    });
+    expect(await deliverWhatsApp(INPUT, textDead)).toEqual({
+      ok: false,
+      reason: "connection_inactive",
+      detail: "whatsapp_needs_reauth"
+    });
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("whatsapp_connections", "wc-1");
+
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    const tmplDead = makeDeps({
+      getConversation: vi.fn(async () => null),
+      sendTemplate: vi.fn(async () => {
+        throw dead;
+      })
+    });
+    expect(await deliverWhatsApp(INPUT, tmplDead)).toEqual({
+      ok: false,
+      reason: "connection_inactive",
+      detail: "whatsapp_needs_reauth"
     });
   });
 

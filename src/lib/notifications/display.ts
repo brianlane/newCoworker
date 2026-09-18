@@ -6,6 +6,7 @@
  */
 
 import { calendlyReconnectPath } from "@/lib/calendly/reauth-copy";
+import { connectionReconnectPath } from "@/lib/connections/reauth-copy";
 
 export type NotificationLike = {
   kind: string | null;
@@ -165,6 +166,39 @@ export function notificationLink(n: NotificationLike): NotificationLink {
       return { href: calendlyReconnectPath(connectionId), label: "Reconnect Calendly" };
     }
     return { href: "/dashboard/integrations/calendly", label: "Reconnect Calendly" };
+  }
+  if (kind === "connection_needs_reauth") {
+    const connectionId = readUuid(p, "connection_id");
+    const provider = readString(p, "provider");
+    const slugRaw = readString(p, "table");
+    const slug =
+      slugRaw === "zoom_connections"
+        ? "zoom"
+        : slugRaw === "acuity_connections"
+          ? "acuity"
+          : slugRaw === "caldav_connections"
+            ? "caldav"
+            : slugRaw === "vagaro_connections"
+              ? "vagaro"
+              : slugRaw === "meta_connections"
+                ? "meta"
+                : slugRaw === "slack_connections"
+                  ? "slack"
+                  : slugRaw === "whatsapp_connections"
+                    ? "whatsapp"
+                    : provider === "Microsoft 365"
+                      ? "microsoft"
+                      : provider === "Google"
+                        ? "google"
+                        : "integrations";
+    const label = provider ? `Reconnect ${provider}` : "Reconnect";
+    if (connectionId && slug !== "integrations") {
+      return { href: connectionReconnectPath(slug, connectionId), label };
+    }
+    return {
+      href: slug === "integrations" ? "/dashboard/integrations" : `/dashboard/integrations/${slug}`,
+      label
+    };
   }
   if (
     kind === "byon_port" ||
