@@ -180,6 +180,23 @@ describe("resolveVoiceConnection", () => {
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
   });
 
+  it("keeps a flagged dedicated book selected instead of falling through to Google", async () => {
+    // The Vagaro ID probe returns the row even when it needs reconnect
+    // (decrypted getActiveVagaroConnection is what skips the dead token).
+    // If the probe hid it, this would list workspace Google and silently
+    // switch calendars, the one unacceptable outcome.
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-flagged-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "vagaro-flagged-1"
+    });
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+    expect(getActiveAcuityConnectionId).not.toHaveBeenCalled();
+  });
+
   it("resolveCalendarConnection puts an active Acuity connection ahead of the workspace calendars", async () => {
     vi.mocked(getActiveAcuityConnectionId).mockResolvedValue("acuity-row-1");
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);

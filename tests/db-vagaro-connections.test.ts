@@ -152,12 +152,22 @@ describe("getActiveVagaroConnectionId", () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
     expect(await getActiveVagaroConnectionId(BIZ, makeDb(c))).toBe("vg-1");
-    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).not.toHaveBeenCalledWith("needs_reauth", false);
 
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: null });
     expect(await getActiveVagaroConnectionId(BIZ, makeDb(c2))).toBeNull();
     expect(c2.eq).toHaveBeenCalledWith("is_active", true);
+  });
+
+  it("still returns a needs_reauth row so calendar resolution stays on Vagaro", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
+    expect(await getActiveVagaroConnectionId(BIZ, makeDb(c))).toBe("vg-1");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).not.toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("throws on a query error", async () => {

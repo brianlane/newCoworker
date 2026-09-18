@@ -170,6 +170,12 @@ export async function getActiveAcuityConnection(
 /**
  * Lightweight "is Acuity connected?" probe for the calendar-provider
  * resolver: id-only select, no key decryption on the hot path.
+ *
+ * Includes a needs_reauth row. The decrypted {@link getActiveAcuityConnection}
+ * already skips the dead key so API calls stop. Hiding the flagged book here
+ * would let calendar resolution fall through to Google or Microsoft, a silent
+ * provider switch. Keep the dedicated book selected so callers pause on
+ * calendar_not_connected until the owner reconnects.
  */
 export async function getActiveAcuityConnectionId(
   businessId: string,
@@ -181,7 +187,6 @@ export async function getActiveAcuityConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
-    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveAcuityConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;

@@ -139,6 +139,12 @@ export async function getActiveCaldavConnection(
 /**
  * Lightweight "is a direct CalDAV connected?" probe for the
  * calendar-provider resolver: id-only select, no password decryption.
+ *
+ * Includes a needs_reauth row. The decrypted {@link getActiveCaldavConnection}
+ * already skips the dead password so API calls stop. Hiding the flagged book
+ * here would let calendar resolution fall through to Calendly or a workspace
+ * mailbox when no native Google/Outlook calendar is connected. Keep the
+ * dedicated book selected so callers pause until the owner reconnects.
  */
 export async function getActiveCaldavConnectionId(
   businessId: string,
@@ -150,7 +156,6 @@ export async function getActiveCaldavConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
-    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveCaldavConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;

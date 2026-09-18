@@ -115,6 +115,14 @@ export async function getActiveVagaroConnection(
 /**
  * Lightweight "is Vagaro connected?" probe for the calendar-provider
  * resolver: id-only select, no secret decryption on the hot path.
+ *
+ * Includes a needs_reauth row. The decrypted {@link getActiveVagaroConnection}
+ * already skips the dead secret so API calls stop. Hiding the flagged book
+ * here would let calendar resolution fall through to Acuity or Google, a
+ * silent provider switch. Keep the dedicated book selected so callers pause
+ * on calendar_not_connected until the owner reconnects. The Acuity connect
+ * GET also uses this probe as `otherBookingProviderActive`, so a flagged
+ * Vagaro still occupies the dedicated-book slot.
  */
 export async function getActiveVagaroConnectionId(
   businessId: string,
@@ -126,7 +134,6 @@ export async function getActiveVagaroConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
-    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveVagaroConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;

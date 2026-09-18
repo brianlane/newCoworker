@@ -171,7 +171,9 @@ export async function resolveCalendarConnection(
 ): Promise<ResolvedVoiceConnection | null> {
   // Vagaro is the business's REAL book when connected (dedicated scheduling
   // platform, not a workspace side calendar), it wins over every Nango
-  // connection. Id-only probe: no secret decryption on this hot path.
+  // connection. Id-only probe: no secret decryption on this hot path. The
+  // probe still returns a needs_reauth row so we stay on this book and pause
+  // rather than silently switching to Acuity or Google.
   const vagaroId = await getActiveVagaroConnectionId(businessId);
   if (vagaroId) {
     return { provider: "vagaro", providerConfigKey: "vagaro", connectionId: vagaroId };
@@ -183,7 +185,8 @@ export async function resolveCalendarConnection(
   // sits BEHIND Vagaro purely because Vagaro is the incumbent: a tenant with
   // both connected must keep resolving to Vagaro, since a silent provider
   // switch on deploy is the one unacceptable outcome. Id-only probe, so no
-  // secret is decrypted on this hot path.
+  // secret is decrypted on this hot path. Same as Vagaro: a needs_reauth
+  // row still wins so we pause this book instead of falling through to Google.
   const acuityId = await getActiveAcuityConnectionId(businessId);
   if (acuityId) {
     return { provider: "acuity", providerConfigKey: "acuity", connectionId: acuityId };
