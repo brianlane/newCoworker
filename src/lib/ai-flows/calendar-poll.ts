@@ -64,7 +64,6 @@ import {
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
-import { isCalendlyTokenRejected } from "@/lib/calendly/reauth-copy";
 import {
   markConnectionNeedsReauth,
   stampConnectionHealthy

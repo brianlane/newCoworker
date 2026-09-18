@@ -39,8 +39,10 @@ import {
   CONNECTION_REAUTH_REMINDER_MS,
   clearedReauthFields
 } from "@/lib/connections/reauth-copy";
-import { CALENDLY_REAUTH_KIND } from "@/lib/calendly/reauth-copy";
 import { recordSystemLog } from "@/lib/db/system-logs";
+
+/** Shipped #1868 kind. Kept as a local so this PR does not re-export Calendly internals. */
+const CALENDLY_REAUTH_KIND = "calendly_needs_reauth";
 
 function dispatchOk() {
   return vi.fn(async () => ({

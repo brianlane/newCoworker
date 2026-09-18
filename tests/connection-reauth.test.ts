@@ -40,10 +40,10 @@ import {
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { markCalendlyConnectionNeedsReauth } from "@/lib/calendly/reauth";
-import {
-  CALENDLY_REAUTH_KIND,
-  CALENDLY_REAUTH_MAX_EMAILS
-} from "@/lib/calendly/reauth-copy";
+
+/** Shipped #1868 values. Not imported from calendly/reauth-copy (private there). */
+const CALENDLY_REAUTH_KIND = "calendly_needs_reauth";
+const CALENDLY_REAUTH_MAX_EMAILS = 2;
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ZOOM_A = "aaaaaaaa-1111-4111-8111-111111111111";
