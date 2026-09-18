@@ -233,8 +233,26 @@ function makeSession(overrides: Partial<Stripe.Checkout.Session> = {}): Stripe.C
   } as Stripe.Checkout.Session;
 }
 
+const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+
+function isoFromNow(deltaMs: number): string {
+  return new Date(Date.now() + deltaMs).toISOString();
+}
+
+function assignedInventory(
+  vmId: number,
+  expiresAt: string | null
+): { vm_id: number; state: "assigned"; assigned_business_id: string; expires_at: string | null } {
+  return {
+    vm_id: vmId,
+    state: "assigned",
+    assigned_business_id: "biz-1",
+    expires_at: expiresAt
+  };
+}
+
 /** Unpinned Standard (deployed kvm8) → Starter (kvm1): the size-changing path. */
-function mockUnpinnedStandardBusiness() {
+function mockUnpinnedStandardBusiness(opts?: { paidThrough?: "future" | "lapsed" }) {
   getBusinessMock.mockResolvedValue({
     id: "biz-1",
     owner_email: "owner@example.com",
@@ -254,6 +272,19 @@ function mockUnpinnedStandardBusiness() {
     status: "active",
     created_at: "2026-01-01T00:00:00.000Z",
     cancel_at_period_end: false
+  });
+  const oldExpiresAt =
+    opts?.paidThrough === "future" ? isoFromNow(TEN_DAYS_MS) : isoFromNow(-60_000);
+  getVpsInventoryByVmIdMock.mockImplementation(async (vmId: number) => {
+    if (vmId === 1001) return assignedInventory(1001, oldExpiresAt);
+    return assignedInventory(vmId, isoFromNow(TEN_DAYS_MS));
+  });
+}
+
+function mockBoxLapsed(vmId = 1001) {
+  getVpsInventoryByVmIdMock.mockImplementation(async (id: number) => {
+    if (id === vmId) return assignedInventory(id, isoFromNow(-60_000));
+    return assignedInventory(id, isoFromNow(TEN_DAYS_MS));
   });
 }
 
@@ -320,11 +351,9 @@ beforeEach(() => {
     id: "biz-1",
     tier: t
   }));
-  getVpsInventoryByVmIdMock.mockResolvedValue({
-    vm_id: 2002,
-    state: "assigned",
-    assigned_business_id: "biz-1"
-  });
+  getVpsInventoryByVmIdMock.mockImplementation(async (vmId: number) =>
+    assignedInventory(vmId, isoFromNow(TEN_DAYS_MS))
+  );
   waitForVoiceBridgeHeartbeatMock.mockResolvedValue({
     healthy: true,
     heartbeatAt: "2026-09-18T16:00:00.000Z",
@@ -423,6 +452,28 @@ describe("runChangePlanFromCheckout", () => {
     );
   });
 
+  it("Starter → Standard with prepaid time left keeps the assigned box and only flips tier", async () => {
+    await runChangePlanFromCheckout(makeSession(), "evt_upgrade_keep_paid");
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "standard");
+    expect(getVpsInventoryByVmIdMock).toHaveBeenCalledWith(1001);
+  });
+
+  it("Standard → Starter with prepaid time left keeps the kvm8 assigned and only flips tier", async () => {
+    mockUnpinnedStandardBusiness({ paidThrough: "future" });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_keep_paid_kvm8");
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+    expect(getVpsInventoryByVmIdMock).toHaveBeenCalledWith(1001);
+    expect(waitForVoiceBridgeHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsId: "1001" })
+    );
+  });
+
   it("unpinned Standard → Starter migrates onto a new assigned box, then pools the old one", async () => {
     mockUnpinnedStandardBusiness();
     await runChangePlanFromCheckout(starterMonthlySession(), "evt_size_change");
@@ -483,11 +534,6 @@ describe("runChangePlanFromCheckout", () => {
       hostingerBillingSubscriptionId: "billing_new",
       deploySucceeded: true
     });
-    getVpsInventoryByVmIdMock.mockResolvedValueOnce({
-      vm_id: 1001,
-      state: "assigned",
-      assigned_business_id: "biz-1"
-    });
 
     await runChangePlanFromCheckout(starterMonthlySession(), "evt_same_id");
 
@@ -499,10 +545,14 @@ describe("runChangePlanFromCheckout", () => {
 
   it("does not pool the old box when the new VM's inventory is still available", async () => {
     mockUnpinnedStandardBusiness();
-    getVpsInventoryByVmIdMock.mockResolvedValueOnce({
-      vm_id: 2002,
-      state: "available",
-      assigned_business_id: null
+    getVpsInventoryByVmIdMock.mockImplementation(async (vmId: number) => {
+      if (vmId === 1001) return assignedInventory(1001, isoFromNow(-60_000));
+      return {
+        vm_id: vmId,
+        state: "available",
+        assigned_business_id: null,
+        expires_at: null
+      };
     });
     await runChangePlanFromCheckout(starterMonthlySession(), "evt_unassigned");
     expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
@@ -639,7 +689,8 @@ describe("runChangePlanFromCheckout", () => {
       getVpsInventoryByVmIdMock.mockResolvedValue({
         vm_id: 1936826,
         state: "available",
-        assigned_business_id: null
+        assigned_business_id: null,
+        expires_at: isoFromNow(TEN_DAYS_MS)
       });
       await runChangePlanFromCheckout(
         makeSession({
@@ -1033,6 +1084,7 @@ describe("runChangePlanFromCheckout", () => {
     });
 
     it("aligns once the lifetime refund has been used, even inside 30 days", async () => {
+      mockBoxLapsed();
       hostingerListBillingSubscriptionsMock.mockResolvedValue([
         { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
       ]);
@@ -1064,7 +1116,23 @@ describe("runChangePlanFromCheckout", () => {
       );
     });
 
+    it("does not term-align while the live box still has prepaid Hostinger time", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_paid_keep");
+
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+      expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
     it("migrates a monthly-cycle box onto a term-bought purchase when the customer commits to biennial", async () => {
+      mockBoxLapsed();
       hostingerListBillingSubscriptionsMock.mockResolvedValue([
         { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
       ]);
@@ -1112,6 +1180,7 @@ describe("runChangePlanFromCheckout", () => {
     });
 
     it("also migrates when the box's existing term is shorter than the target (1y box, biennial commitment)", async () => {
+      mockBoxLapsed();
       hostingerListBillingSubscriptionsMock.mockResolvedValue([
         { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "year" }
       ]);
@@ -1688,6 +1757,7 @@ describe("runChangePlanFromCheckout", () => {
       cancel_at_period_end: false
     });
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
+    mockBoxLapsed();
 
     await runChangePlanFromCheckout(
       starterMonthlySession({ customer_details: null, customer_email: null }),
@@ -1855,8 +1925,19 @@ describe("runChangePlanFromCheckout", () => {
     expect(createSubscriptionMock).toHaveBeenCalled();
 
     mockUnpinnedStandardBusiness();
-    getVpsInventoryByVmIdMock.mockRejectedValueOnce(new Error("inventory down"));
+    getVpsInventoryByVmIdMock.mockImplementation(async (vmId: number) => {
+      if (vmId === 1001) return assignedInventory(1001, isoFromNow(-60_000));
+      throw new Error("inventory down");
+    });
     await runChangePlanFromCheckout(starterMonthlySession(), "evt_inventory_throw");
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live box when the paid-through lookup throws (unknown expiry fails toward keep)", async () => {
+    getVpsInventoryByVmIdMock.mockRejectedValueOnce(new Error("inventory down"));
+    orchestrateProvisioningMock.mockClear();
+    await runChangePlanFromCheckout(makeSession(), "evt_old_inventory_throw");
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  boxHasPaidTimeLeft,
   canReleaseOldVpsForPlanChange,
   inventoryAssignedToBusiness,
   isReplacementVm,
@@ -9,6 +10,29 @@ import {
   shouldMigrateHardwareForPlanChange
 } from "@/lib/billing/plan-change-hardware";
 
+const NOW_MS = Date.parse("2026-09-18T15:25:00.000Z");
+const FUTURE_EXPIRY = "2026-09-28T00:00:00.000Z";
+const PAST_EXPIRY = "2026-09-18T15:24:00.000Z";
+const AT_EXPIRY = "2026-09-18T15:25:00.000Z";
+
+describe("boxHasPaidTimeLeft", () => {
+  it("treats a future expires_at as prepaid time (KIN 2026-09-28)", () => {
+    expect(boxHasPaidTimeLeft(FUTURE_EXPIRY, NOW_MS)).toBe(true);
+  });
+
+  it("treats at-or-past expiry as lapsed", () => {
+    expect(boxHasPaidTimeLeft(AT_EXPIRY, NOW_MS)).toBe(false);
+    expect(boxHasPaidTimeLeft(PAST_EXPIRY, NOW_MS)).toBe(false);
+  });
+
+  it("fails toward keep when expiry is missing or unreadable", () => {
+    expect(boxHasPaidTimeLeft(null, NOW_MS)).toBe(true);
+    expect(boxHasPaidTimeLeft(undefined, NOW_MS)).toBe(true);
+    expect(boxHasPaidTimeLeft("", NOW_MS)).toBe(true);
+    expect(boxHasPaidTimeLeft("not-a-date", NOW_MS)).toBe(true);
+  });
+});
+
 describe("shouldMigrateHardwareForPlanChange", () => {
   it("skips Standard → Starter when a kvm2 pin keeps the same box (KIN)", () => {
     expect(
@@ -16,7 +40,9 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         oldTier: "standard",
         newTier: "starter",
         vpsSizePin: "kvm2",
-        termAlignment: false
+        termAlignment: false,
+        expiresAt: FUTURE_EXPIRY,
+        nowMs: NOW_MS
       })
     ).toBe(false);
     expect(resolvedHardwareForPlanChange("standard", "starter", "kvm2")).toEqual({
@@ -31,18 +57,45 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         oldTier: "starter",
         newTier: "standard",
         vpsSizePin: null,
-        termAlignment: false
+        termAlignment: false,
+        expiresAt: FUTURE_EXPIRY,
+        nowMs: NOW_MS
       })
     ).toBe(false);
   });
 
-  it("migrates a legacy unpinned Standard kvm8 box down to Starter kvm1", () => {
+  it("keeps an unpinned Standard kvm8 on Starter while the box still has paid time", () => {
     expect(
       shouldMigrateHardwareForPlanChange({
         oldTier: "standard",
         newTier: "starter",
         vpsSizePin: null,
-        termAlignment: false
+        termAlignment: false,
+        expiresAt: FUTURE_EXPIRY,
+        nowMs: NOW_MS
+      })
+    ).toBe(false);
+  });
+
+  it("migrates a lapsed unpinned Standard kvm8 box down to Starter kvm1", () => {
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "standard",
+        newTier: "starter",
+        vpsSizePin: null,
+        termAlignment: false,
+        expiresAt: PAST_EXPIRY,
+        nowMs: NOW_MS
+      })
+    ).toBe(true);
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "standard",
+        newTier: "starter",
+        vpsSizePin: null,
+        termAlignment: false,
+        expiresAt: AT_EXPIRY,
+        nowMs: NOW_MS
       })
     ).toBe(true);
     expect(resolvedHardwareForPlanChange("standard", "starter", null)).toEqual({
@@ -51,13 +104,42 @@ describe("shouldMigrateHardwareForPlanChange", () => {
     });
   });
 
-  it("still migrates a same-size term alignment onto a newly bought box", () => {
+  it("does not term-align while the live box still has prepaid time", () => {
     expect(
       shouldMigrateHardwareForPlanChange({
         oldTier: "starter",
         newTier: "starter",
         vpsSizePin: "kvm2",
-        termAlignment: true
+        termAlignment: true,
+        expiresAt: FUTURE_EXPIRY,
+        nowMs: NOW_MS
+      })
+    ).toBe(false);
+  });
+
+  it("still migrates a lapsed same-size term alignment onto a newly bought box", () => {
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "starter",
+        newTier: "starter",
+        vpsSizePin: "kvm2",
+        termAlignment: true,
+        expiresAt: PAST_EXPIRY,
+        nowMs: NOW_MS
+      })
+    ).toBe(true);
+  });
+
+  it("provisions when there is no live box even if expiry is unknown", () => {
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "standard",
+        newTier: "starter",
+        vpsSizePin: null,
+        termAlignment: false,
+        hasLiveBox: false,
+        expiresAt: null,
+        nowMs: NOW_MS
       })
     ).toBe(true);
   });
@@ -68,7 +150,9 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         oldTier: "standard",
         newTier: "standard",
         vpsSizePin: "kvm2",
-        termAlignment: false
+        termAlignment: false,
+        expiresAt: PAST_EXPIRY,
+        nowMs: NOW_MS
       })
     ).toBe(false);
   });
@@ -79,7 +163,9 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         oldTier: "starter",
         newTier: "starter",
         vpsSizePin: null,
-        termAlignment: false
+        termAlignment: false,
+        expiresAt: PAST_EXPIRY,
+        nowMs: NOW_MS
       })
     ).toBe(false);
   });
@@ -178,15 +264,32 @@ describe("canReleaseOldVpsForPlanChange", () => {
     ).toBe(false);
   });
 
-  it("allows teardown only for a different assigned VM with a live bridge", () => {
+  it("refuses to pool a box that still has prepaid time, even if a replacement exists", () => {
     expect(
       canReleaseOldVpsForPlanChange({
         oldVmId: 1001,
         newVpsId: "2002",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
+        oldExpiresAt: FUTURE_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
+      })
+    ).toBe(false);
+  });
+
+  it("allows teardown only for a lapsed box after a different assigned VM with a live bridge", () => {
+    expect(
+      canReleaseOldVpsForPlanChange({
+        oldVmId: 1001,
+        newVpsId: "2002",
+        deploySucceeded: true,
+        inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
+        businessId: "biz-kin",
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
     ).toBe(true);
   });
@@ -288,7 +391,7 @@ describe("planChangeCutoverDecision", () => {
     ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });
 
-  it("releases the old box only when a same-size move landed on a different assigned VM", () => {
+  it("releases the old box only when a lapsed same-size move landed on a different assigned VM", () => {
     expect(
       planChangeCutoverDecision({
         migrateVps: true,
@@ -296,8 +399,10 @@ describe("planChangeCutoverDecision", () => {
         newVpsId: "2002",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
     ).toEqual({ releaseOldBox: true, cutoverReady: true });
     expect(
@@ -307,8 +412,10 @@ describe("planChangeCutoverDecision", () => {
         newVpsId: "1936826",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
     ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });

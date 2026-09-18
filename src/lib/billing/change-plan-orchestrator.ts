@@ -39,14 +39,22 @@
  * cannot change an existing subscription's billing cycle (only auto-renew
  * on/off, cycle changes are hPanel-only). So:
  *
- *   - Customer commits to a LONGER term than the box's current cycle →
- *     run the full migration (steps 1-4, 7) onto a freshly TERM-BOUGHT box
- *     of the same size; the old monthly box is pooled with auto-renew off.
- *   - Same/shorter commitment, cycle already covers the target, or the
- *     cycle can't be verified → period-only fast path: steps 1-4 and 7 are
- *     skipped, the box keeps its existing Hostinger billing subscription
- *     (inherited onto the new sub row), and only the Stripe swap + DB
- *     bookkeeping (steps 5, 6, 8) execute.
+ * A live box with prepaid Hostinger time (`vps_inventory.expires_at` in
+ * the future) is never replaced, on upgrade, downgrade, or same-tier term
+ * alignment. Entitlements still flip immediately via `businesses.tier`.
+ * Hardware moves only when that paid-through instant is at or past now
+ * (the same lapse signal the pool already uses), and only then if size
+ * actually changes or a same-tier term alignment needs a newly bought box.
+ *
+ *   - Customer commits to a LONGER term than the box's current cycle, AND
+ *     the live box has already lapsed → run the full migration (steps
+ *     1-4, 7) onto a freshly TERM-BOUGHT box of the same size; the old
+ *     monthly box is pooled with auto-renew off.
+ *   - Prepaid time still left, same/shorter commitment, cycle already
+ *     covers the target, or the cycle can't be verified → period-only
+ *     fast path: steps 1-4 and 7 are skipped, the box keeps its existing
+ *     Hostinger billing subscription (inherited onto the new sub row),
+ *     and only the Stripe swap + DB bookkeeping (steps 5, 6, 8) execute.
  *
  * Either way, ops gets a term-alignment summary email when the switch
  * completes (including a MANUAL CHECK flag when verification failed).
@@ -95,6 +103,7 @@ import {
 } from "@/lib/db/businesses";
 import { getVpsInventoryByVmId, releaseVpsToPool } from "@/lib/db/vps-inventory";
 import {
+  boxHasPaidTimeLeft,
   planChangeCutoverDecision,
   shouldMigrateHardwareForPlanChange
 } from "@/lib/billing/plan-change-hardware";
@@ -447,13 +456,31 @@ export async function runChangePlanFromCheckout(
   const oldVmId =
     oldVpsIdRaw && /^\d+$/.test(oldVpsIdRaw) ? Number.parseInt(oldVpsIdRaw, 10) : null;
 
+  let oldInventory: Awaited<ReturnType<typeof getVpsInventoryByVmId>> = null;
+  if (oldVmId !== null) {
+    try {
+      oldInventory = await getVpsInventoryByVmId(oldVmId);
+    } catch (err) {
+      logger.warn("changePlan: inventory lookup for live VM failed", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
+    }
+  }
+  const oldExpiresAt = oldInventory?.expires_at ?? null;
+  const liveBoxHasPaidTime =
+    oldVmId !== null && boxHasPaidTimeLeft(oldExpiresAt);
+
   // ── Same-tier switches: the hardware is already the right size, but the
   // box's Hostinger BILLING TERM may not match the new commitment. Term
   // SKUs are ~40-65% cheaper per month than monthly renewal, and the
   // public API cannot change an existing subscription's cycle (hPanel
-  // only), so a LONGER commitment triggers the full migration onto a
-  // freshly term-bought box of the same size. Everything else stays on
-  // the period-only fast path: skip snapshot / backup / re-provision /
+  // only), so a LONGER commitment on a LAPSED box triggers the full
+  // migration onto a freshly term-bought box of the same size. A box
+  // that still has prepaid time stays assigned (the contract-upgrade
+  // sweep aligns it at the next lapse). Everything else stays on the
+  // period-only fast path: skip snapshot / backup / re-provision /
   // restore (steps 1-4) AND the old-Hostinger teardown (step 7, the box
   // keeps its existing Hostinger subscription; touching it would destroy
   // the customer's live VPS). Only the Stripe/DB steps (5, 6, 8) run.
@@ -497,7 +524,12 @@ export async function runChangePlanFromCheckout(
         termAlignmentSkipReason =
           "the box's current Hostinger billing cycle could not be verified, check hPanel and change the renewal period manually if it is still monthly";
       } else if (currentCycleMonths < targetTermMonths) {
-        termAlignment = true;
+        if (liveBoxHasPaidTime) {
+          termAlignmentSkipReason =
+            "the current box still has prepaid Hostinger time left; it will be aligned at lapse rather than throwing that time away";
+        } else {
+          termAlignment = true;
+        }
       }
     }
   }
@@ -505,7 +537,9 @@ export async function runChangePlanFromCheckout(
     oldTier: oldSub.tier,
     newTier: tier,
     vpsSizePin: business.vps_size ?? null,
-    termAlignment
+    termAlignment,
+    expiresAt: oldExpiresAt,
+    hasLiveBox: oldVmId !== null
   });
   if (sameTier) {
     logger.info(
@@ -763,6 +797,7 @@ export async function runChangePlanFromCheckout(
     newVpsId: newProv?.vpsId ?? null,
     deploySucceeded: newProv?.deploySucceeded,
     inventoryRow,
+    oldExpiresAt,
     businessId,
     heartbeatHealthy
   });

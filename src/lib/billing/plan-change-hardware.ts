@@ -2,13 +2,16 @@
  * Whether a paid plan change should move hardware, and whether a provisioned
  * box is a real replacement that is safe to cut over onto.
  *
- * KIN 2026-09-18: Standard → Starter with a kvm2 pin is the same box size.
- * adopt-first then returned that live kvm2, deploy-client ran on it, and
- * teardown pooled vm 1936826 while businesses.hostinger_vps_id still pointed
- * at it. Entitlement changes that do not change size must not migrate.
- * A same-size move that DOES migrate (term alignment onto a term-bought box)
- * must land on a different VM that is assigned in inventory before the old
- * box is released.
+ * Brian 2026-09-18: do not release or replace a tenant's box while that
+ * box still has paid Hostinger time (`vps_inventory.expires_at` in the
+ * future). KIN's kvm2 (vm 1936826) had `expires_at` 2026-09-28 and was
+ * still pooled by `upgrade_switch`. Entitlements (`businesses.tier`)
+ * still flip immediately. Hardware moves only when that paid-through
+ * instant is at or past now, and only then if size changes or a
+ * same-tier term alignment needs a newly bought box.
+ *
+ * Unknown / missing `expires_at` fails toward keep: throwing away
+ * prepaid time we cannot prove is gone is the KIN bug.
  */
 
 import {
@@ -20,19 +23,41 @@ import {
 export type PlanChangeHardwareTier = "starter" | "standard" | "enterprise";
 
 /**
+ * True when `vps_inventory.expires_at` is still in the future, or cannot
+ * be read. The Hostinger paid-through column is the lapse / period-end
+ * signal the pool already uses.
+ */
+export function boxHasPaidTimeLeft(
+  expiresAt: string | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (expiresAt == null || expiresAt === "") return true;
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return true;
+  return ms > nowMs;
+}
+
+/**
  * True when this plan change needs a new (or term-realigned) box.
  *
- * Term alignment always migrates: the point is a cheaper Hostinger term SKU
- * of the same size. Every other path migrates only when the resolved
- * hardware size actually changes. The pin on `businesses.vps_size` wins on
- * both sides, so a kvm2-pinned Standard → Starter keeps that kvm2.
+ * A live box with prepaid time is never replaced. Once that time has
+ * lapsed (or there is no live box), term alignment migrates, and every
+ * other path migrates only when resolved hardware size actually changes.
+ * The pin on `businesses.vps_size` wins on both sides.
  */
 export function shouldMigrateHardwareForPlanChange(input: {
   oldTier: PlanChangeHardwareTier;
   newTier: PlanChangeHardwareTier;
   vpsSizePin: string | null | undefined;
   termAlignment: boolean;
+  expiresAt?: string | null;
+  /** False when the tenant has no numeric Hostinger VM to keep. */
+  hasLiveBox?: boolean;
+  nowMs?: number;
 }): boolean {
+  if (input.hasLiveBox !== false && boxHasPaidTimeLeft(input.expiresAt, input.nowMs)) {
+    return false;
+  }
   if (input.termAlignment) return true;
   // Same-tier period switches keep the live box. A null-pin Starter
   // resolves deployed kvm2 vs new kvm1, which is a default flip, not a
@@ -94,8 +119,11 @@ export type PlanChangeCutoverInput = {
       }
     | null
     | undefined;
+  /** Paid-through of the box we would pool, not the replacement. */
+  oldExpiresAt?: string | null;
   businessId: string;
   heartbeatHealthy: boolean;
+  nowMs?: number;
 };
 
 /**
@@ -113,11 +141,14 @@ export function canReleaseOldVpsForPlanChange(input: {
       }
     | null
     | undefined;
+  oldExpiresAt?: string | null;
   businessId: string;
   heartbeatHealthy: boolean;
+  nowMs?: number;
 }): boolean {
   if (!input.heartbeatHealthy) return false;
   if (input.deploySucceeded === false) return false;
+  if (boxHasPaidTimeLeft(input.oldExpiresAt, input.nowMs)) return false;
   if (!isReplacementVm(input.oldVmId, input.newVpsId)) return false;
   return inventoryAssignedToBusiness(input.inventoryRow, input.businessId);
 }

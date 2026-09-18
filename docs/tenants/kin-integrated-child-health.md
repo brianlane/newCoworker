@@ -234,14 +234,16 @@ they are a distinct human.
   flow set `suppressDefaultReply`. KIN's cadence does not.
 - **2026-09-18 Standard → Starter left the live box pooled with no
   replacement.** Paid monthly change. `upgrade_switch` returned vm 1936826
-  to the pool (~8:25 AM PT) while `businesses.hostinger_vps_id` still pointed
+  to the pool (~8:25 AM PT) while that box still had prepaid time
+  (`expires_at` 2026-09-28). `businesses.hostinger_vps_id` still pointed
   at it, `businesses.tier` stayed `standard`, and no inventory row was
   assigned. Voice-bridge last heartbeat 2026-09-18T15:24:37Z; inbound calls
-  failed. The worker had started at 8:24:46 with no assigned box. Generic
-  heal on the provisioning-retry watchdog reclaims a pooled VM the business
-  still points at (never stealing a row assigned to someone else), starts
-  it, waits for a voice-bridge heartbeat, and copies `subscriptions.tier`
-  onto `businesses.tier`. Do not hardcode this business id.
+  failed. The worker had started at 8:24:46 with no assigned box. A paid
+  box must stay assigned until it lapses; only `businesses.tier` flips
+  immediately. Generic heal on the provisioning-retry watchdog reclaims a
+  pooled VM the business still points at (never stealing a row assigned to
+  someone else), starts it, waits for a voice-bridge heartbeat, and copies
+  `subscriptions.tier` onto `businesses.tier`. Do not hardcode this business id.
 
 ## One-shots
 
