@@ -39,7 +39,7 @@ import { GOOGLE_KEYS, OUTLOOK_KEYS } from "@/lib/workspace/reconnect";
 export const dynamic = "force-dynamic";
 
 type Params = Promise<{ slug: string }>;
-type SearchParams = Promise<{ error?: string; workspace?: string; meta?: string }>;
+type SearchParams = Promise<{ error?: string; workspace?: string; meta?: string; reconnect?: string }>;
 
 /**
  * The rows one workspace tile owns, in the shape its client components take.
@@ -67,13 +67,15 @@ function IntegrationBody({
   slug,
   businessId,
   ctx,
-  mcpConnectedByEmail
+  mcpConnectedByEmail,
+  reconnectConnectionId
 }: {
   slug: IntegrationSlug;
   businessId: string;
   ctx: IntegrationsContext;
   /** Who on the team the connector card should name; null when unresolved. */
   mcpConnectedByEmail: string | null;
+  reconnectConnectionId?: string | null;
 }) {
   switch (slug) {
     case "google": {
@@ -181,6 +183,7 @@ function IntegrationBody({
         <CalendlyIntegrationCard
           businessId={businessId}
           initialConnections={ctx.calendlyConnections}
+          reconnectConnectionId={reconnectConnectionId}
         />
       );
     case "caldav":
@@ -370,6 +373,7 @@ export default async function IntegrationDetailPage({
         businessId={ctx.businessId}
         ctx={ctx}
         mcpConnectedByEmail={mcpConnectedByEmail}
+        reconnectConnectionId={q.reconnect}
       />
     </div>
   );

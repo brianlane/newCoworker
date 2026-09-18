@@ -2301,6 +2301,24 @@
       "autoImportLabel": "Automatic meeting minutes",
       "autoImportHint": "Import minutes automatically after every cloud-recorded meeting with a transcript."
     },
+    "integrationsCalendly": {
+      "statusConnected": "Connected",
+      "statusNeedsReconnect": "Needs reconnect",
+      "statusDisabled": "disabled",
+      "statusNotConnected": "Not connected",
+      "accountsLabel": "{count} accounts",
+      "reconnect": "Reconnect",
+      "disconnect": "Disconnect",
+      "primary": "primary",
+      "lastCheck": "Last successful check: {when}"
+    },
+    "calendlyReauth": {
+      "title": "Calendly needs a reconnect",
+      "reconnect": "Reconnect",
+      "bodyWithLastCheck": "{account}'s Calendly needs a reconnect. Calendar follow-ups and booking checks for that account are paused, last successful check: {when}.",
+      "bodyNoLastCheck": "{account}'s Calendly needs a reconnect. Calendar follow-ups and booking checks for that account are paused.",
+      "pausedUntilReconnect": "Paused until Calendly is reconnected."
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Bring your coworker into Slack: alerts land in a channel you pick, right where your team already works.",
@@ -3569,6 +3587,17 @@
       "summary": "Email to {name} did not arrive ({address})",
       "sms": "New Coworker Alert: our email to {name} at {address} did not arrive (address rejected it). Reach them another way.",
       "smsWithPhone": "New Coworker Alert: our email to {name} at {address} did not arrive (address rejected it). Reach them at {phone} instead."
+    },
+    "calendlyReauth": {
+      "subject": "Calendly needs a reconnect",
+      "heading": "Calendly needs a reconnect",
+      "intro": "{account}'s Calendly connection stopped working.",
+      "lastCheck": "Last successful check: {when}.",
+      "paused": "Calendar follow-ups and booking checks for that account are paused until it is reconnected. Missed hours are not backfilled.",
+      "action": "Reconnect that Calendly account from your dashboard. The new token is saved on the same connection, so you will not create a duplicate.",
+      "cta": "Reconnect Calendly",
+      "summary": "Calendly needs a reconnect: {account}",
+      "sms": "[REDACTED]: {account}'s Calendly needs a reconnect. Calendar follow-ups are paused until you reconnect it on the Integrations page."
     },
     "ncSignoff": "- The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",

@@ -14,8 +14,8 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
-  // Empty by default: the single-connection fallback in each consumer
-  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  // Empty by default. Callers that still need a Calendly account pass
+  // listConnections in deps: a rejected primary is not reused.
   listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
   CALENDLY_DIRECT_KEY: "calendly-direct"
@@ -92,6 +92,7 @@ function deps(overrides: Partial<ContactBookingContextDeps> = {}): ContactBookin
   return {
     request: vi.fn().mockResolvedValue(null),
     resolveConnection: vi.fn().mockResolvedValue(CONN),
+    listConnections: vi.fn().mockResolvedValue([CONN]),
     getCachedUserUri: vi.fn().mockResolvedValue(USER_URI),
     persistUserUri: vi.fn().mockResolvedValue(undefined),
     ...overrides
@@ -239,6 +240,13 @@ describe("contactBookingContextForPhone", () => {
     const d = deps({ getCachedUserUri: vi.fn().mockResolvedValue(null) });
     const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
     expect(out.status).toBe("none");
+  });
+
+  it("does not fall back to the rejected primary when the active Calendly list is empty", async () => {
+    const d = deps({ listConnections: vi.fn().mockResolvedValue([]) });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("none");
+    expect(d.request).not.toHaveBeenCalled();
   });
 
   it("multi-account: an ACTIVE booking on the second account beats a canceled one on the first", async () => {

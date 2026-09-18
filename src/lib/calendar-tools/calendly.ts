@@ -99,7 +99,7 @@ export async function calendlyRequest(
     ? await getCalendlyConnectionById(businessId, conn.connectionId).catch(() => null)
     : null;
   if (byId) {
-    if (!byId.is_active) return null;
+    if (!byId.is_active || byId.needs_reauth) return null;
     return calendlyDirectRequest(byId.accessToken, config);
   }
   const row = await getActiveCalendlyConnection(businessId);

@@ -75,6 +75,12 @@ import {
   goalStepMatches
 } from "../../../supabase/functions/_shared/ai_flows/goal_events";
 import type { FlowStep } from "../../../supabase/functions/_shared/ai_flows/types";
+import {
+  isCalendlyTokenRejected,
+  markCalendlyConnectionNeedsReauth,
+  stampCalendlyConnectionHealthy
+} from "@/lib/calendly/reauth";
+import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
 
 // Provider-neutral pieces moved to booking-goal-fire.ts; re-exported so the
 // existing call sites (precheck, webhook receiver, one-shots) are unchanged.
@@ -82,6 +88,9 @@ export { contactNumbersFor } from "@/lib/ai-flows/booking-goal-fire";
 export type { BookingGoalFireDeps, BookingGoalFireResult };
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/** Marker event when the sweep is paused because every Calendly PAT needs reconnect. */
+export const BOOKING_SWEEP_PAUSED_REAUTH_EVENT = "ai_flow_booking_goal_sweep_paused_reauth";
 
 /** Page size for the goal-flow listing, paged so no flow is silently skipped. */
 export const BOOKING_GOAL_FLOW_PAGE = 100;
@@ -275,6 +284,12 @@ export type BookingGoalSweepDeps = {
   findByEmails?: typeof findContactsByEmails;
   /** Injectable webhook-subscription upgrader (tests). */
   ensureWebhook?: typeof ensureCalendlyWebhookSubscription;
+  /** Injectable permanent-reject flip (tests). */
+  markNeedsReauth?: typeof markCalendlyConnectionNeedsReauth;
+  /** Injectable last-healthy stamp (tests). */
+  stampHealthy?: typeof stampCalendlyConnectionHealthy;
+  /** Injectable pause-state probe (tests). */
+  pauseState?: typeof calendlyCalendarPauseState;
 };
 
 /**
@@ -323,6 +338,9 @@ export async function sweepCalendlyBookingGoals(
   const applyGoal = deps.applyGoal ?? applyGoalEvent;
   const findByEmails = deps.findByEmails ?? findContactsByEmails;
   const ensureWebhook = deps.ensureWebhook ?? ensureCalendlyWebhookSubscription;
+  const markNeedsReauth = deps.markNeedsReauth ?? markCalendlyConnectionNeedsReauth;
+  const stampHealthy = deps.stampHealthy ?? stampCalendlyConnectionHealthy;
+  const pauseState = deps.pauseState ?? calendlyCalendarPauseState;
   const db = client ?? (await createSupabaseServiceClient());
 
   // Enabled flows with any trunk goal step (jsonb containment narrows the
@@ -397,8 +415,23 @@ export async function sweepCalendlyBookingGoals(
       // EVERY linked Calendly account is swept (a business can connect
       // several); bookings union across them before goal firing.
       const allConns = await listConnections(businessId);
-      /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
-      const sweepConns = allConns.length > 0 ? allConns : [conn];
+      // Never fall back to `[conn]`: that primary may already be flagged
+      // needs_reauth. Empty list → pause, do not hit Calendly with a dead token.
+      if (allConns.length === 0) {
+        const pause = await pauseState(businessId);
+        if (pause.pausedCopy) {
+          await recordSystemLog({
+            businessId,
+            source: "aiflow",
+            level: "warn",
+            event: BOOKING_SWEEP_PAUSED_REAUTH_EVENT,
+            message: pause.pausedCopy,
+            payload: { connection_ids: pause.needingReauth.map((r) => r.id) }
+          });
+        }
+        continue;
+      }
+      const sweepConns = allConns;
 
       // Shared across the linked accounts: the invitee-fetch cap is a
       // per-TICK budget, and bookings union before goal firing.
@@ -419,7 +452,7 @@ export async function sweepCalendlyBookingGoals(
         const userUri = (userRes?.data as { resource?: { uri?: string } } | undefined)?.resource
           ?.uri;
         if (typeof userUri !== "string" || userUri.length === 0) {
-          throw new Error("calendar_not_connected");
+          throw new Error("calendly_token_rejected");
         }
 
         // Same scan window as the poller's event_created mode: the listing
@@ -437,7 +470,7 @@ export async function sweepCalendlyBookingGoals(
             max_start_time: iso(nowMs + CALENDLY_CREATED_SCAN_DAYS * dayMs)
           }
         });
-        if (!listRes) throw new Error("calendar_not_connected");
+        if (!listRes) throw new Error("calendly_token_rejected");
         const listed = (listRes.data as { collection?: RawBooking[] })?.collection ?? [];
         if (listed.length >= CALENDLY_POLL_PAGE_COUNT) {
           // The single page may be truncating; fresh bookings could be hidden
@@ -473,6 +506,15 @@ export async function sweepCalendlyBookingGoals(
         // failure (Bugbot Medium on PR #1349).
         accountsSucceeded += 1;
         bookingsSeen += bookings.length;
+        if (sweepConn.connectionId) {
+          await stampHealthy(sweepConn.connectionId).catch((err) => {
+            logger.warn("booking goal sweep: last_healthy_at stamp failed", {
+              businessId,
+              connectionId: sweepConn.connectionId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          });
+        }
         if (bookings.length === 0) continue;
 
         // Invitee identities across this business's fresh bookings. The cap
@@ -517,6 +559,15 @@ export async function sweepCalendlyBookingGoals(
         // starve the other accounts' bookings; the business-level
         // failure log still fires when EVERY account failed.
         firstAccountError ??= err;
+        if (isCalendlyTokenRejected(err) && sweepConn.connectionId) {
+          await markNeedsReauth(sweepConn.connectionId).catch((markErr) => {
+            logger.warn("booking goal sweep: needs_reauth flip failed", {
+              businessId,
+              connectionId: sweepConn.connectionId,
+              error: markErr instanceof Error ? markErr.message : String(markErr)
+            });
+          });
+        }
         logger.warn("booking goal sweep: account read failed", {
           businessId,
           connectionId: sweepConn.connectionId,

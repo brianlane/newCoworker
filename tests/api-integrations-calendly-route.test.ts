@@ -125,10 +125,38 @@ describe("POST (verify first, then save)", () => {
       accessToken: "pat",
       userUri: URI,
       accountName: "Liz",
-      accountEmail: "liz@lizdev.test"
+      accountEmail: "liz@lizdev.test",
+      connectionId: undefined
     });
     const json = (await res.json()) as { data: Record<string, unknown> };
     expect(json.data).toMatchObject({ created: true, verified: true });
+  });
+
+  it("reconnect POST writes the new token onto the SAME connectionId", async () => {
+    vi.mocked(verifyCalendlyToken).mockResolvedValue({
+      ok: true,
+      userUri: URI,
+      name: "James Lee",
+      email: "james@kyp.test"
+    });
+    vi.mocked(saveCalendlyConnection).mockResolvedValue({
+      connection: { id: CONN_ID, needs_reauth: false } as never,
+      created: false
+    });
+    const res = await POST(
+      jsonRequest("POST", { businessId: BIZ, accessToken: "new-pat", connectionId: CONN_ID })
+    );
+    expect(res.status).toBe(200);
+    expect(saveCalendlyConnection).toHaveBeenCalledWith({
+      businessId: BIZ,
+      accessToken: "new-pat",
+      userUri: URI,
+      accountName: "James Lee",
+      accountEmail: "james@kyp.test",
+      connectionId: CONN_ID
+    });
+    const json = (await res.json()) as { data: Record<string, unknown> };
+    expect(json.data).toMatchObject({ created: false, verified: true });
   });
 
   it("maps validation errors to 400 and 401s without a session", async () => {

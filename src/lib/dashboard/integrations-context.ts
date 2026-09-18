@@ -174,6 +174,20 @@ export async function loadIntegrationsContext(
 }
 
 /** Per-tile display status for the hub grid, computed from loaded state. */
+export function calendlyTileStatus(
+  connections: IntegrationsContext["calendlyConnections"]
+): IntegrationStatus {
+  const disconnected: IntegrationStatus = { state: "disconnected", label: "Not connected" };
+  if (connections.length === 0) return disconnected;
+  if (connections.some((c) => c.needs_reauth)) {
+    return { state: "attention", label: "Needs reconnect" };
+  }
+  return {
+    state: "connected",
+    label: connections.length === 1 ? "Connected" : `${connections.length} accounts connected`
+  };
+}
+
 export function computeIntegrationStatuses(
   ctx: IntegrationsContext
 ): Record<IntegrationSlug, IntegrationStatus> {
@@ -270,16 +284,7 @@ export function computeIntegrationStatuses(
     workspace: countStatus(families.other.length),
     vagaro: ctx.vagaroConnection ? connected : disconnected,
     acuity: ctx.acuityConnection ? connected : disconnected,
-    calendly:
-      ctx.calendlyConnections.length > 0
-        ? {
-            state: "connected",
-            label:
-              ctx.calendlyConnections.length === 1
-                ? "Connected"
-                : `${ctx.calendlyConnections.length} accounts connected`
-          }
-        : disconnected,
+    calendly: calendlyTileStatus(ctx.calendlyConnections),
     caldav: ctx.caldavConnection ? connected : disconnected,
     meta: metaStatus,
     whatsapp: whatsappStatus,

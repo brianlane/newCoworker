@@ -386,6 +386,16 @@ describe("computeIntegrationStatuses", () => {
       baseCtx({ calendlyConnections: [{ id: "c" }] as never })
     );
     expect(single.calendly).toEqual({ state: "connected", label: "Connected" });
+
+    const broken = computeIntegrationStatuses(
+      baseCtx({
+        calendlyConnections: [
+          { id: "james", needs_reauth: true },
+          { id: "liz", needs_reauth: false }
+        ] as never
+      })
+    );
+    expect(broken.calendly).toEqual({ state: "attention", label: "Needs reconnect" });
   });
 
   it("distinguishes active vs pending Meta connections", () => {

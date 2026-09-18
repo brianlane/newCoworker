@@ -95,7 +95,15 @@ function conditionLabel(c: TriggerCondition): string {
   }
 }
 
-function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; heading?: string }) {
+function TriggerView({
+  trigger,
+  heading = "Trigger",
+  calendarPausedCopy
+}: {
+  trigger: FlowTrigger;
+  heading?: string;
+  calendarPausedCopy?: string | null;
+}) {
   // Our own integrations ride the webhook channel, so a flow pinned to one of
   // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
   // this page, the generic label is for the channel PICKER, where the owner
@@ -175,6 +183,9 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
             }
           />
           <Row label="Watches" value={CALENDAR_SOURCE_LABELS[trigger.calendar ?? "both"]} />
+          {calendarPausedCopy ? (
+            <Row label="Status" value={calendarPausedCopy} />
+          ) : null}
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
@@ -1027,13 +1038,16 @@ function StepView({
 export function AiFlowView({
   definition,
   coworkerEmail,
-  statsByStepId
+  statsByStepId,
+  calendarPausedCopy
 }: {
   definition: AiFlowDefinition;
   /** The business's AI mailbox address, shown as the sender for platform-path emails. */
   coworkerEmail?: string;
   /** Per-node run counts for the canvas overlay (flow detail page only). */
   statsByStepId?: Record<string, StepStats>;
+  /** Honest pause when every Calendly PAT needs reconnect. */
+  calendarPausedCopy?: string | null;
 }) {
   return (
     <div className="space-y-4">
@@ -1047,6 +1061,7 @@ export function AiFlowView({
           steps={definition.steps}
           readOnly
           statsByStepId={statsByStepId}
+          calendarPausedCopy={calendarPausedCopy}
         />
       </div>
       {definition.timeWindow && (
@@ -1062,9 +1077,15 @@ export function AiFlowView({
       <TriggerView
         trigger={definition.trigger}
         heading={definition.triggers?.length ? "Trigger 1 (any one starts the flow)" : "Trigger"}
+        calendarPausedCopy={calendarPausedCopy}
       />
       {(definition.triggers ?? []).map((t, i) => (
-        <TriggerView key={i} trigger={t} heading={`Trigger ${i + 2} (or)`} />
+        <TriggerView
+          key={i}
+          trigger={t}
+          heading={`Trigger ${i + 2} (or)`}
+          calendarPausedCopy={calendarPausedCopy}
+        />
       ))}
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>

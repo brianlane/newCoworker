@@ -7,6 +7,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
+import { CalendlyReauthBanner } from "@/components/dashboard/CalendlyReauthBanner";
+import { listCalendlyReauthBannerState } from "@/lib/calendly/reauth";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
 import { bindBusinessMemberUser } from "@/lib/db/business-members";
 import {
@@ -93,6 +95,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let hipaaMode = false;
   let metaConnected = false;
   let whatsappConnected = false;
+  let calendlyReauthBanners: Awaited<ReturnType<typeof listCalendlyReauthBannerState>> = [];
   if (ownerEmail) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
@@ -135,8 +138,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     businessId = ctx.businessId;
     accessible = ctx.accessible;
     if (businessId) {
-      // The four reads below are independent of each other (branding row,
-      // newest subscription, Meta connection, WhatsApp connection), they
+      // The four reads below plus the Calendly reconnect banner are
+      // independent of each other (branding row, newest subscription, Meta
+      // connection, WhatsApp connection, Calendly reauth banners), they
       // used to run as four sequential round-trips on EVERY dashboard
       // navigation; one Promise.all collapses them to the slowest single
       // read. The grace lookup is gated up front: its CTA is
@@ -145,7 +149,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       // connection reads degrade to "not connected" on error, a read
       // hiccup hides the Messenger/WhatsApp nav rather than breaking it.
       const graceEligible = !!ctx.role && can(ctx.role, "manage_billing");
-      const [brandRes, subs, metaConnection, whatsappConnection] = await Promise.all([
+      const [brandRes, subs, metaConnection, whatsappConnection, calendlyBanners] =
+        await Promise.all([
         // White-label branding (enterprise): read tier + branding for the
         // active business; effectiveBranding gates on tier so a downgraded
         // tenant's stored branding goes dormant automatically.
@@ -172,6 +177,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
             error: err instanceof Error ? err.message : String(err)
           });
           return null;
+        }),
+        listCalendlyReauthBannerState(businessId).catch((err: unknown) => {
+          logger.warn("dashboard layout: calendly reauth banner read failed", {
+            businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return [];
         })
       ]);
 
@@ -193,6 +205,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       // routing and sends, so the inbox must disappear with it.
       metaConnected = metaConnection?.status === "active" && metaConnection.is_active === true;
       whatsappConnected = whatsappConnection?.is_active === true;
+      calendlyReauthBanners = calendlyBanners;
     }
   }
 
@@ -254,6 +267,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />
           </div>
         )}
+        <CalendlyReauthBanner banners={calendlyReauthBanners} />
         {/* Asks once per device, then never again: any decision ends it. The
             permanent opt-in stays on the notifications settings page. Not
             shown while the terms gate is up, which owns the screen. */}

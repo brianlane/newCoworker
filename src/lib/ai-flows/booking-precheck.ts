@@ -183,11 +183,12 @@ export async function bookingPrecheckForRun(
 
   // Calendly: a business can link SEVERAL accounts, and a booking on ANY of
   // them counts (e.g. a lead booking on a teammate's own Calendly). Other
-  // providers stay single-connection.
-  const conns =
+  // providers stay single-connection. Never fall back to `[conn]`: that
+  // primary may already be flagged needs_reauth (filtered out of the active
+  // list) and using it would present a dead token.
+  const lookupConns =
     conn.provider === "calendly" ? await listConnections(businessId) : [conn];
-  /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
-  const lookupConns = conns.length > 0 ? conns : [conn];
+  if (lookupConns.length === 0) return none(refusedReason);
 
   let booked = false;
   let anyOk = false;

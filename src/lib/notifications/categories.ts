@@ -21,6 +21,7 @@ export function resolveNotificationCategory(kind: string): NotificationCategory 
       return "team";
     case "byon_port":
     case "calendar_connection_broken":
+    case "calendly_needs_reauth":
     case "meta_connection_broken":
     // A bounced email to a contact is a delivery fault, not a lead event: an
     // owner who muted "leads" to cut chatter (KYP has) still needs to hear

@@ -4,8 +4,8 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
-  // Empty by default: the single-connection fallback in each consumer
-  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  // Empty by default. Calendly tests that still need an account stub
+  // listCalendlyCalendarConnections; a rejected primary is not reused.
   listCalendlyCalendarConnections: vi.fn(async () => []),
   // Pure helper, real behavior inline so the guards under test stay honest.
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
@@ -23,12 +23,22 @@ vi.mock("@/lib/ai-flows/acuity-poll", () => ({
 vi.mock("@/lib/ai-flows/vagaro-poll", () => ({
   fetchVagaroCandidateEvents: vi.fn()
 }));
+vi.mock("@/lib/calendly/reauth", () => ({
+  isCalendlyTokenRejected: (err: unknown) =>
+    err instanceof Error && err.message === "calendly_token_rejected",
+  markCalendlyConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true })),
+  stampCalendlyConnectionHealthy: vi.fn(async () => undefined)
+}));
+vi.mock("@/lib/db/calendly-connections", () => ({
+  calendlyCalendarPauseState: vi.fn(async () => ({ pausedCopy: null, needingReauth: [] }))
+}));
 
 import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
   CALENDAR_END_LOOKBACK_MINUTES,
   CALENDAR_POLL_MAX_EVENTS,
   CALENDAR_POLL_OWNER_ALERT_EVENT,
+  CALENDAR_POLL_PAUSED_REAUTH_EVENT,
   CALENDAR_POLL_TICK_EVENT,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
@@ -59,6 +69,11 @@ import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 import { fetchVagaroCandidateEvents } from "@/lib/ai-flows/vagaro-poll";
 import { fetchAcuityCandidateEvents } from "@/lib/ai-flows/acuity-poll";
+import {
+  markCalendlyConnectionNeedsReauth,
+  stampCalendlyConnectionHealthy
+} from "@/lib/calendly/reauth";
+import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -72,6 +87,12 @@ const microsoftConn = {
   providerConfigKey: "outlook-calendar",
   connectionId: "nango-conn-2"
 };
+
+const calendlyConn = (connectionId = "cx-calendly") => ({
+  provider: "calendly" as const,
+  providerConfigKey: "calendly-direct",
+  connectionId
+});
 
 function flowRow(id: string, trigger: unknown, businessId = BIZ, triggers?: unknown[]) {
   return {
@@ -213,7 +234,7 @@ describe("eventEndDue", () => {
 });
 
 describe("eventCreatedDue", () => {
-  it("fires only inside the created lookback window", () => {
+  it("fires only inside the created lookback window from now, never a stored last_healthy_at", () => {
     const now = Date.now();
     expect(eventCreatedDue({ createdIso: new Date(now - 60_000).toISOString() }, now)).toBe(true);
     expect(
@@ -226,6 +247,8 @@ describe("eventCreatedDue", () => {
         now
       )
     ).toBe(false);
+    // A healthy stamp from hours ago must not widen this window (no backfill).
+    expect(CALENDAR_CREATED_LOOKBACK_MINUTES).toBe(15);
   });
   it("is never due without a parseable created timestamp", () => {
     expect(eventCreatedDue({ createdIso: undefined }, Date.now())).toBe(false);
@@ -417,6 +440,16 @@ describe("pollCalendarTriggers", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(googleConn);
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1" } as never);
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: null,
+      needingReauth: []
+    });
+    vi.mocked(markCalendlyConnectionNeedsReauth).mockResolvedValue({
+      flipped: true,
+      emailed: true
+    });
+    vi.mocked(stampCalendlyConnectionHealthy).mockResolvedValue(undefined);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([]);
   });
 
   it("throws on a flows query error", async () => {
@@ -727,6 +760,7 @@ describe("pollCalendarTriggers", () => {
       providerConfigKey: "calendly-direct",
       connectionId: "cx-calendly"
     } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([calendlyConn()] as never);
     vi.mocked(fetchCalendlyCandidateEvents).mockResolvedValue({
       events: [
         {
@@ -766,6 +800,7 @@ describe("pollCalendarTriggers", () => {
     expect((enq.trigger as { windowText: string }).windowText).toContain(
       "invitee timezone: America/Toronto"
     );
+    expect(stampCalendlyConnectionHealthy).toHaveBeenCalledWith("cx-calendly");
   });
 
   it("Calendly: polls EVERY linked account, unions + dedupes events, degrades per-account failures", async () => {
@@ -836,6 +871,13 @@ describe("pollCalendarTriggers", () => {
       connectionId: "cx-calendly"
     } as never);
     vi.mocked(fetchCalendlyCandidateEvents).mockResolvedValue({ events: [], overflowed: true });
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([
+      {
+        provider: "calendly",
+        providerConfigKey: "calendly",
+        connectionId: "cx-calendly"
+      }
+    ] as never);
     const res = await pollCalendarTriggers(
       dbWith([
         flowRow("f-created", createdTrigger()),
@@ -885,6 +927,7 @@ describe("pollCalendarTriggers", () => {
     vi.mocked(fetchCalendlyCandidateEvents).mockRejectedValue(
       new Error("calendar_not_connected")
     );
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([calendlyConn()] as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
@@ -893,6 +936,119 @@ describe("pollCalendarTriggers", () => {
         message: expect.stringContaining("calendar_not_connected")
       })
     );
+    expect(markCalendlyConnectionNeedsReauth).not.toHaveBeenCalled();
+  });
+
+  it("Calendly: a permanent token reject flips needs_reauth on THAT connection only", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-james"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([
+      calendlyConn("cx-james"),
+      calendlyConn("cx-liz")
+    ] as never);
+    vi.mocked(fetchCalendlyCandidateEvents)
+      .mockRejectedValueOnce(new Error("calendly_token_rejected"))
+      .mockResolvedValueOnce({
+        events: [
+          {
+            id: "EV-LIZ",
+            title: "Liz booking",
+            startIso: isoIn(60),
+            calendar: "primary" as const
+          }
+        ],
+        overflowed: false
+      });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(markCalendlyConnectionNeedsReauth).toHaveBeenCalledTimes(1);
+    expect(markCalendlyConnectionNeedsReauth).toHaveBeenCalledWith("cx-james");
+    expect(stampCalendlyConnectionHealthy).toHaveBeenCalledWith("cx-liz");
+    expect(res.enqueued).toBe(1);
+  });
+
+  it("Calendly: a transient 5xx does not flip needs_reauth", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-calendly"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([calendlyConn()] as never);
+    vi.mocked(fetchCalendlyCandidateEvents).mockRejectedValue(
+      new Error("Calendly API GET /scheduled_events failed (500)")
+    );
+    await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(markCalendlyConnectionNeedsReauth).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("500")
+      })
+    );
+  });
+
+  it("Calendly: empty active list does not fall back to the rejected primary", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-dead"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([]);
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: "Paused until Calendly is reconnected.",
+      needingReauth: [{ id: "cx-dead" }] as never
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+    expect(res.enqueued).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+        message: "Paused until Calendly is reconnected."
+      })
+    );
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
+  });
+
+  it("Calendly: calendar_not_connected becomes a paused log when every PAT needs reconnect", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null);
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: "Paused until Calendly is reconnected.",
+      needingReauth: [{ id: "cx-dead" }] as never
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res.enqueued).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_PAUSED_REAUTH_EVENT })
+    );
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
+  });
+
+  it("Calendly: stamp/mark failures on the poll path never take down the tick", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-james"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([
+      calendlyConn("cx-james"),
+      calendlyConn("cx-liz")
+    ] as never);
+    vi.mocked(stampCalendlyConnectionHealthy).mockRejectedValueOnce("stamp down");
+    vi.mocked(markCalendlyConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
+    vi.mocked(fetchCalendlyCandidateEvents)
+      .mockResolvedValueOnce({ events: [], overflowed: false })
+      .mockRejectedValueOnce(new Error("calendly_token_rejected"));
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res.enqueued).toBe(0);
+    expect(stampCalendlyConnectionHealthy).toHaveBeenCalled();
+    expect(markCalendlyConnectionNeedsReauth).toHaveBeenCalledWith("cx-liz");
   });
 
   it("stringifies a non-Error failure", async () => {
@@ -1699,6 +1855,10 @@ describe("poll failure escalation + owner alert", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(googleConn);
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null as never);
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: null,
+      needingReauth: []
+    });
   });
 
   it("logs the FIRST failure at warn (a one-off blip stays out of the error feed)", async () => {
@@ -1875,6 +2035,10 @@ describe("poll cadence gate (inside pollCalendarTriggers)", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(googleConn);
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null as never);
+    vi.mocked(calendlyCalendarPauseState).mockResolvedValue({
+      pausedCopy: null,
+      needingReauth: []
+    });
   });
 
   it("skips the provider calls when a real poll ran inside the interval", async () => {

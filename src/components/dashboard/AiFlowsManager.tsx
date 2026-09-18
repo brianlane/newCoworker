@@ -52,6 +52,7 @@ import {
   friendlyFlowSummary
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
+import { flowHasCalendarTrigger } from "@/lib/calendly/reauth-copy";
 import {
   variablesPaletteGroups,
   type VariablePaletteEntry
@@ -1043,7 +1044,8 @@ export function AiFlowsManager({
   webhooksEnabled = true,
   outboundAiCallsEnabled = true,
   browseActionEnabled = true,
-  initialDismissedCards
+  initialDismissedCards,
+  calendarPausedCopy
 }: {
   businessId: string;
   businessType?: string | null;
@@ -1070,6 +1072,8 @@ export function AiFlowsManager({
   browseActionEnabled?: boolean;
   /** Starter cards this user has hidden (per user, not per business). */
   initialDismissedCards?: DismissibleCardKey[];
+  /** Honest pause when every Calendly PAT needs reconnect. */
+  calendarPausedCopy?: string | null;
 }) {
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
@@ -1891,6 +1895,7 @@ export function AiFlowsManager({
                 steps={editor.steps}
                 selectedId={selectedNode ?? undefined}
                 addableTypes={canvasAddable}
+                calendarPausedCopy={calendarPausedCopy}
                 onSelectStep={(id) => setSelectedNode((cur) => (cur === id ? null : id))}
                 onSelectTrigger={() =>
                   setSelectedNode((cur) => (cur === "trigger" ? null : "trigger"))
@@ -3161,10 +3166,18 @@ export function AiFlowsManager({
                   )}
                 </div>
                 <p
-                  title={friendlyFlowSummary(row.definition)}
+                  title={(() => {
+                    const summary = friendlyFlowSummary(row.definition);
+                    return calendarPausedCopy && flowHasCalendarTrigger(row.definition)
+                      ? `${summary} ${calendarPausedCopy}`
+                      : summary;
+                  })()}
                   className="mt-1 text-xs text-parchment/50 line-clamp-2"
                 >
                   {friendlyFlowSummary(row.definition)}
+                  {calendarPausedCopy && flowHasCalendarTrigger(row.definition) ? (
+                    <span className="block text-spark-orange/90">{calendarPausedCopy}</span>
+                  ) : null}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-parchment/50 sm:shrink-0 sm:flex-nowrap">

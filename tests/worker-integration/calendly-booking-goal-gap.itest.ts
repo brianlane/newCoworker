@@ -32,7 +32,9 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
-  // Empty by default: the sweep falls back to [resolved conn] (multi-account belt).
+  // Empty by default. Sweep callers that still need a Calendly account
+  // MUST pass listConnections in deps: a rejected primary is no longer
+  // reused when the active list is empty.
   listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
   CALENDLY_DIRECT_KEY: "calendly-direct"
@@ -233,7 +235,12 @@ describe("young-run sweep widening (Tim's timeline)", () => {
       request: calendlyFakeFor(businessId, lead) as never,
       resolveConnection: (async (bizId: string) =>
         bizId === businessId ? CONN : null) as never,
-      ensureWebhook: (async () => ({ status: "unsupported", attempted: false })) as never
+      listConnections: (async (bizId: string) =>
+        bizId === businessId ? [CONN] : []) as never,
+      ensureWebhook: (async () => ({ status: "unsupported", attempted: false })) as never,
+      stampHealthy: (async () => undefined) as never,
+      markNeedsReauth: (async () => ({ flipped: false, emailed: false })) as never,
+      pauseState: (async () => ({ pausedCopy: null, needingReauth: [] })) as never
     });
 
     expect(result.jumpedRuns).toBeGreaterThanOrEqual(1);
@@ -271,7 +278,12 @@ describe("young-run sweep widening (Tim's timeline)", () => {
       request: calendlyFakeFor(businessId, lead) as never,
       resolveConnection: (async (bizId: string) =>
         bizId === businessId ? CONN : null) as never,
-      ensureWebhook: (async () => ({ status: "unsupported", attempted: false })) as never
+      listConnections: (async (bizId: string) =>
+        bizId === businessId ? [CONN] : []) as never,
+      ensureWebhook: (async () => ({ status: "unsupported", attempted: false })) as never,
+      stampHealthy: (async () => undefined) as never,
+      markNeedsReauth: (async () => ({ flipped: false, emailed: false })) as never,
+      pauseState: (async () => ({ pausedCopy: null, needingReauth: [] })) as never
     });
 
     const run = await getRun(db, runId);
