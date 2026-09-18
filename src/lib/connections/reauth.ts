@@ -327,7 +327,9 @@ export async function processConnectionReauthReminders(
       .eq("needs_reauth", true)
       .lt("reauth_email_count", CONNECTION_REAUTH_MAX_EMAILS)
       .or(
-        `reauth_email_last_sent_at.is.null,reauth_email_last_sent_at.lt."${cutoffIso}"`
+        // Inclusive: JS due-check is `now - lastSent >= REMINDER_MS`. `.lt`
+        // dropped a last_sent stamped exactly 24h ago (CI itest).
+        `reauth_email_last_sent_at.is.null,reauth_email_last_sent_at.lte."${cutoffIso}"`
       )
       .limit(100);
     if (error) throw new Error(`processConnectionReauthReminders: ${error.message}`);

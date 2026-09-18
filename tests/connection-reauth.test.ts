@@ -338,6 +338,9 @@ describe("processConnectionReauthReminders", () => {
     });
     expect(first.emailed).toBe(1);
     expect(dispatchUrgentNotification).toHaveBeenCalledTimes(1);
+    expect(zoomList.or).toHaveBeenCalledWith(
+      expect.stringMatching(/reauth_email_last_sent_at\.lte\."20/)
+    );
 
     vi.mocked(dispatchUrgentNotification).mockClear();
     const alreadyTwo = chain();
