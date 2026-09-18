@@ -49,6 +49,7 @@ vi.mock("@/lib/legal/acceptance", () => ({
 
 import { POST } from "@/app/api/onboard/set-password/route";
 import { findAuthUserIdByEmail } from "@/lib/auth";
+import { WEAK_PASSWORD_USER_MESSAGE } from "@/lib/auth-weak-password";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { recordAcceptance } from "@/lib/legal/acceptance";
 import { rateLimitDurable } from "@/lib/rate-limit";
@@ -387,6 +388,68 @@ describe("api/onboard/set-password route", () => {
     expect(admin.updateUserById).not.toHaveBeenCalled();
   });
 
+  it("returns 400 VALIDATION_ERROR when Auth rejects a known-weak password (BA Fitness 422)", async () => {
+    // Production log, 2026-09-18, BA Fitness LLC / info@bafitness.net:
+    // POST /auth/v1/admin/users → 422
+    // "Password is known to be weak and easy to guess, please choose a different one."
+    // The JS SDK wraps that as AuthWeakPasswordError with code "weak_password".
+    // The customer already passed our composition rules, so this must surface
+    // as a 400 they can act on, not the generic 500 "Could not create your account".
+    const { client, admin } = fakeServiceClient({
+      createUser: vi.fn().mockResolvedValue({
+        data: null,
+        error: {
+          name: "AuthWeakPasswordError",
+          message: "Password is known to be weak and easy to guess, please choose a different one.",
+          status: 422,
+          code: "weak_password",
+          reasons: ["pwned"]
+        }
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe(WEAK_PASSWORD_USER_MESSAGE);
+    expect(admin.updateUserById).not.toHaveBeenCalled();
+    // Weak-password is a validation miss, not a duplicate-email collision.
+    // Do not spend a user lookup or risk a 409 on this path.
+    expect(vi.mocked(findAuthUserIdByEmail)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when Auth only carries the HIBP message (no SDK code)", async () => {
+    // The GoTrue log line for BA Fitness was the 422 string with no extra
+    // fields. Message matching must still fire if the SDK shape is thinner.
+    const { client, admin } = fakeServiceClient({
+      createUser: vi.fn().mockResolvedValue({
+        data: null,
+        error: {
+          message: "Password is known to be weak and easy to guess, please choose a different one."
+        }
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe(WEAK_PASSWORD_USER_MESSAGE);
+    expect(admin.updateUserById).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when admin.createUser fails for a non-duplicate reason (no existing user found)", async () => {
     const { client } = fakeServiceClient({
       createUser: vi.fn().mockResolvedValue({
@@ -400,8 +463,34 @@ describe("api/onboard/set-password route", () => {
     const response = await POST(
       makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
     );
+    const body = await response.json();
 
     expect(response.status).toBe(500);
+    expect(body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(body.error.message).toMatch(/Could not create your account/i);
+  });
+
+  it("returns 500 when createUser fails with an unrelated 422 (not a weak password)", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi.fn().mockResolvedValue({
+        data: null,
+        error: {
+          message: "Email address is invalid",
+          status: 422,
+          code: "email_address_invalid"
+        }
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error.code).toBe("INTERNAL_SERVER_ERROR");
   });
 
   it("rejects when the Stripe session is not complete", async () => {

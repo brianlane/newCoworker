@@ -1,5 +1,6 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { findAuthUserIdByEmail } from "@/lib/auth";
+import { isWeakPasswordAuthError, WEAK_PASSWORD_USER_MESSAGE } from "@/lib/auth-weak-password";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
 import { cookies } from "next/headers";
@@ -293,7 +294,14 @@ export async function POST(request: Request) {
       return response;
     }
 
-    // createUser failed. Disambiguate the cause with a direct lookup:
+    // createUser failed. Disambiguate the cause:
+    //
+    //   - A weak / HIBP / "known password" rejection (GoTrue 422
+    //     `weak_password`, including "Password is known to be weak and
+    //     easy to guess") is the customer's password, not an internal
+    //     fault. 400 so /onboard/success can show the reason: that page
+    //     already renders `error.message`. Do not look up the email:
+    //     the create did not succeed, so this is not a duplicate.
     //
     //   - An existing user for `ownerEmail` means we hit a duplicate-
     //     email collision. In a well-behaved flow this is unreachable
@@ -307,6 +315,15 @@ export async function POST(request: Request) {
     //
     //   - No existing user means the create truly failed (DB transient,
     //     bad request, etc.). 500 lets the client retry.
+    if (isWeakPasswordAuthError(createErr)) {
+      logger.warn("set-password: auth rejected a weak or known password", {
+        sessionId: body.sessionId,
+        businessId,
+        error: createErr?.message ?? "unknown"
+      });
+      return errorResponse("VALIDATION_ERROR", WEAK_PASSWORD_USER_MESSAGE, 400);
+    }
+
     const existingId = await findAuthUserIdByEmail(ownerEmail);
     if (!existingId) {
       logger.error("set-password: admin.createUser failed without a duplicate-email cause", {
