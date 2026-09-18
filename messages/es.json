@@ -2319,6 +2319,25 @@
       "bodyNoLastCheck": "Calendly de {account} necesita reconectarse. Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa.",
       "pausedUntilReconnect": "En pausa hasta que se reconecte Calendly."
     },
+    "connectionReauth": {
+      "title": "{provider} necesita reconectarse",
+      "reconnect": "Reconectar",
+      "bodyWithLastCheck": "{provider} de {account} necesita reconectarse. {pausedWork}, última revisión correcta: {when}.",
+      "bodyNoLastCheck": "{provider} de {account} necesita reconectarse. {pausedWork}.",
+      "pausedUntilReconnect": "En pausa hasta que se reconecte {provider}.",
+      "pausedWork": {
+        "google": "El correo y el calendario de esa cuenta están en pausa",
+        "microsoft": "El correo y el calendario de esa cuenta están en pausa",
+        "workspace": "El correo y el calendario de esa cuenta están en pausa",
+        "zoom": "Las reuniones y transcripciones de esa cuenta están en pausa",
+        "acuity": "Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa",
+        "caldav": "Las comprobaciones de reservas de calendario de esa cuenta están en pausa",
+        "vagaro": "Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa",
+        "facebook": "Los formularios de leads, Messenger, Instagram y las publicaciones programadas de esa cuenta están en pausa",
+        "slack": "Los avisos de Slack de ese espacio de trabajo están en pausa",
+        "whatsapp": "Los mensajes de WhatsApp de esa cuenta están en pausa"
+      }
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Lleva a tu coworker a Slack: los avisos llegan al canal que elijas, justo donde ya trabaja tu equipo.",
@@ -3598,6 +3617,29 @@
       "cta": "Reconectar Calendly",
       "summary": "Calendly necesita reconectarse: {account}",
       "sms": "[REDACTED]: Calendly de {account} necesita reconectarse. Los seguimientos de calendario están en pausa hasta que lo reconectes en Integraciones."
+    },
+    "connectionReauth": {
+      "subject": "{provider} necesita reconectarse",
+      "heading": "{provider} necesita reconectarse",
+      "intro": "La conexión de {provider} de {account} dejó de funcionar.",
+      "lastCheck": "Última revisión correcta: {when}.",
+      "paused": "{pausedWork} hasta que se reconecte. Las horas perdidas no se recuperan.",
+      "pausedWork": {
+        "google": "El correo y el calendario de esa cuenta están en pausa",
+        "microsoft": "El correo y el calendario de esa cuenta están en pausa",
+        "workspace": "El correo y el calendario de esa cuenta están en pausa",
+        "zoom": "Las reuniones y transcripciones de esa cuenta están en pausa",
+        "acuity": "Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa",
+        "caldav": "Las comprobaciones de reservas de calendario de esa cuenta están en pausa",
+        "vagaro": "Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa",
+        "facebook": "Los formularios de leads, Messenger, Instagram y las publicaciones programadas de esa cuenta están en pausa",
+        "slack": "Los avisos de Slack de ese espacio de trabajo están en pausa",
+        "whatsapp": "Los mensajes de WhatsApp de esa cuenta están en pausa"
+      },
+      "action": "Reconecta esa cuenta de {provider} desde tu panel. El acceso nuevo se guarda en la misma conexión, así que no crearás un duplicado.",
+      "cta": "Reconectar {provider}",
+      "summary": "{provider} necesita reconectarse: {account}",
+      "sms": "[REDACTED]: {provider} de {account} necesita reconectarse. Ábrelo en Integraciones para reconectarlo."
     },
     "ncSignoff": "- El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",

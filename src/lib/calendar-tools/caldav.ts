@@ -33,6 +33,7 @@ import {
 } from "@/lib/caldav/client";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
 import { logger } from "@/lib/logger";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 type CaldavBusyOutcome =
   | { ok: true; busy: BusyBlock[] }
@@ -43,10 +44,15 @@ function credentialsOf(row: CaldavConnectionRow) {
 }
 
 /** Map transport errors to the standard tool-result vocabulary. */
-function failureResult(err: unknown, fallbackDetail: string): CalendarToolResult {
+function failureResult(
+  err: unknown,
+  fallbackDetail: string,
+  connectionId?: string
+): CalendarToolResult {
   if (err instanceof CaldavApiError && (err.code === "auth_failed" || err.code === "blocked_url")) {
-    // Revoked app-specific password / unusable stored URL: same semantics
-    // as a stale OAuth link.
+    if (err.code === "auth_failed" && connectionId) {
+      void markConnectionNeedsReauth("caldav_connections", connectionId).catch(() => undefined);
+    }
     return { ok: false, detail: "calendar_not_connected" };
   }
   logger.warn("calendar-tools/caldav failed", {
@@ -90,9 +96,11 @@ export async function getCaldavBusyBlocks(
   windowStart: Date,
   windowEnd: Date
 ): Promise<CaldavBusyOutcome> {
+  let connectionId: string | undefined;
   try {
     const row = await getActiveCaldavConnection(businessId);
     if (!row) return { ok: false, result: { ok: false, detail: "calendar_not_connected" } };
+    connectionId = row.id;
     const calendar = await resolveCalendar(row);
     if (!calendar) {
       return { ok: false, result: { ok: false, detail: "calendar_not_connected" } };
@@ -100,7 +108,7 @@ export async function getCaldavBusyBlocks(
     const busy = await fetchCaldavBusy(credentialsOf(row), calendar.url, windowStart, windowEnd);
     return { ok: true, busy };
   } catch (err) {
-    return { ok: false, result: failureResult(err, "calendar_lookup_failed") };
+    return { ok: false, result: failureResult(err, "calendar_lookup_failed", connectionId) };
   }
 }
 
@@ -121,9 +129,11 @@ export async function bookCaldavAppointment(
   businessId: string,
   args: CaldavBookArgs
 ): Promise<CalendarToolResult> {
+  let connectionId: string | undefined;
   try {
     const row = await getActiveCaldavConnection(businessId);
     if (!row) return { ok: false, detail: "calendar_not_connected" };
+    connectionId = row.id;
     const calendar = await resolveCalendar(row);
     if (!calendar) return { ok: false, detail: "calendar_not_connected" };
 
@@ -147,7 +157,7 @@ export async function bookCaldavAppointment(
       }
     };
   } catch (err) {
-    return failureResult(err, "calendar_book_failed");
+    return failureResult(err, "calendar_book_failed", connectionId);
   }
 }
 
@@ -168,9 +178,11 @@ export async function rescheduleCaldavAppointment(
   newStartIso: string,
   newEndIso: string
 ): Promise<CalendarToolResult> {
+  let connectionId: string | undefined;
   try {
     const row = await getActiveCaldavConnection(businessId);
     if (!row) return { ok: false, detail: "calendar_not_connected" };
+    connectionId = row.id;
     const calendar = await resolveCalendar(row);
     if (!calendar) return { ok: false, detail: "calendar_not_connected" };
 
@@ -195,7 +207,7 @@ export async function rescheduleCaldavAppointment(
     if (err instanceof CaldavApiError && err.status === 404) {
       return { ok: false, detail: "booking_not_found" };
     }
-    return failureResult(err, "calendar_reschedule_failed");
+    return failureResult(err, "calendar_reschedule_failed", connectionId);
   }
 }
 
@@ -208,9 +220,11 @@ export async function cancelCaldavAppointment(
   businessId: string,
   eventUid: string
 ): Promise<CalendarToolResult> {
+  let connectionId: string | undefined;
   try {
     const row = await getActiveCaldavConnection(businessId);
     if (!row) return { ok: false, detail: "calendar_not_connected" };
+    connectionId = row.id;
     const calendar = await resolveCalendar(row);
     if (!calendar) return { ok: false, detail: "calendar_not_connected" };
 
@@ -220,6 +234,6 @@ export async function cancelCaldavAppointment(
       data: { eventId: eventUid, provider: "caldav", canceled: true }
     };
   } catch (err) {
-    return failureResult(err, "calendar_cancel_failed");
+    return failureResult(err, "calendar_cancel_failed", connectionId);
   }
 }

@@ -64,6 +64,11 @@ import {
   markCalendlyConnectionNeedsReauth,
   stampCalendlyConnectionHealthy
 } from "@/lib/calendly/reauth";
+import {
+  markConnectionNeedsReauth,
+  stampConnectionHealthy
+} from "@/lib/connections/reauth";
+import { isPermanentConnectionAuthError, connectionPausedUntilCopy } from "@/lib/connections/reauth-copy";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -1163,36 +1168,69 @@ export async function pollCalendarTriggers(
           const follows = primaryFlows
             .filter((f) => f.on === "event_end")
             .map((f) => f.followMinutes);
-          const fetched = await fetchVagaroCandidateEvents({
-            businessId,
-            nowMs,
-            windows: {
-              createdScan: primaryFlows.some((f) => f.on === "event_created"),
-              startHorizonMinutes:
-                leads.length > 0
-                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
-                  : null,
-              endBackMinutes:
-                follows.length > 0
-                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
-                  : null,
-              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
-            },
-            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
-          });
-          if (fetched.overflowed) {
-            await recordSystemLog({
+          try {
+            const fetched = await fetchVagaroCandidateEvents({
               businessId,
-              source: "aiflow",
-              level: "warn",
-              event: "ai_flow_calendar_poll_overflow",
-              message:
-                "Vagaro poll hit a listing cap this tick; remainder deferred to later polls",
-              payload: { calendar: "primary", events_read: fetched.events.length }
+              nowMs,
+              windows: {
+                createdScan: primaryFlows.some((f) => f.on === "event_created"),
+                startHorizonMinutes:
+                  leads.length > 0
+                    ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                    : null,
+                endBackMinutes:
+                  follows.length > 0
+                    ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                    : null,
+                canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+              },
+              dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
             });
+            await stampConnectionHealthy("vagaro_connections", conn.connectionId).catch((err) => {
+              logger.warn("calendar poll: last_healthy_at stamp failed", {
+                businessId,
+                connectionId: conn.connectionId,
+                error: String(err)
+              });
+            });
+            if (fetched.overflowed) {
+              await recordSystemLog({
+                businessId,
+                source: "aiflow",
+                level: "warn",
+                event: "ai_flow_calendar_poll_overflow",
+                message:
+                  "Vagaro poll hit a listing cap this tick; remainder deferred to later polls",
+                payload: { calendar: "primary", events_read: fetched.events.length }
+              });
+            }
+            eventsBySource.set("primary", fetched.events);
+            result.events += fetched.events.length;
+          } catch (err) {
+            if (isPermanentConnectionAuthError(err) || String(err).includes("calendar_not_connected")) {
+              if (isPermanentConnectionAuthError(err)) {
+                await markConnectionNeedsReauth("vagaro_connections", conn.connectionId).catch(
+                  (markErr) => {
+                    logger.warn("calendar poll: needs_reauth flip failed", {
+                      businessId,
+                      connectionId: conn.connectionId,
+                      error: String(markErr)
+                    });
+                  }
+                );
+              }
+              await recordSystemLog({
+                businessId,
+                source: "aiflow",
+                level: "warn",
+                event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+                message: connectionPausedUntilCopy("Vagaro"),
+                payload: { connection_id: conn.connectionId, provider: "vagaro" }
+              });
+              continue;
+            }
+            throw err;
           }
-          eventsBySource.set("primary", fetched.events);
-          result.events += fetched.events.length;
         }
       } else if (conn.provider === "acuity") {
         // Acuity branch: one "primary" source (no shared-calendar concept,
@@ -1207,36 +1245,69 @@ export async function pollCalendarTriggers(
           const follows = primaryFlows
             .filter((f) => f.on === "event_end")
             .map((f) => f.followMinutes);
-          const fetched = await fetchAcuityCandidateEvents({
-            businessId,
-            nowMs,
-            windows: {
-              createdScan: primaryFlows.some((f) => f.on === "event_created"),
-              startHorizonMinutes:
-                leads.length > 0
-                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
-                  : null,
-              endBackMinutes:
-                follows.length > 0
-                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
-                  : null,
-              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
-            },
-            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
-          });
-          if (fetched.overflowed) {
-            await recordSystemLog({
+          try {
+            const fetched = await fetchAcuityCandidateEvents({
               businessId,
-              source: "aiflow",
-              level: "warn",
-              event: "ai_flow_calendar_poll_overflow",
-              message:
-                "Acuity poll hit a listing cap this tick; remainder deferred to later polls",
-              payload: { calendar: "primary", events_read: fetched.events.length }
+              nowMs,
+              windows: {
+                createdScan: primaryFlows.some((f) => f.on === "event_created"),
+                startHorizonMinutes:
+                  leads.length > 0
+                    ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                    : null,
+                endBackMinutes:
+                  follows.length > 0
+                    ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                    : null,
+                canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+              },
+              dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
             });
+            await stampConnectionHealthy("acuity_connections", conn.connectionId).catch((err) => {
+              logger.warn("calendar poll: last_healthy_at stamp failed", {
+                businessId,
+                connectionId: conn.connectionId,
+                error: String(err)
+              });
+            });
+            if (fetched.overflowed) {
+              await recordSystemLog({
+                businessId,
+                source: "aiflow",
+                level: "warn",
+                event: "ai_flow_calendar_poll_overflow",
+                message:
+                  "Acuity poll hit a listing cap this tick; remainder deferred to later polls",
+                payload: { calendar: "primary", events_read: fetched.events.length }
+              });
+            }
+            eventsBySource.set("primary", fetched.events);
+            result.events += fetched.events.length;
+          } catch (err) {
+            if (isPermanentConnectionAuthError(err) || String(err).includes("calendar_not_connected")) {
+              if (isPermanentConnectionAuthError(err)) {
+                await markConnectionNeedsReauth("acuity_connections", conn.connectionId).catch(
+                  (markErr) => {
+                    logger.warn("calendar poll: needs_reauth flip failed", {
+                      businessId,
+                      connectionId: conn.connectionId,
+                      error: String(markErr)
+                    });
+                  }
+                );
+              }
+              await recordSystemLog({
+                businessId,
+                source: "aiflow",
+                level: "warn",
+                event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+                message: connectionPausedUntilCopy("Acuity"),
+                payload: { connection_id: conn.connectionId, provider: "acuity" }
+              });
+              continue;
+            }
+            throw err;
           }
-          eventsBySource.set("primary", fetched.events);
-          result.events += fetched.events.length;
         }
       } else {
         const link: WorkspaceLink = {

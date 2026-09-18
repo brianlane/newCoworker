@@ -3,6 +3,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -37,6 +38,10 @@ export type WorkspaceOAuthConnectionRow = {
   metadata: Record<string, unknown>;
   transport: WorkspaceConnectionTransport;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   /**
    * Scopes the owner ACTUALLY granted, space delimited, as the provider
    * reported them. Null on Nango rows, which is why every consumer must treat
@@ -62,7 +67,7 @@ export type WorkspaceOAuthConnectionRow = {
  * that path structurally rather than by convention.
  */
 const CONNECTION_COLUMNS =
-  "id, business_id, provider_config_key, connection_id, metadata, transport, is_active, oauth_scope, created_at, updated_at";
+  "id, business_id, provider_config_key, connection_id, metadata, transport, is_active, needs_reauth, last_healthy_at, reauth_email_count, reauth_email_last_sent_at, oauth_scope, created_at, updated_at";
 
 export async function listWorkspaceOAuthConnections(
   businessId: string,
@@ -76,7 +81,9 @@ export async function listWorkspaceOAuthConnections(
     .order("created_at", { ascending: true });
 
   if (error) throw new Error(`listWorkspaceOAuthConnections: ${error.message}`);
-  return (data ?? []) as WorkspaceOAuthConnectionRow[];
+  return ((data ?? []) as WorkspaceOAuthConnectionRow[]).map((row) =>
+    withReauthColumnDefaults(row)
+  );
 }
 
 export async function getWorkspaceOAuthConnection(
@@ -93,7 +100,7 @@ export async function getWorkspaceOAuthConnection(
     .maybeSingle();
 
   if (error) throw new Error(`getWorkspaceOAuthConnection: ${error.message}`);
-  return data ? (data as WorkspaceOAuthConnectionRow) : null;
+  return data ? withReauthColumnDefaults(data as WorkspaceOAuthConnectionRow) : null;
 }
 
 /** Verifies a Nango connection belongs to the business (for proxy / token helpers). */
@@ -113,7 +120,7 @@ export async function getWorkspaceOAuthConnectionByNangoIds(
     .maybeSingle();
 
   if (error) throw new Error(`getWorkspaceOAuthConnectionByNangoIds: ${error.message}`);
-  return data ? (data as WorkspaceOAuthConnectionRow) : null;
+  return data ? withReauthColumnDefaults(data as WorkspaceOAuthConnectionRow) : null;
 }
 
 export type UpsertWorkspaceOAuthConnectionInput = {
@@ -213,6 +220,7 @@ export type WorkspaceConnectionSecrets = {
   refreshToken: string;
   tokenExpiresAt: string;
   isActive: boolean;
+  needsReauth: boolean;
   /** Fence value for the optimistic-concurrency guard on token rotation. */
   updatedAt: string;
 };
@@ -249,7 +257,7 @@ export async function getWorkspaceConnectionSecrets(
   const { data, error } = await db
     .from("workspace_oauth_connections")
     .select(
-      "id, transport, is_active, access_token_encrypted, refresh_token_encrypted, token_expires_at, updated_at"
+      "id, transport, is_active, needs_reauth, access_token_encrypted, refresh_token_encrypted, token_expires_at, updated_at"
     )
     .eq("id", id)
     .maybeSingle();
@@ -260,6 +268,7 @@ export async function getWorkspaceConnectionSecrets(
     id: string;
     transport: string;
     is_active: boolean;
+    needs_reauth?: boolean;
     access_token_encrypted: string | null;
     refresh_token_encrypted: string | null;
     token_expires_at: string | null;
@@ -277,6 +286,7 @@ export async function getWorkspaceConnectionSecrets(
     refreshToken,
     tokenExpiresAt: row.token_expires_at,
     isActive: row.is_active,
+    needsReauth: row.needs_reauth === true,
     updatedAt: row.updated_at
   };
 }
@@ -350,21 +360,6 @@ export async function updateWorkspaceConnectionAccessToken(
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
-/** Soft-disable / re-enable (set false when a refresh returns invalid_grant). */
-export async function setWorkspaceConnectionActive(
-  id: string,
-  isActive: boolean,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("workspace_oauth_connections")
-    .update({ is_active: isActive, updated_at: new Date().toISOString() })
-    .eq("id", id);
-
-  if (error) throw new Error(`setWorkspaceConnectionActive: ${error.message}`);
-}
-
 export type UpsertDirectWorkspaceConnectionInput = {
   businessId: string;
   providerConfigKey: string;
@@ -388,6 +383,7 @@ export async function insertDirectWorkspaceConnection(
       metadata: input.metadata,
       transport: "direct",
       is_active: true,
+      ...clearedReauthFields(new Date().toISOString()),
       ...directTokenColumns(input.tokens),
       updated_at: new Date().toISOString()
     })
@@ -428,6 +424,7 @@ export async function flipWorkspaceConnectionToDirect(
       metadata: args.metadata,
       transport: "direct",
       is_active: true,
+      ...clearedReauthFields(new Date().toISOString()),
       ...directTokenColumns(args.tokens),
       updated_at: new Date().toISOString()
     })

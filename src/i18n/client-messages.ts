@@ -82,6 +82,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.bookings",
       "dashboard.bulk",
       "dashboard.calendlyReauth",
+      "dashboard.connectionReauth",
       "dashboard.companion",
       "dashboard.contacts",
       "dashboard.deals",

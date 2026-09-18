@@ -55,7 +55,8 @@ function workspaceRowsFor(ctx: IntegrationsContext, family: WorkspaceFamily) {
     providerConfigKey: r.provider_config_key,
     connectionId: r.connection_id,
     createdAt: r.created_at,
-    metadata: r.metadata
+    metadata: r.metadata,
+    needsReauth: r.needs_reauth === true
   }));
 }
 
@@ -97,7 +98,13 @@ function IntegrationBody({
           title="Google"
           description="Gmail and Google Calendar, including a personal Google account."
           icon={getIntegration("google")!.icon}
-          status={rows.length > 0 ? "connected" : "disconnected"}
+          status={
+            rows.some((r) => r.needsReauth)
+              ? "attention"
+              : rows.length > 0
+                ? "connected"
+                : "disconnected"
+          }
         >
           <div className="space-y-3">
             <GoogleConnectButton businessId={businessId} blocked={blocked} />
@@ -106,6 +113,7 @@ function IntegrationBody({
               connections={rows}
               cap={workspaceCap(ctx)}
               connectBlocked={blocked}
+              reconnectHref={`/api/integrations/google/connect?businessId=${encodeURIComponent(businessId)}`}
             />
             {/* Only with a Google account on file: Meet rides that grant, so
                 the switch has nothing to act on before one exists. */}
@@ -139,7 +147,13 @@ function IntegrationBody({
           title="Microsoft 365"
           description="Outlook mail and calendar, on Microsoft 365 or a personal Outlook account."
           icon={getIntegration("microsoft")!.icon}
-          status={rows.length > 0 ? "connected" : "disconnected"}
+          status={
+            rows.some((r) => r.needsReauth)
+              ? "attention"
+              : rows.length > 0
+                ? "connected"
+                : "disconnected"
+          }
         >
           <div className="space-y-3">
             <MicrosoftConnectButton businessId={businessId} blocked={blocked} />
@@ -148,6 +162,7 @@ function IntegrationBody({
               connections={rows}
               cap={workspaceCap(ctx)}
               connectBlocked={blocked}
+              reconnectHref={`/api/integrations/microsoft/connect?businessId=${encodeURIComponent(businessId)}&reconnect=1`}
             />
           </div>
         </IntegrationCard>

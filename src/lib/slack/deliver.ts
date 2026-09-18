@@ -16,6 +16,8 @@ import { getActiveSlackConnection, getSlackConnection } from "@/lib/db/slack-con
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
 import { slackPostMessage } from "@/lib/slack/client";
 import { logger } from "@/lib/logger";
+import { isSlackTokenDead } from "@/lib/connections/reauth-copy";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 export type SlackDeliveryResult =
   | { ok: true; channelId: string; channelName: string | null; ts: string }
@@ -50,7 +52,7 @@ export async function deliverSlackAlert(input: SlackDeliveryInput): Promise<Slac
     return { ok: false, reason: "send_failed", detail: "connection_read_failed" };
   }
   if (!connection) return { ok: false, reason: "not_connected" };
-  if (!connection.is_active || connection.botToken.length === 0) {
+  if (!connection.is_active || connection.botToken.length === 0 || connection.needs_reauth) {
     return { ok: false, reason: "needs_reconnect" };
   }
   if (!connection.alert_channel_id) return { ok: false, reason: "no_alert_channel" };
@@ -75,6 +77,15 @@ export async function deliverSlackAlert(input: SlackDeliveryInput): Promise<Slac
       ...(input.blocks ? { blocks: input.blocks } : {})
     });
     if (!posted.ok) {
+      if (isSlackTokenDead(posted.error)) {
+        await markConnectionNeedsReauth("slack_connections", connection.id).catch((markErr) => {
+          logger.warn("deliverSlackAlert: needs_reauth flip failed", {
+            businessId: input.businessId,
+            error: String(markErr)
+          });
+        });
+        return { ok: false, reason: "needs_reconnect", detail: posted.error };
+      }
       return { ok: false, reason: "send_failed", detail: posted.error };
     }
     return {

@@ -148,6 +148,10 @@ describe("getActiveCaldavConnection", () => {
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: STORED, error: null });
     expect((await getActiveCaldavConnection(BIZ, makeDb(c2)))?.id).toBe("cd-1");
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
+    expect(await getActiveCaldavConnection(BIZ, makeDb(c3))).toBeNull();
   });
 });
 
@@ -157,10 +161,19 @@ describe("getActiveCaldavConnectionId", () => {
     c.maybeSingle.mockResolvedValue({ data: { id: "cd-1" }, error: null });
     expect(await getActiveCaldavConnectionId(BIZ, makeDb(c))).toBe("cd-1");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).not.toHaveBeenCalledWith("needs_reauth", false);
 
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: null });
     expect(await getActiveCaldavConnectionId(BIZ, makeDb(c2))).toBeNull();
+  });
+
+  it("still returns a needs_reauth row so calendar resolution stays on CalDAV", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "cd-1" }, error: null });
+    expect(await getActiveCaldavConnectionId(BIZ, makeDb(c))).toBe("cd-1");
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).not.toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("throws on a query error", async () => {

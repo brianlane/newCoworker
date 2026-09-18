@@ -51,6 +51,10 @@ function row(over: Partial<Awaited<ReturnType<typeof getWorkspaceOAuthConnection
     transport: "nango" as const,
     is_active: true,
     oauth_scope: null,
+    needs_reauth: false,
+    last_healthy_at: null,
+    reauth_email_count: 0,
+    reauth_email_last_sent_at: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...over
@@ -94,6 +98,10 @@ describe("api/integrations/workspace", () => {
         transport: "nango" as const,
         is_active: true,
         oauth_scope: null,
+        needs_reauth: false,
+        last_healthy_at: null,
+        reauth_email_count: 0,
+        reauth_email_last_sent_at: null,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z"
       }
@@ -121,6 +129,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -135,6 +147,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -160,6 +176,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -210,6 +230,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -222,6 +246,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -247,6 +275,10 @@ describe("api/integrations/workspace", () => {
       transport: "nango" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -279,6 +311,10 @@ describe("api/integrations/workspace", () => {
       transport: "direct" as const,
       is_active: true,
       oauth_scope: null,
+      needs_reauth: false,
+      last_healthy_at: null,
+      reauth_email_count: 0,
+      reauth_email_last_sent_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     } as never);
@@ -320,6 +356,7 @@ describe("api/integrations/workspace", () => {
         refreshToken: "rt",
         tokenExpiresAt: "2026-01-01T01:00:00Z",
         isActive: true,
+        needsReauth: false,
         updatedAt: "2026-01-01T00:00:00Z"
       });
     });
@@ -348,6 +385,7 @@ describe("api/integrations/workspace", () => {
           refreshToken: "rt",
           tokenExpiresAt: "2026-01-01T01:00:00Z",
           isActive: true,
+          needsReauth: false,
           updatedAt: "2026-01-01T00:00:00Z"
         };
       });

@@ -34,6 +34,7 @@ type WhatsAppConnection = {
   display_phone_number: string | null;
   templates: TemplatesState | null;
   is_active: boolean;
+  needs_reauth?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -286,8 +287,20 @@ export function WhatsAppIntegrationCard({
           </p>
         </div>
         {connection ? (
-          <Badge variant={connection.is_active ? "success" : "neutral"}>
-            {connection.is_active ? "Connected" : "Paused"}
+          <Badge
+            variant={
+              connection.needs_reauth
+                ? "high_load"
+                : connection.is_active
+                  ? "success"
+                  : "neutral"
+            }
+          >
+            {connection.needs_reauth
+              ? "Needs reconnect"
+              : connection.is_active
+                ? "Connected"
+                : "Paused"}
           </Badge>
         ) : null}
       </div>
@@ -344,10 +357,21 @@ export function WhatsAppIntegrationCard({
                 : ""}
             </p>
           ) : null}
+          {connection.needs_reauth ? (
+            <p className="text-xs text-spark-orange">
+              WhatsApp needs to be reconnected. WhatsApp messages for this account are paused.
+            </p>
+          ) : null}
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={toggleActive} loading={toggling}>
-              {connection.is_active ? "Pause" : "Resume"}
-            </Button>
+            {connection.needs_reauth ? (
+              <Button variant="secondary" size="sm" onClick={launchSignup}>
+                Reconnect
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={toggleActive} loading={toggling}>
+                {connection.is_active ? "Pause" : "Resume"}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={disconnect} loading={removing}>
               Disconnect
             </Button>

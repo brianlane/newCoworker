@@ -35,6 +35,10 @@ function conn(over: Partial<{ id: string; provider_config_key: string; metadata:
     transport: "nango" as const,
     is_active: true,
     oauth_scope: null,
+    needs_reauth: false,
+    last_healthy_at: null,
+    reauth_email_count: 0,
+    reauth_email_last_sent_at: null,
     created_at: "",
     updated_at: ""
   };

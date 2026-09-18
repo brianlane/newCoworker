@@ -6,6 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 vi.mock("@/lib/vagaro/client", () => {
   class VagaroApiError extends Error {
     constructor(
@@ -34,6 +37,7 @@ import {
   resolveVagaroService
 } from "@/lib/calendar-tools/vagaro";
 import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 import {
   createVagaroAppointment,
   deleteVagaroAppointment,
@@ -245,6 +249,13 @@ describe("findVagaroSlots", () => {
   });
 
   it("maps credential rejections to vagaro_auth_failed and rethrows other errors", async () => {
+    vi.mocked(searchVagaroAvailability).mockRejectedValueOnce(apiError("auth_failed", "401"));
+    expect(await findVagaroSlots(BIZ, WINDOW)).toEqual({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    });
+
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
     vi.mocked(searchVagaroAvailability).mockRejectedValueOnce(apiError("auth_failed", "401"));
     expect(await findVagaroSlots(BIZ, WINDOW)).toEqual({
       ok: false,

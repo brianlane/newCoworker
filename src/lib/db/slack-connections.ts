@@ -16,6 +16,8 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -32,6 +34,10 @@ type StoredSlackConnectionRow = {
   alert_channel_id: string | null;
   alert_channel_name: string | null;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   installed_by_user_id: string | null;
   created_at: string;
   updated_at: string;
@@ -53,7 +59,8 @@ export type PublicSlackConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,team_id,team_name,enterprise_id,bot_user_id,app_id," +
   "bot_token_encrypted,scopes,alert_channel_id,alert_channel_name," +
-  "is_active,installed_by_user_id,created_at,updated_at";
+  "is_active,needs_reauth,last_healthy_at,reauth_email_count," +
+  "reauth_email_last_sent_at,installed_by_user_id,created_at,updated_at";
 
 /** Raised when a workspace is already linked to a different business. */
 export class SlackWorkspaceAlreadyLinkedError extends Error {
@@ -82,7 +89,8 @@ function toDecryptedRow(row: StoredSlackConnectionRow): SlackConnectionRow {
 export function toPublicSlackConnection(
   row: StoredSlackConnectionRow
 ): PublicSlackConnectionRow {
-  const { bot_token_encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const { bot_token_encrypted, ...rest } = hydrated as unknown as StoredSlackConnectionRow;
   return { ...rest, has_bot_token: bot_token_encrypted.length > 0 };
 }
 
@@ -108,7 +116,9 @@ export async function getActiveSlackConnection(
   client?: SupabaseClient
 ): Promise<SlackConnectionRow | null> {
   const row = await getSlackConnection(businessId, client);
-  return row && row.is_active && row.botToken.length > 0 ? row : null;
+  return row && row.is_active && row.botToken.length > 0 && row.needs_reauth !== true
+    ? row
+    : null;
 }
 
 /** Dashboard listing shape (no decrypt, masked). Null when not connected. */
@@ -176,7 +186,8 @@ export async function upsertSlackConnection(
     bot_token_encrypted: encryptIntegrationSecret(input.botToken),
     scopes: input.scopes,
     is_active: true,
-    installed_by_user_id: input.installedByUserId
+    installed_by_user_id: input.installedByUserId,
+    ...clearedReauthFields(new Date().toISOString())
   };
 
   const { data: existing, error: readError } = await db
@@ -278,6 +289,12 @@ export async function markSlackConnectionDeauthorizedByTeamId(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
+  const { data: existing, error: readError } = await db
+    .from("slack_connections")
+    .select("id")
+    .eq("team_id", teamId)
+    .maybeSingle();
+  if (readError) throw new Error(`markSlackConnectionDeauthorizedByTeamId: ${readError.message}`);
   const { error } = await db
     .from("slack_connections")
     .update({
@@ -287,4 +304,8 @@ export async function markSlackConnectionDeauthorizedByTeamId(
     })
     .eq("team_id", teamId);
   if (error) throw new Error(`markSlackConnectionDeauthorizedByTeamId: ${error.message}`);
+  const id = (existing as { id?: string } | null)?.id;
+  if (id) {
+    await markConnectionNeedsReauth("slack_connections", id, { client: db });
+  }
 }

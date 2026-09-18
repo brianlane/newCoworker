@@ -18,6 +18,8 @@ import {
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
 import type { ZoomClientEnv } from "@/lib/zoom/oauth";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -31,6 +33,10 @@ type StoredZoomConnectionRow = {
   account_email: string | null;
   account_name: string | null;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   auto_import_transcripts: boolean;
   /** Which Marketplace client minted the pair; refresh/revoke must match it. */
   oauth_client_env: ZoomClientEnv;
@@ -58,7 +64,8 @@ export type PublicZoomConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,access_token_encrypted,refresh_token_encrypted," +
   "token_expires_at,zoom_user_id,account_email,account_name," +
-  "is_active,auto_import_transcripts,oauth_client_env,created_at,updated_at";
+  "is_active,needs_reauth,last_healthy_at,reauth_email_count,reauth_email_last_sent_at," +
+  "auto_import_transcripts,oauth_client_env,created_at,updated_at";
 
 function toDecryptedRow(row: StoredZoomConnectionRow): ZoomConnectionRow {
   const {
@@ -85,7 +92,9 @@ function toDecryptedRow(row: StoredZoomConnectionRow): ZoomConnectionRow {
 export function toPublicZoomConnection(
   row: StoredZoomConnectionRow
 ): PublicZoomConnectionRow {
-  const { access_token_encrypted, refresh_token_encrypted, ...rest } = row;
+  const { access_token_encrypted, refresh_token_encrypted, ...rest } = withReauthColumnDefaults(
+    row as unknown as Record<string, unknown>
+  ) as unknown as StoredZoomConnectionRow;
   return {
     ...rest,
     has_tokens:
@@ -115,7 +124,7 @@ export async function getActiveZoomConnection(
   client?: SupabaseClient
 ): Promise<ZoomConnectionRow | null> {
   const row = await getZoomConnection(businessId, client);
-  return row && row.is_active ? row : null;
+  return row && row.is_active && !row.needs_reauth ? row : null;
 }
 
 /**
@@ -132,6 +141,7 @@ export async function getActiveZoomConnectionId(
     .select("id")
     .eq("business_id", businessId)
     .eq("is_active", true)
+    .eq("needs_reauth", false)
     .maybeSingle();
   if (error) throw new Error(`getActiveZoomConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;
@@ -187,6 +197,7 @@ export async function upsertZoomConnection(
     account_email: input.accountEmail ?? null,
     account_name: input.accountName ?? null,
     is_active: true,
+    ...clearedReauthFields(new Date().toISOString()),
     oauth_client_env: input.clientEnv
   };
 
@@ -253,7 +264,7 @@ export async function updateZoomTokens(
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
-/** Soft-disable / re-enable (also used when a refresh returns invalid_grant). */
+/** Soft-disable / re-enable (owner Disable, distinct from needs_reauth). */
 export async function setZoomConnectionActive(
   businessId: string,
   isActive: boolean,
@@ -305,7 +316,8 @@ export async function getActiveZoomConnectionSummariesByZoomUserId(
     .from("zoom_connections")
     .select("business_id,auto_import_transcripts")
     .eq("zoom_user_id", zoomUserId)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("needs_reauth", false);
   if (error) {
     throw new Error(`getActiveZoomConnectionSummariesByZoomUserId: ${error.message}`);
   }
@@ -398,6 +410,12 @@ export async function markZoomConnectionDeauthorized(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
+  const { data: existing, error: readError } = await db
+    .from("zoom_connections")
+    .select("id")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (readError) throw new Error(`markZoomConnectionDeauthorized: ${readError.message}`);
   const { error } = await db
     .from("zoom_connections")
     .update({
@@ -408,4 +426,8 @@ export async function markZoomConnectionDeauthorized(
     })
     .eq("business_id", businessId);
   if (error) throw new Error(`markZoomConnectionDeauthorized: ${error.message}`);
+  const id = (existing as { id?: string } | null)?.id;
+  if (id) {
+    await markConnectionNeedsReauth("zoom_connections", id, { client: db });
+  }
 }

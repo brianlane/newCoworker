@@ -22,6 +22,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { clearedReauthFields, withReauthColumnDefaults } from "@/lib/connections/reauth-copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -62,6 +63,10 @@ type StoredAcuityConnectionRow = {
   suppress_provider_emails: boolean;
   webhook_registration: Record<string, unknown>;
   is_active: boolean;
+  needs_reauth: boolean;
+  last_healthy_at: string | null;
+  reauth_email_count: number;
+  reauth_email_last_sent_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -95,7 +100,8 @@ const ALL_COLUMNS =
   "id,business_id,user_id,api_key_encrypted,api_base_url," +
   "webhook_verification_token,default_appointment_type_id,default_calendar_id," +
   "default_calendar_timezone,suppress_provider_emails,webhook_registration," +
-  "is_active,created_at,updated_at";
+  "is_active,needs_reauth,last_healthy_at,reauth_email_count,reauth_email_last_sent_at," +
+  "created_at,updated_at";
 
 /** Narrow the jsonb column to the typed registration record. */
 export function readWebhookRegistration(
@@ -131,7 +137,8 @@ function toDecryptedRow(row: StoredAcuityConnectionRow): AcuityConnectionRow {
 export function toPublicAcuityConnection(
   row: StoredAcuityConnectionRow
 ): PublicAcuityConnectionRow {
-  const { api_key_encrypted, ...rest } = row;
+  const hydrated = withReauthColumnDefaults(row as unknown as Record<string, unknown>);
+  const { api_key_encrypted, ...rest } = hydrated as unknown as StoredAcuityConnectionRow;
   return { ...rest, has_api_key: api_key_encrypted.length > 0 };
 }
 
@@ -157,12 +164,18 @@ export async function getActiveAcuityConnection(
   client?: SupabaseClient
 ): Promise<AcuityConnectionRow | null> {
   const row = await getAcuityConnection(businessId, client);
-  return row && row.is_active ? row : null;
+  return row && row.is_active && row.needs_reauth !== true ? row : null;
 }
 
 /**
  * Lightweight "is Acuity connected?" probe for the calendar-provider
  * resolver: id-only select, no key decryption on the hot path.
+ *
+ * Includes a needs_reauth row. The decrypted {@link getActiveAcuityConnection}
+ * already skips the dead key so API calls stop. Hiding the flagged book here
+ * would let calendar resolution fall through to Google or Microsoft, a silent
+ * provider switch. Keep the dedicated book selected so callers pause on
+ * calendar_not_connected until the owner reconnects.
  */
 export async function getActiveAcuityConnectionId(
   businessId: string,
@@ -294,6 +307,7 @@ export async function upsertAcuityConnection(
     updated_at: new Date().toISOString(),
     ...(apiBaseUrl === null ? {} : { api_base_url: apiBaseUrl }),
     ...(apiKey ? { api_key_encrypted: encryptIntegrationSecret(apiKey) } : {}),
+    ...(apiKey ? clearedReauthFields(new Date().toISOString()) : {}),
     ...(input.isActive === undefined ? {} : { is_active: input.isActive })
   };
   const { data, error } = await db

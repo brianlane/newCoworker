@@ -32,6 +32,7 @@ type VagaroConnection = {
   default_service_id: string | null;
   default_employee_id: string | null;
   is_active: boolean;
+  needs_reauth?: boolean;
   has_secret: boolean;
   created_at: string;
   updated_at: string;
@@ -206,8 +207,16 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
             Vagaro calendar, and start AiFlows from Vagaro events.
           </p>
         </div>
-        <Badge variant={connection ? "success" : "neutral"}>
-          {connection ? "Connected" : "Not connected"}
+        <Badge
+          variant={
+            connection?.needs_reauth
+              ? "high_load"
+              : connection
+                ? "success"
+                : "neutral"
+          }
+        >
+          {connection?.needs_reauth ? "Needs reconnect" : connection ? "Connected" : "Not connected"}
         </Badge>
       </div>
 
@@ -267,9 +276,21 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
             </div>
           ) : null}
 
+          {connection.needs_reauth ? (
+            <p className="text-xs text-spark-orange">
+              Vagaro needs to be reconnected. Calendar follow-ups and booking checks for
+              this account are paused.
+            </p>
+          ) : null}
+
           <div className="flex gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(true)}>
-              Update credentials
+            <Button
+              type="button"
+              variant={connection.needs_reauth ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setShowForm(true)}
+            >
+              {connection.needs_reauth ? "Reconnect" : "Update credentials"}
             </Button>
             <Button
               type="button"

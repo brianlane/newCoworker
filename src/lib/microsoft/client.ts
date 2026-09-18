@@ -17,16 +17,16 @@
  *   - an optimistic-concurrency fence on `updated_at` for cross-instance
  *     races, which the in-process map cannot see. A losing refresher re-reads
  *     and adopts the winner's rotation instead of clobbering it or
- *     deactivating a healthy connection.
+ *     flagging a healthy connection as needs_reauth.
  */
 import { logger } from "@/lib/logger";
 import {
   getWorkspaceConnectionSecrets,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionTokens,
   type WorkspaceConnectionSecrets
 } from "@/lib/db/workspace-oauth-connections";
 import { MicrosoftOAuthError, refreshMicrosoftTokens } from "@/lib/microsoft/oauth";
+import { markConnectionNeedsReauth, stampConnectionHealthy } from "@/lib/connections/reauth";
 
 /** Refresh when less than this much validity remains. */
 export const MICROSOFT_TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -52,15 +52,15 @@ async function refreshAndPersist(row: WorkspaceConnectionSecrets): Promise<strin
       // their password, an admin revoked it, or ANOTHER INSTANCE already
       // rotated this token (the in-process map cannot see other servers).
       // Re-read before concluding: if the row rotated since we read it, use the
-      // newer pair rather than deactivating a healthy connection.
+      // newer pair rather than flagging a healthy connection as needs_reauth.
       const latest = await getWorkspaceConnectionSecrets(row.id);
-      if (latest && latest.isActive && latest.updatedAt !== row.updatedAt) {
+      if (latest && latest.isActive && !latest.needsReauth && latest.updatedAt !== row.updatedAt) {
         return latest.accessToken;
       }
-      logger.warn("microsoft refresh token rejected; deactivating connection", {
+      logger.warn("microsoft refresh token rejected; connection needs reconnect", {
         connectionId: row.id
       });
-      await setWorkspaceConnectionActive(row.id, false);
+      await markConnectionNeedsReauth("workspace_oauth_connections", row.id);
       return null;
     }
     throw err;
@@ -72,7 +72,14 @@ async function refreshAndPersist(row: WorkspaceConnectionSecrets): Promise<strin
   const stored = await updateWorkspaceConnectionTokens(row.id, tokens, row.updatedAt);
   if (!stored) {
     const latest = await getWorkspaceConnectionSecrets(row.id);
-    if (latest && latest.isActive) return latest.accessToken;
+    if (latest && latest.isActive && !latest.needsReauth) return latest.accessToken;
+  } else {
+    await stampConnectionHealthy("workspace_oauth_connections", row.id).catch((err) => {
+      logger.warn("microsoft last_healthy_at stamp failed", {
+        connectionId: row.id,
+        error: String(err)
+      });
+    });
   }
   return tokens.accessToken;
 }
@@ -87,7 +94,7 @@ export async function getMicrosoftAccessToken(
   now = Date.now()
 ): Promise<string | null> {
   const row = await getWorkspaceConnectionSecrets(connectionRowId);
-  if (!row || !row.isActive) return null;
+  if (!row || !row.isActive || row.needsReauth) return null;
 
   const expiresAt = new Date(row.tokenExpiresAt).getTime();
   if (Number.isFinite(expiresAt) && expiresAt - now > MICROSOFT_TOKEN_REFRESH_MARGIN_MS) {

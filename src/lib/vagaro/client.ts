@@ -90,7 +90,9 @@ export async function getVagaroAccessToken(conn: VagaroConnectionRow): Promise<s
   });
   if (!res.ok) {
     throw new VagaroApiError(
-      "auth_failed",
+      res.status === 401 || res.status === 403 || res.status === 400
+        ? "auth_failed"
+        : "request_failed",
       `Vagaro token exchange failed (${res.status})`,
       res.status
     );

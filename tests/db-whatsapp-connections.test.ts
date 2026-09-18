@@ -125,6 +125,7 @@ describe("reads", () => {
     expect(row?.accessToken).toBe("business-token");
     expect(c.eq).toHaveBeenCalledWith("phone_number_id", "pn-9");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
 
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: null });

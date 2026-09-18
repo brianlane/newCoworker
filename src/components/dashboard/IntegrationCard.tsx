@@ -2,7 +2,12 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { LucideIcon } from "lucide-react";
 
-export type IntegrationCardStatus = "connected" | "disconnected" | "coming_soon" | "platform";
+export type IntegrationCardStatus =
+  | "connected"
+  | "disconnected"
+  | "coming_soon"
+  | "platform"
+  | "attention";
 
 type IntegrationCardProps = {
   title: string;
@@ -21,6 +26,8 @@ const badgeVariant = (status: IntegrationCardStatus) => {
       return "neutral" as const;
     case "coming_soon":
       return "pending" as const;
+    case "attention":
+      return "high_load" as const;
     case "platform":
       return "online" as const;
     default:
@@ -44,7 +51,9 @@ export function IntegrationCard({
         ? "Not connected"
         : status === "coming_soon"
           ? "Coming soon"
-          : "Platform");
+          : status === "attention"
+            ? "Needs reconnect"
+            : "Platform");
 
   return (
     <Card className="flex flex-col h-full">

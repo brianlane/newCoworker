@@ -20,6 +20,9 @@ vi.mock("@/lib/integrations/secrets", () => ({
     return m ? m[1] : v;
   })
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 import {
   deleteZoomConnection,
@@ -177,6 +180,10 @@ describe("getActiveZoomConnection", () => {
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: STORED, error: null });
     expect((await getActiveZoomConnection(BIZ, makeDb(c2)))?.id).toBe("zc-1");
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
+    expect(await getActiveZoomConnection(BIZ, makeDb(c3))).toBeNull();
   });
 
   it("returns null when no row exists", async () => {
@@ -268,6 +275,8 @@ describe("upsertZoomConnection", () => {
     expect(inserted.refresh_token_encrypted).toBe("enc(new-refresh)");
     expect(inserted.token_expires_at).toBe("2026-07-15T01:00:00.000Z");
     expect(inserted.is_active).toBe(true);
+    expect(inserted.needs_reauth).toBe(false);
+    expect(inserted.reauth_email_count).toBe(0);
     expect(inserted.oauth_client_env).toBe("production");
   });
 
@@ -598,18 +607,31 @@ describe("setZoomConnectionAutoImport", () => {
 });
 
 describe("markZoomConnectionDeauthorized", () => {
-  it("wipes the token pair and flips the row inactive in one update", async () => {
+  it("wipes the token pair, deactivates, then flags needs_reauth so the first email fires", async () => {
     const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: "zc-1" }, error: null });
     await markZoomConnectionDeauthorized(BIZ, makeDb(c));
     const updated = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(updated.is_active).toBe(false);
     expect(updated.access_token_encrypted).toBe("");
     expect(updated.refresh_token_encrypted).toBe("");
+    expect(updated).not.toHaveProperty("needs_reauth");
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    const { markConnectionNeedsReauth } = await import("@/lib/connections/reauth");
+    expect(markConnectionNeedsReauth).toHaveBeenCalledWith("zoom_connections", "zc-1", {
+      client: expect.anything()
+    });
+  });
+
+  it("throws on a read error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "deauth read" } });
+    await expect(markZoomConnectionDeauthorized(BIZ, makeDb(c))).rejects.toThrow(/deauth read/);
   });
 
   it("throws on an update error", async () => {
     const c = chain({ error: { message: "deauth fail" } });
+    c.maybeSingle.mockResolvedValue({ data: { id: "zc-1" }, error: null });
     await expect(markZoomConnectionDeauthorized(BIZ, makeDb(c))).rejects.toThrow(
       /deauth fail/
     );
@@ -617,6 +639,7 @@ describe("markZoomConnectionDeauthorized", () => {
 
   it("uses the default service client when none is provided", async () => {
     const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: "zc-1" }, error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await markZoomConnectionDeauthorized(BIZ);
     expect(defaultClientSpy).toHaveBeenCalled();

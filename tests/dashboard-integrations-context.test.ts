@@ -398,6 +398,34 @@ describe("computeIntegrationStatuses", () => {
     expect(broken.calendly).toEqual({ state: "attention", label: "Needs reconnect" });
   });
 
+  it("flags needs_reauth on Zoom, Vagaro, Acuity, WhatsApp, Slack, Meta, and Google without touching a healthy sibling", () => {
+    const s = computeIntegrationStatuses(
+      baseCtx({
+        zoomConnection: { is_active: true, needs_reauth: true } as never,
+        vagaroConnection: { id: "v", needs_reauth: true } as never,
+        acuityConnection: { id: "a", needs_reauth: false } as never,
+        caldavConnection: { id: "d", needs_reauth: true } as never,
+        whatsappConnection: { is_active: true, needs_reauth: true } as never,
+        slackConnection: { is_active: true, has_bot_token: true, needs_reauth: true } as never,
+        metaConnection: { status: "active", needs_reauth: true } as never,
+        workspaceConnections: [
+          { id: "g-dead", provider_config_key: "google", needs_reauth: true },
+          { id: "g-ok", provider_config_key: "google", needs_reauth: false },
+          { id: "m1", provider_config_key: "outlook", needs_reauth: false }
+        ] as never
+      })
+    );
+    expect(s.zoom).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.vagaro).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.acuity).toEqual({ state: "connected", label: "Connected" });
+    expect(s.caldav).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.whatsapp).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.slack).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.meta).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.google).toEqual({ state: "attention", label: "Needs reconnect" });
+    expect(s.microsoft).toEqual({ state: "connected", label: "Connected" });
+  });
+
   it("distinguishes active vs pending Meta connections", () => {
     const active = computeIntegrationStatuses(
       baseCtx({ metaConnection: { status: "active" } as never })

@@ -11,7 +11,7 @@
  * Cross-instance races (the in-process single-flight can't see other
  * servers) are handled with an optimistic-concurrency fence on updated_at:
  * a losing refresher re-reads the row and adopts the winner's rotation
- * instead of deactivating the connection or clobbering the newer pair.
+ * instead of flagging the connection or clobbering the newer pair.
  *
  * `zoomApiRequest` mirrors the calendly-direct response contract:
  *   - 401/403 → null (revoked token, "not connected" semantics);
@@ -21,7 +21,6 @@
 import { logger } from "@/lib/logger";
 import {
   getZoomConnection,
-  setZoomConnectionActive,
   updateZoomConnectionIdentity,
   updateZoomTokens,
   type ZoomConnectionRow
@@ -32,6 +31,7 @@ import {
   ZOOM_API_BASE_URL,
   ZoomOAuthError
 } from "@/lib/zoom/oauth";
+import { markConnectionNeedsReauth, stampConnectionHealthy } from "@/lib/connections/reauth";
 
 /** Refresh when less than this much validity remains. */
 export const ZOOM_TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -75,15 +75,16 @@ async function refreshAndPersist(
       // ANOTHER INSTANCE already consumed this single-use refresh token
       // (the in-process single-flight can't see other servers). Re-read
       // before concluding: if the row rotated since we read it, use the
-      // newer pair instead of deactivating a healthy connection.
+      // newer pair instead of flagging a healthy connection as needs_reauth.
       const latest = await getZoomConnection(businessId);
-      if (latest && latest.is_active && latest.updated_at !== row.updated_at) {
+      if (latest && latest.is_active && !latest.needs_reauth && latest.updated_at !== row.updated_at) {
         return latest.accessToken;
       }
-      logger.warn("zoom refresh token rejected; deactivating connection", {
-        businessId
+      logger.warn("zoom refresh token rejected; connection needs reconnect", {
+        businessId,
+        connectionId: row.id
       });
-      await setZoomConnectionActive(businessId, false);
+      await markConnectionNeedsReauth("zoom_connections", row.id);
       return null;
     }
     throw err;
@@ -94,7 +95,15 @@ async function refreshAndPersist(
   const stored = await updateZoomTokens(businessId, tokens, row.updated_at);
   if (!stored) {
     const latest = await getZoomConnection(businessId);
-    if (latest && latest.is_active) return latest.accessToken;
+    if (latest && latest.is_active && !latest.needs_reauth) return latest.accessToken;
+  } else {
+    await stampConnectionHealthy("zoom_connections", row.id).catch((err) => {
+      logger.warn("zoom last_healthy_at stamp failed", {
+        businessId,
+        connectionId: row.id,
+        error: String(err)
+      });
+    });
   }
   return tokens.accessToken;
 }
@@ -109,7 +118,7 @@ export async function getZoomAccessToken(
   now = Date.now()
 ): Promise<string | null> {
   const row = await getZoomConnection(businessId);
-  if (!row || !row.is_active) return null;
+  if (!row || !row.is_active || row.needs_reauth) return null;
   // A wiped pair (Zoom-side deauthorization) is not a usable connection,
   // even if the row was later force-reactivated: never send an empty bearer.
   if (row.accessToken.length === 0 || row.refreshToken.length === 0) return null;

@@ -209,7 +209,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
           className="whitespace-nowrap"
           variant={
             needsReconnect
-              ? "pending"
+              ? "high_load"
               : connection?.status === "active"
                 ? "success"
                 : connection

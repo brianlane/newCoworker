@@ -4,7 +4,6 @@ import {
   flipWorkspaceConnectionToDirect,
   getWorkspaceConnectionSecrets,
   insertDirectWorkspaceConnection,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionAccessToken,
   updateWorkspaceConnectionTokens,
   getWorkspaceOAuthConnection,
@@ -336,6 +335,7 @@ describe("db/workspace-oauth-connections direct rows", () => {
         refreshToken: "rt-plain",
         tokenExpiresAt: "2026-08-11T10:00:00Z",
         isActive: true,
+        needsReauth: false,
         updatedAt: "2026-08-01T00:00:00Z"
       });
     });
@@ -383,6 +383,19 @@ describe("db/workspace-oauth-connections direct rows", () => {
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       const row = await getWorkspaceConnectionSecrets(ROW_ID);
       expect(row?.isActive).toBe(false);
+    });
+
+    it("reports needs_reauth without hiding the row, so the token manager can skip it", async () => {
+      const db = {
+        ...mockDb(),
+        maybeSingle: vi
+          .fn()
+          .mockResolvedValue({ data: storedRow({ needs_reauth: true }), error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const row = await getWorkspaceConnectionSecrets(ROW_ID);
+      expect(row?.needsReauth).toBe(true);
+      expect(row?.isActive).toBe(true);
     });
 
     it("throws on a query error", async () => {
@@ -561,30 +574,6 @@ describe("db/workspace-oauth-connections direct rows", () => {
     });
   });
 
-  describe("setWorkspaceConnectionActive", () => {
-    it("flips the flag", async () => {
-      const db = {
-        ...mockDb(),
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ error: null })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-      await setWorkspaceConnectionActive(ROW_ID, false);
-      expect((db.update.mock.calls[0][0] as { is_active: boolean }).is_active).toBe(false);
-    });
-
-    it("throws on a query error", async () => {
-      const db = {
-        ...mockDb(),
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ error: { message: "bad" } })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-      await expect(setWorkspaceConnectionActive(ROW_ID, true)).rejects.toThrow("bad");
-    });
-  });
-
   describe("insertDirectWorkspaceConnection", () => {
     const input = {
       businessId: "biz-1",
@@ -607,6 +596,8 @@ describe("db/workspace-oauth-connections direct rows", () => {
       const written = db.insert.mock.calls[0][0] as Record<string, unknown>;
       expect(written.transport).toBe("direct");
       expect(written.is_active).toBe(true);
+      expect(written.needs_reauth).toBe(false);
+      expect(written.reauth_email_count).toBe(0);
       expect(decryptIntegrationSecret(written.access_token_encrypted as string)).toBe("at-plain");
     });
 
@@ -645,6 +636,8 @@ describe("db/workspace-oauth-connections direct rows", () => {
       const written = db.update.mock.calls[0][0] as Record<string, unknown>;
       expect(written.transport).toBe("direct");
       expect(written.is_active).toBe(true);
+      expect(written.needs_reauth).toBe(false);
+      expect(written.reauth_email_count).toBe(0);
       expect(written.connection_id).toBe("direct:new");
       // App-owned metadata the caller merged in survives the flip.
       expect(written.metadata).toEqual(args.metadata);

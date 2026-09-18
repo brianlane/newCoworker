@@ -26,13 +26,14 @@
  * hold several Google accounts and keying by business would make two mailboxes
  * share one another's token.
  *
- * ## invalid_grant is the only code that may deactivate
+ * ## invalid_grant is the only code that may flag needs_reauth
  *
  * All three live Google accounts are consumer Gmail, so revocation is ordinary
  * rather than exceptional: a consumer password change revokes the grant, and a
  * refresh token dies after roughly six months unused. When Google says
- * `invalid_grant` the grant is genuinely gone and the row is soft-disabled so
- * the dashboard can show "Reconnect".
+ * `invalid_grant` the grant is genuinely gone and the row flips to
+ * needs_reauth so the dashboard can show "Needs reconnect" without flipping
+ * the owner's Disable toggle.
  *
  * `invalid_client` must never reach that path. It means OUR credentials are
  * wrong, which is exactly what a botched client-secret rotation looks like, and
@@ -44,11 +45,11 @@
 import { logger } from "@/lib/logger";
 import {
   getWorkspaceConnectionSecrets,
-  setWorkspaceConnectionActive,
   updateWorkspaceConnectionAccessToken,
   type WorkspaceConnectionSecrets
 } from "@/lib/db/workspace-oauth-connections";
 import { GoogleOAuthError, refreshGoogleTokens } from "@/lib/google/oauth";
+import { markConnectionNeedsReauth, stampConnectionHealthy } from "@/lib/connections/reauth";
 
 /** Refresh when less than this much validity remains. */
 export const GOOGLE_TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -70,10 +71,10 @@ async function refreshAndPersist(row: WorkspaceConnectionSecrets): Promise<strin
     tokens = await refreshGoogleTokens(row.refreshToken);
   } catch (err) {
     if (err instanceof GoogleOAuthError && err.code === "invalid_grant") {
-      logger.warn("google refresh token rejected; deactivating connection", {
+      logger.warn("google refresh token rejected; connection needs reconnect", {
         connectionId: row.id
       });
-      await setWorkspaceConnectionActive(row.id, false);
+      await markConnectionNeedsReauth("workspace_oauth_connections", row.id);
       return null;
     }
     // Transient (timeout, 5xx) or our own misconfiguration (invalid_client).
@@ -95,6 +96,13 @@ async function refreshAndPersist(row: WorkspaceConnectionSecrets): Promise<strin
     logger.warn("google access token refreshed but not persisted; row may be gone", {
       connectionId: row.id
     });
+  } else {
+    await stampConnectionHealthy("workspace_oauth_connections", row.id).catch((err) => {
+      logger.warn("google last_healthy_at stamp failed", {
+        connectionId: row.id,
+        error: String(err)
+      });
+    });
   }
   return tokens.accessToken;
 }
@@ -113,7 +121,7 @@ export async function getGoogleAccessToken(
   now = Date.now()
 ): Promise<string | null> {
   const row = await getWorkspaceConnectionSecrets(connectionRowId);
-  if (!row || !row.isActive) return null;
+  if (!row || !row.isActive || row.needsReauth) return null;
 
   const expiresAt = new Date(row.tokenExpiresAt).getTime();
   if (Number.isFinite(expiresAt) && expiresAt - now > GOOGLE_TOKEN_REFRESH_MARGIN_MS) {

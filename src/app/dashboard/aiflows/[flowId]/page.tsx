@@ -12,6 +12,7 @@ import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailb
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
 import { calendlyDashboardPauseCopy } from "@/lib/calendly/reauth";
+import { listConnectionReauthBannerState } from "@/lib/connections/reauth";
 import { AiFlowHistory } from "@/components/dashboard/AiFlowHistory";
 
 export const dynamic = "force-dynamic";
@@ -41,8 +42,20 @@ export default async function AiFlowViewPage({ params }: Props) {
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
   const tCalendly = await getTranslations("dashboard.calendlyReauth");
+  const tConnection = await getTranslations("dashboard.connectionReauth");
   const paused = businessId ? await calendlyDashboardPauseCopy(businessId) : null;
-  const calendarPausedCopy = paused ? tCalendly("pausedUntilReconnect") : null;
+  const calendlyPaused = paused ? tCalendly("pausedUntilReconnect") : null;
+  const otherCalendarPaused = businessId
+    ? (await listConnectionReauthBannerState(businessId)).find(
+        (b) =>
+          b.provider === "Acuity" || b.provider === "Vagaro" || b.provider === "CalDAV"
+      )
+    : null;
+  const calendarPausedCopy =
+    calendlyPaused ??
+    (otherCalendarPaused
+      ? tConnection("pausedUntilReconnect", { provider: otherCalendarPaused.provider })
+      : null);
 
   // Only offer "View runs" when this flow has actually been triggered/run at
   // least once, a cheap single-row probe scoped to this flow.

@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: true }))
+}));
 
 const getActiveAcuityConnectionMock = vi.fn();
 vi.mock("@/lib/db/acuity-connections", () => ({
@@ -50,6 +53,7 @@ vi.mock("@/lib/acuity/client", async () => {
 });
 
 import { AcuityApiError } from "@/lib/acuity/client";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 import {
   ACUITY_MAX_AVAILABILITY_CALLS,
   ACUITY_MAX_AVAILABILITY_DAYS,
@@ -379,6 +383,17 @@ describe("findAcuitySlots", () => {
   });
 
   it("surfaces a rejected credential as acuity_auth_failed", async () => {
+    listAcuityAvailableTimesMock.mockRejectedValue(
+      new AcuityApiError("auth_failed", "nope", 401)
+    );
+    await expect(findAcuitySlots(BIZ, baseArgs)).resolves.toEqual({
+      ok: false,
+      detail: "acuity_auth_failed"
+    });
+  });
+
+  it("still returns acuity_auth_failed when the needs_reauth flip rejects", async () => {
+    vi.mocked(markConnectionNeedsReauth).mockRejectedValueOnce(new Error("mark down"));
     listAcuityAvailableTimesMock.mockRejectedValue(
       new AcuityApiError("auth_failed", "nope", 401)
     );

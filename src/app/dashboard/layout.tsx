@@ -8,7 +8,9 @@ import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
 import { CalendlyReauthBanner } from "@/components/dashboard/CalendlyReauthBanner";
+import { ConnectionReauthBanner } from "@/components/dashboard/ConnectionReauthBanner";
 import { listCalendlyReauthBannerState } from "@/lib/calendly/reauth";
+import { listConnectionReauthBannerState } from "@/lib/connections/reauth";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
 import { bindBusinessMemberUser } from "@/lib/db/business-members";
 import {
@@ -96,6 +98,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let metaConnected = false;
   let whatsappConnected = false;
   let calendlyReauthBanners: Awaited<ReturnType<typeof listCalendlyReauthBannerState>> = [];
+  let connectionReauthBanners: Awaited<ReturnType<typeof listConnectionReauthBannerState>> = [];
   if (ownerEmail) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
@@ -149,7 +152,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
       // connection reads degrade to "not connected" on error, a read
       // hiccup hides the Messenger/WhatsApp nav rather than breaking it.
       const graceEligible = !!ctx.role && can(ctx.role, "manage_billing");
-      const [brandRes, subs, metaConnection, whatsappConnection, calendlyBanners] =
+      const [
+        brandRes,
+        subs,
+        metaConnection,
+        whatsappConnection,
+        calendlyBanners,
+        connectionBanners
+      ] =
         await Promise.all([
         // White-label branding (enterprise): read tier + branding for the
         // active business; effectiveBranding gates on tier so a downgraded
@@ -184,6 +194,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
             error: err instanceof Error ? err.message : String(err)
           });
           return [];
+        }),
+        listConnectionReauthBannerState(businessId).catch((err: unknown) => {
+          logger.warn("dashboard layout: connection reauth banner read failed", {
+            businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return [];
         })
       ]);
 
@@ -206,6 +223,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       metaConnected = metaConnection?.status === "active" && metaConnection.is_active === true;
       whatsappConnected = whatsappConnection?.is_active === true;
       calendlyReauthBanners = calendlyBanners;
+      connectionReauthBanners = connectionBanners;
     }
   }
 
@@ -268,6 +286,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </div>
         )}
         <CalendlyReauthBanner banners={calendlyReauthBanners} />
+        <ConnectionReauthBanner banners={connectionReauthBanners} />
         {/* Asks once per device, then never again: any decision ends it. The
             permanent opt-in stays on the notifications settings page. Not
             shown while the terms gate is up, which owns the screen. */}

@@ -82,6 +82,10 @@ const STORED = {
   suppress_provider_emails: true,
   webhook_registration: {},
   is_active: true,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z"
 };
@@ -195,12 +199,24 @@ describe("reads", () => {
     });
   });
 
+  it("hides a needs_reauth row from the calendar-tool gate, but the id probe still returns it", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { ...STORED, needs_reauth: true }, error: null });
+    await expect(getActiveAcuityConnection(BIZ, makeDb(c))).resolves.toBeNull();
+
+    const probe = chain();
+    probe.maybeSingle.mockResolvedValue({ data: { id: STORED.id }, error: null });
+    await expect(getActiveAcuityConnectionId(BIZ, makeDb(probe))).resolves.toBe(STORED.id);
+    expect(probe.eq).toHaveBeenCalledWith("is_active", true);
+    expect(probe.eq).not.toHaveBeenCalledWith("needs_reauth", false);
+  });
+
   it("probes by id only, never decrypting on the resolver hot path", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { id: "ac-1" }, error: null });
     await expect(getActiveAcuityConnectionId(BIZ, makeDb(c))).resolves.toBe("ac-1");
-    expect(c.select).toHaveBeenCalledWith("id");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).not.toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("returns null from the probe when nothing is connected", async () => {

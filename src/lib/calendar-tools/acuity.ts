@@ -50,6 +50,7 @@ import {
   type AcuityAppointmentType
 } from "@/lib/acuity/client";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
+import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
 /** Match the other providers: offer at most 3 candidate slots. */
 const MAX_SLOTS = 3;
@@ -335,7 +336,7 @@ export async function findAcuitySlots(
       }
     };
   } catch (err) {
-    return rethrowUnlessKnown(err);
+    return rethrowUnlessKnown(err, conn.id);
   }
 }
 
@@ -407,7 +408,7 @@ export async function bookAcuityAppointment(
       }
     };
   } catch (err) {
-    return rethrowUnlessKnown(err);
+    return rethrowUnlessKnown(err, conn.id);
   }
 }
 
@@ -488,7 +489,7 @@ export async function rescheduleAcuityAppointment(
       }
     };
   } catch (err) {
-    return rethrowUnlessKnown(err);
+    return rethrowUnlessKnown(err, conn.id);
   }
 }
 
@@ -545,7 +546,7 @@ export async function cancelAcuityAppointment(
       data: { eventId: appointmentId, provider: "acuity", canceled: true }
     };
   } catch (err) {
-    return rethrowUnlessKnown(err);
+    return rethrowUnlessKnown(err, conn.id);
   }
 }
 
@@ -553,9 +554,12 @@ export async function cancelAcuityAppointment(
  * Map the two Acuity failures that carry meaning for the model; everything
  * else is a transport problem handlers.ts already knows how to describe.
  */
-function rethrowUnlessKnown(err: unknown): CalendarToolResult {
+function rethrowUnlessKnown(err: unknown, connectionId: string): CalendarToolResult {
   if (err instanceof AcuityApiError) {
-    if (err.code === "auth_failed") return { ok: false, detail: "acuity_auth_failed" };
+    if (err.code === "auth_failed") {
+      void markConnectionNeedsReauth("acuity_connections", connectionId).catch(() => undefined);
+      return { ok: false, detail: "acuity_auth_failed" };
+    }
     if (err.code === "slot_unavailable") {
       return {
         ok: false,

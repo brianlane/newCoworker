@@ -304,6 +304,16 @@ const DYNAMIC_TABLE_SITES: Record<string, string> = {
     "billing control plane; the tables it iterates are central and do not move",
   "src/lib/todos/db.ts::assertRefInBusiness":
     "ownership assertion across several ref tables; contacts among them is KEPT central, so this is correct",
+  "src/lib/connections/reauth.ts::markConnectionNeedsReauth":
+    "table is one of the eight connection grants (workspace_oauth, zoom, acuity, caldav, vagaro, meta, slack, whatsapp). None of those are in RESIDENCY_MOVED_TABLES, so central is the only copy",
+  "src/lib/connections/reauth.ts::stampEmailSent":
+    "same eight connection tables as markConnectionNeedsReauth: not residency-moved, central is the only copy",
+  "src/lib/connections/reauth.ts::stampConnectionHealthy":
+    "same eight connection tables as markConnectionNeedsReauth: not residency-moved, central is the only copy",
+  "src/lib/connections/reauth.ts::processConnectionReauthReminders":
+    "same eight connection tables as markConnectionNeedsReauth: not residency-moved, central is the only copy",
+  "src/lib/connections/reauth.ts::listConnectionReauthBannerState":
+    "same eight connection tables as markConnectionNeedsReauth: not residency-moved, central is the only copy",
   "supabase/functions/telnyx-voice-call-end/index.ts::wtLookupName":
     "generic single-column lookup helper; engine posture"
 };

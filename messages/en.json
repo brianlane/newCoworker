@@ -2319,6 +2319,25 @@
       "bodyNoLastCheck": "{account}'s Calendly needs a reconnect. Calendar follow-ups and booking checks for that account are paused.",
       "pausedUntilReconnect": "Paused until Calendly is reconnected."
     },
+    "connectionReauth": {
+      "title": "{provider} needs to be reconnected",
+      "reconnect": "Reconnect",
+      "bodyWithLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}, last successful check: {when}.",
+      "bodyNoLastCheck": "{account}'s {provider} needs a reconnect. {pausedWork}.",
+      "pausedUntilReconnect": "Paused until {provider} is reconnected.",
+      "pausedWork": {
+        "google": "Mail and calendar for that account are paused",
+        "microsoft": "Mail and calendar for that account are paused",
+        "workspace": "Mail and calendar for that account are paused",
+        "zoom": "Meetings and transcripts for that account are paused",
+        "acuity": "Calendar follow-ups and booking checks for that account are paused",
+        "caldav": "Calendar booking checks for that account are paused",
+        "vagaro": "Calendar follow-ups and booking checks for that account are paused",
+        "facebook": "Lead forms, Messenger, Instagram, and scheduled posts for that account are paused",
+        "slack": "Slack alerts for that workspace are paused",
+        "whatsapp": "WhatsApp messages for that account are paused"
+      }
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Bring your coworker into Slack: alerts land in a channel you pick, right where your team already works.",
@@ -3598,6 +3617,29 @@
       "cta": "Reconnect Calendly",
       "summary": "Calendly needs a reconnect: {account}",
       "sms": "[REDACTED]: {account}'s Calendly needs a reconnect. Calendar follow-ups are paused until you reconnect it on the Integrations page."
+    },
+    "connectionReauth": {
+      "subject": "{provider} needs to be reconnected",
+      "heading": "{provider} needs to be reconnected",
+      "intro": "{account}'s {provider} connection stopped working.",
+      "lastCheck": "Last successful check: {when}.",
+      "paused": "{pausedWork} until it is reconnected. Missed hours are not backfilled.",
+      "pausedWork": {
+        "google": "Mail and calendar for that account are paused",
+        "microsoft": "Mail and calendar for that account are paused",
+        "workspace": "Mail and calendar for that account are paused",
+        "zoom": "Meetings and transcripts for that account are paused",
+        "acuity": "Calendar follow-ups and booking checks for that account are paused",
+        "caldav": "Calendar booking checks for that account are paused",
+        "vagaro": "Calendar follow-ups and booking checks for that account are paused",
+        "facebook": "Lead forms, Messenger, Instagram, and scheduled posts for that account are paused",
+        "slack": "Slack alerts for that workspace are paused",
+        "whatsapp": "WhatsApp messages for that account are paused"
+      },
+      "action": "Reconnect that {provider} account from your dashboard. The new grant is saved on the same connection, so you will not create a duplicate.",
+      "cta": "Reconnect {provider}",
+      "summary": "{provider} needs to be reconnected: {account}",
+      "sms": "[REDACTED]: {account}'s {provider} needs to be reconnected. Open Integrations to reconnect it."
     },
     "ncSignoff": "- The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",

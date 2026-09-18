@@ -42,7 +42,7 @@ const businessId = "11111111-1111-4111-8111-111111111111";
 function fakeRow(
   provider_config_key: string,
   connection_id = `cx-${provider_config_key}`,
-  over: { is_active?: boolean; oauth_scope?: string | null } = {}
+  over: { is_active?: boolean; oauth_scope?: string | null; needs_reauth?: boolean } = {}
 ) {
   // Realistic defaults: a live row with no recorded scope, which is what every
   // Nango row looks like. Cases that exercise the capability gate override them.
@@ -50,6 +50,7 @@ function fakeRow(
     provider_config_key,
     connection_id,
     is_active: over.is_active ?? true,
+    needs_reauth: over.needs_reauth ?? false,
     oauth_scope: over.oauth_scope ?? null
   } as never;
 }
@@ -177,6 +178,23 @@ describe("resolveVoiceConnection", () => {
     });
     // Never even lists Nango connections once Vagaro answers.
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+
+  it("keeps a flagged dedicated book selected instead of falling through to Google", async () => {
+    // The Vagaro ID probe returns the row even when it needs reconnect
+    // (decrypted getActiveVagaroConnection is what skips the dead token).
+    // If the probe hid it, this would list workspace Google and silently
+    // switch calendars, the one unacceptable outcome.
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-flagged-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "vagaro-flagged-1"
+    });
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+    expect(getActiveAcuityConnectionId).not.toHaveBeenCalled();
   });
 
   it("resolveCalendarConnection puts an active Acuity connection ahead of the workspace calendars", async () => {
@@ -413,11 +431,12 @@ describe("canServe gating in email resolution", () => {
     });
   });
 
-  it("skips a soft-disabled row and falls through to a working one", async () => {
-    // The token manager sets is_active=false on invalid_grant. Resolving it hands
-    // out a known-dead connection, and does so instead of the tenant's other one.
+  it("skips a needs_reauth row and falls through to a working sibling", async () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      fakeRow("google", "cx-google", { is_active: false, oauth_scope: "https://www.googleapis.com/auth/gmail.modify" }),
+      fakeRow("google", "cx-google", {
+        needs_reauth: true,
+        oauth_scope: "https://www.googleapis.com/auth/gmail.modify"
+      }),
       fakeRow("outlook", "cx-outlook")
     ]);
     const conn = await resolveEmailConnection(businessId);

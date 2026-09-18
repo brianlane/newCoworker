@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
 
 export type WorkspaceConnectionClient = {
   id: string;
@@ -10,6 +11,7 @@ export type WorkspaceConnectionClient = {
   connectionId: string;
   createdAt: string;
   metadata: Record<string, unknown>;
+  needsReauth?: boolean;
 };
 
 export type WorkspaceConnectionCapClient = {
@@ -39,7 +41,12 @@ type Props = {
    * unhelpful: the row they would remove is the one their AiFlows are bound
    * to, and removing it is exactly what the reconnect path exists to avoid.
    */
-  connectBlocked: boolean;
+  connectBlocked?: boolean;
+  /**
+   * Href that starts a first-party reconnect for THIS tile (Google or
+   * Microsoft). The reconnect writes onto the same row; it is not a new seat.
+   */
+  reconnectHref?: string | null;
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -104,7 +111,8 @@ export function WorkspaceConnectionList({
   businessId,
   connections,
   cap,
-  connectBlocked
+  connectBlocked,
+  reconnectHref
 }: Props) {
   const t = useTranslations("dashboard.integrationsWorkspace");
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
@@ -151,6 +159,7 @@ export function WorkspaceConnectionList({
             const sameN = countsByProvider.get(c.providerConfigKey) ?? 1;
             const primary = connectionPrimaryLabel(c, sameN);
             const provider = providerLabel(c.providerConfigKey);
+            const needsReauth = c.needsReauth === true;
             return (
               <li
                 key={c.id}
@@ -162,16 +171,43 @@ export function WorkspaceConnectionList({
                     {primary === provider ? "" : `· ${provider} `}·{" "}
                     {new Date(c.createdAt).toLocaleDateString()}
                   </span>
+                  {needsReauth ? (
+                    <span className="ml-2">
+                      <Badge variant="high_load" className="whitespace-nowrap">
+                        Needs reconnect
+                      </Badge>
+                    </span>
+                  ) : (
+                    <span className="ml-2">
+                      <Badge variant="success" className="whitespace-nowrap">
+                        Connected
+                      </Badge>
+                    </span>
+                  )}
                 </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => disconnectOne(c.id)}
-                  loading={disconnectingId === c.id}
-                >
-                  Remove
-                </Button>
+                <span className="flex gap-2 shrink-0">
+                  {needsReauth && reconnectHref ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        window.location.href = reconnectHref;
+                      }}
+                    >
+                      Reconnect
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => disconnectOne(c.id)}
+                    loading={disconnectingId === c.id}
+                  >
+                    Remove
+                  </Button>
+                </span>
               </li>
             );
           })}

@@ -1,7 +1,7 @@
 /**
  * Tests for the direct Zoom API client (src/lib/zoom/client.ts): the
  * refresh-managing token accessor (rotation persistence, single-flight,
- * invalid_grant deactivation) and the resolver-compatible request contract.
+ * invalid_grant needs_reauth) and the resolver-compatible request contract.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,11 +13,17 @@ const getZoomConnection = vi.fn();
 const setZoomConnectionActive = vi.fn();
 const updateZoomTokens = vi.fn();
 const updateZoomConnectionIdentity = vi.fn();
+const markNeedsReauth = vi.fn();
+const stampHealthy = vi.fn();
 vi.mock("@/lib/db/zoom-connections", () => ({
   getZoomConnection: (...args: unknown[]) => getZoomConnection(...args),
   setZoomConnectionActive: (...args: unknown[]) => setZoomConnectionActive(...args),
   updateZoomTokens: (...args: unknown[]) => updateZoomTokens(...args),
   updateZoomConnectionIdentity: (...args: unknown[]) => updateZoomConnectionIdentity(...args)
+}));
+vi.mock("@/lib/connections/reauth", () => ({
+  markConnectionNeedsReauth: (...args: unknown[]) => markNeedsReauth(...args),
+  stampConnectionHealthy: (...args: unknown[]) => stampHealthy(...args)
 }));
 
 const refreshZoomTokens = vi.fn();
@@ -66,6 +72,7 @@ function row(overrides: Record<string, unknown> = {}) {
     account_email: "o@a.com",
     account_name: "Acme",
     is_active: true,
+    needs_reauth: false,
     oauth_client_env: "production",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
@@ -79,6 +86,10 @@ beforeEach(() => {
   setZoomConnectionActive.mockReset();
   updateZoomTokens.mockReset();
   refreshZoomTokens.mockReset();
+  markNeedsReauth.mockReset();
+  markNeedsReauth.mockResolvedValue({ flipped: true, emailed: true });
+  stampHealthy.mockReset();
+  stampHealthy.mockResolvedValue(undefined);
   resetZoomRefreshStateForTests();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -94,6 +105,12 @@ describe("getZoomAccessToken", () => {
     expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
 
     getZoomConnection.mockResolvedValueOnce(row({ is_active: false }));
+    expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
+    expect(refreshZoomTokens).not.toHaveBeenCalled();
+  });
+
+  it("returns null without refreshing a needs_reauth row", async () => {
+    getZoomConnection.mockResolvedValueOnce(row({ needs_reauth: true }));
     expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
     expect(refreshZoomTokens).not.toHaveBeenCalled();
   });
@@ -147,6 +164,7 @@ describe("getZoomAccessToken", () => {
       "2026-07-01T00:00:00Z"
     );
     expect(order).toEqual(["refresh", "persist"]);
+    expect(stampHealthy).toHaveBeenCalledWith("zoom_connections", row().id);
   });
 
   // A dev-minted grant must keep refreshing against the dev credentials for
@@ -213,6 +231,35 @@ describe("getZoomAccessToken", () => {
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("fresh-access");
   });
 
+  it("falls back to its own fresh pair when the fence is lost and the re-read needs reconnect", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW + 1000).toISOString() })
+    );
+    refreshZoomTokens.mockResolvedValueOnce({
+      accessToken: "fresh-access",
+      refreshToken: "fresh-refresh",
+      expiresAt: new Date(NOW + 3_600_000)
+    });
+    updateZoomTokens.mockResolvedValueOnce(false);
+    getZoomConnection.mockResolvedValueOnce(row({ needs_reauth: true }));
+
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("fresh-access");
+  });
+
+  it("still returns the rotated pair when last_healthy_at cannot stamp", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW + 1000).toISOString() })
+    );
+    refreshZoomTokens.mockResolvedValueOnce({
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+      expiresAt: new Date(NOW + 3_600_000)
+    });
+    updateZoomTokens.mockResolvedValueOnce(true);
+    stampHealthy.mockRejectedValueOnce(new Error("stamp down"));
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("new-access");
+  });
+
   it("single-flights concurrent refreshes for the same business", async () => {
     getZoomConnection.mockResolvedValue(
       row({ token_expires_at: new Date(NOW + 1000).toISOString() })
@@ -242,7 +289,7 @@ describe("getZoomAccessToken", () => {
     expect(refreshZoomTokens).toHaveBeenCalledTimes(1);
   });
 
-  it("deactivates the connection and returns null on a genuine invalid_grant", async () => {
+  it("flags needs_reauth and returns null on a genuine invalid_grant", async () => {
     const stale = row({ token_expires_at: new Date(NOW - 1000).toISOString() });
     getZoomConnection.mockResolvedValueOnce(stale);
     refreshZoomTokens.mockRejectedValueOnce(
@@ -251,10 +298,11 @@ describe("getZoomAccessToken", () => {
     // Re-read shows the SAME row (no concurrent rotation happened), the
     // grant really is dead.
     getZoomConnection.mockResolvedValueOnce(stale);
-    setZoomConnectionActive.mockResolvedValueOnce(undefined);
+    markNeedsReauth.mockResolvedValueOnce({ flipped: true, emailed: true });
 
     expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
-    expect(setZoomConnectionActive).toHaveBeenCalledWith(BIZ, false);
+    expect(markNeedsReauth).toHaveBeenCalledWith("zoom_connections", "zc-1");
+    expect(setZoomConnectionActive).not.toHaveBeenCalled();
     expect(updateZoomTokens).not.toHaveBeenCalled();
   });
 
@@ -273,6 +321,22 @@ describe("getZoomAccessToken", () => {
 
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("winner-access");
     expect(setZoomConnectionActive).not.toHaveBeenCalled();
+  });
+
+  it("flags needs_reauth when invalid_grant re-read already needs reconnect", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW - 1000).toISOString() })
+    );
+    refreshZoomTokens.mockRejectedValueOnce(
+      new ZoomOAuthError("invalid_grant", "Zoom token endpoint failed (401)")
+    );
+    getZoomConnection.mockResolvedValueOnce(
+      row({ needs_reauth: true, updated_at: "2026-07-01T00:00:05Z" })
+    );
+    markNeedsReauth.mockResolvedValueOnce({ flipped: false, emailed: false });
+
+    expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
+    expect(markNeedsReauth).toHaveBeenCalledWith("zoom_connections", "zc-1");
   });
 
   it("rethrows transient refresh failures and clears the in-flight slot", async () => {
