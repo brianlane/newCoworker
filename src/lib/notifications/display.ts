@@ -5,6 +5,8 @@
  * the lib coverage gate and the row component stays render-only.
  */
 
+import { calendlyReconnectPath } from "@/lib/calendly/reauth-copy";
+
 export type NotificationLike = {
   kind: string | null;
   payload: Record<string, unknown> | null;
@@ -156,6 +158,13 @@ export function notificationLink(n: NotificationLike): NotificationLink {
       };
     }
     return { href: "/dashboard/emails", label: "Open Emails" };
+  }
+  if (kind === "calendly_needs_reauth") {
+    const connectionId = readUuid(p, "connection_id");
+    if (connectionId) {
+      return { href: calendlyReconnectPath(connectionId), label: "Reconnect Calendly" };
+    }
+    return { href: "/dashboard/integrations/calendly", label: "Reconnect Calendly" };
   }
   if (
     kind === "byon_port" ||

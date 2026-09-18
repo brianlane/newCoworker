@@ -2301,6 +2301,24 @@
       "autoImportLabel": "Minutas automáticas de reuniones",
       "autoImportHint": "Importa minutas automáticamente después de cada reunión grabada en la nube con transcripción."
     },
+    "integrationsCalendly": {
+      "statusConnected": "Conectado",
+      "statusNeedsReconnect": "Necesita reconexión",
+      "statusDisabled": "desactivado",
+      "statusNotConnected": "Sin conectar",
+      "accountsLabel": "{count} cuentas",
+      "reconnect": "Reconectar",
+      "disconnect": "Desconectar",
+      "primary": "principal",
+      "lastCheck": "Última revisión correcta: {when}"
+    },
+    "calendlyReauth": {
+      "title": "Calendly necesita reconectarse",
+      "reconnect": "Reconectar",
+      "bodyWithLastCheck": "Calendly de {account} necesita reconectarse. Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa, última revisión correcta: {when}.",
+      "bodyNoLastCheck": "Calendly de {account} necesita reconectarse. Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa.",
+      "pausedUntilReconnect": "En pausa hasta que se reconecte Calendly."
+    },
     "integrationsSlack": {
       "title": "Slack",
       "description": "Lleva a tu coworker a Slack: los avisos llegan al canal que elijas, justo donde ya trabaja tu equipo.",
@@ -3569,6 +3587,17 @@
       "summary": "El correo a {name} no llegó ({address})",
       "sms": "Alerta de New Coworker: nuestro correo a {name} en {address} no llegó (la dirección lo rechazó). Contáctalo por otro medio.",
       "smsWithPhone": "Alerta de New Coworker: nuestro correo a {name} en {address} no llegó (la dirección lo rechazó). Contáctalo al {phone}."
+    },
+    "calendlyReauth": {
+      "subject": "Calendly necesita reconectarse",
+      "heading": "Calendly necesita reconectarse",
+      "intro": "La conexión de Calendly de {account} dejó de funcionar.",
+      "lastCheck": "Última revisión correcta: {when}.",
+      "paused": "Los seguimientos de calendario y las comprobaciones de reservas de esa cuenta están en pausa hasta que se reconecte. Las horas perdidas no se recuperan.",
+      "action": "Reconecta esa cuenta de Calendly desde tu panel. El token nuevo se guarda en la misma conexión, así que no crearás un duplicado.",
+      "cta": "Reconectar Calendly",
+      "summary": "Calendly necesita reconectarse: {account}",
+      "sms": "[REDACTED]: Calendly de {account} necesita reconectarse. Los seguimientos de calendario están en pausa hasta que lo reconectes en Integraciones."
     },
     "ncSignoff": "- El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",

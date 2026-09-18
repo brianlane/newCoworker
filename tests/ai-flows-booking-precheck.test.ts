@@ -16,8 +16,8 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
-  // Empty by default: the single-connection fallback in each consumer
-  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  // Empty by default. Callers that still need a Calendly account pass
+  // listCalendlyConnections in deps: a rejected primary is not reused.
   listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
   CALENDLY_DIRECT_KEY: "calendly-direct"
@@ -106,6 +106,7 @@ function deps(overrides: Partial<BookingPrecheckDeps> = {}): BookingPrecheckDeps
   return {
     request: vi.fn().mockResolvedValue(null),
     resolveConnection: vi.fn().mockResolvedValue(CONN),
+    listCalendlyConnections: vi.fn().mockResolvedValue([CONN]),
     fireGoals: vi.fn().mockResolvedValue({ goalsFired: 1, jumpedRuns: 1 }),
     getCachedUserUri: vi.fn().mockResolvedValue(USER_URI),
     persistUserUri: vi.fn().mockResolvedValue(undefined),
@@ -225,6 +226,13 @@ describe("bookingPrecheckForRun gating", () => {
     expect(result.reason).toBe("run_not_found");
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
+
+  it("does not fall back to the rejected primary when the active Calendly list is empty", async () => {
+    const d = deps({ listCalendlyConnections: vi.fn().mockResolvedValue([]) });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result).toMatchObject({ booked: false, reason: "calendly_refused" });
+    expect(d.request).not.toHaveBeenCalled();
+  });
 });
 
 describe("bookingPrecheckForRun user URI", () => {
@@ -301,11 +309,15 @@ describe("bookingPrecheckForRun user URI", () => {
         ? { data: { resource: { uri: USER_URI } } }
         : { data: { collection: [{ uri: "e1" }] } }
     );
+    const nangoConn = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly",
+      connectionId: "n1"
+    };
     const d = deps({
       request: request as never,
-      resolveConnection: vi
-        .fn()
-        .mockResolvedValue({ provider: "calendly", providerConfigKey: "calendly", connectionId: "n1" })
+      resolveConnection: vi.fn().mockResolvedValue(nangoConn),
+      listCalendlyConnections: vi.fn().mockResolvedValue([nangoConn])
     });
     const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
     expect(result.booked).toBe(true);

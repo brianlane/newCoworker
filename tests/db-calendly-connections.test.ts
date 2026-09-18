@@ -29,7 +29,8 @@ import {
   saveCalendlyConnection,
   setCalendlyConnectionActive,
   setCalendlyConnectionUserUri,
-  toPublicCalendlyConnection
+  toPublicCalendlyConnection,
+  calendlyCalendarPauseState
 } from "@/lib/db/calendly-connections";
 
 type Chain = {
@@ -78,6 +79,10 @@ const storedRow = (over: Record<string, unknown> = {}) => ({
   account_email: "james@kyp.test",
   user_uri: URI_A,
   is_active: true,
+  needs_reauth: false,
+  last_healthy_at: null,
+  reauth_email_count: 0,
+  reauth_email_last_sent_at: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
   ...over
@@ -102,8 +107,16 @@ describe("listCalendlyConnections / listActiveCalendlyConnections", () => {
     );
   });
 
-  it("active list filters out disabled rows", async () => {
-    const rows = [storedRow(), storedRow({ id: CONN_B, user_uri: URI_B, is_active: false })];
+  it("active list filters out disabled AND needs_reauth rows", async () => {
+    const rows = [
+      storedRow(),
+      storedRow({ id: CONN_B, user_uri: URI_B, is_active: false }),
+      storedRow({
+        id: "cccccccc-1111-4111-8111-111111111111",
+        user_uri: "https://api.calendly.com/users/CCC",
+        needs_reauth: true
+      })
+    ];
     const c = chain({ data: rows, error: null });
     const list = await listActiveCalendlyConnections(BIZ, makeDb(c));
     expect(list.map((r) => r.id)).toEqual([CONN_A]);
@@ -169,6 +182,7 @@ describe("getActiveCalendlyConnectionId", () => {
     expect(await getActiveCalendlyConnectionId(BIZ, makeDb(c))).toBe(CONN_A);
     expect(c.order).toHaveBeenCalledWith("created_at", { ascending: true });
     expect(c.limit).toHaveBeenCalledWith(1);
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("null when none; throws on error", async () => {
@@ -190,6 +204,7 @@ describe("getCalendlyConnectionUserUriById / setCalendlyConnectionUserUri", () =
     expect(await getCalendlyConnectionUserUriById(CONN_A, makeDb(c))).toBe(URI_A);
     expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).toHaveBeenCalledWith("needs_reauth", false);
   });
 
   it("null when unresolved/absent; throws on error", async () => {
@@ -243,6 +258,49 @@ describe("toPublicCalendlyConnection", () => {
   it("flags an empty stored token as has_token false", () => {
     const pub = toPublicCalendlyConnection(storedRow({ access_token_encrypted: "" }) as never);
     expect(pub.has_token).toBe(false);
+  });
+
+  it("defaults missing reauth columns so a pre-migration row cannot look Connected", () => {
+    const pub = toPublicCalendlyConnection(
+      storedRow({
+        needs_reauth: undefined as never,
+        last_healthy_at: undefined as never,
+        reauth_email_count: "nope" as never,
+        reauth_email_last_sent_at: undefined as never
+      }) as never
+    );
+    expect(pub.needs_reauth).toBe(false);
+    expect(pub.last_healthy_at).toBeNull();
+    expect(pub.reauth_email_count).toBe(0);
+    expect(pub.reauth_email_last_sent_at).toBeNull();
+  });
+});
+
+describe("calendlyCalendarPauseState", () => {
+  it("lists flagged rows and pauses only when no healthy Calendly remains", async () => {
+    const rows = [
+      storedRow({ needs_reauth: true, account_name: "James Lee" }),
+      storedRow({
+        id: CONN_B,
+        user_uri: URI_B,
+        is_active: true,
+        needs_reauth: false,
+        account_name: "Elizabeth Stone"
+      })
+    ];
+    const mixed = await calendlyCalendarPauseState(BIZ, makeDb(chain({ data: rows, error: null })));
+    expect(mixed.pausedCopy).toBeNull();
+    expect(mixed.needingReauth.map((r) => r.id)).toEqual([CONN_A]);
+
+    const onlyBroken = [
+      storedRow({ needs_reauth: true }),
+      storedRow({ id: CONN_B, user_uri: URI_B, is_active: false, needs_reauth: true })
+    ];
+    const paused = await calendlyCalendarPauseState(
+      BIZ,
+      makeDb(chain({ data: onlyBroken, error: null }))
+    );
+    expect(paused.pausedCopy).toBe("Paused until Calendly is reconnected.");
   });
 });
 
@@ -308,13 +366,19 @@ describe("saveCalendlyConnection", () => {
     );
   });
 
-  it("CONVERGES onto the existing row when the account is already linked (re-activates too)", async () => {
+  it("CONVERGES onto the existing row when the account is already linked (clears needs_reauth)", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: CONN_B }, error: null });
-    c.single.mockResolvedValue({
-      data: storedRow({ id: CONN_B, user_uri: URI_B, access_token_encrypted: "enc(tok-new)" }),
-      error: null
-    });
+    c.maybeSingle
+      .mockResolvedValueOnce({ data: { id: CONN_B }, error: null })
+      .mockResolvedValueOnce({
+        data: storedRow({
+          id: CONN_B,
+          user_uri: URI_B,
+          access_token_encrypted: "enc(tok-new)",
+          needs_reauth: false
+        }),
+        error: null
+      });
     const { connection, created } = await saveCalendlyConnection(input, makeDb(c));
     expect(created).toBe(false);
     expect(connection.id).toBe(CONN_B);
@@ -322,6 +386,9 @@ describe("saveCalendlyConnection", () => {
       expect.objectContaining({
         access_token_encrypted: "enc(tok-new)",
         is_active: true,
+        needs_reauth: false,
+        reauth_email_count: 0,
+        reauth_email_last_sent_at: null,
         user_uri: URI_B
       })
     );
@@ -330,11 +397,38 @@ describe("saveCalendlyConnection", () => {
 
   it("converge update error surfaces", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: CONN_B }, error: null });
-    c.single.mockResolvedValue({ data: null, error: { message: "boom" } });
+    c.maybeSingle
+      .mockResolvedValueOnce({ data: { id: CONN_B }, error: null })
+      .mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     await expect(saveCalendlyConnection(input, makeDb(c))).rejects.toThrow(
       "saveCalendlyConnection: boom"
     );
+  });
+
+  it("reconnect by connectionId writes the new token onto THAT row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({
+      data: storedRow({ id: CONN_A, needs_reauth: false, access_token_encrypted: "enc(tok-new)" }),
+      error: null
+    });
+    const { created, connection } = await saveCalendlyConnection(
+      { ...input, connectionId: CONN_A, userUri: URI_A },
+      makeDb(c)
+    );
+    expect(created).toBe(false);
+    expect(connection.id).toBe(CONN_A);
+    expect(c.update).toHaveBeenCalledWith(expect.objectContaining({ needs_reauth: false }));
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
+    // No user_uri lookup when reconnecting a named row.
+    expect(c.eq).not.toHaveBeenCalledWith("user_uri", URI_A);
+  });
+
+  it("reconnect of a missing connectionId is a validation error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(
+      saveCalendlyConnection({ ...input, connectionId: CONN_A }, makeDb(c))
+    ).rejects.toThrow(CalendlyConnectionValidationError);
   });
 });
 
@@ -384,6 +478,10 @@ describe("default client resolution", () => {
     defaultClientSpy.mockReturnValue(makeDb(listChain));
     expect(await listCalendlyConnections(BIZ)).toEqual([]);
     expect(await listPublicCalendlyConnections(BIZ)).toEqual([]);
+    expect(await calendlyCalendarPauseState(BIZ)).toEqual({
+      pausedCopy: null,
+      needingReauth: []
+    });
 
     const single = chain();
     single.maybeSingle.mockResolvedValue({ data: null, error: null });

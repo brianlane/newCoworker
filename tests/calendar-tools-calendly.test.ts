@@ -760,6 +760,23 @@ describe("multi-account row selection (conn.connectionId)", () => {
     expect(getActiveCalendlyConnection).not.toHaveBeenCalled();
   });
 
+  it("REFUSES a needs_reauth row without calling Calendly", async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    vi.mocked(getCalendlyConnectionById).mockResolvedValue({
+      ...(DIRECT_ROW as Record<string, unknown>),
+      is_active: true,
+      needs_reauth: true
+    } as never);
+    expect(
+      await createCalendlyBookingLink(BIZ, CONN, {
+        startIso: "2026-06-12T17:00:00.000Z",
+        endIso: "2026-06-12T17:30:00.000Z"
+      })
+    ).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(calendlyDirectRequest)).not.toHaveBeenCalled();
+    expect(getActiveCalendlyConnection).not.toHaveBeenCalled();
+  });
+
   it("a conn with NO id at all goes straight to the primary (no byId probe)", async () => {
     const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
     mockUserAndEventTypes([THIRTY_MIN]);

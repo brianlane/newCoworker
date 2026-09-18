@@ -20,6 +20,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
 import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
+import { processCalendlyReauthReminders } from "@/lib/calendly/reauth";
 import { handleObservedCancellation, sweepWaitlist } from "@/lib/calendar-tools/waitlist-fill";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
@@ -51,10 +52,17 @@ export async function POST(request: Request): Promise<Response> {
       console.error("aiflow-calendar-poll booking-goal sweep", err);
       return null;
     });
+    // Second (and final) Calendly reconnect email: independent of the
+    // poll cadence gate so a skipped poll tick still sends the next-day
+    // reminder while the dead token is being skipped.
+    const calendlyReauth = await processCalendlyReauthReminders().catch((err) => {
+      console.error("aiflow-calendar-poll calendly reauth reminders", err);
+      return null;
+    });
     // Waitlist maintenance rides the same tick: expire lapsed entries and
     // pass expired offer holds to the next candidate. Never throws.
     const waitlist = await sweepWaitlist();
-    return successResponse({ ...result, bookingGoals, waitlist });
+    return successResponse({ ...result, bookingGoals, waitlist, calendlyReauth });
   } catch (err) {
     return handleRouteError(err);
   }

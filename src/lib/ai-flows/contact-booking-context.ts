@@ -505,13 +505,14 @@ export async function contactBookingContextForPhone(
     // a canceled one is remembered in case a later account holds an active
     // booking (booked beats canceled across accounts).
     const conns = await listConnections(businessId);
-    /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
-    const scanConns = conns.length > 0 ? conns : [conn];
+    // Never fall back to `[conn]`: that primary may already be flagged
+    // needs_reauth. Empty list → no Calendly scan this turn.
+    if (conns.length === 0) return NONE;
 
     const nowMs = Date.now();
     const budget = { remaining: BOOKING_CONTEXT_INVITEE_FETCH_CAP };
     let canceledAnswer: ContactBookingContext | null = null;
-    for (const scanConn of scanConns) {
+    for (const scanConn of conns) {
     const userUri = await resolveCalendlyUserUri(
       businessId,
       scanConn,

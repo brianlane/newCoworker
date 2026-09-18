@@ -38,7 +38,9 @@ const businessIdSchema = z.string().uuid();
 
 const createSchema = z.object({
   businessId: z.string().uuid(),
-  accessToken: z.string().min(1).max(4096)
+  accessToken: z.string().min(1).max(4096),
+  /** Reconnect of a specific flagged row. Writes the new PAT onto THAT id. */
+  connectionId: z.string().uuid().optional()
 });
 
 const patchSchema = z.object({
@@ -102,7 +104,8 @@ export async function POST(request: Request) {
       accessToken: body.accessToken,
       userUri: verification.userUri,
       accountName: verification.name ?? null,
-      accountEmail: verification.email ?? null
+      accountEmail: verification.email ?? null,
+      connectionId: body.connectionId
     });
     return successResponse({ connection, created, verified: true });
   } catch (err) {

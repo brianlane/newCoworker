@@ -147,6 +147,9 @@ function deps(overrides: Partial<BookingGoalSweepDeps> = {}): BookingGoalSweepDe
     listConnections: vi.fn().mockResolvedValue([CONN]),
     applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
     findByEmails: vi.fn().mockResolvedValue(new Map()),
+    markNeedsReauth: vi.fn(async () => ({ flipped: true, emailed: false })),
+    stampHealthy: vi.fn(async () => undefined),
+    pauseState: vi.fn(async () => ({ pausedCopy: null, needingReauth: [] })),
     ...overrides
   };
 }
@@ -188,6 +191,8 @@ describe("bookingCreatedRecently", () => {
         now
       )
     ).toBe(false);
+    // Reconnect never backfills missed hours: lookback stays 15 minutes from now.
+    expect(CALENDAR_CREATED_LOOKBACK_MINUTES).toBe(15);
   });
 
   it("is false for missing/unparseable created timestamps", () => {
@@ -402,23 +407,28 @@ describe("sweepCalendlyBookingGoals", () => {
     errSpy.mockRestore();
   });
 
-  it("treats a refused /users/me (or one without a uri) as not connected", async () => {
+  it("treats a refused /users/me (or one without a uri) as a permanent token reject", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1")] }],
       ai_flow_runs: [{ data: [{ id: "run-1" }] }]
     });
-    const d = deps({ request: vi.fn().mockResolvedValue({ data: { resource: {} } }) });
+    const markNeedsReauth = vi.fn(async () => ({ flipped: true, emailed: false }));
+    const d = deps({
+      request: vi.fn().mockResolvedValue({ data: { resource: {} } }),
+      markNeedsReauth
+    });
     await sweepCalendlyBookingGoals(db, d);
+    expect(markNeedsReauth).toHaveBeenCalledWith(CONN.connectionId);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: BIZ,
         event: "ai_flow_booking_goal_sweep_failed",
-        message: expect.stringContaining("calendar_not_connected")
+        message: expect.stringContaining("calendly_token_rejected")
       })
     );
   });
 
-  it("treats a refused scheduled-events listing as not connected", async () => {
+  it("treats a refused scheduled-events listing as a permanent token reject", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1")] }],
       ai_flow_runs: [{ data: [{ id: "run-1" }] }]
@@ -426,14 +436,108 @@ describe("sweepCalendlyBookingGoals", () => {
     const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) =>
       config.endpoint === "/users/me" ? USER_RES : null
     );
-    const d = deps({ request: request as never });
+    const markNeedsReauth = vi.fn(async () => ({ flipped: true, emailed: false }));
+    const d = deps({ request: request as never, markNeedsReauth });
     const result = await sweepCalendlyBookingGoals(db, d);
     expect(result.swept).toBe(1);
+    expect(markNeedsReauth).toHaveBeenCalledWith(CONN.connectionId);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_booking_goal_sweep_failed",
-        message: expect.stringContaining("calendar_not_connected")
+        message: expect.stringContaining("calendly_token_rejected")
       })
+    );
+  });
+
+  it("does not hit Calendly when every connection needs reconnect", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1" }] }]
+    });
+    const pauseState = vi.fn(async () => ({
+      pausedCopy: "Paused until Calendly is reconnected.",
+      needingReauth: [{ id: "cx-dead" }]
+    }));
+    const d = deps({
+      listConnections: vi.fn().mockResolvedValue([]),
+      pauseState: pauseState as never
+    });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    expect(result.swept).toBe(1);
+    expect(d.request).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_booking_goal_sweep_paused_reauth",
+        message: "Paused until Calendly is reconnected."
+      })
+    );
+  });
+
+  it("skips an empty connection list without a pause log when nothing needs reconnect", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1" }] }]
+    });
+    const d = deps({ listConnections: vi.fn().mockResolvedValue([]) });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    expect(result.swept).toBe(1);
+    expect(d.request).not.toHaveBeenCalled();
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_booking_goal_sweep_paused_reauth" })
+    );
+  });
+
+  it("a transient 5xx does not flip needs_reauth", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1" }] }]
+    });
+    const markNeedsReauth = vi.fn(async () => ({ flipped: true, emailed: false }));
+    const d = deps({
+      request: vi.fn().mockRejectedValue(new Error("Calendly API timed out")),
+      markNeedsReauth
+    });
+    await sweepCalendlyBookingGoals(db, d);
+    expect(markNeedsReauth).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_booking_goal_sweep_failed",
+        message: expect.stringContaining("timed out")
+      })
+    );
+  });
+
+  it("stamp/mark failures on the sweep path never take down the tick", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1" }] }]
+    });
+    const request = vi.fn(
+      async (_b: string, conn: { connectionId: string }, config: { endpoint: string }) => {
+        if (conn.connectionId === "cx-dead") {
+          return config.endpoint === "/users/me" ? { data: { resource: {} } } : null;
+        }
+        if (config.endpoint === "/users/me") return USER_RES;
+        return { data: { collection: [] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listConnections: vi.fn().mockResolvedValue([
+        CONN,
+        { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-dead" }
+      ]),
+      stampHealthy: vi.fn(async () => {
+        throw "stamp down";
+      }),
+      markNeedsReauth: vi.fn(async () => {
+        throw new Error("mark down");
+      })
+    });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    expect(result.swept).toBe(1);
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_booking_goal_sweep_failed" })
     );
   });
 
@@ -464,9 +568,11 @@ describe("sweepCalendlyBookingGoals", () => {
       };
     });
     const applyGoal = vi.fn().mockResolvedValue({ jumpedRuns: 1 });
-    const d = deps({ request: request as never, applyGoal });
+    const stampHealthy = vi.fn(async () => undefined);
+    const d = deps({ request: request as never, applyGoal, stampHealthy });
     const result = await sweepCalendlyBookingGoals(db, d);
     expect(result).toMatchObject({ swept: 1, bookings: 1, goalsFired: 1, jumpedRuns: 1 });
+    expect(stampHealthy).toHaveBeenCalledWith(CONN.connectionId);
     expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+17808039935", {
       kind: "appointment_booked"
     });

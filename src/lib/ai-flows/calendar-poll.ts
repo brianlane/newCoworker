@@ -58,6 +58,12 @@ import {
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { calendlyCalendarPauseState } from "@/lib/db/calendly-connections";
+import { isCalendlyTokenRejected } from "@/lib/calendly/reauth-copy";
+import {
+  markCalendlyConnectionNeedsReauth,
+  stampCalendlyConnectionHealthy
+} from "@/lib/calendly/reauth";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -113,6 +119,13 @@ export const CALENDAR_POLL_ALERT_PRIOR_FAILURES = 2;
 
 /** Marker event for the once-per-day owner alert dedupe. */
 export const CALENDAR_POLL_OWNER_ALERT_EVENT = "ai_flow_calendar_owner_alerted";
+
+/**
+ * Honest pause while every Calendly PAT on the business needs reconnect.
+ * Distinct from `ai_flow_calendar_poll_failed`: nothing is broken in a
+ * retryable way, the token is dead, follow-ups stay paused until Reconnect.
+ */
+const CALENDAR_POLL_PAUSED_REAUTH_EVENT = "ai_flow_calendar_poll_paused_reauth";
 
 /** Failure details that mean "the calendar connection itself is broken". */
 const CONNECTION_FAILURE_DETAILS = [
@@ -608,6 +621,25 @@ function isConnectionFailure(message: string): boolean {
 }
 
 /**
+ * Honest pause while every Calendly PAT on the business needs reconnect.
+ * Distinct from a poll failure: nothing is retryable, follow-ups stay paused
+ * until Reconnect, and the 3-strike owner SMS must not fire.
+ */
+async function logCalendlyPollPaused(businessId: string): Promise<boolean> {
+  const pause = await calendlyCalendarPauseState(businessId);
+  if (!pause.pausedCopy) return false;
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: "warn",
+    event: CALENDAR_POLL_PAUSED_REAUTH_EVENT,
+    message: pause.pausedCopy,
+    payload: { connection_ids: pause.needingReauth.map((r) => r.id) }
+  });
+  return true;
+}
+
+/**
  * Record a poll failure with blip-vs-outage escalation, and alert the OWNER
  * when a connection-class failure persists.
  *
@@ -1013,6 +1045,10 @@ export async function pollCalendarTriggers(
           conn.provider !== "acuity" &&
           !isWorkspaceCalendarProvider(conn.provider))
       ) {
+        // Every Calendly PAT on this business needs reconnect: pause honestly
+        // instead of logging calendar_not_connected (which would still look
+        // like a retryable outage and arm the 3-strike owner SMS).
+        if (await logCalendlyPollPaused(businessId)) continue;
         throw new Error("calendar_not_connected");
       }
 
@@ -1049,13 +1085,17 @@ export async function pollCalendarTriggers(
             canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
           };
           const conns = await listCalendlyCalendarConnections(businessId);
-          /* c8 ignore next -- resolveCalendarConnection returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
-          const pollConns = conns.length > 0 ? conns : [conn];
+          // Never fall back to `[conn]`: that primary may already be flagged
+          // needs_reauth (filtered out of the active list) and using it would
+          // keep polling a dead token. Empty list → pause, do not fetch.
+          if (conns.length === 0) {
+            await logCalendlyPollPaused(businessId);
+          } else {
           const unioned: CalendarEventInput[] = [];
           const seenIds = new Set<string>();
           let firstError: unknown = null;
           let succeeded = 0;
-          for (const pollConn of pollConns) {
+          for (const pollConn of conns) {
             try {
               const fetched = await fetchCalendlyCandidateEvents({
                 businessId,
@@ -1065,6 +1105,13 @@ export async function pollCalendarTriggers(
                 dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
               });
               succeeded += 1;
+              await stampCalendlyConnectionHealthy(pollConn.connectionId).catch((err) => {
+                logger.warn("calendar poll: last_healthy_at stamp failed", {
+                  businessId,
+                  connectionId: pollConn.connectionId,
+                  error: String(err)
+                });
+              });
               if (fetched.overflowed) {
                 await recordSystemLog({
                   businessId,
@@ -1083,6 +1130,15 @@ export async function pollCalendarTriggers(
               }
             } catch (err) {
               firstError ??= err;
+              if (isCalendlyTokenRejected(err)) {
+                await markCalendlyConnectionNeedsReauth(pollConn.connectionId).catch((markErr) => {
+                  logger.warn("calendar poll: needs_reauth flip failed", {
+                    businessId,
+                    connectionId: pollConn.connectionId,
+                    error: String(markErr)
+                  });
+                });
+              }
               logger.warn("calendar poll: calendly account read failed", {
                 businessId,
                 connectionId: pollConn.connectionId,
@@ -1093,6 +1149,7 @@ export async function pollCalendarTriggers(
           if (succeeded === 0 && firstError !== null) throw firstError;
           eventsBySource.set("primary", unioned);
           result.events += unioned.length;
+          }
         }
       } else if (conn.provider === "vagaro") {
         // Vagaro branch: one "primary" source (no shared-calendar concept,

@@ -195,6 +195,22 @@ describe("notifications/display", () => {
       });
     });
 
+    it("routes Calendly reconnect alerts to the same-row deep link", () => {
+      expect(
+        notificationLink({
+          kind: "calendly_needs_reauth",
+          payload: { connection_id: UUID }
+        })
+      ).toEqual({
+        href: `/dashboard/integrations/calendly?reconnect=${UUID}`,
+        label: "Reconnect Calendly"
+      });
+      expect(notificationLink({ kind: "calendly_needs_reauth", payload: {} })).toEqual({
+        href: "/dashboard/integrations/calendly",
+        label: "Reconnect Calendly"
+      });
+    });
+
     it("routes connection alerts to Integrations", () => {
       for (const kind of ["byon_port", "byon_activation", "calendar_connection_broken"]) {
         expect(notificationLink({ kind, payload: {} })).toEqual({
