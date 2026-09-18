@@ -1105,15 +1105,13 @@ export async function pollCalendarTriggers(
                 dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
               });
               succeeded += 1;
-              if (pollConn.connectionId) {
-                await stampCalendlyConnectionHealthy(pollConn.connectionId).catch((err) => {
-                  logger.warn("calendar poll: last_healthy_at stamp failed", {
-                    businessId,
-                    connectionId: pollConn.connectionId,
-                    error: err instanceof Error ? err.message : String(err)
-                  });
+              await stampCalendlyConnectionHealthy(pollConn.connectionId).catch((err) => {
+                logger.warn("calendar poll: last_healthy_at stamp failed", {
+                  businessId,
+                  connectionId: pollConn.connectionId,
+                  error: String(err)
                 });
-              }
+              });
               if (fetched.overflowed) {
                 await recordSystemLog({
                   businessId,
@@ -1132,12 +1130,12 @@ export async function pollCalendarTriggers(
               }
             } catch (err) {
               firstError ??= err;
-              if (isCalendlyTokenRejected(err) && pollConn.connectionId) {
+              if (isCalendlyTokenRejected(err)) {
                 await markCalendlyConnectionNeedsReauth(pollConn.connectionId).catch((markErr) => {
                   logger.warn("calendar poll: needs_reauth flip failed", {
                     businessId,
                     connectionId: pollConn.connectionId,
-                    error: markErr instanceof Error ? markErr.message : String(markErr)
+                    error: String(markErr)
                   });
                 });
               }

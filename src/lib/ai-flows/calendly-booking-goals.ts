@@ -506,15 +506,13 @@ export async function sweepCalendlyBookingGoals(
         // failure (Bugbot Medium on PR #1349).
         accountsSucceeded += 1;
         bookingsSeen += bookings.length;
-        if (sweepConn.connectionId) {
-          await stampHealthy(sweepConn.connectionId).catch((err) => {
-            logger.warn("booking goal sweep: last_healthy_at stamp failed", {
-              businessId,
-              connectionId: sweepConn.connectionId,
-              error: err instanceof Error ? err.message : String(err)
-            });
+        await stampHealthy(sweepConn.connectionId).catch((err) => {
+          logger.warn("booking goal sweep: last_healthy_at stamp failed", {
+            businessId,
+            connectionId: sweepConn.connectionId,
+            error: String(err)
           });
-        }
+        });
         if (bookings.length === 0) continue;
 
         // Invitee identities across this business's fresh bookings. The cap
@@ -559,12 +557,12 @@ export async function sweepCalendlyBookingGoals(
         // starve the other accounts' bookings; the business-level
         // failure log still fires when EVERY account failed.
         firstAccountError ??= err;
-        if (isCalendlyTokenRejected(err) && sweepConn.connectionId) {
+        if (isCalendlyTokenRejected(err)) {
           await markNeedsReauth(sweepConn.connectionId).catch((markErr) => {
             logger.warn("booking goal sweep: needs_reauth flip failed", {
               businessId,
               connectionId: sweepConn.connectionId,
-              error: markErr instanceof Error ? markErr.message : String(markErr)
+              error: String(markErr)
             });
           });
         }

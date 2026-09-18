@@ -122,7 +122,7 @@ async function sendReauthEmail(
     logger.warn("calendly reauth email failed", {
       businessId: row.business_id,
       connectionId: row.id,
-      error: err instanceof Error ? err.message : String(err)
+      error: String(err)
     });
     return false;
   }
