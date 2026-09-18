@@ -1872,6 +1872,24 @@ describe("runChangePlanFromCheckout", () => {
     expect(waitForVoiceBridgeHeartbeatMock).not.toHaveBeenCalled();
     expect(createSubscriptionMock).toHaveBeenCalled();
   });
+
+  it("provisions a replacement when there is no old VM id to snapshot", async () => {
+    mockUnpinnedStandardBusiness();
+    getBusinessMock.mockResolvedValue({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: null,
+      customer_profile_id: "prof-1",
+      status: "online",
+      vps_size: null
+    });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_no_old_vm");
+    expect(hostingerCreateSnapshotMock).not.toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).toHaveBeenCalled();
+    expect(backupBusinessDataMock).not.toHaveBeenCalled();
+    expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    expect(updateBusinessEntitlementTierMock).toHaveBeenCalledWith("biz-1", "starter");
+  });
 });
 
 describe("runResubscribeFromCheckout", () => {

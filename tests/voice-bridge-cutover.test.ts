@@ -136,4 +136,26 @@ describe("waitForVoiceBridgeHeartbeat", () => {
     expect(result.healthy).toBe(false);
     expect(result.restarted).toBe(false);
   });
+
+  it("logs an Error from the restart path the same way as a string throw", async () => {
+    const start = Date.now();
+    const nowMs = { t: start };
+    const result = await waitForVoiceBridgeHeartbeat({
+      businessId: "biz-1",
+      vpsId: "1001",
+      now: () => new Date(nowMs.t),
+      sleep: async () => {
+        nowMs.t += 20_000;
+      },
+      getSettings: vi.fn().mockResolvedValue({
+        bridge_last_heartbeat_at: "2020-01-01T00:00:00.000Z"
+      }),
+      getVmIp: vi.fn().mockResolvedValue("10.0.0.1"),
+      getSshKey: vi.fn().mockResolvedValue({ private_key_pem: "PEM" }),
+      remoteExec: vi.fn().mockRejectedValue(new Error("ssh down")),
+      timeoutMs: 15_000,
+      pollMs: 5_000
+    });
+    expect(result.healthy).toBe(false);
+  });
 });
