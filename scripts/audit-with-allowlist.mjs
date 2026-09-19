@@ -19,7 +19,8 @@
  * Registry outages: `npm audit --json` on a 503 still prints JSON, just not
  * an audit report (no `vulnerabilities` object). Treating that as "zero
  * advisories" trips the stale-entry ratchet and looks like a lockfile
- * change. Exit 2 instead: we could not ask, which is not "no advisories".
+ * change. Retry a few times, then exit 2: we could not ask, which is not
+ * "no advisories".
  *
  * Usage (from any package dir):
  *   node <repo>/scripts/audit-with-allowlist.mjs [--omit=dev]
@@ -146,6 +147,19 @@ function relativeCwd() {
     : process.cwd();
 }
 
+/**
+ * How long to keep asking npm while the advisory endpoint is in maintenance.
+ * Override in tests with AUDIT_RETRY_ATTEMPTS / AUDIT_RETRY_DELAY_MS.
+ */
+export function auditRetryPlan() {
+  const attempts = Number.parseInt(process.env.AUDIT_RETRY_ATTEMPTS ?? "12", 10);
+  const delayMs = Number.parseInt(process.env.AUDIT_RETRY_DELAY_MS ?? "15000", 10);
+  return {
+    attempts: Number.isFinite(attempts) && attempts > 0 ? attempts : 12,
+    delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : 15000
+  };
+}
+
 function runNpmAudit(args) {
   try {
     return execFileSync("npm", ["audit", ...args, "--json"], {
@@ -154,12 +168,12 @@ function runNpmAudit(args) {
     });
   } catch (err) {
     // npm audit exits 1 when vulnerabilities exist; the JSON is still on
-    // stdout. Any other failure (no lockfile, registry down) has none, and
-    // must fail loudly rather than read as "no advisories".
+    // stdout. Any other failure (no lockfile, registry down) has none.
     const stdout = err && typeof err.stdout === "string" ? err.stdout : "";
     if (!stdout.trim()) {
-      console.error("npm audit produced no JSON output:", err?.message ?? err);
-      process.exit(2);
+      return JSON.stringify({
+        message: `npm audit produced no JSON output: ${err?.message ?? err}`
+      });
     }
     return stdout;
   }
@@ -177,22 +191,35 @@ function auditEndpointFailureHint(report) {
   return "unknown";
 }
 
-function main() {
+function sleep(ms) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function main() {
   const allowlist = loadAllowlist();
   const args = process.argv.slice(2);
-  const auditJson = runNpmAudit(args);
-  let report;
-  try {
-    report = JSON.parse(auditJson);
-  } catch (err) {
-    console.error("npm audit output was not JSON:", err?.message ?? err);
-    process.exit(2);
+  const { attempts, delayMs } = auditRetryPlan();
+  let report = null;
+  let lastHint = "unknown";
+  for (let i = 1; i <= attempts; i++) {
+    const auditJson = runNpmAudit(args);
+    try {
+      report = JSON.parse(auditJson);
+    } catch (err) {
+      report = { message: `npm audit output was not JSON: ${err?.message ?? err}` };
+    }
+    if (isSuccessfulAuditReport(report)) break;
+    lastHint = auditEndpointFailureHint(report);
+    console.error(`npm audit attempt ${i}/${attempts} failed: ${lastHint}`);
+    if (i === attempts) {
+      console.error("npm audit did not return a vulnerability report:", lastHint);
+      process.exit(2);
+    }
+    await sleep(delayMs);
   }
   if (!isSuccessfulAuditReport(report)) {
-    console.error(
-      "npm audit did not return a vulnerability report:",
-      auditEndpointFailureHint(report)
-    );
+    console.error("npm audit did not return a vulnerability report:", lastHint);
     process.exit(2);
   }
   const found = collectHighAdvisories(report);
@@ -212,4 +239,9 @@ function main() {
 
 const thisFile = fileURLToPath(import.meta.url);
 const invokedAs = process.argv[1] ? resolve(process.argv[1]) : "";
-if (thisFile === invokedAs) main();
+if (thisFile === invokedAs) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(2);
+  });
+}

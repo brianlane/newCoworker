@@ -2,6 +2,8 @@ export function isSuccessfulAuditReport(
   report: unknown
 ): report is { vulnerabilities: Record<string, unknown> };
 
+export function auditRetryPlan(): { attempts: number; delayMs: number };
+
 export type HighAdvisory = {
   id: string;
   package: string;

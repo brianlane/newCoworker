@@ -27,7 +27,7 @@ alerts 54/55 dismissed as not_used 2026-08-07; entries expire 2026-11-07
 when the advisory endpoint is in maintenance (`statusCode: 503`, no
 `vulnerabilities` object). Scoring that as zero advisories trips the stale
 ratchet on the image-size entries and fails `audit (.)` / Security Audit
-as if the lockfile changed. The wrapper must exit 2 when the JSON is not
+as if the lockfile changed. The wrapper must retry a few times, then exit 2 when the JSON is not
 an audit report. Observed on PR #1876 (2026-09-19) while npmjs.org was in
 maintenance; PR #1875 was green earlier the same day on the same lockfile.
 

@@ -1,9 +1,10 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  auditRetryPlan,
   collectHighAdvisories,
   evaluateAllowlist,
   isSuccessfulAuditReport
@@ -161,6 +162,20 @@ describe("evaluateAllowlist", () => {
   });
 });
 
+describe("auditRetryPlan", () => {
+  it("defaults to 12 attempts, 15s apart", () => {
+    const prevAttempts = process.env.AUDIT_RETRY_ATTEMPTS;
+    const prevDelay = process.env.AUDIT_RETRY_DELAY_MS;
+    delete process.env.AUDIT_RETRY_ATTEMPTS;
+    delete process.env.AUDIT_RETRY_DELAY_MS;
+    expect(auditRetryPlan()).toEqual({ attempts: 12, delayMs: 15000 });
+    if (prevAttempts === undefined) delete process.env.AUDIT_RETRY_ATTEMPTS;
+    else process.env.AUDIT_RETRY_ATTEMPTS = prevAttempts;
+    if (prevDelay === undefined) delete process.env.AUDIT_RETRY_DELAY_MS;
+    else process.env.AUDIT_RETRY_DELAY_MS = prevDelay;
+  });
+});
+
 describe("audit-with-allowlist CLI", () => {
   it("exits 2 when npm audit --json is a 503 body, without STALE allowlist noise", () => {
     const dir = mkdtempSync(join(tmpdir(), "audit-503-"));
@@ -180,7 +195,12 @@ process.exit(1);
     try {
       execFileSync("node", ["scripts/audit-with-allowlist.mjs", "--omit=dev"], {
         encoding: "utf8",
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          AUDIT_RETRY_ATTEMPTS: "1",
+          AUDIT_RETRY_DELAY_MS: "0"
+        }
       });
       throw new Error("expected exit 2");
     } catch (err: unknown) {
@@ -190,5 +210,62 @@ process.exit(1);
       expect(stderr).toContain("503 Service Unavailable");
       expect(stderr).not.toContain("STALE allowlist entry");
     }
+  });
+
+  it("retries a 503 and exits 0 once npm returns a real report", () => {
+    const dir = mkdtempSync(join(tmpdir(), "audit-retry-"));
+    const countFile = join(dir, "count");
+    writeFileSync(countFile, "0");
+    const stub = join(dir, "npm");
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require("node:fs");
+const countFile = ${JSON.stringify(countFile)};
+const n = Number(readFileSync(countFile, "utf8")) + 1;
+writeFileSync(countFile, String(n));
+if (n < 3) {
+  process.stdout.write(JSON.stringify({
+    message: "503 Service Unavailable",
+    statusCode: 503
+  }));
+  process.exit(1);
+}
+process.stdout.write(JSON.stringify({
+  vulnerabilities: {
+    "image-size": {
+      severity: "high",
+      via: [
+        {
+          name: "image-size",
+          title: "image-size has a denial of service",
+          severity: "high",
+          url: "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr"
+        },
+        {
+          name: "image-size",
+          title: "image-size has another denial of service",
+          severity: "high",
+          url: "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq"
+        }
+      ]
+    }
+  }
+}));
+process.exit(1);
+`
+    );
+    chmodSync(stub, 0o755);
+    const out = execFileSync("node", ["scripts/audit-with-allowlist.mjs", "--omit=dev"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        AUDIT_RETRY_ATTEMPTS: "4",
+        AUDIT_RETRY_DELAY_MS: "0"
+      }
+    });
+    expect(out).toContain("audit clean: 2 allowlisted, 0 unlisted high+ advisories");
+    expect(readFileSync(countFile, "utf8")).toBe("3");
   });
 });
