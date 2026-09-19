@@ -87,22 +87,31 @@ export function voicePlanMeter(input: {
 
 /**
  * SMS window usage is a single `daily_usage` total (plan + bonus) for the
- * current billing window. Packs persist across windows, so lifetime
- * `texts_purchased - texts_remaining` must not be subtracted from this-period
- * usage: that zeroes included after rollover. Clamp period usage to the live
- * cap (included + unexpired grant SIZE) so expired-pack overflow drops out
- * and leftover packs only raise the denominator until they are used again.
+ * current billing window. Bonus only starts after the included cap, so
+ * this-period pack draw is the overflow, capped by lifetime consumption on
+ * packs that are still unexpired:
+ *
+ * - leftover consumption from last window does not subtract from this-period
+ *   included usage (overflow is 0 while under cap)
+ * - usage drawn from a pack that later expires is dropped, even when another
+ *   live pack keeps the denominator high
  */
 export function smsPlanMeter(input: {
   usedThisPeriod: number;
   includedCap: number;
   unexpiredPurchased: number;
+  unexpiredConsumed: number;
 }): PlanMeter {
   const purchased = finiteNonNeg(input.unexpiredPurchased);
+  const consumed = Math.min(finiteNonNeg(input.unexpiredConsumed), purchased);
   const period = finiteNonNeg(input.usedThisPeriod);
   const includedCap = finiteNonNeg(input.includedCap);
-  const cap = includedCap + purchased;
-  return { used: Math.min(period, cap), cap };
+  const includedUsed = Math.min(period, includedCap);
+  const overflow = Math.max(0, period - includedCap);
+  return {
+    used: includedUsed + Math.min(overflow, consumed),
+    cap: includedCap + purchased
+  };
 }
 
 /**

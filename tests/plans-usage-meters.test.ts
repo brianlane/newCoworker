@@ -140,7 +140,8 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 4_180,
         includedCap: included,
-        unexpiredPurchased: 500
+        unexpiredPurchased: 500,
+        unexpiredConsumed: 0
       })
     ).toEqual({ used: 4_180, cap: 5_500 });
   });
@@ -150,7 +151,8 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: 500
+        unexpiredPurchased: 500,
+        unexpiredConsumed: 200
       })
     ).toEqual({ used: 5_200, cap: 5_500 });
   });
@@ -160,9 +162,21 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: 0
+        unexpiredPurchased: 0,
+        unexpiredConsumed: 0
       })
     ).toEqual({ used: 5_000, cap: 5_000 });
+  });
+
+  it("drops expired-pack overflow even when another live pack keeps the cap up", () => {
+    expect(
+      smsPlanMeter({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        unexpiredPurchased: 500,
+        unexpiredConsumed: 0
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
   });
 
   it("stacks two unexpired text packs", () => {
@@ -174,7 +188,8 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: totals.purchased
+        unexpiredPurchased: totals.purchased,
+        unexpiredConsumed: totals.consumed
       })
     ).toEqual({ used: 5_200, cap: 6_500 });
   });
@@ -187,7 +202,8 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 100,
         includedCap: included,
-        unexpiredPurchased: 500
+        unexpiredPurchased: 500,
+        unexpiredConsumed: 400
       })
     ).toEqual({ used: 100, cap: 5_500 });
   });
@@ -197,7 +213,8 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: Number.NaN,
         includedCap: Number.NEGATIVE_INFINITY,
-        unexpiredPurchased: -1
+        unexpiredPurchased: -1,
+        unexpiredConsumed: Number.NaN
       })
     ).toEqual({ used: 0, cap: 0 });
   });

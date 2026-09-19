@@ -147,7 +147,8 @@ export default async function DashboardPage() {
       ? smsPlanMeter({
           usedThisPeriod: smsUsedThisPeriod,
           includedCap: smsCap,
-          unexpiredPurchased: smsBonusTotals.textsPurchased
+          unexpiredPurchased: smsBonusTotals.textsPurchased,
+          unexpiredConsumed: smsBonusTotals.textsConsumed
         })
       : null;
   const aiMeter = chatSpend
