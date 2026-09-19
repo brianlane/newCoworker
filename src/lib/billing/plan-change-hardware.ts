@@ -134,7 +134,6 @@ function canReleaseOldVpsForPlanChange(input: {
   heartbeatHealthy: boolean;
   nowMs?: number;
 }): boolean {
-  if (!input.heartbeatHealthy) return false;
   if (input.deploySucceeded === false) return false;
   if (boxHasPaidTimeLeft(input.oldExpiresAt, input.nowMs)) return false;
   if (!isReplacementVm(input.oldVmId, input.newVpsId)) return false;

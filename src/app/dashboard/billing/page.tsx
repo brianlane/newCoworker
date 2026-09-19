@@ -85,11 +85,13 @@ import {
 import { formatPriceCents } from "@/lib/pricing";
 // Same operator channels the enterprise dedicated-support card uses: a paying
 // priority customer reaches us the same way an enterprise tenant does.
+import { getEnterpriseSupportContact } from "@/lib/plans/enterprise-support";
 import { getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
 import {
   formatPlanChangePaidThroughDate,
   parseablePaidThroughIso,
-  planChangeSuccessBannerKey
+  planChangeSuccessBannerKey,
+  showServerPrepaidLine
 } from "@/lib/billing/plan-change-copy";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +114,7 @@ export default async function BillingPage(props: {
   searchParams?: Promise<SearchParams>;
 }) {
   const t = await getTranslations("dashboard.billing");
+  const tPlanCard = await getTranslations("dashboard.planCard");
   const locale = (await getLocale()) as AppLocale;
   const searchParams = (await props.searchParams) ?? {};
   const user = await getAuthUser();
@@ -429,6 +432,15 @@ export default async function BillingPage(props: {
   //
   // Bonus packs are the exception and keep their own per-grant expiry.
   const nowMs = now.getTime();
+  const prepaidLine = showServerPrepaidLine(boxExpiresAt, nowMs, hasLiveBox)
+    ? (() => {
+        const iso = parseablePaidThroughIso(boxExpiresAt, nowMs);
+        const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
+        return date
+          ? tPlanCard("serverPrepaidThrough", { date })
+          : tPlanCard("serverPrepaidUnknown");
+      })()
+    : null;
   const usageResetAt =
     monthlyUsageResetAt(subscription?.stripe_current_period_start ?? null, nowMs) ??
     // No usable Stripe anchor: every meter falls back to the UTC calendar
@@ -605,6 +617,7 @@ export default async function BillingPage(props: {
         }
         boxExpiresAt={boxExpiresAt}
         hasLiveBox={hasLiveBox}
+        prepaidLine={prepaidLine}
         vpsSizePin={(business as { vps_size?: string | null } | null)?.vps_size ?? null}
       />
 

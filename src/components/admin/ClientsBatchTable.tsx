@@ -405,13 +405,11 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                   <span className="inline-flex flex-wrap items-center gap-1">
                     <Badge variant={b.tier === "standard" ? "online" : "neutral"}>{b.tier}</Badge>
                     {b.subscriptionTier && b.subscriptionTier !== b.tier && (
-                      <Badge
-                        variant="error"
-                        className="text-[10px]"
-                        title={`Entitlement ${b.tier}, Stripe subscription ${b.subscriptionTier}`}
-                      >
-                        bill {b.subscriptionTier}
-                      </Badge>
+                      <span title={`Entitlement ${b.tier}, Stripe subscription ${b.subscriptionTier}`}>
+                        <Badge variant="error" className="text-[10px]">
+                          bill {b.subscriptionTier}
+                        </Badge>
+                      </span>
                     )}
                   </span>
                 </td>

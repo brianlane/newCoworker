@@ -262,12 +262,9 @@ export default async function BusinessDetailPage({
             {business.tier}
           </Badge>
           {subscription && subscription.tier !== business.tier && (
-            <Badge
-              variant="error"
-              title={`Entitlement ${business.tier}, Stripe subscription ${subscription.tier}`}
-            >
-              billing {subscription.tier}
-            </Badge>
+            <span title={`Entitlement ${business.tier}, Stripe subscription ${subscription.tier}`}>
+              <Badge variant="error">billing {subscription.tier}</Badge>
+            </span>
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-start gap-2">
