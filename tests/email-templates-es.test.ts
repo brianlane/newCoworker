@@ -79,6 +79,13 @@ describe("Spanish email variants", () => {
     const user = buildCancelConfirmationEmail({ ...base, reason: "user_refund" });
     expect(user.subject).toContain("cancelada");
     expect(user.text).toContain("a petición tuya");
+    expect(user.text).toContain("Conservas durante la ventana de retención de datos");
+
+    const external = buildCancelConfirmationEmail({ ...base, reason: "stripe_external" });
+    expect(external.subject).toContain("cancelada");
+    expect(external.text).toContain("Tu suscripción ha sido cancelada");
+    expect(external.text).not.toContain("a petición tuya");
+    expect(external.text).toContain("Esto se detiene y deja de ayudar al negocio");
   });
 
   it("refund-issued localizes the amount line", () => {

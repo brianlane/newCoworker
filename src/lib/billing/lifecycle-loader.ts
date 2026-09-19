@@ -164,6 +164,7 @@ export async function loadLifecycleContextForBusiness(
     subscription,
     ownerEmail: business.owner_email,
     ownerName: business.owner_name ?? null,
+    businessName: business.name ?? null,
     businessTimezone: business.timezone ?? null,
     ownerAuthUserId: opts.ownerAuthUserId,
     profile,

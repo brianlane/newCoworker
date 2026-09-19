@@ -65,6 +65,10 @@ import {
 import { PRIORITY_SUPPORT_CHECKOUT_KIND } from "@/lib/plans/priority-support";
 import { isUpgradeSwitchDeletion } from "@/lib/billing/upgrade-switch";
 import {
+  dispatchExternalStripeCancel,
+  stripeCancellationDetailsLabel
+} from "@/lib/billing/external-stripe-cancel";
+import {
   applyPrioritySupportInvoicePaid,
   isPrioritySupportSubscription,
   prioritySupportPeriodEnd,
@@ -429,6 +433,44 @@ export async function POST(request: Request) {
               });
             }
           }
+          // Immediate cancel from Stripe (Customer Portal / Dashboard /
+          // API) reports status=canceled with cancel_at_period_end=false.
+          // Without this dispatch the later deleted handler often sees a
+          // row already mirrored to canceled with a null reason and never
+          // emails the owner or ops (Scar Fairy, 2026-09-17).
+          if (
+            status === "canceled" &&
+            !sub.cancel_at_period_end &&
+            existing.status === "active"
+          ) {
+            const newestRow = await getSubscription(existing.business_id);
+            const upgradeOnUpdate = isUpgradeSwitchDeletion({
+              deletedStripeSubscriptionId: sub.id,
+              deletedRow: existing,
+              newestRow
+            });
+            if (!upgradeOnUpdate) {
+              const dispatched = await dispatchExternalStripeCancel({
+                existing,
+                eventId: event.id,
+                stripeSubscriptionId: sub.id,
+                cancellationDetails: stripeCancellationDetailsLabel(sub),
+                after
+              });
+              if (dispatched !== "skipped") {
+                logger.info(
+                  "customer.subscription.updated: dispatched externalStripeCancel",
+                  {
+                    businessId: existing.business_id,
+                    subscriptionRowId: existing.id,
+                    dispatched,
+                    eventId: event.id
+                  }
+                );
+                break;
+              }
+            }
+          }
           // Resurrection guard. Stripe can deliver `subscription.updated`
           // with `status="active"` for a row our lifecycle has already
           // moved into the canceled/grace state, typical sources:
@@ -777,6 +819,24 @@ export async function POST(request: Request) {
               }
             );
             break;
+          }
+          if (!existing.cancel_at_period_end) {
+            const dispatched = await dispatchExternalStripeCancel({
+              existing,
+              eventId: event.id,
+              stripeSubscriptionId: sub.id,
+              cancellationDetails: stripeCancellationDetailsLabel(sub),
+              after
+            });
+            if (dispatched !== "skipped") {
+              logger.info("customer.subscription.deleted: dispatched externalStripeCancel", {
+                businessId,
+                subscriptionId: existing.id,
+                dispatched,
+                eventId: event.id
+              });
+              break;
+            }
           }
           // Stamp a grace deadline whenever we reach the fallback mirror
           // AND the row isn't already past the grace window (i.e.

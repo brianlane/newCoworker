@@ -72,6 +72,7 @@ import {
   buildOpsVpsDeletionEmail,
   opsNotificationEmail
 } from "@/lib/email/templates/ops-vps-deletion";
+import { buildOpsSubscriptionCanceledEmail } from "@/lib/email/templates/ops-subscription-canceled";
 import {
   TelnyxNumbersClient,
   TelnyxApiError
@@ -829,9 +830,36 @@ async function runEmailOp(
         recipientEmail: op.toEmail,
         siteUrl,
         ...(op.timeZone ? { timeZone: op.timeZone } : {}),
-        locale: await resolveOwnerUiLocaleForEmail(op.toEmail)
+        locale: await resolveOwnerUiLocaleForEmail(op.toEmail),
+        currentTier: op.currentTier ?? null,
+        hostingerExpiresAt: op.hostingerExpiresAt ?? null,
+        nowMs: Date.now()
       });
       await send(apiKey, op.toEmail, subject, { text, html });
+      return;
+    }
+    case "send_ops_subscription_canceled": {
+      const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]").replace(/\/$/, "");
+      const toEmail = opsNotificationEmail();
+      const { subject, text, html } = buildOpsSubscriptionCanceledEmail({
+        businessId: op.businessId,
+        businessName: op.businessName,
+        ownerName: op.ownerName,
+        ownerEmail: op.ownerEmail,
+        tier: op.tier,
+        cancelReason: op.cancelReason,
+        cancelPath: op.cancelPath,
+        graceEndsAt: op.graceEndsAt,
+        hostingerExpiresAt: op.hostingerExpiresAt,
+        siteUrl
+      });
+      await send(apiKey, toEmail, subject, { text, html });
+      logger.info("ops subscription-canceled email sent", {
+        businessId: op.businessId,
+        cancelReason: op.cancelReason,
+        cancelPath: op.cancelPath,
+        toEmail
+      });
       return;
     }
     case "send_refund_issued": {

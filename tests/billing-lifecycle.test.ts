@@ -160,8 +160,26 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     expect(plan.emailsToSend.map((e) => e.type)).toEqual([
       "send_cancel_confirmation",
       "send_refund_issued",
+      "send_ops_subscription_canceled",
       "send_ops_vps_deletion_request"
     ]);
+    expect(plan.emailsToSend[0]).toEqual(
+      expect.objectContaining({
+        type: "send_cancel_confirmation",
+        reason: "user_refund",
+        currentTier: "starter"
+      })
+    );
+    expect(plan.emailsToSend[2]).toEqual(
+      expect.objectContaining({
+        type: "send_ops_subscription_canceled",
+        cancelReason: "user_refund",
+        cancelPath: "in_app_refund",
+        businessId: "biz-1",
+        ownerEmail: "owner@example.com",
+        tier: "starter"
+      })
+    );
   });
 
   it("asks ops for the manual hPanel deletion with owner + refund context", () => {
@@ -382,7 +400,18 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
     const patch = (res.plan.dbUpdates[0] as { patch: Record<string, unknown> }).patch;
     expect(patch.cancel_at_period_end).toBe(true);
     expect(patch.cancel_reason).toBe("user_period_end");
-    expect(res.plan.emailsToSend[0].type).toBe("send_cancel_confirmation");
+    expect(res.plan.emailsToSend.map((e) => e.type)).toEqual([
+      "send_cancel_confirmation",
+      "send_ops_subscription_canceled"
+    ]);
+    expect(res.plan.emailsToSend[1]).toEqual(
+      expect.objectContaining({
+        type: "send_ops_subscription_canceled",
+        cancelReason: "user_period_end",
+        cancelPath: "in_app_period_end",
+        graceEndsAt: null
+      })
+    );
   });
 
   it("disables Hostinger auto-renewal when billing expiration is on/after Stripe period end", () => {
@@ -613,6 +642,7 @@ describe("planLifecycleAction: autoCancelOnPaymentFailure", () => {
     expect(res.plan.dbUpdates.find((op) => op.type === "mark_refund_used")).toBeUndefined();
     expect(res.plan.emailsToSend.map((e) => e.type)).toEqual([
       "send_cancel_confirmation",
+      "send_ops_subscription_canceled",
       "send_ops_vps_deletion_request"
     ]);
     expect(
@@ -788,6 +818,13 @@ describe("planLifecycleAction: periodEndReached", () => {
     expect(subUpdate.patch.status).toBe("canceled");
     expect(subUpdate.patch.cancel_reason).toBe("user_period_end");
     expect(subUpdate.patch.cancel_at_period_end).toBe(false);
+    expect(res.plan.emailsToSend.map((e) => e.type)).toEqual([
+      "send_cancel_confirmation",
+      "send_ops_vps_deletion_request"
+    ]);
+    expect(
+      res.plan.emailsToSend.some((e) => e.type === "send_ops_subscription_canceled")
+    ).toBe(false);
   });
 
   it("rejects period-end teardown for rows that are not still pending period-end cancel", () => {
@@ -816,6 +853,56 @@ describe("planLifecycleAction: periodEndReached", () => {
     expect(notScheduled).toEqual({
       ok: false,
       reason: "subscription_not_cancel_at_period_end"
+    });
+  });
+});
+
+describe("planLifecycleAction: externalStripeCancel", () => {
+  it("stamps stripe_external, skips Stripe cancel, and emails owner plus ops", () => {
+    const res = planLifecycleAction(
+      { type: "externalStripeCancel" },
+      makeCtx({
+        businessName: "Scar Fairy",
+        hostingerBillingExpiresAt: "2026-10-01T00:00:00.000Z"
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.stripeOps).toEqual([]);
+    const subUpdate = res.plan.dbUpdates.find(
+      (op) => op.type === "update_subscription"
+    ) as { type: "update_subscription"; patch: Record<string, unknown> };
+    expect(subUpdate.patch.status).toBe("canceled");
+    expect(subUpdate.patch.cancel_reason).toBe("stripe_external");
+    expect(subUpdate.patch.cancel_at_period_end).toBe(false);
+    expect(res.plan.emailsToSend.map((e) => e.type)).toEqual([
+      "send_cancel_confirmation",
+      "send_ops_subscription_canceled",
+      "send_ops_vps_deletion_request"
+    ]);
+    expect(res.plan.emailsToSend[0]).toEqual(
+      expect.objectContaining({
+        type: "send_cancel_confirmation",
+        reason: "stripe_external",
+        currentTier: "starter",
+        hostingerExpiresAt: "2026-10-01T00:00:00.000Z"
+      })
+    );
+    expect(res.plan.emailsToSend[1]).toEqual(
+      expect.objectContaining({
+        type: "send_ops_subscription_canceled",
+        businessName: "Scar Fairy",
+        cancelReason: "stripe_external",
+        cancelPath: "stripe_external",
+        hostingerExpiresAt: "2026-10-01T00:00:00.000Z"
+      })
+    );
+  });
+
+  it("rejects on non-active subs", () => {
+    const ctx = makeCtx({ subscription: makeSub({ status: "canceled" }) });
+    expect(planLifecycleAction({ type: "externalStripeCancel" }, ctx)).toEqual({
+      ok: false,
+      reason: "subscription_not_active"
     });
   });
 });
@@ -1183,7 +1270,8 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     // No hPanel entry exists, no ops deletion request.
     expect(plan.emailsToSend.map((e) => e.type)).toEqual([
       "send_cancel_confirmation",
-      "send_refund_issued"
+      "send_refund_issued",
+      "send_ops_subscription_canceled"
     ]);
     // No VM was stopped, so the plan must not claim one was.
     const subUpdate = plan.dbUpdates.find(

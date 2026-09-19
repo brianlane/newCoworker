@@ -10,15 +10,14 @@ import { describe, expect, it } from "vitest";
  *
  * This guard exists because of how the removal was nearly shipped wrong.
  * The sweep that removed the copy searched `messages/en.json`,
- * `messages/es.json`, the Terms page and the FAQ, and it MISSED
- * `src/components/billing/CancelSheet.tsx`, which hardcodes its copy inline
- * instead of reading the i18n catalog. That is the sheet a customer reads at
- * the moment they click cancel, so it was the single worst place to leave a
- * promise we no longer honor: it told them we would withhold a month we no
- * longer withhold.
+ * `messages/es.json`, the Terms page and the FAQ, and it originally MISSED
+ * `src/components/billing/CancelSheet.tsx` when that sheet hardcoded copy
+ * inline. The sheet is now catalog-backed (`cancelRefundBody`), but it is
+ * still the last thing a customer reads before cancelling, so this guard
+ * pins both the TSX binding and the English catalog line.
  *
- * A catalog-only sweep cannot catch hardcoded copy, so this scans the
- * rendered source too. It is deliberately about the POLICY claim, not about
+ * A catalog-only sweep cannot catch hardcoded copy, so this also scans the
+ * rendered source. It is deliberately about the POLICY claim, not about
  * one file.
  */
 
@@ -120,19 +119,25 @@ describe("refund policy copy matches the shipped refund policy", () => {
     }
   });
 
-  // The specific file the original sweep missed, pinned by name: it is the
-  // last thing a customer reads before cancelling, and it does not go
-  // through the i18n catalog, so nothing else covers it.
+  // The specific surface the original sweep missed, pinned by name: it is
+  // the last thing a customer reads before cancelling. Copy now lives in
+  // the catalog; the sheet must keep reading that key.
   it("the cancel sheet lists exactly the carve-outs that still apply", () => {
     const sheet = readFileSync(
       join(ROOT, "src/components/billing/CancelSheet.tsx"),
       "utf8"
     );
-    expect(sheet).toMatch(/carrier registration fee/i);
-    expect(sheet).toMatch(/usage charges billed at cost/i);
-    expect(sheet).toMatch(/pack add-ons are\s+non-refundable/i);
+    expect(sheet).toMatch(/cancelRefundBody/);
+    const catalog = JSON.parse(
+      readFileSync(join(ROOT, "messages/en.json"), "utf8")
+    ) as { dashboard: { planCard: { cancelRefundBody: string } } };
+    const body = catalog.dashboard.planCard.cancelRefundBody;
+    expect(body).toMatch(/carrier registration fee/i);
+    expect(body).toMatch(/usage charges billed at cost/i);
+    expect(body).toMatch(/pack add-ons are\s+non-refundable/i);
     for (const claim of REMOVED_DEDUCTION_CLAIMS) {
       expect(sheet).not.toMatch(claim);
+      expect(body).not.toMatch(claim);
     }
   });
 });

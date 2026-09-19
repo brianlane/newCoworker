@@ -12,7 +12,8 @@ export type CancelReason =
   | "user_period_end"
   | "payment_failed"
   | "admin_force"
-  | "upgrade_switch";
+  | "upgrade_switch"
+  | "stripe_external";
 
 export type SubscriptionRow = {
   id: string;

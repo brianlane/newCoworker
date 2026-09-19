@@ -2680,29 +2680,57 @@ describe("stripe webhook route", () => {
     );
   });
 
-  it("preserves null cancel reason for external Stripe cancellations", async () => {
-    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+  it("runs externalStripeCancel on Customer Portal deletions instead of leaving cancel_reason null", async () => {
+    const existing = {
       id: "local_sub_external",
       business_id: "biz_external",
       status: "active",
       cancel_reason: null,
       cancel_at_period_end: false,
       grace_ends_at: null,
-      canceled_at: null
-    } as never);
+      canceled_at: null,
+      stripe_subscription_id: "sub_external",
+      tier: "starter",
+      hostinger_billing_subscription_id: "hbs-1",
+      customer_profile_id: null,
+      vps_stopped_at: null,
+      wiped_at: null,
+      stripe_refund_id: null,
+      refund_amount_cents: null,
+      created_at: "2026-04-01T00:00:00.000Z"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: existing,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        now: new Date("2026-09-17T01:04:59.000Z")
+      }
+    });
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_external_deleted",
       type: "customer.subscription.deleted",
       data: {
         object: {
           id: "sub_external",
-          metadata: { businessId: "biz_external" }
+          metadata: { businessId: "biz_external" },
+          cancellation_details: {
+            reason: "cancellation_requested",
+            feedback: "unused",
+            comment: null
+          }
         }
       }
     } as never);
 
     const response = await POST(
-      new Request("http://localhost:3000/api/webhooks/stripe", {
+      new Request("http://localhost:3000/api/webhooks/stripe", { // pragma: allowlist secret
         method: "POST",
         headers: { "stripe-signature": "sig" },
         body: "{}"
@@ -2710,14 +2738,141 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
-    expect(updateSubscription).toHaveBeenCalledWith(
+    expect(mockExecuteLifecyclePlanFastPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [],
+        emailsToSend: expect.arrayContaining([
+          expect.objectContaining({
+            type: "send_cancel_confirmation",
+            reason: "stripe_external"
+          }),
+          expect.objectContaining({
+            type: "send_ops_subscription_canceled",
+            cancelReason: "stripe_external"
+          })
+        ])
+      }),
+      expect.objectContaining({ businessId: "biz_external", vpsHost: "1.2.3.4" })
+    );
+    expect(afterCallbacks).toHaveLength(1);
+    await afterCallbacks[0]();
+    expect(mockExecuteLifecyclePlanSlowPhase).toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalledWith(
       "local_sub_external",
+      expect.objectContaining({ cancel_reason: null })
+    );
+  });
+
+  it("stamps stripe_external on a canceled null-reason row (Scar Fairy shape)", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_scar",
+      business_id: "biz_scar",
+      status: "canceled",
+      cancel_reason: null,
+      cancel_at_period_end: false,
+      grace_ends_at: "2026-10-17T01:04:59.000Z",
+      canceled_at: "2026-09-17T01:04:59.000Z",
+      stripe_subscription_id: "sub_scar",
+      tier: "starter"
+    } as never);
+    vi.mocked(getBusiness).mockResolvedValue({
+      name: "Scar Fairy",
+      owner_name: "Selena",
+      owner_email: "selena@example.com"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_scar_deleted",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_scar",
+          metadata: { businessId: "biz_scar" }
+        }
+      }
+    } as never);
+
+    const prevKey = process.env.RESEND_API_KEY;
+    process.env.RESEND_API_KEY = "resend_test";
+    try {
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", { // pragma: allowlist secret
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+      expect(response.status).toBe(200);
+    } finally {
+      if (prevKey === undefined) delete process.env.RESEND_API_KEY;
+      else process.env.RESEND_API_KEY = prevKey;
+    }
+
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_scar",
       expect.objectContaining({
         status: "canceled",
-        cancel_reason: null,
+        cancel_reason: "stripe_external",
         cancel_at_period_end: false
       })
+    );
+    expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+  });
+
+  it("runs externalStripeCancel on subscription.updated active to canceled without cancel_at_period_end", async () => {
+    const existing = {
+      id: "local_sub_portal",
+      business_id: "biz_portal",
+      status: "active",
+      cancel_reason: null,
+      cancel_at_period_end: false,
+      stripe_subscription_id: "sub_portal",
+      tier: "starter",
+      hostinger_billing_subscription_id: "hbs-1"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    vi.mocked(getSubscription).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: existing,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        now: new Date("2026-09-17T01:04:59.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_portal_updated",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_portal",
+          status: "canceled",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_portal" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", { // pragma: allowlist secret
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockExecuteLifecyclePlanFastPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailsToSend: expect.arrayContaining([
+          expect.objectContaining({ type: "send_ops_subscription_canceled" })
+        ])
+      }),
+      expect.objectContaining({ businessId: "biz_portal" })
     );
   });
 

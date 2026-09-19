@@ -3,9 +3,10 @@
  *
  * Sent by the lifecycle executor on every cancel action
  * (`cancelWithRefund`, `cancelAtPeriodEnd`, `autoCancelOnPaymentFailure`,
- * `adminForceCancel`). Copy branches on the cancel reason so the tenant
- * gets an accurate account of what just happened and what they can do
- * next (undo, reactivate, or just let the wipe clock run out).
+ * `adminForceCancel`, `externalStripeCancel`). Copy branches on the cancel
+ * reason so the tenant gets an accurate account of what just happened and
+ * what they can do next (undo, reactivate, or just let the wipe clock run
+ * out). Keep/lose lines match the in-app cancel confirm sheet.
  *
  * Keep this file deterministic and input-pure: no DB reads, no `Date.now()`,
  * no env lookups. Easy to snapshot-test and reason about.
@@ -17,6 +18,15 @@ import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import { emailDate, emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 import {
+  CANCEL_KEEP_CATALOG_KEYS,
+  CANCEL_LOSS_CATALOG_KEYS,
+  cancelConfirmModeForReason,
+  cancelConfirmPreview,
+  cancelReasonShowsKeepLose
+} from "@/lib/billing/cancel-copy";
+import {
+  formatPlanChangePaidThroughDate,
+  parseablePaidThroughIso,
   STARTER_DOWNGRADE_KEEP_CATALOG_KEYS,
   STARTER_DOWNGRADE_KEEP_IDS,
   STARTER_DOWNGRADE_LOSS_CATALOG_KEYS,
@@ -30,7 +40,7 @@ export type CancelConfirmationInput = {
   /** ISO timestamp when data will be wiped, or null for scheduled-period-end (grace starts after the period). */
   graceEndsAt: string | null;
   recipientEmail: string;
-  /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
+  /** App origin without trailing slash (e.g. [REDACTED]). */
   siteUrl: string;
   /**
    * IANA timezone (e.g. "America/Phoenix") the dates are rendered in. Emails
@@ -40,6 +50,15 @@ export type CancelConfirmationInput = {
   timeZone?: string;
   /** Recipient's UI locale; defaults to English. */
   locale?: AppLocale;
+  /** Current membership tier, so the loss list matches what they actually had. */
+  currentTier?: "starter" | "standard" | "enterprise" | null;
+  /** Hostinger `expires_at` when known, for the prepaid-cliff honesty line. */
+  hostingerExpiresAt?: string | null;
+  /**
+   * Clock for prepaid-through math. Injected so this builder stays free of
+   * `Date.now()`. Executor passes the plan's `now`.
+   */
+  nowMs?: number;
 };
 
 export type CancelConfirmationEmail = {
@@ -72,6 +91,36 @@ function envelope(
   return { subject, text, html };
 }
 
+function keepLoseSummary(
+  c: ReturnType<typeof emailMessagesForLocale>["cancelConfirmation"],
+  input: CancelConfirmationInput,
+  locale: AppLocale
+): string | null {
+  if (!cancelReasonShowsKeepLose(input.reason)) return null;
+  const preview = cancelConfirmPreview({
+    mode: cancelConfirmModeForReason(input.reason),
+    currentTier: input.currentTier ?? "starter",
+    periodEnd: input.effectiveAt,
+    boxExpiresAt: input.hostingerExpiresAt,
+    hasLiveBox: input.hostingerExpiresAt != null && input.hostingerExpiresAt !== "",
+    nowMs: input.nowMs ?? 0
+  });
+  const lines = [
+    c.keepLead,
+    ...preview.keepIds.map((id) => `• ${c[CANCEL_KEEP_CATALOG_KEYS[id]]}`),
+    c.lossLead,
+    ...preview.lossIds.map((id) => `• ${c[CANCEL_LOSS_CATALOG_KEYS[id]]}`)
+  ];
+  const iso = parseablePaidThroughIso(input.hostingerExpiresAt, input.nowMs ?? 0);
+  const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
+  if (preview.hardwareKey === "cliffDated" || preview.hardwareKey === "cliffGeneric") {
+    lines.push(date ? fmtEmail(c.hostingerCliffDated, { date }) : c.hostingerCliffGeneric);
+  } else if (preview.hardwareKey === "periodEndDated" && date) {
+    lines.push(fmtEmail(c.hostingerPeriodEndDated, { date }));
+  }
+  return lines.join("\n");
+}
+
 export function buildCancelConfirmationEmail(
   input: CancelConfirmationInput
 ): CancelConfirmationEmail {
@@ -84,6 +133,7 @@ export function buildCancelConfirmationEmail(
   const billingUrl = `${normalizedSite}/dashboard/billing`;
   const dashboardUrl = `${normalizedSite}/dashboard`;
   const billingCta = { label: copy.openBilling, href: billingUrl };
+  const keepLose = keepLoseSummary(c, input, locale);
 
   if (input.reason === "user_period_end") {
     return envelope(
@@ -92,7 +142,8 @@ export function buildCancelConfirmationEmail(
         c.periodEnd1,
         fmtEmail(c.periodEnd2, { date: effective }),
         c.periodEnd3,
-        c.periodEnd4
+        c.periodEnd4,
+        ...(keepLose ? [keepLose] : [])
       ],
       copy.ncSignoff,
       input.siteUrl,
@@ -107,7 +158,8 @@ export function buildCancelConfirmationEmail(
       [
         c.payment1,
         fmtEmail(c.payment2, { date: graceEnds ?? c.thirtyDays }),
-        c.payment3
+        c.payment3,
+        ...(keepLose ? [keepLose] : [])
       ],
       copy.ncSignoff,
       input.siteUrl,
@@ -140,11 +192,10 @@ export function buildCancelConfirmationEmail(
     );
   }
 
-  const leadIn = input.reason === "admin_force" ? c.adminLeadIn : c.userLeadIn;
   if (input.reason === "admin_force") {
     return envelope(
       c.adminSubject,
-      [leadIn, c.admin2, c.admin3],
+      [c.adminLeadIn, c.admin2, c.admin3],
       copy.ncSignoff,
       input.siteUrl,
       input.recipientEmail,
@@ -152,11 +203,28 @@ export function buildCancelConfirmationEmail(
     );
   }
 
+  if (input.reason === "stripe_external") {
+    return envelope(
+      c.defaultSubject,
+      [
+        c.stripeExternalLeadIn,
+        fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
+        ...(keepLose ? [keepLose] : []),
+        c.default3
+      ],
+      copy.ncSignoff,
+      input.siteUrl,
+      input.recipientEmail,
+      billingCta
+    );
+  }
+
   return envelope(
     c.defaultSubject,
     [
-      leadIn,
+      c.userLeadIn,
       fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
+      ...(keepLose ? [keepLose] : []),
       c.default3
     ],
     copy.ncSignoff,
