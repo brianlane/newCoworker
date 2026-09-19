@@ -100,6 +100,26 @@ describe("smsPlanMeterFromGrants", () => {
     ).toEqual({ used: 5_000, cap: 5_500 });
   });
 
+  it("does not let an unused expired pack wipe leftover live-pack overflow", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          leftoverLive,
+          {
+            purchased: 500,
+            remaining: 500,
+            purchasedAt: "2026-07-01T00:00:00.000Z",
+            expiresAt: "2026-09-10T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 5_500 });
+  });
+
   it("counts same-window pack draw on a still-live grant", () => {
     expect(
       smsPlanMeterFromGrants({

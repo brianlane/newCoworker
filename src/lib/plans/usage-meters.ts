@@ -142,9 +142,10 @@ function smsPlanMeter(input: {
  *
  * - leftover pack purchased last window, used this window, still live: the
  *   overflow stays (normal 30-day / period-end survival)
- * - overflow from a pack that expired this window is dropped, even when
- *   another live pack keeps the denominator high
- * - leftover last-window consumption cannot cover that expired overflow
+ * - overflow from a pack that expired this window is dropped only when that
+ *   pack actually consumed, even if another live pack keeps the denominator
+ *   high. An unused pack expiring does not wipe leftover live-pack draw.
+ * - leftover last-window consumption cannot cover consumed expired overflow
  */
 export function smsPlanMeterFromGrants(input: {
   usedThisPeriod: number;
@@ -177,11 +178,13 @@ export function smsPlanMeterFromGrants(input: {
     expiredThisWindow.filter((g) => purchasedInWindow(g, startMs))
   ).consumed;
   const rest = Math.max(0, overflow - newLiveConsumed - newExpiredConsumed);
-  const hasOldExpired = expiredThisWindow.some((g) => !purchasedInWindow(g, startMs));
+  const hasOldExpiredDraw = expiredThisWindow.some(
+    (g) => !purchasedInWindow(g, startMs) && sumUsageGrants([g]).consumed > 0
+  );
   const thisPeriodLive = Math.min(
     overflow,
     livePurchased,
-    newLiveConsumed + (hasOldExpired ? 0 : rest)
+    newLiveConsumed + (hasOldExpiredDraw ? 0 : rest)
   );
   return smsPlanMeter({
     usedThisPeriod: period,
