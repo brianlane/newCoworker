@@ -197,4 +197,13 @@ describe("clientsCsv", () => {
     ]);
     expect(csv.split("\r\n")[1]).toContain(",starter,standard,");
   });
+
+  it("leaves billing_tier empty when the business has no subscription row", () => {
+    const csv = clientsCsv([row({ subscriptionTier: null, subscriptionStatus: null })]);
+    expect(csv.split("\r\n")[1]).toContain(",standard,,none,");
+  });
+
+  it("produces only the header for zero rows", () => {
+    expect(clientsCsv([])).toBe(HEADER);
+  });
 });
