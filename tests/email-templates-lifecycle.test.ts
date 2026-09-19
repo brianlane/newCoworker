@@ -11,6 +11,7 @@ import {
 import { buildOpsPlanChangeEmail } from "@/lib/email/templates/ops-plan-change";
 import { buildOpsTermAlignmentEmail } from "@/lib/email/templates/ops-term-alignment";
 import { buildOpsDidReleaseFailedEmail } from "@/lib/email/templates/ops-did-release-failed";
+import { buildOpsSubscriptionCanceledEmail } from "@/lib/email/templates/ops-subscription-canceled";
 
 const mailCtx = {
   recipientEmail: "owner@example.com",
@@ -115,6 +116,72 @@ describe("cancel-confirmation email", () => {
     expect(subject).toMatch(/has been canceled/i);
     expect(text).toMatch(/at your request/i);
     expect(text).toMatch(/2026/);
+    expect(text).toMatch(/You keep through the data-retention window/);
+    expect(text).toMatch(/These stop and no longer help the business/);
+    expect(text).toMatch(/live VPS coworker/);
+  });
+
+  it("lists Standard-gated losses when the canceled tier was Standard", () => {
+    const { text } = buildCancelConfirmationEmail({
+      reason: "user_refund",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: "2026-07-01T00:00:00.000Z",
+      currentTier: "standard",
+      ...mailCtx
+    });
+    expect(text).toMatch(/incoming webhooks/i);
+    expect(text).toMatch(/Outbound AI calls/);
+  });
+
+  it("names a prepaid Hostinger cliff when a live box expiry is in the future", () => {
+    const { text } = buildCancelConfirmationEmail({
+      reason: "user_refund",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: "2026-07-01T00:00:00.000Z",
+      hostingerExpiresAt: "2026-08-01T00:00:00.000Z",
+      nowMs: Date.parse("2026-06-15T00:00:00.000Z"),
+      ...mailCtx
+    });
+    expect(text).toMatch(/prepaid Hostinger box/i);
+    expect(text).toMatch(/August 1, 2026/);
+  });
+
+  it("uses generic Hostinger cliff copy when expiry is present but not prepaid-through", () => {
+    const { text } = buildCancelConfirmationEmail({
+      reason: "stripe_external",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: "2026-07-01T00:00:00.000Z",
+      hostingerExpiresAt: "2026-05-01T00:00:00.000Z",
+      nowMs: Date.parse("2026-06-15T00:00:00.000Z"),
+      ...mailCtx
+    });
+    expect(text).toMatch(/If the Hostinger box still has prepaid time/);
+  });
+
+  it("on scheduled period-end, names Hostinger auto-renew off through the access-end date", () => {
+    const { text } = buildCancelConfirmationEmail({
+      reason: "user_period_end",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: null,
+      hostingerExpiresAt: "2026-08-01T00:00:00.000Z",
+      nowMs: Date.parse("2026-06-15T00:00:00.000Z"),
+      ...mailCtx
+    });
+    expect(text).toMatch(/does not bill after August 1, 2026/);
+  });
+
+  it("uses stripe_external framing for Customer Portal / Dashboard cancels", () => {
+    const { subject, text, html } = buildCancelConfirmationEmail({
+      reason: "stripe_external",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: "2026-07-01T00:00:00.000Z",
+      ...mailCtx
+    });
+    expect(subject).toMatch(/has been canceled/i);
+    expect(text).toMatch(/Your subscription has been canceled/);
+    expect(text).not.toMatch(/at your request/);
+    expect(text).toMatch(/You keep through the data-retention window/);
+    expect(html).toContain("/dashboard/billing");
   });
 
   it("gracefully handles a null grace deadline with a default message", () => {
@@ -398,6 +465,66 @@ describe("ops-did-release-failed email", () => {
     expect(text).toContain("Telnyx portal → Numbers → My Numbers");
     expect(html).toContain("DID release failed, manual action required");
     expect(html).toContain("https://portal.telnyx.com/#/numbers/my-numbers");
+  });
+});
+
+describe("ops-subscription-canceled email", () => {
+  const baseInput = {
+    businessId: "biz-1",
+    businessName: "Scar Fairy",
+    ownerName: "Selena",
+    ownerEmail: "selena@example.com",
+    tier: "starter",
+    cancelReason: "stripe_external",
+    cancelPath: "stripe_external",
+    graceEndsAt: "2026-10-17T01:04:59.000Z",
+    hostingerExpiresAt: "2026-09-30T00:00:00.000Z",
+    siteUrl: "https://www.example.com"
+  };
+
+  it("renders business, owner, tier, path, grace, Hostinger, and the admin link", () => {
+    const { subject, text, html } = buildOpsSubscriptionCanceledEmail(baseInput);
+    expect(subject).toBe(
+      "[ops] Subscription canceled, Scar Fairy (starter, stripe_external)"
+    );
+    expect(text).toContain("Business: Scar Fairy");
+    expect(text).toContain("Business id: biz-1");
+    expect(text).toContain("Owner: Selena");
+    expect(text).toContain("Owner email: selena@example.com");
+    expect(text).toContain("Tier: starter");
+    expect(text).toContain("Cancel reason: stripe_external");
+    expect(text).toContain("Cancel path: stripe_external");
+    expect(text).toContain("Grace ends at: 2026-10-17T01:04:59.000Z");
+    expect(text).toContain("Hostinger expires at: 2026-09-30T00:00:00.000Z");
+    expect(html).toContain("Open admin panel");
+    expect(html).toContain("https://www.example.com/admin/biz-1");
+  });
+
+  it("falls back when name, grace, Hostinger, and Stripe details are missing", () => {
+    const { subject, text } = buildOpsSubscriptionCanceledEmail({
+      ...baseInput,
+      businessName: "   ",
+      ownerName: "   ",
+      graceEndsAt: null,
+      hostingerExpiresAt: null
+    });
+    expect(subject).toContain("(unnamed)");
+    expect(text).toContain("Owner: selena@example.com");
+    expect(text).toContain("Grace ends at: (not started; scheduled period-end)");
+    expect(text).toContain("Hostinger expires at: (none on file)");
+    expect(text).not.toContain("Stripe cancellation details:");
+
+    const withDetails = buildOpsSubscriptionCanceledEmail({
+      ...baseInput,
+      ownerName: null,
+      businessName: "",
+      stripeCancellationDetails: "cancellation_requested / too_expensive"
+    });
+    expect(withDetails.subject).toContain("(unnamed)");
+    expect(withDetails.text).toContain("Owner: selena@example.com");
+    expect(withDetails.text).toContain(
+      "Stripe cancellation details: cancellation_requested / too_expensive"
+    );
   });
 });
 

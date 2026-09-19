@@ -27,6 +27,10 @@ import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import { SIDEBAR_ITEMS } from "../src/lib/dashboard/sidebar-items";
 import { STARTER_DOWNGRADE_KEEP_CATALOG_KEYS, STARTER_DOWNGRADE_LOSS_CATALOG_KEYS } from "../src/lib/billing/plan-change-copy";
+import {
+  CANCEL_KEEP_CATALOG_KEYS,
+  CANCEL_LOSS_CATALOG_KEYS
+} from "../src/lib/billing/cancel-copy";
 
 const ROOT = join(__dirname, "..");
 const SRC = join(ROOT, "src");
@@ -219,6 +223,30 @@ describe("translation keys referenced in src/ exist in the catalogs", () => {
     expect(catalogHas("dashboard.pages.webhookGateCurrentPlan")).toBe(true);
     expect(catalogHas("dashboard.pages.webhookGateRequiredPlan")).toBe(true);
     expect(catalogHas("dashboard.pages.webhookGateBlockedOutcome")).toBe(true);
+  });
+
+  it("cancel keep/lose keys exist under planCard and the cancel-confirmation email", () => {
+    for (const key of Object.values(CANCEL_KEEP_CATALOG_KEYS)) {
+      expect(catalogHas(`dashboard.planCard.${key}`), `dashboard.planCard.${key}`).toBe(true);
+      expect(
+        catalogHas(`emails.cancelConfirmation.${key}`),
+        `emails.cancelConfirmation.${key}`
+      ).toBe(true);
+    }
+    for (const key of Object.values(CANCEL_LOSS_CATALOG_KEYS)) {
+      expect(catalogHas(`dashboard.planCard.${key}`), `dashboard.planCard.${key}`).toBe(true);
+      expect(
+        catalogHas(`emails.cancelConfirmation.${key}`),
+        `emails.cancelConfirmation.${key}`
+      ).toBe(true);
+    }
+    expect(catalogHas("dashboard.planCard.cancelConfirmTimingLabel")).toBe(true);
+    expect(catalogHas("dashboard.planCard.cancelConfirmKeepLabel")).toBe(true);
+    expect(catalogHas("dashboard.planCard.cancelConfirmLossLabel")).toBe(true);
+    expect(catalogHas("dashboard.planCard.cancelAlternative")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.keepLead")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.lossLead")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.stripeExternalLeadIn")).toBe(true);
   });
 
   it("industry i18nKeys exist under marketing.industries", () => {

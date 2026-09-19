@@ -512,6 +512,9 @@ export function PlanCard(props: PlanCardProps) {
         refundBlockedReason={refundBlockedReason ?? null}
         periodEnd={periodEnd}
         alreadyPeriodEnd={alreadyPeriodEnd}
+        currentTier={tier}
+        boxExpiresAt={boxExpiresAt}
+        hasLiveBox={hasLiveBox}
         onUndoPeriodEnd={async () => {
           setShowCancel(false);
           await undoPeriodEnd();

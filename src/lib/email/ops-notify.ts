@@ -64,6 +64,10 @@ import {
   buildOpsIntakeCompletedEmail,
   type OpsIntakeCompletedInput
 } from "@/lib/email/templates/ops-intake-completed";
+import {
+  buildOpsSubscriptionCanceledEmail,
+  type OpsSubscriptionCanceledInput
+} from "@/lib/email/templates/ops-subscription-canceled";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -572,3 +576,44 @@ export async function sendOpsCronSweepHealthEmail(
     return false;
   }
 }
+
+/**
+ * Fire-and-forget "subscription canceled" ops alert; never throws. Returns
+ * true when sent. Used by the Stripe deleted-webhook notify-only path for
+ * rows the lifecycle planner cannot re-run (already canceled, null reason).
+ * The lifecycle executor also sends this template from EmailOp.
+ */
+export async function sendOpsSubscriptionCanceledEmail(
+  input: Omit<OpsSubscriptionCanceledInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops subscription-canceled email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsSubscriptionCanceledEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), {
+      text,
+      html
+    });
+    logger.info("ops subscription-canceled email sent", {
+      businessId: input.businessId,
+      cancelReason: input.cancelReason,
+      cancelPath: input.cancelPath,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops subscription-canceled email failed", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
+

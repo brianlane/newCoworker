@@ -28,6 +28,7 @@ type Props = {
     | "payment_failed"
     | "admin_force"
     | "upgrade_switch"
+    | "stripe_external"
     | null;
 };
 

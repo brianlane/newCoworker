@@ -37,7 +37,8 @@ import {
   sendOpsProvisioningStuckEmail,
   sendOpsDeployFailedEmail,
   sendOpsCronSweepHealthEmail,
-  sendOpsIntakeCompletedEmail
+  sendOpsIntakeCompletedEmail,
+  sendOpsSubscriptionCanceledEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -1116,6 +1117,90 @@ describe("sendOpsCronSweepHealthEmail", () => {
     await expect(sendOpsCronSweepHealthEmail(watchdogInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops cron-sweep-health email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsSubscriptionCanceledEmail", () => {
+  const canceledInput = {
+    businessId: "biz-1",
+    businessName: "Scar Fairy",
+    ownerName: "Selena",
+    ownerEmail: "selena@example.com",
+    tier: "starter",
+    cancelReason: "stripe_external",
+    cancelPath: "stripe_external",
+    graceEndsAt: "2026-10-17T01:04:59.000Z",
+    hostingerExpiresAt: null as string | null
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "starter" } as never);
+  });
+
+  it("sends the cancel alert to the ops inbox with an admin deep link", async () => {
+    await expect(sendOpsSubscriptionCanceledEmail(canceledInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      expect.stringMatching(/^team@/),
+      expect.stringContaining("Subscription canceled, Scar Fairy"),
+      expect.objectContaining({
+        text: expect.stringContaining("Cancel path: stripe_external"),
+        html: expect.stringContaining("/admin/biz-1")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops subscription-canceled email sent",
+      expect.objectContaining({
+        businessId: "biz-1",
+        cancelReason: "stripe_external",
+        cancelPath: "stripe_external"
+      })
+    );
+  });
+
+  it("tier-tags enterprise subjects", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({ tier: "enterprise" } as never);
+    await sendOpsSubscriptionCanceledEmail({ ...canceledInput, tier: "enterprise" });
+    expect(sendOwnerEmailMock.mock.calls[0][2]).toContain("[ENTERPRISE]");
+  });
+
+  it("falls back to localhost when no app URL is set", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsSubscriptionCanceledEmail(canceledInput);
+    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("[REDACTED]");
+  });
+
+  it("skips without a Resend key rather than throwing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsSubscriptionCanceledEmail(canceledInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops subscription-canceled email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ businessId: "biz-1" })
+    );
+  });
+
+  it("swallows a send failure", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("resend down"));
+    await expect(sendOpsSubscriptionCanceledEmail(canceledInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops subscription-canceled email failed",
+      expect.objectContaining({ error: "resend down" })
+    );
+  });
+
+  it("stringifies a non-Error send failure", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsSubscriptionCanceledEmail(canceledInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops subscription-canceled email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

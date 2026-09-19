@@ -77,6 +77,7 @@ describe("loadLifecycleContextForBusiness", () => {
     process.env.HOSTINGER_API_TOKEN = "token";
     getBusinessMock.mockResolvedValue({
       id: "biz-1",
+      name: "Jane's Shop",
       owner_email: "owner@example.com",
       owner_name: "Jane Doe",
       customer_profile_id: "prof-business",
@@ -106,6 +107,7 @@ describe("loadLifecycleContextForBusiness", () => {
       context: expect.objectContaining({
         ownerEmail: "owner@example.com",
         ownerName: "Jane Doe",
+        businessName: "Jane's Shop",
         businessTimezone: "America/Phoenix",
         ownerAuthUserId: "auth-1",
         profile: { id: "prof-sub" },
@@ -330,6 +332,7 @@ describe("loadLifecycleContextForBusiness", () => {
       context: expect.objectContaining({
         profile: { id: "prof-business" },
         ownerName: null,
+        businessName: null,
         virtualMachineId: null,
         vpsHost: null
       })

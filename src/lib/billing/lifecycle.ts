@@ -218,12 +218,28 @@ export type EmailOp =
       graceEndsAt: string | null;
       /** IANA timezone for date rendering; null → runtime default (UTC). */
       timeZone: string | null;
+      currentTier?: "starter" | "standard" | "enterprise";
+      hostingerExpiresAt?: string | null;
     }
   | {
       type: "send_refund_issued";
       toEmail: string;
       businessId: string;
       amountCents: number;
+    }
+  | {
+      type: "send_ops_subscription_canceled";
+      businessId: string;
+      businessName: string;
+      ownerName: string | null;
+      ownerEmail: string;
+      tier: string;
+      cancelReason: CancelReason;
+      cancelPath: string;
+      graceEndsAt: string | null;
+      hostingerExpiresAt: string | null;
+      /** Stripe cancellation_details, when the webhook carried them. */
+      stripeCancellationDetails?: string | null;
     }
   | {
       /**
@@ -294,6 +310,14 @@ export type LifecycleAction =
     }
   | { type: "autoCancelOnPaymentFailure" }
   | { type: "adminForceCancel" }
+  | {
+      /**
+       * Stripe already deleted the subscription (Customer Portal, Dashboard,
+       * or API). We skip the Stripe cancel op and still run grace + emails.
+       */
+      type: "externalStripeCancel";
+      stripeCancellationDetails?: string | null;
+    }
   | { type: "graceExpiredWipe" };
 
 export type LifecycleContext = {
@@ -302,6 +326,8 @@ export type LifecycleContext = {
   ownerEmail: string;
   /** Owner display name from the business row, for the ops deletion email. */
   ownerName?: string | null;
+  /** Business display name, for the ops cancel alert. */
+  businessName?: string | null;
   /**
    * IANA timezone of the business, for rendering dates in emails (which have
    * no "viewer" timezone). Null/omitted → emails fall back to the runtime
@@ -409,6 +435,8 @@ export function planLifecycleAction(
       return planAutoCancelOnPaymentFailure(ctx);
     case "adminForceCancel":
       return planAdminForceCancel(ctx);
+    case "externalStripeCancel":
+      return planExternalStripeCancel(ctx, action.stripeCancellationDetails);
     case "graceExpiredWipe":
       return planGraceExpiredWipe(ctx);
   }
@@ -520,8 +548,15 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
           reason: "user_period_end",
           effectiveAt: sub.stripe_current_period_end ?? now.toISOString(),
           graceEndsAt: null,
-          timeZone: ctx.businessTimezone ?? null
-        }
+          timeZone: ctx.businessTimezone ?? null,
+          currentTier: sub.tier,
+          hostingerExpiresAt: ctx.hostingerBillingExpiresAt ?? null
+        },
+        opsSubscriptionCanceledEmailOp(ctx, {
+          cancelReason: "user_period_end",
+          cancelPath: "in_app_period_end",
+          graceEndsAt: null
+        })
       ]
     }
   };
@@ -651,7 +686,8 @@ function planPeriodEndReached(ctx: LifecycleContext): LifecyclePlanResult {
       now,
       cancelReason: "user_period_end",
       includeRefund: false,
-      skipStripeCancel: true
+      skipStripeCancel: true,
+      includeOpsCancelAlert: false
     })
   };
 }
@@ -732,6 +768,31 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
   }
 
   return { ok: true, plan };
+}
+
+function planExternalStripeCancel(
+  ctx: LifecycleContext,
+  stripeCancellationDetails?: string | null
+): LifecyclePlanResult {
+  const { subscription: sub } = ctx;
+  /* v8 ignore next -- tests use explicit clocks; runtime default is a deterministic fallback. */
+  const now = ctx.now ?? new Date();
+
+  if (sub.status !== "active") {
+    return { ok: false, reason: "subscription_not_active" };
+  }
+
+  return {
+    ok: true,
+    plan: buildCancelPlan({
+      ctx,
+      now,
+      cancelReason: "stripe_external",
+      includeRefund: false,
+      skipStripeCancel: true,
+      stripeCancellationDetails
+    })
+  };
 }
 
 function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
@@ -939,6 +1000,45 @@ function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string
 // (c) the grace window (admin force collapses it to zero).
 // ───────────────────────────────────────────────────────────────────────
 
+function opsSubscriptionCanceledEmailOp(
+  ctx: LifecycleContext,
+  args: {
+    cancelReason: CancelReason;
+    cancelPath: string;
+    graceEndsAt: string | null;
+    stripeCancellationDetails?: string | null;
+  }
+): Extract<EmailOp, { type: "send_ops_subscription_canceled" }> {
+  const sub = ctx.subscription;
+  return {
+    type: "send_ops_subscription_canceled",
+    businessId: sub.business_id,
+    businessName: ctx.businessName ?? "",
+    ownerName: ctx.ownerName ?? null,
+    ownerEmail: ctx.ownerEmail,
+    tier: sub.tier,
+    cancelReason: args.cancelReason,
+    cancelPath: args.cancelPath,
+    graceEndsAt: args.graceEndsAt,
+    hostingerExpiresAt: ctx.hostingerBillingExpiresAt ?? null,
+    ...(args.stripeCancellationDetails
+      ? { stripeCancellationDetails: args.stripeCancellationDetails }
+      : {})
+  };
+}
+
+function cancelPathForReason(reason: CancelReason): string {
+  const paths: Record<CancelReason, string> = {
+    user_refund: "in_app_refund",
+    user_period_end: "period_end_reached",
+    payment_failed: "payment_failed",
+    admin_force: "admin_force",
+    upgrade_switch: "upgrade_switch",
+    stripe_external: "stripe_external"
+  };
+  return paths[reason];
+}
+
 function buildCancelPlan(args: {
   ctx: LifecycleContext;
   now: Date;
@@ -946,6 +1046,8 @@ function buildCancelPlan(args: {
   includeRefund: boolean;
   graceMs?: number;
   skipStripeCancel?: boolean;
+  includeOpsCancelAlert?: boolean;
+  stripeCancellationDetails?: string | null;
 }): LifecyclePlan {
   const {
     ctx,
@@ -953,7 +1055,9 @@ function buildCancelPlan(args: {
     cancelReason,
     includeRefund,
     graceMs = GRACE_WINDOW_MS,
-    skipStripeCancel = false
+    skipStripeCancel = false,
+    includeOpsCancelAlert = true,
+    stripeCancellationDetails
   } = args;
   const sub = ctx.subscription;
   const profileId = sub.customer_profile_id ?? ctx.profile?.id ?? null;
@@ -1094,7 +1198,9 @@ function buildCancelPlan(args: {
     reason: cancelReason,
     effectiveAt: now.toISOString(),
     graceEndsAt: graceEndsAtIso,
-    timeZone: ctx.businessTimezone ?? null
+    timeZone: ctx.businessTimezone ?? null,
+    currentTier: sub.tier,
+    hostingerExpiresAt: ctx.hostingerBillingExpiresAt ?? null
   });
   if (includeRefund) {
     plan.emailsToSend.push({
@@ -1103,6 +1209,16 @@ function buildCancelPlan(args: {
       businessId: sub.business_id,
       amountCents: ctx.lastInvoiceAmountCents ?? 0
     });
+  }
+  if (includeOpsCancelAlert) {
+    plan.emailsToSend.push(
+      opsSubscriptionCanceledEmailOp(ctx, {
+        cancelReason,
+        cancelPath: cancelPathForReason(cancelReason),
+        graceEndsAt: graceEndsAtIso,
+        stripeCancellationDetails
+      })
+    );
   }
   // Hostinger deletion is manual-only (panel): every cancel that tears a box
   // down asks ops to finish the job in hPanel. Non-hostinger boxes have no
