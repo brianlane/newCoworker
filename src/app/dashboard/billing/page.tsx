@@ -85,7 +85,12 @@ import {
 import { formatPriceCents } from "@/lib/pricing";
 // Same operator channels the enterprise dedicated-support card uses: a paying
 // priority customer reaches us the same way an enterprise tenant does.
-import { getEnterpriseSupportContact } from "@/lib/plans/enterprise-support";
+import { getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
+import {
+  formatPlanChangePaidThroughDate,
+  parseablePaidThroughIso,
+  planChangeSuccessBannerKey
+} from "@/lib/billing/plan-change-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +126,7 @@ export default async function BillingPage(props: {
   const { data: businesses } = await db
     .from("businesses")
     .select(
-      "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until, phone, timezone"
+      "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until, phone, timezone, hostinger_vps_id, vps_size"
     )
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
@@ -134,6 +139,12 @@ export default async function BillingPage(props: {
   // snapshot → … → offers was 4+ serial round-trips). The SMS + Gemini usage
   // meters are read-only display (enforcement lives in the workers / RPCs)
   // and are individually non-fatal for the page.
+  const liveVmId = Number.parseInt(
+    (business as { hostinger_vps_id?: string | null } | null)?.hostinger_vps_id ?? "",
+    10
+  );
+  const hasLiveBox = Number.isFinite(liveVmId) && liveVmId > 0;
+
   const [
     subscription,
     snapshot,
@@ -145,7 +156,8 @@ export default async function BillingPage(props: {
     autoReloadRules,
     autoReloadCard,
     autoReloadEvents,
-    prioritySupportRow
+    prioritySupportRow,
+    boxInventory
   ] = business
     ? await Promise.all([
         getSubscription(business.id),
@@ -171,7 +183,10 @@ export default async function BillingPage(props: {
         listAutoReloadEvents(business.id, 5, db).catch(() => []),
         // Same non-fatal treatment: the priority support card is an add-on,
         // and losing it must not blank the page a tenant came here to read.
-        getLivePrioritySupportSubscription(business.id, db).catch(() => null)
+        getLivePrioritySupportSubscription(business.id, db).catch(() => null),
+        hasLiveBox
+          ? getVpsInventoryByVmId(liveVmId).catch(() => null)
+          : Promise.resolve(null)
       ])
     : [
         null,
@@ -184,8 +199,10 @@ export default async function BillingPage(props: {
         [] as Awaited<ReturnType<typeof listAutoReloadRules>>,
         null,
         [] as Awaited<ReturnType<typeof listAutoReloadEvents>>,
+        null,
         null
       ];
+  const boxExpiresAt = boxInventory?.expires_at ?? null;
 
   // Prefer `business.customer_profile_id` over `subscription.customer_profile_id`
   // when the subscription is in a terminal state (canceled or wiped),
@@ -324,10 +341,20 @@ export default async function BillingPage(props: {
         ? { kind: "warn" as const, text: t("checkoutCancelled") }
         : null;
 
-  const planChangedBanner =
-    searchParams.planChanged === "1"
-      ? { kind: "ok" as const, text: t("planChanged") }
-      : null;
+  const planChangedBanner = (() => {
+    if (searchParams.planChanged !== "1") return null;
+    const key = planChangeSuccessBannerKey(boxExpiresAt);
+    if (key === "planChangedKeepDated") {
+      const iso = parseablePaidThroughIso(boxExpiresAt);
+      const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
+      if (date) return { kind: "ok" as const, text: t("planChangedKeepDated", { date }) };
+      return { kind: "ok" as const, text: t("planChangedKeepGeneric") };
+    }
+    if (key === "planChangedKeepGeneric") {
+      return { kind: "ok" as const, text: t("planChangedKeepGeneric") };
+    }
+    return { kind: "ok" as const, text: t("planChangedMigrate") };
+  })();
   const reactivatedBanner =
     searchParams.reactivated === "1"
       ? { kind: "ok" as const, text: t("reactivated") }
@@ -576,6 +603,9 @@ export default async function BillingPage(props: {
               }
             : null
         }
+        boxExpiresAt={boxExpiresAt}
+        hasLiveBox={hasLiveBox}
+        vpsSizePin={(business as { vps_size?: string | null } | null)?.vps_size ?? null}
       />
 
       <Card>

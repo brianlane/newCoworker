@@ -17,11 +17,16 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
+import {
+  formatPlanChangePaidThroughDate,
+  parseablePaidThroughIso,
+  showServerPrepaidLine
+} from "@/lib/billing/plan-change-copy";
 import {
   formatCommitmentTotal,
   formatPriceCents,
@@ -76,6 +81,12 @@ export type PlanCardProps = {
    * than only discovering it on the invoice. Omitted/all-null renders nothing.
    */
   discount?: MembershipDiscountState | null;
+  /** `vps_inventory.expires_at` for the live Hostinger box, if known. */
+  boxExpiresAt?: string | null;
+  /** False when the tenant has no numeric Hostinger VM. */
+  hasLiveBox?: boolean;
+  /** Raw `businesses.vps_size` pin, forwarded to change-plan confirm copy. */
+  vpsSizePin?: string | null;
 };
 
 function formatDate(iso: string | null | undefined): string {
@@ -100,6 +111,7 @@ function tierLabel(tier: PlanTier | null): string {
 
 export function PlanCard(props: PlanCardProps) {
   const t = useTranslations("dashboard.planCard");
+  const locale = useLocale();
 
   /**
    * The operator-applied discount, in the reader's own language.
@@ -180,8 +192,16 @@ export function PlanCard(props: PlanCardProps) {
     contractAutoRenew,
     commitmentElapsed,
     packAddonOptions = [],
-    currentPackAddons
+    currentPackAddons,
+    boxExpiresAt = null,
+    hasLiveBox,
+    vpsSizePin = null
   } = props;
+
+  const showPrepaid = showServerPrepaidLine(boxExpiresAt, Date.now(), hasLiveBox === true);
+  const prepaidDate = parseablePaidThroughIso(boxExpiresAt)
+    ? formatPlanChangePaidThroughDate(parseablePaidThroughIso(boxExpiresAt)!, locale)
+    : null;
 
   const [showCancel, setShowCancel] = useState(false);
   const [undoLoading, setUndoLoading] = useState(false);
@@ -322,6 +342,13 @@ export function PlanCard(props: PlanCardProps) {
           <p className="text-xs text-parchment/50 mt-1">
             {tierLabel(tier)} · {periodLabel(billingPeriod)}
           </p>
+          {showPrepaid && (
+            <p className="text-xs text-parchment/40 mt-1">
+              {prepaidDate
+                ? t("serverPrepaidThrough", { date: prepaidDate })
+                : t("serverPrepaidUnknown")}
+            </p>
+          )}
         </div>
         <Badge variant={badge.variant}>{badge.text}</Badge>
       </div>
@@ -481,6 +508,9 @@ export function PlanCard(props: PlanCardProps) {
             disabledReason={changePlanBlockedReason}
             packAddonOptions={packAddonOptions}
             currentPackAddons={currentPackAddons}
+            boxExpiresAt={boxExpiresAt}
+            hasLiveBox={hasLiveBox}
+            vpsSizePin={vpsSizePin}
           />
         </div>
       )}

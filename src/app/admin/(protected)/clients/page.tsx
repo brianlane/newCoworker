@@ -106,6 +106,7 @@ export default async function AdminClientsPage() {
               status: b.status,
               isPaused: !!b.is_paused,
               subscriptionStatus: subscriptionMap.get(b.id)?.status ?? null,
+              subscriptionTier: subscriptionMap.get(b.id)?.tier ?? null,
               ownerQuiet: quietOwners.has(b.id),
               marginCents: marginByBusiness.get(b.id)?.marginCents ?? null,
               pinned: !!b.admin_pinned,

@@ -17,6 +17,12 @@ export type AdminClientRow = {
   isPaused: boolean;
   subscriptionStatus: string | null;
   /**
+   * `subscriptions.tier` for the newest row. After a keep-box plan change
+   * this should match `tier` (entitlements flip immediately). When they
+   * differ, the heal path still needs to copy billing onto the business.
+   */
+  subscriptionTier: string | null;
+  /**
    * Owner hasn't signed in for 90+ days (the "quiet" band from
    * src/lib/admin/user-engagement.ts), surfaced as a churn-risk badge.
    */
@@ -138,6 +144,7 @@ export function clientsCsv(rows: AdminClientRow[]): string {
       "name",
       "owner_email",
       "tier",
+      "billing_tier",
       "payment",
       "status",
       "paused",
@@ -151,6 +158,7 @@ export function clientsCsv(rows: AdminClientRow[]): string {
       row.name,
       row.ownerEmail,
       row.tier,
+      row.subscriptionTier ?? "",
       row.subscriptionStatus ?? PAYMENT_NONE,
       row.status,
       row.isPaused,

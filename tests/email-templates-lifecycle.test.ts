@@ -77,7 +77,9 @@ describe("cancel-confirmation email", () => {
       ...mailCtx
     });
     expect(subject).toMatch(/plan change/i);
-    expect(text).toMatch(/migrating your workspace/i);
+    expect(text).toMatch(/plan is live now/i);
+    expect(text).toMatch(/prepaid/i);
+    expect(text).not.toMatch(/fresh server/i);
     expect(html).toContain("/dashboard");
   });
 
