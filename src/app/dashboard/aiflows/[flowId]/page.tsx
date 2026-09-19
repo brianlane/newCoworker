@@ -11,9 +11,13 @@ import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
+import { FlowEnabledStatusPill } from "@/components/dashboard/FlowEnabledStatusPill";
+import { StarterWebhookGateBanner } from "@/components/dashboard/StarterWebhookGateBanner";
 import { calendlyDashboardPauseCopy } from "@/lib/calendly/reauth";
 import { listConnectionReauthBannerState } from "@/lib/connections/reauth";
 import { AiFlowHistory } from "@/components/dashboard/AiFlowHistory";
+import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
+import { webhookFlowBlockedOnStarter } from "@/lib/ai-flows/webhook-sources";
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +38,18 @@ export default async function AiFlowViewPage({ params }: Props) {
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_aiflows");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, tier")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
+  const businessTier = (businesses?.[0]?.tier as string | null | undefined) ?? "starter";
+  const webhooksEnabled = webhooksAllowedForTier(businessTier);
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
+  const webhookBlockedOnStarter = flow
+    ? webhookFlowBlockedOnStarter(flow.definition, webhooksEnabled)
+    : false;
   const tCalendly = await getTranslations("dashboard.calendlyReauth");
   const tConnection = await getTranslations("dashboard.connectionReauth");
   const paused = businessId ? await calendlyDashboardPauseCopy(businessId) : null;
@@ -117,15 +126,11 @@ export default async function AiFlowViewPage({ params }: Props) {
                 <h1 className="min-w-0 break-words text-2xl font-bold text-parchment">
                   {flow.name}
                 </h1>
-                <span
-                  className={`mt-1.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                    flow.enabled
-                      ? "bg-claw-green/15 text-claw-green"
-                      : "bg-parchment/10 text-parchment/50"
-                  }`}
-                >
-                  {flow.enabled ? "ENABLED" : "OFF"}
-                </span>
+                <FlowEnabledStatusPill
+                  enabled={flow.enabled}
+                  webhookBlockedOnStarter={webhookBlockedOnStarter}
+                  className="mt-1.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                />
               </div>
               <p className="mt-1 text-sm text-parchment/50">
                 {friendlyFlowSummary(flow.definition)}
@@ -160,14 +165,24 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow && businessId ? (
         <>
+          {webhookBlockedOnStarter ? (
+            <StarterWebhookGateBanner currentTier={businessTier} />
+          ) : null}
           <Card>
             <AiFlowView
               definition={flow.definition}
               coworkerEmail={coworkerEmail}
               statsByStepId={statsByStepId}
               calendarPausedCopy={calendarPausedCopy}
+              webhooksEnabled={webhooksEnabled}
+              currentTier={businessTier}
             />
           </Card>
+          {webhookBlockedOnStarter ? (
+            <p className="text-sm text-amber-400/90" role="status">
+              {t("webhookGateRunsNote")}
+            </p>
+          ) : null}
           {/* Edit history lives beside the flow it belongs to, so "what did I
               just change, and can I take it back" is answered in one place. */}
           <Card>

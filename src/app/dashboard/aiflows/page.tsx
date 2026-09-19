@@ -40,15 +40,10 @@ export default async function AiFlowsPage({ searchParams }: Props) {
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
   const businessType = (businesses?.[0]?.business_type as string | null | undefined) ?? null;
-  const webhooksEnabled = webhooksAllowedForTier(
-    (businesses?.[0]?.tier as string | null | undefined) ?? null
-  );
-  const outboundAiCallsEnabled = outboundAiCallsAllowedForTier(
-    (businesses?.[0]?.tier as string | null | undefined) ?? null
-  );
-  const browseActionEnabled = browseActionAllowedForTier(
-    (businesses?.[0]?.tier as string | null | undefined) ?? null
-  );
+  const businessTier = (businesses?.[0]?.tier as string | null | undefined) ?? null;
+  const webhooksEnabled = webhooksAllowedForTier(businessTier);
+  const outboundAiCallsEnabled = outboundAiCallsAllowedForTier(businessTier);
+  const browseActionEnabled = browseActionAllowedForTier(businessTier);
 
   const flows = businessId ? await listAiFlows(businessId) : [];
   const tCalendly = await getTranslations("dashboard.calendlyReauth");
@@ -134,6 +129,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           initialEditId={edit ?? null}
           initialAdaptDraft={adapt === "1"}
           webhooksEnabled={webhooksEnabled}
+          currentTier={businessTier}
           outboundAiCallsEnabled={outboundAiCallsEnabled}
           browseActionEnabled={browseActionEnabled}
           initialDismissedCards={dismissedCards}

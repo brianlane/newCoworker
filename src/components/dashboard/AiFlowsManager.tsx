@@ -65,6 +65,12 @@ import {
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
 import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
 import { NewLeadIntakeCard } from "@/components/dashboard/NewLeadIntakeCard";
+import { FlowEnabledStatusPill } from "@/components/dashboard/FlowEnabledStatusPill";
+import { StarterWebhookGateBanner } from "@/components/dashboard/StarterWebhookGateBanner";
+import {
+  webhookFlowBlockedOnStarter,
+  webhookTriggerBlockedOnStarter
+} from "@/lib/ai-flows/webhook-sources";
 import type { DismissibleCardKey } from "@/lib/dashboard/dismissed-cards";
 import {
   ContactRefPicker,
@@ -1042,6 +1048,7 @@ export function AiFlowsManager({
   initialEditId,
   initialAdaptDraft,
   webhooksEnabled = true,
+  currentTier = "starter",
   outboundAiCallsEnabled = true,
   browseActionEnabled = true,
   initialDismissedCards,
@@ -1060,6 +1067,8 @@ export function AiFlowsManager({
    * upgrade note instead of setup instructions.
    */
   webhooksEnabled?: boolean;
+  /** Live `businesses.tier` for the webhook Starter gate copy. */
+  currentTier?: string | null;
   /**
    * False on starter: hide place_ai_call / outbound voice authoring and refuse
    * Place call; dial paths also refuse server-side.
@@ -2194,17 +2203,10 @@ export function AiFlowsManager({
           )}
           {editor.channel === "webhook" && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-1.5">
-              {!webhooksEnabled && (
-                <p className="text-[11px] text-amber-400/90">
-                  Webhooks are a Standard plan perk. This flow can be saved, but incoming
-                  webhook events (Zapier, Meta lead ads, and other outside tools) won&apos;t
-                  start it until you{" "}
-                  <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
-                    upgrade your plan
-                  </Link>
-                  .
-                </p>
-              )}
+              {webhookTriggerBlockedOnStarter(
+                { channel: "webhook", conditions: editor.conditions },
+                webhooksEnabled
+              ) && <StarterWebhookGateBanner compact currentTier={currentTier} />}
               <p className="text-[11px] text-parchment/60">
                 This runs when an outside tool (Zapier, Make.com, or any API client) sends an
                 event to your coworker&apos;s webhook address. Point the tool at{" "}
@@ -3143,15 +3145,13 @@ export function AiFlowsManager({
                   >
                     {row.name}
                   </Link>
-                  <span
-                    className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                      row.enabled
-                        ? "bg-claw-green/15 text-claw-green"
-                        : "bg-parchment/10 text-parchment/50"
-                    }`}
-                  >
-                    {row.enabled ? "ENABLED" : "OFF"}
-                  </span>
+                  <FlowEnabledStatusPill
+                    enabled={row.enabled}
+                    webhookBlockedOnStarter={webhookFlowBlockedOnStarter(
+                      row.definition,
+                      webhooksEnabled
+                    )}
+                  />
                   {/* Status times: when the flow last fired, and how long the
                       current on/off state has held (toggle time; falls back to
                       created_at when never toggled). Client-mounted only (see
