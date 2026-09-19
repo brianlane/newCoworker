@@ -58,7 +58,7 @@ export function sumUsageGrants(grants: readonly UsageGrant[] | null | undefined)
  * Shared PLAN fraction. `unexpiredPurchased` is grant SIZE (not leftover
  * balance). `unexpiredConsumed` is usage drawn from those same live grants.
  */
-export function planMeter(input: {
+function planMeter(input: {
   includedUsed: number;
   includedCap: number;
   unexpiredPurchased: number;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   aiBudgetPlanMeter,
-  planMeter,
   planMeterMinutes,
   smsPlanMeter,
   sumUsageGrants,
@@ -38,25 +37,25 @@ describe("sumUsageGrants", () => {
   });
 });
 
-describe("planMeter", () => {
+describe("voicePlanMeter clamps", () => {
   it("clamps consumed to purchased and included used to included cap", () => {
     expect(
-      planMeter({
-        includedUsed: 20_000,
-        includedCap: STANDARD_VOICE_CAP,
-        unexpiredPurchased: PACK_30,
-        unexpiredConsumed: 99_000
+      voicePlanMeter({
+        committedIncludedSeconds: 20_000,
+        tierCapSeconds: STANDARD_VOICE_CAP,
+        unexpiredPurchasedSeconds: PACK_30,
+        unexpiredConsumedSeconds: 99_000
       })
     ).toEqual({ used: STANDARD_VOICE_CAP + PACK_30, cap: STANDARD_VOICE_CAP + PACK_30 });
   });
 
   it("treats garbage numbers as zero", () => {
     expect(
-      planMeter({
-        includedUsed: Number.NaN,
-        includedCap: Number.NEGATIVE_INFINITY,
-        unexpiredPurchased: -1,
-        unexpiredConsumed: Number.NaN
+      voicePlanMeter({
+        committedIncludedSeconds: Number.NaN,
+        tierCapSeconds: Number.NEGATIVE_INFINITY,
+        unexpiredPurchasedSeconds: -1,
+        unexpiredConsumedSeconds: Number.NaN
       })
     ).toEqual({ used: 0, cap: 0 });
   });
