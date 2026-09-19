@@ -38,8 +38,8 @@ import type {
 import {
   formatPlanChangePaidThroughDate,
   parseablePaidThroughIso,
-  planChangeConfirmHardwareKey,
-  starterDowngradeLossIds,
+  planChangeConfirmPreview,
+  type StarterDowngradeKeepId,
   type StarterDowngradeLossId
 } from "@/lib/billing/plan-change-copy";
 
@@ -178,13 +178,14 @@ export function ChangePlanSelector({
 
   function hardwareConfirmText(): string {
     if (!selectedTier) return "";
-    const key = planChangeConfirmHardwareKey({
+    const preview = planChangeConfirmPreview({
       currentTier,
       selectedTier,
       vpsSizePin,
       expiresAt: boxExpiresAt,
       hasLiveBox
     });
+    const key = preview.hardwareKey;
     if (key === "confirmKeepDated") {
       const iso = parseablePaidThroughIso(boxExpiresAt);
       const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
@@ -218,7 +219,30 @@ export function ChangePlanSelector({
     }
   }
 
-  const starterLossIds = selectedTier ? starterDowngradeLossIds(currentTier, selectedTier) : [];
+  function starterKeepLine(id: StarterDowngradeKeepId): string {
+    switch (id) {
+      case "inbound_voice_sms":
+        return t("keepInboundVoiceSms");
+      case "booking_email_chat":
+        return t("keepBookingEmailChat");
+      case "knowledge_and_limits":
+        return t("keepKnowledgeAndLimits");
+      case "saved_config":
+        return t("keepSavedConfig");
+    }
+  }
+
+  const confirmPreview = selectedTier
+    ? planChangeConfirmPreview({
+        currentTier,
+        selectedTier,
+        vpsSizePin,
+        expiresAt: boxExpiresAt,
+        hasLiveBox
+      })
+    : null;
+  const starterLossIds = confirmPreview?.lossIds ?? [];
+  const starterKeepIds = confirmPreview?.keepIds ?? [];
 
   return (
     <div className="space-y-4">
@@ -294,19 +318,57 @@ export function ChangePlanSelector({
       </div>
 
       {pending && (
-        <div className="rounded-lg border border-signal-teal/40 bg-signal-teal/5 p-4 space-y-3">
-          <p className="text-sm font-semibold text-parchment">
-            Switch to {tierLabel(selectedTier!)} · {periodLabel(selectedPeriod!)}
-          </p>
-          <p className="text-xs text-parchment/60">
-            You&apos;ll be charged <span className="font-mono">{monthlyRateLabel(selectedTier!, selectedPeriod!)}</span>
-            {selectedPeriod !== "monthly" && pendingSavings > 0 ? ` (save ${pendingSavings}% vs. monthly)` : ""}
-            {renewalRateLabel(selectedTier!, selectedPeriod!)
-              ? `, renewing at ${renewalRateLabel(selectedTier!, selectedPeriod!)} after the first term`
-              : ""}.
-            Your current plan will be canceled immediately with no proration or refund.{" "}
-            {hardwareConfirmText()}
-          </p>
+        <div className="rounded-lg border border-signal-teal/40 bg-signal-teal/5 p-4 space-y-4">
+          <div className="space-y-1">
+            <p className="text-xs text-parchment/50 uppercase tracking-wider">
+              {t("confirmDestinationLabel")}
+            </p>
+            <p className="text-sm font-semibold text-parchment">
+              Switch to {tierLabel(selectedTier!)} · {periodLabel(selectedPeriod!)}
+            </p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs text-parchment/50 uppercase tracking-wider">{t("confirmPriceLabel")}</p>
+            <p className="text-xs text-parchment/60">
+              You&apos;ll be charged{" "}
+              <span className="font-mono">{monthlyRateLabel(selectedTier!, selectedPeriod!)}</span>
+              {selectedPeriod !== "monthly" && pendingSavings > 0
+                ? ` (save ${pendingSavings}% vs. monthly)`
+                : ""}
+              {renewalRateLabel(selectedTier!, selectedPeriod!)
+                ? `, renewing at ${renewalRateLabel(selectedTier!, selectedPeriod!)} after the first term`
+                : ""}
+              .
+            </p>
+            <p className="text-xs text-parchment/60">{t("confirmNoProration")}</p>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs text-parchment/50 uppercase tracking-wider">
+              {t("confirmTimingLabel")}
+            </p>
+            {confirmPreview?.showsEntitlementFlipNow ? (
+              <p className="text-xs text-parchment/80">{t("confirmEntitlementsNow")}</p>
+            ) : null}
+            {confirmPreview?.showsStarterFeatureSplit ? (
+              <p className="text-xs text-spark-orange" role="status">
+                {t("confirmStandardPerksStopNow")}
+              </p>
+            ) : null}
+            <p className="text-xs text-parchment/60">
+              <span className="font-semibold text-parchment/70">{t("confirmHardwareLabel")}: </span>
+              {hardwareConfirmText()}
+            </p>
+          </div>
+          {starterKeepIds.length > 0 && (
+            <div className="text-xs text-parchment/80 space-y-1.5">
+              <p className="font-semibold text-parchment">{t("confirmKeepLead")}</p>
+              <ul className="list-disc pl-4 space-y-1">
+                {starterKeepIds.map((id) => (
+                  <li key={id}>{starterKeepLine(id)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {starterLossIds.length > 0 && (
             <div className="text-xs text-spark-orange space-y-1.5" role="status">
               <p className="font-semibold">{t("confirmStarterLossLead")}</p>
@@ -315,6 +377,7 @@ export function ChangePlanSelector({
                   <li key={id}>{starterLossLine(id)}</li>
                 ))}
               </ul>
+              <p>{t("confirmStarterWebhookKeep")}</p>
               <p>{t("confirmStarterLossKeep")}</p>
             </div>
           )}

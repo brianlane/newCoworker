@@ -11,6 +11,7 @@ import {
   flowEnabledStatusKind,
   INTERNAL_WEBHOOK_SOURCES,
   webhookFlowBlockedOnStarter,
+  webhookGatePlanLabel,
   webhookTriggerBlockedOnStarter
 } from "@/lib/ai-flows/webhook-sources";
 import { DEFAULT_BACKLOG_SOURCE } from "@/lib/ai-flows/lead-backlog";
@@ -217,6 +218,17 @@ describe("flowEnabledStatusKind", () => {
   });
 });
 
+describe("webhookGatePlanLabel", () => {
+  it("names Standard and Enterprise, and falls back to Starter", () => {
+    expect(webhookGatePlanLabel("standard")).toBe("Standard");
+    expect(webhookGatePlanLabel("enterprise")).toBe("Enterprise");
+    expect(webhookGatePlanLabel("starter")).toBe("Starter");
+    expect(webhookGatePlanLabel(null)).toBe("Starter");
+    expect(webhookGatePlanLabel(undefined)).toBe("Starter");
+    expect(webhookGatePlanLabel("other")).toBe("Starter");
+  });
+});
+
 describe("flow-detail copy and wiring", () => {
   it("names the Starter gate without claiming the flow is fully operational", () => {
     const pages = en.dashboard.pages;
@@ -225,8 +237,12 @@ describe("flow-detail copy and wiring", () => {
     expect(pages.flowStatusSavedNoWebhooks).toMatch(/not receiving webhooks/i);
     expect(pages.flowStatusSavedNoWebhooks).toMatch(/Starter/);
     expect(pages.webhookGateTitle).toMatch(/not receiving webhooks/i);
-    expect(pages.webhookGateBody).toMatch(/Starter/);
-    expect(pages.webhookGateBody).toMatch(/upgrade/i);
+    expect(pages.webhookGateCurrentPlan).toMatch(/Current plan/i);
+    expect(pages.webhookGateRequiredPlan).toMatch(/Standard/);
+    expect(pages.webhookGateBlockedOutcome).toMatch(/will not start/i);
+    expect(pages.webhookGateBody).toMatch(/saved and editable/i);
+    expect(pages.webhookGateBody).toMatch(/Nothing is deleted/i);
+    expect(pages.webhookGateBody).not.toMatch(/upgrade/i);
     expect(pages.webhookGateUpgrade).toMatch(/Upgrade/i);
     expect(pages.webhookGateRunsNote).toMatch(/historical|earlier|remain/i);
   });
@@ -239,12 +255,23 @@ describe("flow-detail copy and wiring", () => {
       join(root, "src/components/dashboard/AiFlowsManager.tsx"),
       "utf8"
     );
+    const banner = readFileSync(
+      join(root, "src/components/dashboard/StarterWebhookGateBanner.tsx"),
+      "utf8"
+    );
     expect(detail).toContain("webhookFlowBlockedOnStarter");
     expect(detail).toContain("FlowEnabledStatusPill");
     expect(detail).toContain("StarterWebhookGateBanner");
+    expect(detail).toContain("AiFlowHistory");
     expect(view).toContain("webhookTriggerBlockedOnStarter");
     expect(view).toContain("StarterWebhookGateBanner");
     expect(manager).toContain("webhookFlowBlockedOnStarter");
     expect(manager).toContain("FlowEnabledStatusPill");
+    expect(banner).toContain("webhookGateCurrentPlan");
+    expect(banner).toContain("webhookGateRequiredPlan");
+    expect(banner).toContain("webhookGateBlockedOutcome");
+    expect(banner).toContain("webhookGateUpgrade");
+    expect(banner).toContain("<Link");
+    expect(banner).not.toMatch(/\{t\("webhookGateBody"\)\}\s*\{/);
   });
 });

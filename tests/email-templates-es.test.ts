@@ -70,6 +70,7 @@ describe("Spanish email variants", () => {
     expect(upgrade.subject).toContain("cambio de plan");
     expect(upgrade.text).toContain("Starter");
     expect(upgrade.text).toMatch(/webhooks/i);
+    expect(upgrade.text).toMatch(/conservas/i);
 
     const admin = buildCancelConfirmationEmail({ ...base, reason: "admin_force" });
     expect(admin.subject).toContain("cerrada");

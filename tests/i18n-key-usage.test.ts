@@ -26,7 +26,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import { SIDEBAR_ITEMS } from "../src/lib/dashboard/sidebar-items";
-import { STARTER_DOWNGRADE_LOSS_CATALOG_KEYS } from "../src/lib/billing/plan-change-copy";
+import { STARTER_DOWNGRADE_KEEP_CATALOG_KEYS, STARTER_DOWNGRADE_LOSS_CATALOG_KEYS } from "../src/lib/billing/plan-change-copy";
 
 const ROOT = join(__dirname, "..");
 const SRC = join(ROOT, "src");
@@ -196,10 +196,29 @@ describe("translation keys referenced in src/ exist in the catalogs", () => {
         `emails.cancelConfirmation.${key}`
       ).toBe(true);
     }
+    const keepKeys = Object.values(STARTER_DOWNGRADE_KEEP_CATALOG_KEYS);
+    expect(keepKeys.length).toBeGreaterThan(0);
+    for (const key of keepKeys) {
+      expect(catalogHas(`dashboard.planCard.${key}`), `dashboard.planCard.${key}`).toBe(true);
+      expect(
+        catalogHas(`emails.cancelConfirmation.${key}`),
+        `emails.cancelConfirmation.${key}`
+      ).toBe(true);
+    }
     expect(catalogHas("dashboard.planCard.confirmStarterLossLead")).toBe(true);
     expect(catalogHas("dashboard.planCard.confirmStarterLossKeep")).toBe(true);
+    expect(catalogHas("dashboard.planCard.confirmKeepLead")).toBe(true);
+    expect(catalogHas("dashboard.planCard.confirmStarterWebhookKeep")).toBe(true);
+    expect(catalogHas("dashboard.planCard.confirmEntitlementsNow")).toBe(true);
+    expect(catalogHas("dashboard.planCard.confirmStandardPerksStopNow")).toBe(true);
     expect(catalogHas("emails.cancelConfirmation.upgradeStarterCutsLead")).toBe(true);
     expect(catalogHas("emails.cancelConfirmation.upgradeStarterCutsKeep")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.upgradeStarterKeepLead")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.upgradeStarterWebhookKeep")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.upgradeStandardPerksStopNow")).toBe(true);
+    expect(catalogHas("dashboard.pages.webhookGateCurrentPlan")).toBe(true);
+    expect(catalogHas("dashboard.pages.webhookGateRequiredPlan")).toBe(true);
+    expect(catalogHas("dashboard.pages.webhookGateBlockedOutcome")).toBe(true);
   });
 
   it("industry i18nKeys exist under marketing.industries", () => {

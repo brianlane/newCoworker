@@ -110,6 +110,67 @@ export function starterDowngradeLossIds(
   return STARTER_DOWNGRADE_LOSS_IDS;
 }
 
+/**
+ * Starter capabilities that continue after a Standard cut. Configs stay;
+ * only the Standard-gated surfaces in STARTER_DOWNGRADE_LOSS_IDS stop.
+ */
+export const STARTER_DOWNGRADE_KEEP_IDS = [
+  "inbound_voice_sms",
+  "booking_email_chat",
+  "knowledge_and_limits",
+  "saved_config"
+] as const;
+
+export type StarterDowngradeKeepId = (typeof STARTER_DOWNGRADE_KEEP_IDS)[number];
+
+export const STARTER_DOWNGRADE_KEEP_CATALOG_KEYS = {
+  inbound_voice_sms: "keepInboundVoiceSms",
+  booking_email_chat: "keepBookingEmailChat",
+  knowledge_and_limits: "keepKnowledgeAndLimits",
+  saved_config: "keepSavedConfig"
+} as const satisfies Record<StarterDowngradeKeepId, string>;
+
+function starterDowngradeKeepIds(
+  currentTier: "starter" | "standard",
+  selectedTier: "starter" | "standard"
+): readonly StarterDowngradeKeepId[] {
+  if (!planChangeWarnsStarterWebhooks(currentTier, selectedTier)) return [];
+  return STARTER_DOWNGRADE_KEEP_IDS;
+}
+
+/**
+ * Confirm-sheet model: destination, retain vs lose, entitlement timing vs
+ * hardware. Hardware copy stays direction-agnostic; Starter-only flags
+ * carry the "prepaid box does not keep Standard features" honesty line.
+ */
+export type PlanChangeConfirmPreview = {
+  destinationTier: "starter" | "standard";
+  showsEntitlementFlipNow: boolean;
+  showsStarterFeatureSplit: boolean;
+  hardwareKey: PlanChangeConfirmHardwareKey;
+  lossIds: readonly StarterDowngradeLossId[];
+  keepIds: readonly StarterDowngradeKeepId[];
+};
+
+export function planChangeConfirmPreview(input: {
+  currentTier: "starter" | "standard";
+  selectedTier: "starter" | "standard";
+  vpsSizePin?: string | null;
+  expiresAt?: string | null;
+  hasLiveBox?: boolean;
+  nowMs?: number;
+}): PlanChangeConfirmPreview {
+  const { currentTier, selectedTier } = input;
+  return {
+    destinationTier: selectedTier,
+    showsEntitlementFlipNow: currentTier !== selectedTier,
+    showsStarterFeatureSplit: planChangeWarnsStarterWebhooks(currentTier, selectedTier),
+    hardwareKey: planChangeConfirmHardwareKey(input),
+    lossIds: starterDowngradeLossIds(currentTier, selectedTier),
+    keepIds: starterDowngradeKeepIds(currentTier, selectedTier)
+  };
+}
+
 /** True when a parseable expires_at is still in the future. */
 export function parseablePaidThroughIso(
   expiresAt: string | null | undefined,

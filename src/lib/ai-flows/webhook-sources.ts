@@ -129,6 +129,13 @@ export function flowEnabledStatusKind(
   return "enabled";
 }
 
+/** Display name for the diagnostic "Current plan" line. */
+export function webhookGatePlanLabel(tier: string | null | undefined): string {
+  if (tier === "standard") return "Standard";
+  if (tier === "enterprise") return "Enterprise";
+  return "Starter";
+}
+
 /**
  * The first-party source this webhook trigger is pinned to, or null when the
  * flow is fed by a bridge or the public API.

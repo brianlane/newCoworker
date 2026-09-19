@@ -17,6 +17,8 @@ import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import { emailDate, emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 import {
+  STARTER_DOWNGRADE_KEEP_CATALOG_KEYS,
+  STARTER_DOWNGRADE_KEEP_IDS,
   STARTER_DOWNGRADE_LOSS_CATALOG_KEYS,
   STARTER_DOWNGRADE_LOSS_IDS
 } from "@/lib/billing/plan-change-copy";
@@ -116,10 +118,16 @@ export function buildCancelConfirmationEmail(
 
   if (input.reason === "upgrade_switch") {
     const starterCuts = [
+      c.upgradeStandardPerksStopNow,
+      c.upgradeStarterKeepLead,
+      ...STARTER_DOWNGRADE_KEEP_IDS.map(
+        (id) => `• ${c[STARTER_DOWNGRADE_KEEP_CATALOG_KEYS[id]]}`
+      ),
       c.upgradeStarterCutsLead,
       ...STARTER_DOWNGRADE_LOSS_IDS.map(
         (id) => `• ${c[STARTER_DOWNGRADE_LOSS_CATALOG_KEYS[id]]}`
       ),
+      c.upgradeStarterWebhookKeep,
       c.upgradeStarterCutsKeep
     ].join("\n");
     return envelope(

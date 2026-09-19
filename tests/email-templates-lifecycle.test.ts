@@ -85,6 +85,10 @@ describe("cancel-confirmation email", () => {
     expect(text).toMatch(/Meta/i);
     expect(text).toMatch(/API keys/i);
     expect(text).toMatch(/remain/i);
+    expect(text).toMatch(/you keep/i);
+    expect(text).toMatch(/stay saved/i);
+    expect(text).toMatch(/does not keep/i);
+    expect(text).toMatch(/immediately/i);
     expect(html).toContain("/dashboard");
   });
 

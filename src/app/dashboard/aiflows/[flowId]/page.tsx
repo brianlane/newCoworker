@@ -43,9 +43,8 @@ export default async function AiFlowViewPage({ params }: Props) {
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
-  const webhooksEnabled = webhooksAllowedForTier(
-    (businesses?.[0]?.tier as string | null | undefined) ?? null
-  );
+  const businessTier = (businesses?.[0]?.tier as string | null | undefined) ?? "starter";
+  const webhooksEnabled = webhooksAllowedForTier(businessTier);
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
   const webhookBlockedOnStarter = flow
@@ -166,7 +165,9 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow && businessId ? (
         <>
-          {webhookBlockedOnStarter ? <StarterWebhookGateBanner /> : null}
+          {webhookBlockedOnStarter ? (
+            <StarterWebhookGateBanner currentTier={businessTier} />
+          ) : null}
           <Card>
             <AiFlowView
               definition={flow.definition}
@@ -174,6 +175,7 @@ export default async function AiFlowViewPage({ params }: Props) {
               statsByStepId={statsByStepId}
               calendarPausedCopy={calendarPausedCopy}
               webhooksEnabled={webhooksEnabled}
+              currentTier={businessTier}
             />
           </Card>
           {webhookBlockedOnStarter ? (

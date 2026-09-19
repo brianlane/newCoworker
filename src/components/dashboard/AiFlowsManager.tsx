@@ -1045,6 +1045,7 @@ export function AiFlowsManager({
   initialEditId,
   initialAdaptDraft,
   webhooksEnabled = true,
+  currentTier = "starter",
   outboundAiCallsEnabled = true,
   browseActionEnabled = true,
   initialDismissedCards,
@@ -1063,6 +1064,8 @@ export function AiFlowsManager({
    * upgrade note instead of setup instructions.
    */
   webhooksEnabled?: boolean;
+  /** Live `businesses.tier` for the webhook Starter gate copy. */
+  currentTier?: string | null;
   /**
    * False on starter: hide place_ai_call / outbound voice authoring and refuse
    * Place call; dial paths also refuse server-side.
@@ -2197,7 +2200,9 @@ export function AiFlowsManager({
           )}
           {editor.channel === "webhook" && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-1.5">
-              {!webhooksEnabled && <StarterWebhookGateBanner compact />}
+              {!webhooksEnabled && (
+                <StarterWebhookGateBanner compact currentTier={currentTier} />
+              )}
               <p className="text-[11px] text-parchment/60">
                 This runs when an outside tool (Zapier, Make.com, or any API client) sends an
                 event to your coworker&apos;s webhook address. Point the tool at{" "}

@@ -100,12 +100,14 @@ function TriggerView({
   trigger,
   heading = "Trigger",
   calendarPausedCopy,
-  webhooksEnabled = true
+  webhooksEnabled = true,
+  currentTier = "starter"
 }: {
   trigger: FlowTrigger;
   heading?: string;
   calendarPausedCopy?: string | null;
   webhooksEnabled?: boolean;
+  currentTier?: string | null;
 }) {
   // Our own integrations ride the webhook channel, so a flow pinned to one of
   // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
@@ -117,7 +119,9 @@ function TriggerView({
   return (
     <section className={sectionClass}>
       <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">{heading}</h3>
-      {webhookBlocked ? <StarterWebhookGateBanner compact /> : null}
+      {webhookBlocked ? (
+        <StarterWebhookGateBanner compact currentTier={currentTier} />
+      ) : null}
       <Row
         label="Starts when"
         value={webhookSource?.label ?? CHANNEL_LABELS[trigger.channel]}
@@ -1045,7 +1049,8 @@ export function AiFlowView({
   coworkerEmail,
   statsByStepId,
   calendarPausedCopy,
-  webhooksEnabled = true
+  webhooksEnabled = true,
+  currentTier = "starter"
 }: {
   definition: AiFlowDefinition;
   /** The business's AI mailbox address, shown as the sender for platform-path emails. */
@@ -1056,6 +1061,8 @@ export function AiFlowView({
   calendarPausedCopy?: string | null;
   /** False on Starter: webhook triggers show the informational gate. */
   webhooksEnabled?: boolean;
+  /** Live `businesses.tier` for the diagnostic gate copy. */
+  currentTier?: string | null;
 }) {
   return (
     <div className="space-y-4">
@@ -1087,6 +1094,7 @@ export function AiFlowView({
         heading={definition.triggers?.length ? "Trigger 1 (any one starts the flow)" : "Trigger"}
         calendarPausedCopy={calendarPausedCopy}
         webhooksEnabled={webhooksEnabled}
+        currentTier={currentTier}
       />
       {(definition.triggers ?? []).map((t, i) => (
         <TriggerView
@@ -1095,6 +1103,7 @@ export function AiFlowView({
           heading={`Trigger ${i + 2} (or)`}
           calendarPausedCopy={calendarPausedCopy}
           webhooksEnabled={webhooksEnabled}
+          currentTier={currentTier}
         />
       ))}
       <section className="space-y-3">
