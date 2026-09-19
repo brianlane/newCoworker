@@ -1,11 +1,17 @@
 /**
  * Read-only voice quota snapshot for dashboard / preflight UX (§4). Enforcement remains on Edge RPCs.
+ *
+ * PLAN-card display (included + unexpired pack grant size) lives in
+ * `src/lib/plans/usage-meters.ts`. Auto-reload still uses remaining
+ * headroom (`includedHeadroomSeconds + bonusSecondsAvailable`), not the
+ * PLAN denominator.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTierLimits } from "@/lib/plans/limits";
 import type { PlanTier } from "@/lib/plans/tier";
 import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
 import { soonestExpiryAt } from "@/lib/billing/usage-period";
+import { sumUsageGrants } from "@/lib/plans/usage-meters";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -16,6 +22,17 @@ export type VoiceBillingSnapshot = {
   reservedIncludedInflight: number;
   includedHeadroomSeconds: number;
   bonusSecondsAvailable: number;
+  /**
+   * Full grant size (`seconds_purchased`) of unexpired, unvoided packs.
+   * PLAN denominator adds this, not leftover `bonusSecondsAvailable`.
+   */
+  bonusSecondsPurchased: number;
+  /**
+   * Seconds already drawn from those same unexpired packs
+   * (`purchased - remaining` per grant). PLAN numerator adds this on top
+   * of `committedIncludedSeconds`.
+   */
+  bonusSecondsConsumed: number;
   /**
    * Expiry of the soonest-expiring bonus grant that still HOLDS minutes.
    * Packs expire in tranches, so this is the next date the displayed bonus
@@ -88,22 +105,30 @@ export async function getVoiceBillingSnapshotForBusiness(
   const nowIso = new Date().toISOString();
   const { data: bonusRows } = await db
     .from("voice_bonus_grants")
-    .select("seconds_remaining, expires_at")
+    .select("seconds_purchased, seconds_remaining, expires_at")
     .eq("business_id", businessId)
     .is("voided_at", null)
     .gt("expires_at", nowIso);
 
-  let bonus = 0;
+  const grantInputs: { purchased: number; remaining: number }[] = [];
   // Expiries come from the rows already fetched for the balance rather than a
   // second query. A drained grant is skipped: its expiry is not a date any
   // displayed balance disappears on, so surfacing it would be misleading.
   const liveExpiries: (string | null)[] = [];
   for (const g of bonusRows ?? []) {
-    const row = g as { seconds_remaining?: number; expires_at?: string | null };
+    const row = g as {
+      seconds_purchased?: number;
+      seconds_remaining?: number;
+      expires_at?: string | null;
+    };
+    grantInputs.push({
+      purchased: row.seconds_purchased ?? 0,
+      remaining: row.seconds_remaining ?? 0
+    });
     const seconds = Number(row.seconds_remaining ?? 0);
-    bonus += seconds;
     if (seconds > 0) liveExpiries.push(row.expires_at ?? null);
   }
+  const bonusTotals = sumUsageGrants(grantInputs);
 
   const headroom = Math.max(0, tierCap - committed - reservedSum);
 
@@ -113,7 +138,9 @@ export async function getVoiceBillingSnapshotForBusiness(
     committedIncludedSeconds: committed,
     reservedIncludedInflight: reservedSum,
     includedHeadroomSeconds: headroom,
-    bonusSecondsAvailable: bonus,
+    bonusSecondsAvailable: bonusTotals.remaining,
+    bonusSecondsPurchased: bonusTotals.purchased,
+    bonusSecondsConsumed: bonusTotals.consumed,
     bonusSoonestExpiresAt: soonestExpiryAt(liveExpiries)
   };
 }

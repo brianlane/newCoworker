@@ -10,6 +10,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
+import { sumUsageGrants } from "@/lib/plans/usage-meters";
 import {
   addUtcMonthsClamped,
   deriveMonthlyQuotaWindow
@@ -200,6 +201,76 @@ export async function getFleetCurrentAiSpendMicrosByBusiness(
     }
   }
   return current;
+}
+
+type SmsBonusGrantRow = {
+  purchased: number;
+  remaining: number;
+  purchasedAt: string | null;
+  expiresAt: string | null;
+};
+
+export type SmsBonusGrantTotals = {
+  textsPurchased: number;
+  textsRemaining: number;
+  textsConsumed: number;
+  grants: SmsBonusGrantRow[];
+};
+
+const EMPTY_SMS_BONUS_TOTALS: SmsBonusGrantTotals = {
+  textsPurchased: 0,
+  textsRemaining: 0,
+  textsConsumed: 0,
+  grants: []
+};
+
+/**
+ * Unvoided SMS pack rows for the PLAN meter, live and recently expired.
+ * Purchased/remaining/consumed totals are live grants only (denominator).
+ * `grants` includes expired rows so the meter can drop this-window expired
+ * overflow without ignoring leftover live-pack draw. Zeros on error so a
+ * read blip does not blank the dashboard.
+ */
+export async function getSmsBonusGrantTotals(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<SmsBonusGrantTotals> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("sms_bonus_grants")
+    .select("texts_purchased, texts_remaining, purchased_at, expires_at")
+    .eq("business_id", businessId)
+    .is("voided_at", null);
+  if (error) {
+    console.error("getSmsBonusGrantTotals", error.message);
+    return EMPTY_SMS_BONUS_TOTALS;
+  }
+  const nowMs = Date.now();
+  const grants: SmsBonusGrantRow[] = (data ?? []).map((row) => {
+    const r = row as {
+      texts_purchased?: number;
+      texts_remaining?: number;
+      purchased_at?: string | null;
+      expires_at?: string | null;
+    };
+    return {
+      purchased: r.texts_purchased ?? 0,
+      remaining: r.texts_remaining ?? 0,
+      purchasedAt: typeof r.purchased_at === "string" ? r.purchased_at : null,
+      expiresAt: typeof r.expires_at === "string" ? r.expires_at : null
+    };
+  });
+  const live = grants.filter((g) => {
+    const exp = Date.parse(g.expiresAt ?? "");
+    return !Number.isFinite(exp) || exp > nowMs;
+  });
+  const totals = sumUsageGrants(live);
+  return {
+    textsPurchased: totals.purchased,
+    textsRemaining: totals.remaining,
+    textsConsumed: totals.consumed,
+    grants
+  };
 }
 
 /** Unexpired, unvoided bonus texts remaining across all SMS grants. 0 on error. */

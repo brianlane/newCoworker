@@ -8,7 +8,8 @@
  * mutate counters from Node (most metering is handled inside Supabase functions / Telnyx webhooks).
  *
  * For **Stripe-period included voice + bonus** display logic, see `getVoiceBillingSnapshotForBusiness` in
- * `voice-usage.ts` (read-only; caps in `getTierLimits` / `VOICE_RES_LIMITS`).
+ * `voice-usage.ts` (read-only; caps in `getTierLimits` / `VOICE_RES_LIMITS`). The dashboard PLAN
+ * row combines included + unexpired pack grant size via `src/lib/plans/usage-meters.ts`.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";

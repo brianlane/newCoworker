@@ -14,7 +14,8 @@ import {
   getFleetCurrentAiSpendMicros,
   getFleetCurrentAiSpendMicrosByBusiness,
   getSmsBonusSoonestExpiry,
-  getSmsBonusTextsRemaining
+  getSmsBonusTextsRemaining,
+  getSmsBonusGrantTotals
 } from "@/lib/db/chat-usage";
 
 type MaybeSingleResult = { data: unknown; error: { message: string } | null };
@@ -369,6 +370,152 @@ describe("getSmsBonusTextsRemaining", () => {
     mockCreateClient.mockResolvedValueOnce(db);
     await expect(getSmsBonusTextsRemaining("biz-1")).resolves.toBe(5);
     expect(mockCreateClient).toHaveBeenCalled();
+  });
+});
+
+describe("getSmsBonusGrantTotals", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  function stubGrantRows(result: { data: unknown; error: { message: string } | null }) {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      is: async () => result,
+      gt: async () => result
+    };
+    return { from: vi.fn(() => builder), rpc: vi.fn() };
+  }
+
+  it("sums purchased, remaining, and consumed across unexpired grants", async () => {
+    const db = stubGrantRows({
+      data: [
+        { texts_purchased: 500, texts_remaining: 300 },
+        { texts_purchased: 1_000, texts_remaining: 1_000 }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 1_500,
+      textsRemaining: 1_300,
+      textsConsumed: 200,
+      grants: [
+        { purchased: 500, remaining: 300, purchasedAt: null, expiresAt: null },
+        { purchased: 1_000, remaining: 1_000, purchasedAt: null, expiresAt: null }
+      ]
+    });
+    expect(db.from).toHaveBeenCalledWith("sms_bonus_grants");
+  });
+
+  it("keeps purchased_at and expires_at so leftover live draw is distinct from expired overflow", async () => {
+    const db = stubGrantRows({
+      data: [
+        {
+          texts_purchased: 500,
+          texts_remaining: 100,
+          purchased_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 500,
+      textsRemaining: 100,
+      textsConsumed: 400,
+      grants: [
+        {
+          purchased: 500,
+          remaining: 100,
+          purchasedAt: "2026-08-10T00:00:00.000Z",
+          expiresAt: "2026-10-01T00:00:00.000Z"
+        }
+      ]
+    });
+  });
+
+  it("treats null rows and missing fields as zeros", async () => {
+    const db = stubGrantRows({ data: null, error: null });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0,
+      grants: []
+    });
+
+    const dbEmpty = stubGrantRows({ data: [{}], error: null });
+    await expect(getSmsBonusGrantTotals("biz-1", dbEmpty as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0,
+      grants: [{ purchased: 0, remaining: 0, purchasedAt: null, expiresAt: null }]
+    });
+  });
+
+  it("returns zeros on error rather than throwing", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = stubGrantRows({ data: null, error: { message: "boom" } });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0,
+      grants: []
+    });
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed", async () => {
+    const db = stubGrantRows({
+      data: [{ texts_purchased: 500, texts_remaining: 500 }],
+      error: null
+    });
+    mockCreateClient.mockResolvedValueOnce(db);
+    await expect(getSmsBonusGrantTotals("biz-1")).resolves.toEqual({
+      textsPurchased: 500,
+      textsRemaining: 500,
+      textsConsumed: 0,
+      grants: [{ purchased: 500, remaining: 500, purchasedAt: null, expiresAt: null }]
+    });
+    expect(mockCreateClient).toHaveBeenCalled();
+  });
+
+  it("keeps expired grants on the row list but out of live totals", async () => {
+    const db = stubGrantRows({
+      data: [
+        {
+          texts_purchased: 500,
+          texts_remaining: 100,
+          purchased_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2020-01-01T00:00:00.000Z"
+        },
+        {
+          texts_purchased: 1_000,
+          texts_remaining: 1_000,
+          purchased_at: "2026-09-05T00:00:00.000Z",
+          expires_at: "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 1_000,
+      textsRemaining: 1_000,
+      textsConsumed: 0,
+      grants: [
+        {
+          purchased: 500,
+          remaining: 100,
+          purchasedAt: "2026-08-10T00:00:00.000Z",
+          expiresAt: "2020-01-01T00:00:00.000Z"
+        },
+        {
+          purchased: 1_000,
+          remaining: 1_000,
+          purchasedAt: "2026-09-05T00:00:00.000Z",
+          expiresAt: "2026-10-01T00:00:00.000Z"
+        }
+      ]
+    });
   });
 });
 
