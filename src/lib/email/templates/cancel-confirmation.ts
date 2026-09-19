@@ -21,8 +21,7 @@ import {
   CANCEL_KEEP_CATALOG_KEYS,
   CANCEL_LOSS_CATALOG_KEYS,
   cancelConfirmModeForReason,
-  cancelConfirmPreview,
-  cancelReasonShowsKeepLose
+  cancelConfirmPreview
 } from "@/lib/billing/cancel-copy";
 import {
   formatPlanChangePaidThroughDate,
@@ -95,8 +94,7 @@ function keepLoseSummary(
   c: ReturnType<typeof emailMessagesForLocale>["cancelConfirmation"],
   input: CancelConfirmationInput,
   locale: AppLocale
-): string | null {
-  if (!cancelReasonShowsKeepLose(input.reason)) return null;
+): string {
   const preview = cancelConfirmPreview({
     mode: cancelConfirmModeForReason(input.reason),
     currentTier: input.currentTier ?? "starter",
@@ -113,8 +111,10 @@ function keepLoseSummary(
   ];
   const iso = parseablePaidThroughIso(input.hostingerExpiresAt, input.nowMs ?? 0);
   const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
-  if (preview.hardwareKey === "cliffDated" || preview.hardwareKey === "cliffGeneric") {
-    lines.push(date ? fmtEmail(c.hostingerCliffDated, { date }) : c.hostingerCliffGeneric);
+  if (preview.hardwareKey === "cliffDated" && date) {
+    lines.push(fmtEmail(c.hostingerCliffDated, { date }));
+  } else if (preview.hardwareKey === "cliffGeneric") {
+    lines.push(c.hostingerCliffGeneric);
   } else if (preview.hardwareKey === "periodEndDated" && date) {
     lines.push(fmtEmail(c.hostingerPeriodEndDated, { date }));
   }
@@ -143,7 +143,7 @@ export function buildCancelConfirmationEmail(
         fmtEmail(c.periodEnd2, { date: effective }),
         c.periodEnd3,
         c.periodEnd4,
-        ...(keepLose ? [keepLose] : [])
+        keepLose
       ],
       copy.ncSignoff,
       input.siteUrl,
@@ -159,7 +159,7 @@ export function buildCancelConfirmationEmail(
         c.payment1,
         fmtEmail(c.payment2, { date: graceEnds ?? c.thirtyDays }),
         c.payment3,
-        ...(keepLose ? [keepLose] : [])
+        keepLose
       ],
       copy.ncSignoff,
       input.siteUrl,
@@ -209,7 +209,7 @@ export function buildCancelConfirmationEmail(
       [
         c.stripeExternalLeadIn,
         fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
-        ...(keepLose ? [keepLose] : []),
+        keepLose,
         c.default3
       ],
       copy.ncSignoff,
@@ -224,7 +224,7 @@ export function buildCancelConfirmationEmail(
     [
       c.userLeadIn,
       fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
-      ...(keepLose ? [keepLose] : []),
+      keepLose,
       c.default3
     ],
     copy.ncSignoff,

@@ -87,10 +87,6 @@ export function CancelSheet({
 
   const periodFallback = t("cancelEndOfPeriodFallback");
   const periodLabel = formatDate(periodEnd, periodFallback);
-  const graceLabel = formatDate(
-    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    t("cancelTimingRefundGeneric")
-  );
   const preview = cancelConfirmPreview({
     mode: alreadyPeriodEnd ? "period_end" : "refund",
     currentTier,
@@ -178,7 +174,7 @@ export function CancelSheet({
           </p>
           {canRefund ? (
             <p className="text-xs text-parchment/80">
-              {t("cancelTimingRefund", { date: graceLabel })}
+              {t("cancelTimingRefundGeneric")}
             </p>
           ) : null}
           <p className="text-xs text-parchment/80">

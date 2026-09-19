@@ -3,13 +3,9 @@ import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import {
   CANCEL_KEEP_CATALOG_KEYS,
-  CANCEL_KEEP_IDS,
   CANCEL_LOSS_CATALOG_KEYS,
-  CANCEL_LOSS_CORE_IDS,
   cancelConfirmModeForReason,
-  cancelConfirmPreview,
-  cancelLossIdsForTier,
-  cancelReasonShowsKeepLose
+  cancelConfirmPreview
 } from "@/lib/billing/cancel-copy";
 import { STARTER_DOWNGRADE_LOSS_IDS } from "@/lib/billing/plan-change-copy";
 
@@ -19,27 +15,43 @@ const PAST_EXPIRY = "2026-09-18T15:24:00.000Z";
 
 describe("cancelLossIdsForTier", () => {
   it("lists core losses on Starter and when the tier is unknown", () => {
-    expect(cancelLossIdsForTier("starter")).toEqual([...CANCEL_LOSS_CORE_IDS]);
-    expect(cancelLossIdsForTier(null)).toEqual([...CANCEL_LOSS_CORE_IDS]);
-    expect(cancelLossIdsForTier(undefined)).toEqual([...CANCEL_LOSS_CORE_IDS]);
+    const starter = cancelConfirmPreview({ mode: "refund", currentTier: "starter", nowMs: NOW_MS });
+    const unknown = cancelConfirmPreview({ mode: "refund", nowMs: NOW_MS });
+    expect(starter.lossIds).toEqual(unknown.lossIds);
+    expect(starter.lossIds).toEqual([
+      "vps_coworker",
+      "inbound_voice_sms",
+      "booking_email_chat",
+      "lead_followup"
+    ]);
   });
 
   it("adds Standard-gated losses on Standard and enterprise", () => {
-    expect(cancelLossIdsForTier("standard")).toEqual([
-      ...CANCEL_LOSS_CORE_IDS,
+    const standard = cancelConfirmPreview({
+      mode: "refund",
+      currentTier: "standard",
+      nowMs: NOW_MS
+    });
+    const enterprise = cancelConfirmPreview({
+      mode: "immediate",
+      currentTier: "enterprise",
+      nowMs: NOW_MS
+    });
+    expect(standard.lossIds).toEqual([
+      "vps_coworker",
+      "inbound_voice_sms",
+      "booking_email_chat",
+      "lead_followup",
       ...STARTER_DOWNGRADE_LOSS_IDS
     ]);
-    expect(cancelLossIdsForTier("enterprise")).toEqual([
-      ...CANCEL_LOSS_CORE_IDS,
-      ...STARTER_DOWNGRADE_LOSS_IDS
-    ]);
+    expect(enterprise.lossIds).toEqual(standard.lossIds);
   });
 });
 
 describe("cancelConfirmPreview", () => {
   it("always keeps saved data and reactivation", () => {
     const preview = cancelConfirmPreview({ mode: "refund", nowMs: NOW_MS });
-    expect(preview.keepIds).toEqual([...CANCEL_KEEP_IDS]);
+    expect(preview.keepIds).toEqual(["saved_data", "reactivate"]);
     expect(preview.mode).toBe("refund");
     expect(preview.showsStandardLosses).toBe(false);
   });
@@ -132,21 +144,12 @@ describe("cancelConfirmPreview", () => {
 
   it("accepts a missing nowMs (runtime clock) without throwing", () => {
     const preview = cancelConfirmPreview({ mode: "refund" });
-    expect(preview.keepIds).toEqual([...CANCEL_KEEP_IDS]);
+    expect(preview.keepIds).toEqual(["saved_data", "reactivate"]);
     expect(preview.hardwareKey).toBe("none");
   });
 });
 
 describe("cancel reason helpers", () => {
-  it("shows keep/lose on owner-facing leave reasons only", () => {
-    expect(cancelReasonShowsKeepLose("user_refund")).toBe(true);
-    expect(cancelReasonShowsKeepLose("user_period_end")).toBe(true);
-    expect(cancelReasonShowsKeepLose("payment_failed")).toBe(true);
-    expect(cancelReasonShowsKeepLose("stripe_external")).toBe(true);
-    expect(cancelReasonShowsKeepLose("admin_force")).toBe(false);
-    expect(cancelReasonShowsKeepLose("upgrade_switch")).toBe(false);
-  });
-
   it("maps reasons onto confirm modes", () => {
     expect(cancelConfirmModeForReason("user_period_end")).toBe("period_end");
     expect(cancelConfirmModeForReason("user_refund")).toBe("refund");
@@ -159,12 +162,12 @@ describe("cancel reason helpers", () => {
 describe("cancel catalog lines", () => {
   it("has a planCard line for every keep and loss id", () => {
     const catalog = en.dashboard.planCard;
-    for (const id of CANCEL_KEEP_IDS) {
+    for (const id of ["saved_data", "reactivate"] as const) {
       const key = CANCEL_KEEP_CATALOG_KEYS[id];
       expect(typeof catalog[key], key).toBe("string");
       expect(catalog[key].length, key).toBeGreaterThan(20);
     }
-    for (const id of CANCEL_LOSS_CORE_IDS) {
+    for (const id of ["vps_coworker", "inbound_voice_sms", "booking_email_chat", "lead_followup"] as const) {
       const key = CANCEL_LOSS_CATALOG_KEYS[id];
       expect(typeof catalog[key], key).toBe("string");
       expect(catalog[key].length, key).toBeGreaterThan(20);

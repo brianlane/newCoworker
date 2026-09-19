@@ -17,7 +17,7 @@ import {
 
 export type CancelConfirmMode = "refund" | "period_end" | "immediate";
 
-export const CANCEL_KEEP_IDS = ["saved_data", "reactivate"] as const;
+const CANCEL_KEEP_IDS = ["saved_data", "reactivate"] as const;
 export type CancelKeepId = (typeof CANCEL_KEEP_IDS)[number];
 
 export const CANCEL_KEEP_CATALOG_KEYS = {
@@ -25,18 +25,18 @@ export const CANCEL_KEEP_CATALOG_KEYS = {
   reactivate: "cancelKeepReactivate"
 } as const satisfies Record<CancelKeepId, string>;
 
-export const CANCEL_LOSS_CORE_IDS = [
+const CANCEL_LOSS_CORE_IDS = [
   "vps_coworker",
   "inbound_voice_sms",
   "booking_email_chat",
   "lead_followup"
 ] as const;
 
-export type CancelLossCoreId = (typeof CANCEL_LOSS_CORE_IDS)[number];
+type CancelLossCoreId = (typeof CANCEL_LOSS_CORE_IDS)[number];
 
 export type CancelLossId = CancelLossCoreId | StarterDowngradeLossId;
 
-export const CANCEL_LOSS_CORE_CATALOG_KEYS = {
+const CANCEL_LOSS_CORE_CATALOG_KEYS = {
   vps_coworker: "cancelLossVpsCoworker",
   inbound_voice_sms: "keepInboundVoiceSms",
   booking_email_chat: "keepBookingEmailChat",
@@ -48,7 +48,7 @@ export const CANCEL_LOSS_CATALOG_KEYS = {
   ...STARTER_DOWNGRADE_LOSS_CATALOG_KEYS
 } as const satisfies Record<CancelLossId, string>;
 
-export function cancelLossIdsForTier(
+function cancelLossIdsForTier(
   tier: "starter" | "standard" | "enterprise" | null | undefined
 ): readonly CancelLossId[] {
   if (tier === "standard" || tier === "enterprise") {
@@ -57,7 +57,7 @@ export function cancelLossIdsForTier(
   return CANCEL_LOSS_CORE_IDS;
 }
 
-export type CancelConfirmHardwareKey =
+type CancelConfirmHardwareKey =
   | "none"
   | "cliffDated"
   | "cliffGeneric"
@@ -107,18 +107,6 @@ function cancelHardwareKey(
   if (dated) return "cliffDated";
   if (input.boxExpiresAt) return "cliffGeneric";
   return "none";
-}
-
-/** True when the owner-facing keep/lose summary belongs on this cancel reason. */
-export function cancelReasonShowsKeepLose(
-  reason: string
-): boolean {
-  return (
-    reason === "user_refund" ||
-    reason === "user_period_end" ||
-    reason === "payment_failed" ||
-    reason === "stripe_external"
-  );
 }
 
 export function cancelConfirmModeForReason(reason: string): CancelConfirmMode {

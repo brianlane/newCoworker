@@ -1370,6 +1370,16 @@ describe("executeLifecyclePlan refund handling", () => {
         html: expect.stringContaining("/admin/biz_ops")
       })
     );
+
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    sendOwnerEmailMock.mockClear();
+    await executeLifecyclePlan(canceledPlan, { businessId: "biz_ops", vpsHost: null }, {
+      sendEmail: sendOwnerEmailMock
+    });
+    expect(sendOwnerEmailMock.mock.calls[0][3]).toEqual(
+      expect.objectContaining({ html: expect.stringContaining("/admin/biz_ops") })
+    );
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
   });
 
   it("covers alternate refund charge shapes and error paths", async () => {

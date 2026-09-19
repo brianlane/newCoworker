@@ -198,7 +198,7 @@ describe("dispatchExternalStripeCancel", () => {
       stripeSubscriptionId: "sub_stripe_1",
       cancellationDetails: "cancellation_requested",
       now: NOW,
-      after
+      after: after as never
     });
     expect(dispatched).toBe("lifecycle");
     expect(executeFastMock).toHaveBeenCalledWith(
