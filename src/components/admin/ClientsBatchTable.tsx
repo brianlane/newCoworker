@@ -25,6 +25,7 @@ import {
   type ClientsSortDir,
   type ClientsSortKey
 } from "@/lib/admin/clients-table";
+import { entitlementBillingMismatch } from "@/lib/billing/plan-change-copy";
 
 export type ClientRow = AdminClientRow;
 
@@ -404,7 +405,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                 <td className="py-3 px-4 whitespace-nowrap">
                   <span className="inline-flex flex-wrap items-center gap-1">
                     <Badge variant={b.tier === "standard" ? "online" : "neutral"}>{b.tier}</Badge>
-                    {b.subscriptionTier && b.subscriptionTier !== b.tier && (
+                    {entitlementBillingMismatch(b.tier, b.subscriptionTier) && (
                       <span title={`Entitlement ${b.tier}, Stripe subscription ${b.subscriptionTier}`}>
                         <Badge variant="error" className="text-[10px]">
                           bill {b.subscriptionTier}

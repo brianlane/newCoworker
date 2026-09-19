@@ -70,6 +70,7 @@ import { ComplianceModuleEditor } from "@/components/admin/ComplianceModuleEdito
 import { parseComplianceModule } from "@/lib/compliance/module";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize, resolveVpsSize } from "@/lib/vps/size";
+import { entitlementBillingMismatch } from "@/lib/billing/plan-change-copy";
 import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
@@ -261,9 +262,9 @@ export default async function BusinessDetailPage({
           <Badge variant={business.tier === "standard" ? "online" : "neutral"}>
             {business.tier}
           </Badge>
-          {subscription && subscription.tier !== business.tier && (
-            <span title={`Entitlement ${business.tier}, Stripe subscription ${subscription.tier}`}>
-              <Badge variant="error">billing {subscription.tier}</Badge>
+          {entitlementBillingMismatch(business.tier, subscription?.tier) && (
+            <span title={`Entitlement ${business.tier}, Stripe subscription ${subscription?.tier}`}>
+              <Badge variant="error">billing {subscription?.tier}</Badge>
             </span>
           )}
         </div>
