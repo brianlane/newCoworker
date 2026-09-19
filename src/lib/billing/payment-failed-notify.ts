@@ -45,7 +45,7 @@ export async function notifyInvoicePaymentFailed(
   const sendOps = deps.sendOps ?? sendOpsPaymentFailedEmail;
   const resolveLocale = deps.resolveLocale ?? resolveOwnerUiLocaleForEmail;
   const apiKey = deps.resendApiKey ?? process.env.RESEND_API_KEY;
-  const siteUrl = (deps.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]").replace(
+  const siteUrl = (deps.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(
     /\/$/,
     ""
   );

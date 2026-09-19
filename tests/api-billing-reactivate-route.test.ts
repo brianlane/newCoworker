@@ -530,7 +530,7 @@ describe("/api/billing/reactivate", () => {
         expect(res.status).toBe(200);
         expect(createCheckoutSessionMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            successUrl: "http://localhost:3000/dashboard/billing?reactivated=1"
+            successUrl: "http://127.0.0.1:3000/dashboard/billing?reactivated=1"
           })
         );
       } finally {

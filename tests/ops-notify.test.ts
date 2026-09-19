@@ -1175,7 +1175,7 @@ describe("sendOpsSubscriptionCanceledEmail", () => {
   it("falls back to localhost when no app URL is set", async () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     await sendOpsSubscriptionCanceledEmail(canceledInput);
-    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("[REDACTED]");
+    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("/admin/biz-1");
   });
 
   it("skips without a Resend key rather than throwing", async () => {
@@ -1260,7 +1260,7 @@ describe("sendOpsPaymentFailedEmail", () => {
   it("falls back to localhost when no app URL is set", async () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     await sendOpsPaymentFailedEmail(failedInput);
-    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("[REDACTED]");
+    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("/admin/6cc2d7ba-a007-49d4-93a4-586967e147f1");
   });
 
   it("skips without a Resend key rather than throwing", async () => {

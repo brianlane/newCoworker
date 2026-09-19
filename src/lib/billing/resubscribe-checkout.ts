@@ -71,7 +71,7 @@ export async function createResubscribeCheckoutSession(
 ): Promise<{ id: string; url: string }> {
   /* c8 ignore next -- production default; unit tests inject createSession */
   const openSession = deps.createSession ?? createCheckoutSession;
-  const appUrl = (input.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]").replace(
+  const appUrl = (input.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(
     /\/$/,
     ""
   );
@@ -124,7 +124,7 @@ export async function createAdminResubscribeCheckout(
   const readBusiness = deps.getBusinessRow ?? getBusiness;
   const readSubscription = deps.getSubscriptionRow ?? getSubscription;
   const openSession = deps.createSession ?? createResubscribeCheckoutSession;
-  const appUrl = deps.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]";
+  const appUrl = deps.appUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000";
   /* c8 ignore stop */
   const now = input.now ?? new Date();
 

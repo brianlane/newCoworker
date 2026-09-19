@@ -2839,6 +2839,10 @@ describe("stripe webhook route", () => {
       canceled_at: "2026-09-17T01:04:59.000Z",
       wiped_at: null
     } as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: false,
+      reason: "subscription_not_active"
+    } as never);
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_null_reason",
       type: "customer.subscription.deleted",
@@ -2851,7 +2855,7 @@ describe("stripe webhook route", () => {
     } as never);
 
     const response = await POST(
-      new Request("[REDACTED]/api/webhooks/stripe", {
+      new Request("http://example.com/api/webhooks/stripe", {
         method: "POST",
         headers: { "stripe-signature": "sig" },
         body: "{}"
@@ -2903,7 +2907,7 @@ describe("stripe webhook route", () => {
     } as never);
 
     const response = await POST(
-      new Request("[REDACTED]/api/webhooks/stripe", {
+      new Request("http://example.com/api/webhooks/stripe", {
         method: "POST",
         headers: { "stripe-signature": "sig" },
         body: "{}"
@@ -3493,7 +3497,7 @@ describe("stripe webhook route", () => {
       } as never);
 
       const response = await POST(
-        new Request("[REDACTED]/api/webhooks/stripe", {
+        new Request("http://example.com/api/webhooks/stripe", {
           method: "POST",
           headers: { "stripe-signature": "sig" },
           body: "{}"
@@ -3526,7 +3530,7 @@ describe("stripe webhook route", () => {
         }
       } as never);
       const response = await POST(
-        new Request("[REDACTED]/api/webhooks/stripe", {
+        new Request("http://example.com/api/webhooks/stripe", {
           method: "POST",
           headers: { "stripe-signature": "sig" },
           body: "{}"

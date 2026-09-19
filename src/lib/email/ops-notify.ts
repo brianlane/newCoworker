@@ -637,7 +637,7 @@ export async function sendOpsPaymentFailedEmail(
       });
       return false;
     }
-    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "[REDACTED]").replace(/\/$/, "");
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsPaymentFailedEmail({ ...input, siteUrl });
     await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), {
@@ -659,4 +659,3 @@ export async function sendOpsPaymentFailedEmail(
     return false;
   }
 }
-

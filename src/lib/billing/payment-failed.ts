@@ -15,7 +15,11 @@
  */
 
 import { GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
-import { updateSubscription, type SubscriptionRow } from "@/lib/db/subscriptions";
+import {
+  updateSubscription,
+  type CancelReason,
+  type SubscriptionRow
+} from "@/lib/db/subscriptions";
 
 export type InvoicePaymentFailureDetails = {
   invoiceId: string;
@@ -184,7 +188,7 @@ export async function stampPaymentFailedCancel(
 }
 
 export type CanceledMirrorExisting = {
-  cancel_reason: string | null;
+  cancel_reason: CancelReason | null;
   canceled_at: string | null;
   grace_ends_at: string | null;
   wiped_at: string | null;
@@ -206,7 +210,7 @@ export function canceledMirrorPatch(args: {
   grace_ends_at: string | null;
   canceled_at: string;
   cancel_at_period_end: false;
-  cancel_reason?: string;
+  cancel_reason?: CancelReason;
 } {
   const { now, existing } = args;
   const graceEndsAt =
