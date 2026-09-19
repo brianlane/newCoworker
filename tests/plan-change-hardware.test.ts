@@ -2,13 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   boxHasPaidTimeLeft,
-  canReleaseOldVpsForPlanChange,
-  inventoryAssignedToBusiness,
-  isReplacementVm,
   planChangeCutoverDecision,
-  resolvedHardwareForPlanChange,
   shouldMigrateHardwareForPlanChange
 } from "@/lib/billing/plan-change-hardware";
+import { resolveDeployedVpsSize, resolveVpsSize } from "@/lib/vps/size";
 
 const NOW_MS = Date.parse("2026-09-18T15:25:00.000Z");
 const FUTURE_EXPIRY = "2026-09-28T00:00:00.000Z";
@@ -45,10 +42,8 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         nowMs: NOW_MS
       })
     ).toBe(false);
-    expect(resolvedHardwareForPlanChange("standard", "starter", "kvm2")).toEqual({
-      fromHardware: "kvm2",
-      toHardware: "kvm2"
-    });
+    expect(resolveDeployedVpsSize("standard", "kvm2")).toBe("kvm2");
+    expect(resolveVpsSize("starter", "kvm2")).toBe("kvm2");
   });
 
   it("skips Starter → Standard when both sides resolve to kvm2 (upgrade, no pin)", () => {
@@ -98,10 +93,8 @@ describe("shouldMigrateHardwareForPlanChange", () => {
         nowMs: NOW_MS
       })
     ).toBe(true);
-    expect(resolvedHardwareForPlanChange("standard", "starter", null)).toEqual({
-      fromHardware: "kvm8",
-      toHardware: "kvm1"
-    });
+    expect(resolveDeployedVpsSize("standard", null)).toBe("kvm8");
+    expect(resolveVpsSize("starter", null)).toBe("kvm1");
   });
 
   it("does not term-align while the live box still has prepaid time", () => {
@@ -171,102 +164,74 @@ describe("shouldMigrateHardwareForPlanChange", () => {
   });
 });
 
-describe("isReplacementVm", () => {
-  it("rejects reusing the live box as if it were a replacement (KIN)", () => {
-    expect(isReplacementVm(1936826, "1936826")).toBe(false);
-  });
-
-  it("accepts a different numeric VM", () => {
-    expect(isReplacementVm(1936826, "2000001")).toBe(true);
-  });
-
-  it("rejects missing, non-numeric, or non-positive ids", () => {
-    expect(isReplacementVm(null, "2002")).toBe(false);
-    expect(isReplacementVm(1001, null)).toBe(false);
-    expect(isReplacementVm(1001, "new-box")).toBe(false);
-    expect(isReplacementVm(1001, "0")).toBe(false);
-  });
-});
-
-describe("inventoryAssignedToBusiness", () => {
-  it("requires state=assigned AND this business id (not a stale hostinger_vps_id)", () => {
-    expect(
-      inventoryAssignedToBusiness(
-        { state: "available", assigned_business_id: null },
-        "biz-kin"
-      )
-    ).toBe(false);
-    expect(
-      inventoryAssignedToBusiness(
-        { state: "assigned", assigned_business_id: "someone-else" },
-        "biz-kin"
-      )
-    ).toBe(false);
-    expect(
-      inventoryAssignedToBusiness(
-        { state: "assigned", assigned_business_id: "biz-kin" },
-        "biz-kin"
-      )
-    ).toBe(true);
-    expect(inventoryAssignedToBusiness(null, "biz-kin")).toBe(false);
-  });
-});
-
 const assignedToKin = { state: "assigned", assigned_business_id: "biz-kin" };
 
-describe("canReleaseOldVpsForPlanChange", () => {
+describe("planChangeCutoverDecision", () => {
   it("refuses to pool the live box when provision reused it (KIN)", () => {
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1936826,
         newVpsId: "1936826",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
-    ).toBe(false);
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });
 
   it("refuses when the new VM's inventory is pooled, not assigned", () => {
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1936826,
         newVpsId: "2000001",
         deploySucceeded: true,
         inventoryRow: { state: "available", assigned_business_id: null },
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
-    ).toBe(false);
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });
 
   it("refuses when deploy failed or the voice bridge is not heartbeating", () => {
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1001,
         newVpsId: "2002",
         deploySucceeded: false,
         inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: true
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
       })
-    ).toBe(false);
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1001,
         newVpsId: "2002",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
         businessId: "biz-kin",
-        heartbeatHealthy: false
+        heartbeatHealthy: false,
+        nowMs: NOW_MS
       })
-    ).toBe(false);
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });
 
   it("refuses to pool a box that still has prepaid time, even if a replacement exists", () => {
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1001,
         newVpsId: "2002",
         deploySucceeded: true,
@@ -276,13 +241,53 @@ describe("canReleaseOldVpsForPlanChange", () => {
         heartbeatHealthy: true,
         nowMs: NOW_MS
       })
-    ).toBe(false);
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
   });
 
-  it("allows teardown only for a lapsed box after a different assigned VM with a live bridge", () => {
+  it("refuses missing, non-numeric, or non-positive replacement ids", () => {
     expect(
-      canReleaseOldVpsForPlanChange({
+      planChangeCutoverDecision({
+        migrateVps: true,
         oldVmId: 1001,
+        newVpsId: null,
+        deploySucceeded: true,
+        inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
+        businessId: "biz-kin",
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
+      }).releaseOldBox
+    ).toBe(false);
+    expect(
+      planChangeCutoverDecision({
+        migrateVps: true,
+        oldVmId: 1001,
+        newVpsId: "new-box",
+        deploySucceeded: true,
+        inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
+        businessId: "biz-kin",
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
+      }).releaseOldBox
+    ).toBe(false);
+    expect(
+      planChangeCutoverDecision({
+        migrateVps: true,
+        oldVmId: 1001,
+        newVpsId: "0",
+        deploySucceeded: true,
+        inventoryRow: assignedToKin,
+        oldExpiresAt: PAST_EXPIRY,
+        businessId: "biz-kin",
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
+      }).releaseOldBox
+    ).toBe(false);
+    expect(
+      planChangeCutoverDecision({
+        migrateVps: true,
+        oldVmId: 0,
         newVpsId: "2002",
         deploySucceeded: true,
         inventoryRow: assignedToKin,
@@ -290,12 +295,40 @@ describe("canReleaseOldVpsForPlanChange", () => {
         businessId: "biz-kin",
         heartbeatHealthy: true,
         nowMs: NOW_MS
-      })
-    ).toBe(true);
+      }).releaseOldBox
+    ).toBe(false);
   });
-});
 
-describe("planChangeCutoverDecision", () => {
+  it("refuses when the replacement is assigned to a different business", () => {
+    expect(
+      planChangeCutoverDecision({
+        migrateVps: true,
+        oldVmId: 1001,
+        newVpsId: "2002",
+        deploySucceeded: true,
+        inventoryRow: { state: "assigned", assigned_business_id: "someone-else" },
+        oldExpiresAt: PAST_EXPIRY,
+        businessId: "biz-kin",
+        heartbeatHealthy: true,
+        nowMs: NOW_MS
+      })
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
+  });
+
+  it("is not complete when migrating without an old VM and the new id is missing", () => {
+    expect(
+      planChangeCutoverDecision({
+        migrateVps: true,
+        oldVmId: null,
+        newVpsId: null,
+        deploySucceeded: true,
+        inventoryRow: assignedToKin,
+        businessId: "biz-kin",
+        heartbeatHealthy: true
+      })
+    ).toEqual({ releaseOldBox: false, cutoverReady: false });
+  });
+
   it("keeps the live box on an entitlement-only same-size change", () => {
     expect(
       planChangeCutoverDecision({

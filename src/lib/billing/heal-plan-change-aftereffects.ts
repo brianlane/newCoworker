@@ -35,7 +35,7 @@ import {
 
 const MAX_ASSIGNMENT_HEALS_PER_TICK = 1;
 
-export type HealPlanChangeAction =
+type HealPlanChangeAction =
   | "tier_synced"
   | "reclaimed_pooled_vm"
   | "skipped_claimed_by_other"

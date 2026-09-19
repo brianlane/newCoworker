@@ -16,8 +16,7 @@
 
 import {
   resolveDeployedVpsSize,
-  resolveVpsSize,
-  type VpsSize
+  resolveVpsSize
 } from "@/lib/vps/size";
 
 export type PlanChangeHardwareTier = "starter" | "standard" | "enterprise";
@@ -68,23 +67,12 @@ export function shouldMigrateHardwareForPlanChange(input: {
   return from !== to;
 }
 
-export function resolvedHardwareForPlanChange(
-  oldTier: PlanChangeHardwareTier,
-  newTier: PlanChangeHardwareTier,
-  vpsSizePin: string | null | undefined
-): { fromHardware: VpsSize; toHardware: VpsSize } {
-  return {
-    fromHardware: resolveDeployedVpsSize(oldTier, vpsSizePin ?? null),
-    toHardware: resolveVpsSize(newTier, vpsSizePin ?? null)
-  };
-}
-
 /**
  * True when `newVpsId` is a different numeric VM than the box we captured
  * before provision. Same-id "success" is the live box being reused, and
  * releasing it orphans the tenant.
  */
-export function isReplacementVm(
+function isReplacementVm(
   oldVmId: number | null,
   newVpsId: string | null | undefined
 ): boolean {
@@ -94,7 +82,7 @@ export function isReplacementVm(
   return Number.isFinite(next) && next > 0 && next !== oldVmId;
 }
 
-export function inventoryAssignedToBusiness(
+function inventoryAssignedToBusiness(
   row:
     | {
         state: string;
@@ -130,7 +118,7 @@ export type PlanChangeCutoverInput = {
  * True only when teardown may pool `oldVmId`. Same-id "success" (KIN:
  * 1936826 provisioned, then released) is never a replacement.
  */
-export function canReleaseOldVpsForPlanChange(input: {
+function canReleaseOldVpsForPlanChange(input: {
   oldVmId: number | null;
   newVpsId: string | null | undefined;
   deploySucceeded: boolean | undefined;
