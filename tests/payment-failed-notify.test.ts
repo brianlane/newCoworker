@@ -254,4 +254,52 @@ describe("notifyInvoicePaymentFailed", () => {
     );
     expect(sendOps).toHaveBeenCalled();
   });
+
+  it("pages ops with empty names when the business row is missing", async () => {
+    getBusinessRow.mockResolvedValue(null);
+    await notifyInvoicePaymentFailed(
+      {
+        existing: makeSub(),
+        invoice,
+        stripeSubscriptionId: "sub_x",
+        willAutoCancel: true
+      },
+      {
+        getBusinessRow,
+        sendOwner,
+        sendOps,
+        resolveLocale,
+        resendApiKey: "re_test",
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(sendOwner).not.toHaveBeenCalled();
+    expect(sendOps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessName: "",
+        ownerEmail: "(none on file)"
+      })
+    );
+  });
+
+  it("stringifies a non-Error owner-mail throw", async () => {
+    sendOwner.mockRejectedValue("smtp down");
+    await notifyInvoicePaymentFailed(
+      {
+        existing: makeSub(),
+        invoice,
+        stripeSubscriptionId: "sub_x",
+        willAutoCancel: true
+      },
+      {
+        getBusinessRow,
+        sendOwner,
+        sendOps,
+        resolveLocale,
+        resendApiKey: "re_test",
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(sendOps).toHaveBeenCalled();
+  });
 });

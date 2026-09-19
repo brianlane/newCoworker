@@ -212,6 +212,18 @@ describe("createAdminResubscribeCheckout", () => {
     expect(result).toEqual(expect.objectContaining({ ok: false, refusal: "no_owner_email" }));
   });
 
+  it("refuses when owner_email is missing entirely", async () => {
+    const result = await createAdminResubscribeCheckout(
+      { businessId: BIZ, now: NOW },
+      {
+        getBusinessRow: vi.fn(async () => business({ owner_email: null as unknown as string })),
+        getSubscriptionRow: vi.fn(async () => subscription()),
+        createSession: vi.fn()
+      }
+    );
+    expect(result).toEqual(expect.objectContaining({ ok: false, refusal: "no_owner_email" }));
+  });
+
   it("refuses an unsupported billing period from a corrupt row", async () => {
     const result = await createAdminResubscribeCheckout(
       { businessId: BIZ, now: NOW },
@@ -244,6 +256,27 @@ describe("createAdminResubscribeCheckout", () => {
       }
     );
     expect(result.ok).toBe(true);
+  });
+
+  it("defaults a null billing period to monthly", async () => {
+    const createSession = vi.fn().mockResolvedValue({
+      id: "cs_month",
+      url: "https://checkout.stripe.com/month"
+    });
+    const result = await createAdminResubscribeCheckout(
+      { businessId: BIZ, now: NOW },
+      {
+        getBusinessRow: vi.fn(async () => business()),
+        getSubscriptionRow: vi.fn(async () =>
+          subscription({ billing_period: null as unknown as SubscriptionRow["billing_period"] })
+        ),
+        createSession,
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.billingPeriod).toBe("monthly");
   });
 
   it("honors an explicit starter / annual override", async () => {
