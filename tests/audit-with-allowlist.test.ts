@@ -163,12 +163,12 @@ describe("evaluateAllowlist", () => {
 });
 
 describe("auditRetryPlan", () => {
-  it("defaults to 12 attempts, 15s apart", () => {
+  it("defaults to 20 attempts, 20s apart", () => {
     const prevAttempts = process.env.AUDIT_RETRY_ATTEMPTS;
     const prevDelay = process.env.AUDIT_RETRY_DELAY_MS;
     delete process.env.AUDIT_RETRY_ATTEMPTS;
     delete process.env.AUDIT_RETRY_DELAY_MS;
-    expect(auditRetryPlan()).toEqual({ attempts: 12, delayMs: 15000 });
+    expect(auditRetryPlan()).toEqual({ attempts: 20, delayMs: 20000 });
     if (prevAttempts === undefined) delete process.env.AUDIT_RETRY_ATTEMPTS;
     else process.env.AUDIT_RETRY_ATTEMPTS = prevAttempts;
     if (prevDelay === undefined) delete process.env.AUDIT_RETRY_DELAY_MS;

@@ -19,8 +19,8 @@
  * Registry outages: `npm audit --json` on a 503 still prints JSON, just not
  * an audit report (no `vulnerabilities` object). Treating that as "zero
  * advisories" trips the stale-entry ratchet and looks like a lockfile
- * change. Retry a few times, then exit 2: we could not ask, which is not
- * "no advisories".
+ * change. Retry across most of the 10-minute CI job, then exit 2: we could
+ * not ask, which is not "no advisories".
  *
  * Usage (from any package dir):
  *   node <repo>/scripts/audit-with-allowlist.mjs [--omit=dev]
@@ -152,11 +152,11 @@ function relativeCwd() {
  * Override in tests with AUDIT_RETRY_ATTEMPTS / AUDIT_RETRY_DELAY_MS.
  */
 export function auditRetryPlan() {
-  const attempts = Number.parseInt(process.env.AUDIT_RETRY_ATTEMPTS ?? "12", 10);
-  const delayMs = Number.parseInt(process.env.AUDIT_RETRY_DELAY_MS ?? "15000", 10);
+  const attempts = Number.parseInt(process.env.AUDIT_RETRY_ATTEMPTS ?? "20", 10);
+  const delayMs = Number.parseInt(process.env.AUDIT_RETRY_DELAY_MS ?? "20000", 10);
   return {
-    attempts: Number.isFinite(attempts) && attempts > 0 ? attempts : 12,
-    delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : 15000
+    attempts: Number.isFinite(attempts) && attempts > 0 ? attempts : 20,
+    delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : 20000
   };
 }
 
