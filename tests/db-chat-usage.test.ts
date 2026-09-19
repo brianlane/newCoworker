@@ -397,9 +397,38 @@ describe("getSmsBonusGrantTotals", () => {
     await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
       textsPurchased: 1_500,
       textsRemaining: 1_300,
-      textsConsumed: 200
+      textsConsumed: 200,
+      grants: [
+        { purchased: 500, remaining: 300, purchasedAt: null },
+        { purchased: 1_000, remaining: 1_000, purchasedAt: null }
+      ]
     });
     expect(db.from).toHaveBeenCalledWith("sms_bonus_grants");
+  });
+
+  it("keeps purchased_at on each grant so the PLAN meter can drop leftover draw", async () => {
+    const db = stubGrantRows({
+      data: [
+        {
+          texts_purchased: 500,
+          texts_remaining: 100,
+          purchased_at: "2026-08-10T00:00:00.000Z"
+        }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 500,
+      textsRemaining: 100,
+      textsConsumed: 400,
+      grants: [
+        {
+          purchased: 500,
+          remaining: 100,
+          purchasedAt: "2026-08-10T00:00:00.000Z"
+        }
+      ]
+    });
   });
 
   it("treats null rows and missing fields as zeros", async () => {
@@ -407,14 +436,16 @@ describe("getSmsBonusGrantTotals", () => {
     await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
       textsPurchased: 0,
       textsRemaining: 0,
-      textsConsumed: 0
+      textsConsumed: 0,
+      grants: []
     });
 
     const dbEmpty = stubGrantRows({ data: [{}], error: null });
     await expect(getSmsBonusGrantTotals("biz-1", dbEmpty as never)).resolves.toEqual({
       textsPurchased: 0,
       textsRemaining: 0,
-      textsConsumed: 0
+      textsConsumed: 0,
+      grants: [{ purchased: 0, remaining: 0, purchasedAt: null }]
     });
   });
 
@@ -424,7 +455,8 @@ describe("getSmsBonusGrantTotals", () => {
     await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
       textsPurchased: 0,
       textsRemaining: 0,
-      textsConsumed: 0
+      textsConsumed: 0,
+      grants: []
     });
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
@@ -439,7 +471,8 @@ describe("getSmsBonusGrantTotals", () => {
     await expect(getSmsBonusGrantTotals("biz-1")).resolves.toEqual({
       textsPurchased: 500,
       textsRemaining: 500,
-      textsConsumed: 0
+      textsConsumed: 0,
+      grants: [{ purchased: 500, remaining: 500, purchasedAt: null }]
     });
     expect(mockCreateClient).toHaveBeenCalled();
   });

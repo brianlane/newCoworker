@@ -40,6 +40,7 @@ import {
   aiBudgetPlanMeter,
   planMeterMinutes,
   smsPlanMeter,
+  sumUsageGrantsPurchasedSince,
   voicePlanMeter
 } from "@/lib/plans/usage-meters";
 
@@ -77,8 +78,13 @@ export default async function DashboardPage() {
   // falls back to the static plan copy rather than blanking the dashboard.
   let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
   let voiceSnapshot: Awaited<ReturnType<typeof getVoiceBillingSnapshotForBusiness>> | null = null;
-  let smsUsedThisPeriod: number | null = null;
-  let smsBonusTotals = { textsPurchased: 0, textsRemaining: 0, textsConsumed: 0 };
+  let smsWindow: { used: number; windowStart: string } | null = null;
+  let smsBonusTotals = {
+    textsPurchased: 0,
+    textsRemaining: 0,
+    textsConsumed: 0,
+    grants: [] as { purchased: number; remaining: number; purchasedAt: string | null }[]
+  };
   // Per-surface staff mode for SMS. Defaults to enabled on its own if the
   // read fails, so this never blanks the card.
   let staffSmsReplyEnabled = true;
@@ -90,7 +96,7 @@ export default async function DashboardPage() {
       telnyxSettings,
       chatSpend,
       voiceSnapshot,
-      smsUsedThisPeriod,
+      smsWindow,
       staffSmsReplyEnabled,
       smsBonusTotals
     ] = await Promise.all([
@@ -107,13 +113,17 @@ export default async function DashboardPage() {
       getBillingWindowUsageTotals(business.id, db)
         // Cap surface: show text UNITS (the number the reserve RPC enforces),
         // ceiled so the displayed remainder is never more than Postgres allows.
-        .then((t) => Math.ceil(t.sms_text_units))
+        .then((t) => ({
+          used: Math.ceil(t.sms_text_units),
+          windowStart: t.windowStart
+        }))
         .catch(() => null),
       staffModeEnabled(business.id, "sms"),
       getSmsBonusGrantTotals(business.id, db).catch(() => ({
         textsPurchased: 0,
         textsRemaining: 0,
-        textsConsumed: 0
+        textsConsumed: 0,
+        grants: []
       }))
     ]);
   }
@@ -143,12 +153,15 @@ export default async function DashboardPage() {
       )
     : null;
   const smsMeter =
-    smsUsedThisPeriod !== null && smsCap !== null && Number.isFinite(smsCap)
+    smsWindow !== null && smsCap !== null && Number.isFinite(smsCap)
       ? smsPlanMeter({
-          usedThisPeriod: smsUsedThisPeriod,
+          usedThisPeriod: smsWindow.used,
           includedCap: smsCap,
           unexpiredPurchased: smsBonusTotals.textsPurchased,
-          unexpiredConsumed: smsBonusTotals.textsConsumed
+          unexpiredConsumed: sumUsageGrantsPurchasedSince(
+            smsBonusTotals.grants,
+            smsWindow.windowStart
+          ).consumed
         })
       : null;
   const aiMeter = chatSpend

@@ -22,6 +22,8 @@ export type PlanMeter = {
 export type UsageGrant = {
   purchased: number;
   remaining: number;
+  /** Grant purchase time. Used to keep leftover last-window draw out of this-period SMS overflow. */
+  purchasedAt?: string | null;
 };
 
 export type UsageGrantTotals = {
@@ -52,6 +54,28 @@ export function sumUsageGrants(grants: readonly UsageGrant[] | null | undefined)
     consumed += Math.max(0, purchasedN - remainingN);
   }
   return { purchased, remaining, consumed };
+}
+
+/**
+ * Lifetime totals for grants purchased at or after `windowStart`. Grants
+ * without a parseable purchase time, or a missing/invalid window start, are
+ * excluded: leftover consumption from an earlier window must not count as
+ * this-period live-pack draw.
+ */
+export function sumUsageGrantsPurchasedSince(
+  grants: readonly UsageGrant[] | null | undefined,
+  windowStart: string | null | undefined
+): UsageGrantTotals {
+  const startMs = Date.parse(windowStart ?? "");
+  if (!Number.isFinite(startMs)) {
+    return { purchased: 0, remaining: 0, consumed: 0 };
+  }
+  return sumUsageGrants(
+    (grants ?? []).filter((g) => {
+      const at = Date.parse(g.purchasedAt ?? "");
+      return Number.isFinite(at) && at >= startMs;
+    })
+  );
 }
 
 /**
@@ -88,11 +112,13 @@ export function voicePlanMeter(input: {
 /**
  * SMS window usage is a single `daily_usage` total (plan + bonus) for the
  * current billing window. Bonus only starts after the included cap, so
- * this-period pack draw is the overflow, capped by lifetime consumption on
- * packs that are still unexpired:
+ * this-period pack draw is the overflow, capped by consumption on live packs
+ * that were purchased in this same window (`sumUsageGrantsPurchasedSince`):
  *
  * - leftover consumption from last window does not subtract from this-period
  *   included usage (overflow is 0 while under cap)
+ * - leftover last-window consumption also cannot keep this-period overflow
+ *   from an expired pack in the numerator
  * - usage drawn from a pack that later expires is dropped, even when another
  *   live pack keeps the denominator high
  */

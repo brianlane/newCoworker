@@ -4,6 +4,7 @@ import {
   planMeterMinutes,
   smsPlanMeter,
   sumUsageGrants,
+  sumUsageGrantsPurchasedSince,
   voicePlanMeter
 } from "@/lib/plans/usage-meters";
 
@@ -34,6 +35,62 @@ describe("sumUsageGrants", () => {
         { purchased: "1800" as unknown as number, remaining: 600 }
       ])
     ).toEqual({ purchased: 1800, remaining: 600, consumed: 1200 });
+  });
+});
+
+describe("sumUsageGrantsPurchasedSince", () => {
+  const windowStart = "2026-09-01T00:00:00.000Z";
+  const leftover = {
+    purchased: 500,
+    remaining: 100,
+    purchasedAt: "2026-08-10T00:00:00.000Z"
+  };
+  const thisWindow = {
+    purchased: 500,
+    remaining: 300,
+    purchasedAt: "2026-09-05T12:00:00.000Z"
+  };
+
+  it("counts only grants purchased at or after the window start", () => {
+    expect(sumUsageGrantsPurchasedSince([leftover, thisWindow], windowStart)).toEqual({
+      purchased: 500,
+      remaining: 300,
+      consumed: 200
+    });
+  });
+
+  it("treats a missing window, unparseable purchase time, or empty list as zeros", () => {
+    expect(sumUsageGrantsPurchasedSince([thisWindow], "")).toEqual({
+      purchased: 0,
+      remaining: 0,
+      consumed: 0
+    });
+    expect(sumUsageGrantsPurchasedSince([thisWindow], null)).toEqual({
+      purchased: 0,
+      remaining: 0,
+      consumed: 0
+    });
+    expect(sumUsageGrantsPurchasedSince([thisWindow], undefined)).toEqual({
+      purchased: 0,
+      remaining: 0,
+      consumed: 0
+    });
+    expect(
+      sumUsageGrantsPurchasedSince([{ purchased: 500, remaining: 0, purchasedAt: "nope" }], windowStart)
+    ).toEqual({ purchased: 0, remaining: 0, consumed: 0 });
+    expect(
+      sumUsageGrantsPurchasedSince([{ purchased: 500, remaining: 0 }], windowStart)
+    ).toEqual({ purchased: 0, remaining: 0, consumed: 0 });
+    expect(sumUsageGrantsPurchasedSince(null, windowStart)).toEqual({
+      purchased: 0,
+      remaining: 0,
+      consumed: 0
+    });
+    expect(sumUsageGrantsPurchasedSince(undefined, windowStart)).toEqual({
+      purchased: 0,
+      remaining: 0,
+      consumed: 0
+    });
   });
 });
 
@@ -175,6 +232,27 @@ describe("smsPlanMeter", () => {
         includedCap: included,
         unexpiredPurchased: 500,
         unexpiredConsumed: 0
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
+  });
+
+  it("does not let leftover last-window consumption cover expired this-period overflow", () => {
+    const leftover = {
+      purchased: 500,
+      remaining: 100,
+      purchasedAt: "2026-08-10T00:00:00.000Z"
+    };
+    const thisWindowConsumed = sumUsageGrantsPurchasedSince(
+      [leftover],
+      "2026-09-01T00:00:00.000Z"
+    ).consumed;
+    expect(thisWindowConsumed).toBe(0);
+    expect(
+      smsPlanMeter({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        unexpiredPurchased: leftover.purchased,
+        unexpiredConsumed: thisWindowConsumed
       })
     ).toEqual({ used: 5_000, cap: 5_500 });
   });

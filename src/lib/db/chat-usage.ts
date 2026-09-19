@@ -203,23 +203,32 @@ export async function getFleetCurrentAiSpendMicrosByBusiness(
   return current;
 }
 
+type SmsBonusGrantRow = {
+  purchased: number;
+  remaining: number;
+  purchasedAt: string | null;
+};
+
 export type SmsBonusGrantTotals = {
   textsPurchased: number;
   textsRemaining: number;
   textsConsumed: number;
+  grants: SmsBonusGrantRow[];
 };
 
 const EMPTY_SMS_BONUS_TOTALS: SmsBonusGrantTotals = {
   textsPurchased: 0,
   textsRemaining: 0,
-  textsConsumed: 0
+  textsConsumed: 0,
+  grants: []
 };
 
 /**
  * Unexpired, unvoided SMS pack totals for the PLAN meter. Purchased is the
- * full grant size (denominator), consumed is usage already drawn from those
- * live packs (numerator). Remaining is leftover balance for billing detail
- * / auto-reload. Zeros on error so a read blip does not blank the dashboard.
+ * full grant size (denominator). Remaining is leftover balance for billing
+ * detail / auto-reload. `grants` carries purchase time so the dashboard can
+ * count only this-window pack draw in the numerator. Zeros on error so a
+ * read blip does not blank the dashboard.
  */
 export async function getSmsBonusGrantTotals(
   businessId: string,
@@ -228,7 +237,7 @@ export async function getSmsBonusGrantTotals(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("sms_bonus_grants")
-    .select("texts_purchased, texts_remaining")
+    .select("texts_purchased, texts_remaining, purchased_at")
     .eq("business_id", businessId)
     .is("voided_at", null)
     .gt("expires_at", new Date().toISOString());
@@ -236,16 +245,24 @@ export async function getSmsBonusGrantTotals(
     console.error("getSmsBonusGrantTotals", error.message);
     return EMPTY_SMS_BONUS_TOTALS;
   }
-  const totals = sumUsageGrants(
-    (data ?? []).map((row) => {
-      const r = row as { texts_purchased?: number; texts_remaining?: number };
-      return { purchased: r.texts_purchased ?? 0, remaining: r.texts_remaining ?? 0 };
-    })
-  );
+  const grants: SmsBonusGrantRow[] = (data ?? []).map((row) => {
+    const r = row as {
+      texts_purchased?: number;
+      texts_remaining?: number;
+      purchased_at?: string | null;
+    };
+    return {
+      purchased: r.texts_purchased ?? 0,
+      remaining: r.texts_remaining ?? 0,
+      purchasedAt: typeof r.purchased_at === "string" ? r.purchased_at : null
+    };
+  });
+  const totals = sumUsageGrants(grants);
   return {
     textsPurchased: totals.purchased,
     textsRemaining: totals.remaining,
-    textsConsumed: totals.consumed
+    textsConsumed: totals.consumed,
+    grants
   };
 }
 
