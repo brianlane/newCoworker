@@ -40,9 +40,11 @@ export function boxHasPaidTimeLeft(
  * True when this plan change needs a new (or term-realigned) box.
  *
  * A live box with prepaid time is never replaced. Once that time has
- * lapsed (or there is no live box), term alignment migrates, and every
- * other path migrates only when resolved hardware size actually changes.
- * The pin on `businesses.vps_size` wins on both sides.
+ * lapsed, term alignment migrates, and a tier change migrates only when
+ * resolved hardware size actually changes. No live box plus a tier change
+ * always provisions: size comparison cannot keep a VM that does not exist,
+ * and heal cannot recover without a pointer. The pin on
+ * `businesses.vps_size` wins on both sides of a live-box size check.
  */
 export function shouldMigrateHardwareForPlanChange(input: {
   oldTier: PlanChangeHardwareTier;
@@ -62,6 +64,9 @@ export function shouldMigrateHardwareForPlanChange(input: {
   // resolves deployed kvm2 vs new kvm1, which is a default flip, not a
   // reason to buy hardware on a billing-period change.
   if (input.oldTier === input.newTier) return false;
+  // No VM to keep. Size comparison would skip Starter → Standard when both
+  // resolve to kvm2, and heal cannot invent a pointer.
+  if (input.hasLiveBox === false) return true;
   const from = resolveDeployedVpsSize(input.oldTier, input.vpsSizePin ?? null);
   const to = resolveVpsSize(input.newTier, input.vpsSizePin ?? null);
   return from !== to;

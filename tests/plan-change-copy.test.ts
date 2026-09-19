@@ -73,6 +73,19 @@ describe("planChangeHardwareStory", () => {
       })
     ).toBe("keep_same_hardware");
   });
+
+  it("migrates when there is no live box even if sizes would match", () => {
+    expect(
+      planChangeHardwareStory({
+        currentTier: "starter",
+        selectedTier: "standard",
+        vpsSizePin: "kvm2",
+        expiresAt: PAST_EXPIRY,
+        hasLiveBox: false,
+        nowMs: NOW_MS
+      })
+    ).toBe("migrate_now");
+  });
 });
 
 describe("planChangeConfirmHardwareKey", () => {

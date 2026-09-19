@@ -137,6 +137,33 @@ describe("shouldMigrateHardwareForPlanChange", () => {
     ).toBe(true);
   });
 
+  it("provisions a missing box on Starter → Standard even when both sides resolve to kvm2", () => {
+    expect(resolveDeployedVpsSize("starter", null)).toBe("kvm2");
+    expect(resolveVpsSize("standard", null)).toBe("kvm2");
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "starter",
+        newTier: "standard",
+        vpsSizePin: null,
+        termAlignment: false,
+        hasLiveBox: false,
+        expiresAt: null,
+        nowMs: NOW_MS
+      })
+    ).toBe(true);
+    expect(
+      shouldMigrateHardwareForPlanChange({
+        oldTier: "starter",
+        newTier: "standard",
+        vpsSizePin: "kvm2",
+        termAlignment: false,
+        hasLiveBox: false,
+        expiresAt: PAST_EXPIRY,
+        nowMs: NOW_MS
+      })
+    ).toBe(true);
+  });
+
   it("does not migrate a same-tier switch that is not term-aligning", () => {
     expect(
       shouldMigrateHardwareForPlanChange({
