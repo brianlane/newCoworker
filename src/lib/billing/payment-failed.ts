@@ -154,7 +154,7 @@ function capitalizeBrand(brand: string): string {
   return brand.charAt(0).toUpperCase() + brand.slice(1);
 }
 
-export type PaymentFailedCancelPatch = {
+type PaymentFailedCancelPatch = {
   status: "canceled";
   cancel_reason: "payment_failed";
   canceled_at: string;
@@ -166,7 +166,7 @@ export type PaymentFailedCancelPatch = {
 };
 
 /** DB patch written BEFORE Stripe cancel so webhook mirrors cannot race a null reason. */
-export function paymentFailedCancelPatch(now: Date): PaymentFailedCancelPatch {
+function paymentFailedCancelPatch(now: Date): PaymentFailedCancelPatch {
   return {
     status: "canceled",
     cancel_reason: "payment_failed",

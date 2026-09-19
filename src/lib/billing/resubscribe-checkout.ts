@@ -16,7 +16,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import { getSubscription } from "@/lib/db/subscriptions";
 import type { BillingPeriod } from "@/lib/plans/tier";
 
-export type ResubscribeCheckoutRefusal =
+type ResubscribeCheckoutRefusal =
   | "business_not_found"
   | "subscription_not_found"
   | "subscription_not_in_grace"

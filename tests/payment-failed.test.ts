@@ -3,7 +3,6 @@ import {
   canceledMirrorPatch,
   formatPaymentFailureDetail,
   invoicePaymentFailureDetails,
-  paymentFailedCancelPatch,
   stampPaymentFailedCancel
 } from "@/lib/billing/payment-failed";
 import { GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
@@ -197,13 +196,20 @@ describe("formatPaymentFailureDetail", () => {
   });
 });
 
-describe("paymentFailedCancelPatch / canceledMirrorPatch", () => {
-  it("stamps payment_failed with a 30-day grace window", () => {
-    const patch = paymentFailedCancelPatch(NOW);
-    expect(patch.cancel_reason).toBe("payment_failed");
-    expect(patch.status).toBe("canceled");
-    expect(patch.canceled_at).toBe(NOW.toISOString());
-    expect(new Date(patch.grace_ends_at).getTime()).toBe(NOW.getTime() + GRACE_WINDOW_MS);
+describe("stampPaymentFailedCancel / canceledMirrorPatch", () => {
+  it("stamps payment_failed with a 30-day grace window", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    await stampPaymentFailedCancel({ id: "sub_row_1" }, NOW, update);
+    expect(update).toHaveBeenCalledWith("sub_row_1", {
+      status: "canceled",
+      cancel_reason: "payment_failed",
+      canceled_at: NOW.toISOString(),
+      grace_ends_at: new Date(NOW.getTime() + GRACE_WINDOW_MS).toISOString(),
+      cancel_at_period_end: false,
+      stripe_current_period_start: null,
+      stripe_current_period_end: null,
+      stripe_subscription_cached_at: NOW.toISOString()
+    });
   });
 
   it("omits cancel_reason when the loaded row is null so a concurrent stamp is not wiped", () => {
@@ -250,11 +256,5 @@ describe("paymentFailedCancelPatch / canceledMirrorPatch", () => {
     });
     expect(patch.grace_ends_at).toBeNull();
     expect(patch.cancel_reason).toBe("admin_force");
-  });
-
-  it("stampPaymentFailedCancel writes the patch through the injected updater", async () => {
-    const update = vi.fn().mockResolvedValue(undefined);
-    await stampPaymentFailedCancel({ id: "sub_row_1" }, NOW, update);
-    expect(update).toHaveBeenCalledWith("sub_row_1", paymentFailedCancelPatch(NOW));
   });
 });
