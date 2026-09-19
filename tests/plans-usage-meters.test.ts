@@ -141,8 +141,7 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 4_180,
         includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 0
+        unexpiredPurchased: 500
       })
     ).toEqual({ used: 4_180, cap: 5_500 });
   });
@@ -152,8 +151,7 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 200
+        unexpiredPurchased: 500
       })
     ).toEqual({ used: 5_200, cap: 5_500 });
   });
@@ -163,8 +161,7 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: 0,
-        unexpiredConsumed: 0
+        unexpiredPurchased: 0
       })
     ).toEqual({ used: 5_000, cap: 5_000 });
   });
@@ -178,21 +175,32 @@ describe("smsPlanMeter", () => {
       smsPlanMeter({
         usedThisPeriod: 5_200,
         includedCap: included,
-        unexpiredPurchased: totals.purchased,
-        unexpiredConsumed: totals.consumed
+        unexpiredPurchased: totals.purchased
       })
     ).toEqual({ used: 5_200, cap: 6_500 });
   });
 
-  it("does not let pack consumption exceed period usage when the ledger is behind", () => {
+  it("does not subtract leftover pack draw from a new billing window", () => {
+    // Pack still unexpired after rollover (400 consumed last window). This
+    // window has only 100 included sends. Numerator is this-period usage,
+    // denominator still includes the live grant.
     expect(
       smsPlanMeter({
         usedThisPeriod: 100,
         includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 400
+        unexpiredPurchased: 500
       })
-    ).toEqual({ used: 400, cap: 5_500 });
+    ).toEqual({ used: 100, cap: 5_500 });
+  });
+
+  it("treats garbage SMS amounts as zero", () => {
+    expect(
+      smsPlanMeter({
+        usedThisPeriod: Number.NaN,
+        includedCap: Number.NEGATIVE_INFINITY,
+        unexpiredPurchased: -1
+      })
+    ).toEqual({ used: 0, cap: 0 });
   });
 });
 
