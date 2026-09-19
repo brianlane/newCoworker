@@ -1206,15 +1206,14 @@ async function dispatchAutoCancelOnPaymentFailure(params: {
       });
       return;
     }
-    // Stamp payment_failed BEFORE Stripe cancel. The executor's Stripe op
-    // emits customer.subscription.updated/deleted with
-    // cancellation_requested (API cancel, not a customer click). Those
-    // webhooks used to race a still-active row and PATCH cancel_reason
-    // null (Scar Fairy, Sep 16 2026).
-    await stampPaymentFailedCancel(
-      ctxRes.context.subscription,
-      ctxRes.context.now ?? new Date()
-    );
+    // Stamp cancel_reason=payment_failed BEFORE Stripe cancel, but leave
+    // status active. The executor's Stripe op emits
+    // customer.subscription.updated/deleted with cancellation_requested
+    // (API cancel, not a customer click). Those webhooks used to race a
+    // still-active row and PATCH cancel_reason null (Scar Fairy, Sep 16
+    // 2026). Flipping status here would block retry if Stripe cancel then
+    // fails (planner and invoice.payment_failed both require active).
+    await stampPaymentFailedCancel(ctxRes.context.subscription);
     await executeLifecyclePlan(planRes.plan, {
       businessId,
       vpsHost: ctxRes.vpsHost,

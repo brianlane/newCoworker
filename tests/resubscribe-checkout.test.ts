@@ -108,6 +108,10 @@ describe("createResubscribeCheckoutSession", () => {
 });
 
 describe("createAdminResubscribeCheckout", () => {
+  function underCapProfile() {
+    return vi.fn(async () => ({ lifetime_subscription_count: 1 }) as never);
+  }
+
   it("mints a Standard monthly link for a canceled-in-grace tenant", async () => {
     const createSession = vi.fn().mockResolvedValue({
       id: "cs_admin",
@@ -118,6 +122,7 @@ describe("createAdminResubscribeCheckout", () => {
       {
         getBusinessRow: vi.fn(async () => business()),
         getSubscriptionRow: vi.fn(async () => subscription()),
+        getProfile: underCapProfile(),
         createSession,
         appUrl: "https://www.example.com"
       }
@@ -146,6 +151,7 @@ describe("createAdminResubscribeCheckout", () => {
       {
         getBusinessRow: vi.fn(async () => business({ tier: "enterprise" })),
         getSubscriptionRow: vi.fn(async () => subscription({ tier: "enterprise" })),
+        getProfile: underCapProfile(),
         createSession,
         appUrl: "https://www.example.com"
       }
@@ -252,6 +258,7 @@ describe("createAdminResubscribeCheckout", () => {
         getSubscriptionRow: vi.fn(async () =>
           subscription({ grace_ends_at: "2099-01-01T00:00:00.000Z" })
         ),
+        getProfile: underCapProfile(),
         createSession
       }
     );
@@ -270,6 +277,7 @@ describe("createAdminResubscribeCheckout", () => {
         getSubscriptionRow: vi.fn(async () =>
           subscription({ billing_period: null as unknown as SubscriptionRow["billing_period"] })
         ),
+        getProfile: underCapProfile(),
         createSession,
         appUrl: "https://www.example.com"
       }
@@ -289,6 +297,7 @@ describe("createAdminResubscribeCheckout", () => {
       {
         getBusinessRow: vi.fn(async () => business()),
         getSubscriptionRow: vi.fn(async () => subscription()),
+        getProfile: underCapProfile(),
         createSession,
         appUrl: "https://www.example.com"
       }
@@ -297,5 +306,53 @@ describe("createAdminResubscribeCheckout", () => {
     if (!result.ok) throw new Error("expected ok");
     expect(result.tier).toBe("starter");
     expect(result.billingPeriod).toBe("annual");
+  });
+
+  it("refuses when the lifetime subscription cap is already reached", async () => {
+    const createSession = vi.fn();
+    const result = await createAdminResubscribeCheckout(
+      { businessId: BIZ, now: NOW },
+      {
+        getBusinessRow: vi.fn(async () => business()),
+        getSubscriptionRow: vi.fn(async () => subscription()),
+        getProfile: vi.fn(async () => ({ lifetime_subscription_count: 3 }) as never),
+        createSession,
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(result).toEqual(expect.objectContaining({ ok: false, refusal: "lifetime_cap" }));
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses when there is no customer profile to check the cap against", async () => {
+    const result = await createAdminResubscribeCheckout(
+      { businessId: BIZ, now: NOW },
+      {
+        getBusinessRow: vi.fn(async () => business()),
+        getSubscriptionRow: vi.fn(async () => subscription({ customer_profile_id: null })),
+        getProfile: vi.fn(),
+        createSession: vi.fn(),
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ ok: false, refusal: "missing_customer_profile" })
+    );
+  });
+
+  it("refuses when the customer profile row is missing", async () => {
+    const result = await createAdminResubscribeCheckout(
+      { businessId: BIZ, now: NOW },
+      {
+        getBusinessRow: vi.fn(async () => business()),
+        getSubscriptionRow: vi.fn(async () => subscription()),
+        getProfile: vi.fn(async () => null),
+        createSession: vi.fn(),
+        appUrl: "https://www.example.com"
+      }
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ ok: false, refusal: "missing_customer_profile" })
+    );
   });
 });

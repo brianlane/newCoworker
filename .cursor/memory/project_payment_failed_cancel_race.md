@@ -27,7 +27,10 @@ grace +30d.
 
 Fix (do not drop the auto-cancel policy):
 
-1. `stampPaymentFailedCancel` **before** `executeLifecyclePlan` Stripe cancel.
+1. `stampPaymentFailedCancel` writes `cancel_reason=payment_failed` **before**
+   `executeLifecyclePlan` Stripe cancel, and leaves `status` active so a failed
+   Stripe cancel can retry (planner and `invoice.payment_failed` both require
+   active).
 2. `dispatchExternalStripeCancel` re-reads the row; skip if reason is already
    set and not `stripe_external`.
 3. `canceledMirrorPatch` omits `cancel_reason` when the loaded value is null.

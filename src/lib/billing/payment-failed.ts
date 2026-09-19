@@ -11,7 +11,7 @@
  * `cancel_reason: existing.cancel_reason` while `existing` was still
  * null. Result: status=canceled, cancel_reason NULL, grace +30d.
  *
- * Stamp `payment_failed` first, and never PATCH cancel_reason to null.
+ * Stamp `cancel_reason=payment_failed` first, and never PATCH cancel_reason to null.
  */
 
 import { GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
@@ -154,37 +154,26 @@ function capitalizeBrand(brand: string): string {
   return brand.charAt(0).toUpperCase() + brand.slice(1);
 }
 
-type PaymentFailedCancelPatch = {
-  status: "canceled";
+type PaymentFailedReasonPatch = {
   cancel_reason: "payment_failed";
-  canceled_at: string;
-  grace_ends_at: string;
-  cancel_at_period_end: false;
-  stripe_current_period_start: null;
-  stripe_current_period_end: null;
-  stripe_subscription_cached_at: string;
 };
 
-/** DB patch written BEFORE Stripe cancel so webhook mirrors cannot race a null reason. */
-function paymentFailedCancelPatch(now: Date): PaymentFailedCancelPatch {
-  return {
-    status: "canceled",
-    cancel_reason: "payment_failed",
-    canceled_at: now.toISOString(),
-    grace_ends_at: new Date(now.getTime() + GRACE_WINDOW_MS).toISOString(),
-    cancel_at_period_end: false,
-    stripe_current_period_start: null,
-    stripe_current_period_end: null,
-    stripe_subscription_cached_at: now.toISOString()
-  };
+/**
+ * Reason-only stamp written BEFORE Stripe cancel.
+ * Deliberately leaves `status` active: if Stripe cancel then fails, the
+ * next `invoice.payment_failed` can still dispatch (planner requires
+ * active). Flipping status here is how a failed Stripe cancel would
+ * leave DB canceled and Stripe still billing.
+ */
+function paymentFailedReasonPatch(): PaymentFailedReasonPatch {
+  return { cancel_reason: "payment_failed" };
 }
 
 export async function stampPaymentFailedCancel(
   row: Pick<SubscriptionRow, "id">,
-  now: Date = new Date(),
   update: typeof updateSubscription = updateSubscription
 ): Promise<void> {
-  await update(row.id, paymentFailedCancelPatch(now));
+  await update(row.id, paymentFailedReasonPatch());
 }
 
 export type CanceledMirrorExisting = {

@@ -3454,13 +3454,9 @@ describe("stripe webhook route", () => {
       await flushAfterCallbacks();
 
       expect(mockLoadLifecycleContext).toHaveBeenCalledWith("biz_invfail");
-      expect(updateSubscription).toHaveBeenCalledWith(
-        "sub_row_invfail",
-        expect.objectContaining({
-          status: "canceled",
-          cancel_reason: "payment_failed"
-        })
-      );
+      expect(updateSubscription).toHaveBeenCalledWith("sub_row_invfail", {
+        cancel_reason: "payment_failed"
+      });
       expect(mockExecuteLifecyclePlan).toHaveBeenCalled();
       const stampOrder = vi.mocked(updateSubscription).mock.invocationCallOrder[0];
       const execOrder = mockExecuteLifecyclePlan.mock.invocationCallOrder[0];

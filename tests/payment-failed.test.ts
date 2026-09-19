@@ -197,19 +197,11 @@ describe("formatPaymentFailureDetail", () => {
 });
 
 describe("stampPaymentFailedCancel / canceledMirrorPatch", () => {
-  it("stamps payment_failed with a 30-day grace window", async () => {
+  it("stamps payment_failed without flipping status, so a failed Stripe cancel can retry", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
-    await stampPaymentFailedCancel({ id: "sub_row_1" }, NOW, update);
-    expect(update).toHaveBeenCalledWith("sub_row_1", {
-      status: "canceled",
-      cancel_reason: "payment_failed",
-      canceled_at: NOW.toISOString(),
-      grace_ends_at: new Date(NOW.getTime() + GRACE_WINDOW_MS).toISOString(),
-      cancel_at_period_end: false,
-      stripe_current_period_start: null,
-      stripe_current_period_end: null,
-      stripe_subscription_cached_at: NOW.toISOString()
-    });
+    await stampPaymentFailedCancel({ id: "sub_row_1" }, update);
+    expect(update).toHaveBeenCalledWith("sub_row_1", { cancel_reason: "payment_failed" });
+    expect(update.mock.calls[0][1]).not.toHaveProperty("status");
   });
 
   it("omits cancel_reason when the loaded row is null so a concurrent stamp is not wiped", () => {
