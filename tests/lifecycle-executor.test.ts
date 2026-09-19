@@ -1380,8 +1380,16 @@ describe("executeLifecyclePlan refund handling", () => {
       ...canceledPlan,
       emailsToSend: [
         {
-          ...canceledPlan.emailsToSend[0],
-          stripeCancellationDetails: undefined
+          type: "send_ops_subscription_canceled",
+          businessId: "biz_ops",
+          businessName: "Scar Fairy",
+          ownerName: "Selena",
+          ownerEmail: "selena@example.com",
+          tier: "starter",
+          cancelReason: "stripe_external",
+          cancelPath: "stripe_external",
+          graceEndsAt: "2026-10-17T01:04:59.000Z",
+          hostingerExpiresAt: "2026-09-30T00:00:00.000Z"
         }
       ]
     };
