@@ -39,14 +39,22 @@
  * cannot change an existing subscription's billing cycle (only auto-renew
  * on/off, cycle changes are hPanel-only). So:
  *
- *   - Customer commits to a LONGER term than the box's current cycle →
- *     run the full migration (steps 1-4, 7) onto a freshly TERM-BOUGHT box
- *     of the same size; the old monthly box is pooled with auto-renew off.
- *   - Same/shorter commitment, cycle already covers the target, or the
- *     cycle can't be verified → period-only fast path: steps 1-4 and 7 are
- *     skipped, the box keeps its existing Hostinger billing subscription
- *     (inherited onto the new sub row), and only the Stripe swap + DB
- *     bookkeeping (steps 5, 6, 8) execute.
+ * A live box with prepaid Hostinger time (`vps_inventory.expires_at` in
+ * the future) is never replaced, on upgrade, downgrade, or same-tier term
+ * alignment. Entitlements still flip immediately via `businesses.tier`.
+ * Hardware moves only when that paid-through instant is at or past now
+ * (the same lapse signal the pool already uses), and only then if size
+ * actually changes or a same-tier term alignment needs a newly bought box.
+ *
+ *   - Customer commits to a LONGER term than the box's current cycle, AND
+ *     the live box has already lapsed → run the full migration (steps
+ *     1-4, 7) onto a freshly TERM-BOUGHT box of the same size; the old
+ *     monthly box is pooled with auto-renew off.
+ *   - Prepaid time still left, same/shorter commitment, cycle already
+ *     covers the target, or the cycle can't be verified → period-only
+ *     fast path: steps 1-4 and 7 are skipped, the box keeps its existing
+ *     Hostinger billing subscription (inherited onto the new sub row),
+ *     and only the Stripe swap + DB bookkeeping (steps 5, 6, 8) execute.
  *
  * Either way, ops gets a term-alignment summary email when the switch
  * completes (including a MANUAL CHECK flag when verification failed).
@@ -88,7 +96,18 @@ import {
   updateSubscriptionIfNotWiped,
   type CancelReason
 } from "@/lib/db/subscriptions";
-import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  setBusinessCustomerProfile,
+  updateBusinessEntitlementTier
+} from "@/lib/db/businesses";
+import { getVpsInventoryByVmId, releaseVpsToPool } from "@/lib/db/vps-inventory";
+import {
+  boxHasPaidTimeLeft,
+  planChangeCutoverDecision,
+  shouldMigrateHardwareForPlanChange
+} from "@/lib/billing/plan-change-hardware";
+import { waitForVoiceBridgeHeartbeat } from "@/lib/provisioning/voice-bridge-cutover";
 import { getCommitmentMonths, renewalDateAfterMonths, type BillingPeriod } from "@/lib/plans/tier";
 import {
   decrementLifetimeSubscriptionCount,
@@ -103,7 +122,6 @@ import {
   sendOpsPlanChangeEmail,
   sendOpsTermAlignmentEmail
 } from "@/lib/email/ops-notify";
-import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 import { retireVpsSshKeysForVps } from "@/lib/db/vps-ssh-keys";
 import {
   hostingerTermForBillingPeriod,
@@ -438,13 +456,31 @@ export async function runChangePlanFromCheckout(
   const oldVmId =
     oldVpsIdRaw && /^\d+$/.test(oldVpsIdRaw) ? Number.parseInt(oldVpsIdRaw, 10) : null;
 
+  let oldInventory: Awaited<ReturnType<typeof getVpsInventoryByVmId>> = null;
+  if (oldVmId !== null) {
+    try {
+      oldInventory = await getVpsInventoryByVmId(oldVmId);
+    } catch (err) {
+      logger.warn("changePlan: inventory lookup for live VM failed", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
+    }
+  }
+  const oldExpiresAt = oldInventory?.expires_at ?? null;
+  const liveBoxHasPaidTime =
+    oldVmId !== null && boxHasPaidTimeLeft(oldExpiresAt);
+
   // ── Same-tier switches: the hardware is already the right size, but the
   // box's Hostinger BILLING TERM may not match the new commitment. Term
   // SKUs are ~40-65% cheaper per month than monthly renewal, and the
   // public API cannot change an existing subscription's cycle (hPanel
-  // only), so a LONGER commitment triggers the full migration onto a
-  // freshly term-bought box of the same size. Everything else stays on
-  // the period-only fast path: skip snapshot / backup / re-provision /
+  // only), so a LONGER commitment on a LAPSED box triggers the full
+  // migration onto a freshly term-bought box of the same size. A box
+  // that still has prepaid time stays assigned (the contract-upgrade
+  // sweep aligns it at the next lapse). Everything else stays on the
+  // period-only fast path: skip snapshot / backup / re-provision /
   // restore (steps 1-4) AND the old-Hostinger teardown (step 7, the box
   // keeps its existing Hostinger subscription; touching it would destroy
   // the customer's live VPS). Only the Stripe/DB steps (5, 6, 8) run.
@@ -488,11 +524,23 @@ export async function runChangePlanFromCheckout(
         termAlignmentSkipReason =
           "the box's current Hostinger billing cycle could not be verified, check hPanel and change the renewal period manually if it is still monthly";
       } else if (currentCycleMonths < targetTermMonths) {
-        termAlignment = true;
+        if (liveBoxHasPaidTime) {
+          termAlignmentSkipReason =
+            "the current box still has prepaid Hostinger time left; it will be aligned at lapse rather than throwing that time away";
+        } else {
+          termAlignment = true;
+        }
       }
     }
   }
-  const migrateVps = !sameTier || termAlignment;
+  const migrateVps = shouldMigrateHardwareForPlanChange({
+    oldTier: oldSub.tier,
+    newTier: tier,
+    vpsSizePin: business.vps_size ?? null,
+    termAlignment,
+    expiresAt: oldExpiresAt,
+    hasLiveBox: oldVmId !== null
+  });
   if (sameTier) {
     logger.info(
       termAlignment
@@ -686,6 +734,91 @@ export async function runChangePlanFromCheckout(
     ...periodCache
   });
 
+  // Entitlement gates (external webhooks, Zapier/Make, public API) read
+  // businesses.tier, not subscriptions.tier. Write it as soon as the new
+  // sub row exists so a Standard → Starter change actually turns webhooks
+  // off, and Starter → Standard turns them on, without waiting for a
+  // later heal. Read-back is inside updateBusinessEntitlementTier.
+  let entitlementTierWritten = false;
+  try {
+    await updateBusinessEntitlementTier(businessId, tier);
+    entitlementTierWritten = true;
+  } catch (err) {
+    logger.error("changePlan: businesses.tier write failed", {
+      businessId,
+      newTier: tier,
+      error: errorMessage(err)
+    });
+  }
+
+  const heartbeatVpsId = migrateVps && newProv?.vpsId ? newProv.vpsId : oldVpsIdRaw;
+  let heartbeatHealthy = false;
+  if (heartbeatVpsId && /^\d+$/.test(heartbeatVpsId)) {
+    try {
+      const heartbeat = await waitForVoiceBridgeHeartbeat({
+        businessId,
+        vpsId: heartbeatVpsId
+      });
+      heartbeatHealthy = heartbeat.healthy;
+    } catch (err) {
+      logger.warn("changePlan: voice-bridge heartbeat wait failed", {
+        businessId,
+        vpsId: heartbeatVpsId,
+        error: errorMessage(err)
+      });
+    }
+  } else {
+    logger.warn("changePlan: no numeric VM id to wait on for voice-bridge heartbeat", {
+      businessId,
+      heartbeatVpsId: heartbeatVpsId ?? null
+    });
+  }
+
+  let inventoryRow: Awaited<ReturnType<typeof getVpsInventoryByVmId>> = null;
+  const inventoryVmId =
+    migrateVps && newProv?.vpsId && /^\d+$/.test(newProv.vpsId)
+      ? Number.parseInt(newProv.vpsId, 10)
+      : oldVmId;
+  if (inventoryVmId !== null) {
+    try {
+      inventoryRow = await getVpsInventoryByVmId(inventoryVmId);
+    } catch (err) {
+      logger.warn("changePlan: inventory lookup for cutover VM failed", {
+        businessId,
+        vpsId: inventoryVmId,
+        error: errorMessage(err)
+      });
+    }
+  }
+
+  const cutover = planChangeCutoverDecision({
+    migrateVps,
+    oldVmId,
+    newVpsId: newProv?.vpsId ?? null,
+    deploySucceeded: newProv?.deploySucceeded,
+    inventoryRow,
+    oldExpiresAt,
+    businessId,
+    heartbeatHealthy
+  });
+  if (!cutover.cutoverReady) {
+    logger.error(
+      migrateVps && oldVmId !== null
+        ? "changePlan: refusing to pool the live box; replacement is not a different assigned VM with a live voice bridge"
+        : "changePlan: not treating as complete; assignment or voice-bridge heartbeat still outstanding",
+      {
+        businessId,
+        oldVmId,
+        newVpsId: newProv?.vpsId ?? null,
+        deploySucceeded: newProv?.deploySucceeded ?? null,
+        inventoryState: inventoryRow?.state ?? null,
+        inventoryAssignedBusinessId: inventoryRow?.assigned_business_id ?? null,
+        heartbeatHealthy,
+        migrateVps
+      }
+    );
+  }
+
   // Discounted usage packs attached to the change-plan Checkout. The new sub
   // row is active above, so grant RPCs pass entitlement the same way as
   // standalone Billing top-ups.
@@ -742,17 +875,18 @@ export async function runChangePlanFromCheckout(
   // Runs when we know about the billing subscription OR just the VM: a
   // missing billing id (e.g. provisioning-time lookup failed) must not
   // suppress the ops email, or the orphaned box never gets deleted.
-  if (migrateVps && (oldSub.hostinger_billing_subscription_id || oldVmId !== null)) {
-    if (oldVmId !== null) {
-      try {
-        await hostinger.stopVirtualMachine(oldVmId);
-      } catch (err) {
-        logger.warn("changePlan: old VPS stop failed before auto-renew disable (continuing)", {
-          businessId,
-          oldVmId,
-          error: errorMessage(err)
-        });
-      }
+  // NEVER runs unless a different VM is actually assigned and heartbeating.
+  // Same-id "success" (KIN: provision returned 1936826, then pooled it) is
+  // refused by planChangeCutoverDecision, so the live box stays assigned.
+  if (cutover.releaseOldBox && oldVmId !== null) {
+    try {
+      await hostinger.stopVirtualMachine(oldVmId);
+    } catch (err) {
+      logger.warn("changePlan: old VPS stop failed before auto-renew disable (continuing)", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
     }
     if (oldSub.hostinger_billing_subscription_id) {
       try {
@@ -773,54 +907,52 @@ export async function runChangePlanFromCheckout(
     // refunds are locked out until ≈Dec 30 2026), return it to the reuse
     // pool so the next matching-size signup adopts it instead of buying.
     // Best-effort: pool bookkeeping never fails a plan change.
-    if (oldVmId !== null) {
-      // Seed label for boxes with no vps_inventory row (releaseVpsToPool
-      // keeps the recorded plan for tracked ones). The business's vps_size
-      // pin is useless here, Step 3 already re-pinned it to the NEW box,
-      // so ask Hostinger for the released box's ACTUAL plan; that also
-      // covers a kvm1 box whose purchase-time inventory record failed,
-      // which the historical tier-default fallback would mislabel kvm2.
-      let releasedPlan: VpsSize = oldSub.tier === "starter" ? "kvm2" : "kvm8";
-      try {
-        const oldVm = await hostinger.getVirtualMachine(oldVmId);
-        releasedPlan = vpsSizeFromHostingerPlan(oldVm.plan) ?? releasedPlan;
-      } catch (err) {
-        logger.warn("changePlan: released-box plan lookup failed (using tier default)", {
-          businessId,
-          oldVmId,
-          error: errorMessage(err)
-        });
-      }
-      // The tenant is off this box now, so its key row must stop counting as
-      // active: fleet sweeps iterate every unrotated row and would keep SSHing
-      // into it. Before the pool release below, so a pooled box never carries
-      // an active key belonging to its previous tenant. Best-effort, like the
-      // rest of this teardown: a stale row is bookkeeping noise and must not
-      // fail a plan change the customer has already paid for.
-      try {
-        const retired = await retireVpsSshKeysForVps(String(oldVmId));
-        logger.info("changePlan: retired old box key rows", { businessId, oldVmId, retired });
-      } catch (err) {
-        logger.warn("changePlan: old key-row retire failed (stale row left active)", {
-          businessId,
-          oldVmId,
-          error: errorMessage(err)
-        });
-      }
-      try {
-        await releaseVpsToPool({
-          vmId: oldVmId,
-          plan: releasedPlan,
-          hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
-          notes: `returned by upgrade_switch of business ${businessId}; auto-renew off, lapses at period end unless adopted`
-        });
-      } catch (err) {
-        logger.warn("changePlan: pool return of old VPS failed (continuing)", {
-          businessId,
-          oldVmId,
-          error: errorMessage(err)
-        });
-      }
+    // Seed label for boxes with no vps_inventory row (releaseVpsToPool
+    // keeps the recorded plan for tracked ones). The business's vps_size
+    // pin is useless here, Step 3 already re-pinned it to the NEW box,
+    // so ask Hostinger for the released box's ACTUAL plan; that also
+    // covers a kvm1 box whose purchase-time inventory record failed,
+    // which the historical tier-default fallback would mislabel kvm2.
+    let releasedPlan: VpsSize = oldSub.tier === "starter" ? "kvm2" : "kvm8";
+    try {
+      const oldVm = await hostinger.getVirtualMachine(oldVmId);
+      releasedPlan = vpsSizeFromHostingerPlan(oldVm.plan) ?? releasedPlan;
+    } catch (err) {
+      logger.warn("changePlan: released-box plan lookup failed (using tier default)", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
+    }
+    // The tenant is off this box now, so its key row must stop counting as
+    // active: fleet sweeps iterate every unrotated row and would keep SSHing
+    // into it. Before the pool release below, so a pooled box never carries
+    // an active key belonging to its previous tenant. Best-effort, like the
+    // rest of this teardown: a stale row is bookkeeping noise and must not
+    // fail a plan change the customer has already paid for.
+    try {
+      const retired = await retireVpsSshKeysForVps(String(oldVmId));
+      logger.info("changePlan: retired old box key rows", { businessId, oldVmId, retired });
+    } catch (err) {
+      logger.warn("changePlan: old key-row retire failed (stale row left active)", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
+    }
+    try {
+      await releaseVpsToPool({
+        vmId: oldVmId,
+        plan: releasedPlan,
+        hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+        notes: `returned by upgrade_switch of business ${businessId}; auto-renew off, lapses at period end unless adopted`
+      });
+    } catch (err) {
+      logger.warn("changePlan: pool return of old VPS failed (continuing)", {
+        businessId,
+        oldVmId,
+        error: errorMessage(err)
+      });
     }
     await sendOpsVpsDeletionEmail({
       businessId,
@@ -833,7 +965,7 @@ export async function runChangePlanFromCheckout(
       refundIssued: false,
       cancelReason: "upgrade_switch",
       vmState: [
-        oldVmId !== null ? "old plan's VM stopped" : "no VM recorded",
+        "old plan's VM stopped",
         oldSub.hostinger_billing_subscription_id
           ? "auto-renew disabled"
           : "no Hostinger billing id, renewal may still be active, check hPanel",
@@ -885,15 +1017,24 @@ export async function runChangePlanFromCheckout(
     });
   }
 
-  logger.info("changePlan: complete", {
-    eventId,
-    businessId,
-    previousSubscriptionId,
-    newTier: tier,
-    newBillingPeriod: billingPeriod,
-    migrateVps,
-    termAlignment
-  });
+  logger.info(
+    entitlementTierWritten && cutover.cutoverReady
+      ? "changePlan: complete"
+      : "changePlan: finished without a complete cutover (tier, assignment, or voice-bridge heartbeat still outstanding)",
+    {
+      eventId,
+      businessId,
+      previousSubscriptionId,
+      newTier: tier,
+      newBillingPeriod: billingPeriod,
+      migrateVps,
+      termAlignment,
+      entitlementTierWritten,
+      heartbeatHealthy,
+      releaseOldBox: cutover.releaseOldBox,
+      cutoverReady: cutover.cutoverReady
+    }
+  );
 }
 
 export async function runResubscribeFromCheckout(

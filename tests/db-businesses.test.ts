@@ -6,6 +6,7 @@ import {
   getBusinessTimezone,
   isValidIanaTimezone,
   listBusinesses,
+  listOnlineBusinessesWithVpsPointer,
   listBusinessIdsByOwnerEmail,
   recordWhiteGlovePurchase,
   setPrioritySupportUntil,
@@ -28,6 +29,7 @@ import {
   setLeadAutoAssign,
   setNeedsHumanTeamFirst,
   updateBusinessVpsSize,
+  updateBusinessEntitlementTier,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
 } from "@/lib/db/businesses";
@@ -62,6 +64,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     update: vi.fn().mockReturnThis(),
     upsert: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    not: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -1058,6 +1061,84 @@ describe("db/businesses", () => {
     await expect(updateBusinessVpsSize("uuid-biz-1", "kvm8")).rejects.toThrow(
       "updateBusinessVpsSize"
     );
+  });
+
+  it("updateBusinessEntitlementTier writes businesses.tier and read-backs the row", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { ...MOCK_BUSINESS, tier: "starter" },
+        error: null
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const row = await updateBusinessEntitlementTier("uuid-biz-1", "starter");
+    expect(db.update).toHaveBeenCalledWith({ tier: "starter" });
+    expect(row.tier).toBe("starter");
+
+    const db2 = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { ...MOCK_BUSINESS, tier: "standard" },
+        error: null
+      })
+    });
+    const upgraded = await updateBusinessEntitlementTier("uuid-biz-1", "standard", db2 as never);
+    expect(upgraded.tier).toBe("standard");
+  });
+
+  it("updateBusinessEntitlementTier throws when Supabase reports an error", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "fail" } })
+    });
+    await expect(updateBusinessEntitlementTier("uuid-biz-1", "starter", db as never)).rejects.toThrow(
+      "updateBusinessEntitlementTier: fail"
+    );
+  });
+
+  it("updateBusinessEntitlementTier throws when the update matches zero rows", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    });
+    await expect(updateBusinessEntitlementTier("uuid-biz-1", "starter", db as never)).rejects.toThrow(
+      "no row written"
+    );
+  });
+
+  it("updateBusinessEntitlementTier throws when read-back tier does not match", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: { ...MOCK_BUSINESS, tier: "standard" },
+        error: null
+      })
+    });
+    await expect(updateBusinessEntitlementTier("uuid-biz-1", "starter", db as never)).rejects.toThrow(
+      "read-back tier standard !== starter"
+    );
+  });
+
+  it("listOnlineBusinessesWithVpsPointer returns online rows that still point at a VM", async () => {
+    const rows = [
+      { id: "biz-1", tier: "standard", hostinger_vps_id: "1936826" }
+    ];
+    const db = mockDb({
+      not: vi.fn().mockResolvedValue({ data: rows, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(listOnlineBusinessesWithVpsPointer()).resolves.toEqual(rows);
+    expect(db.eq).toHaveBeenCalledWith("status", "online");
+  });
+
+  it("listOnlineBusinessesWithVpsPointer throws on DB error and returns [] on null data", async () => {
+    const failing = mockDb({
+      not: vi.fn().mockResolvedValue({ data: null, error: { message: "down" } })
+    });
+    await expect(listOnlineBusinessesWithVpsPointer(failing as never)).rejects.toThrow(
+      "listOnlineBusinessesWithVpsPointer: down"
+    );
+    const empty = mockDb({
+      not: vi.fn().mockResolvedValue({ data: null, error: null })
+    });
+    await expect(listOnlineBusinessesWithVpsPointer(empty as never)).resolves.toEqual([]);
   });
 
   it("getBusinessTimezone returns the trimmed zone when set", async () => {

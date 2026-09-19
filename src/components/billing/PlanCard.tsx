@@ -76,6 +76,16 @@ export type PlanCardProps = {
    * than only discovering it on the invoice. Omitted/all-null renders nothing.
    */
   discount?: MembershipDiscountState | null;
+  /** `vps_inventory.expires_at` for the live Hostinger box, if known. */
+  boxExpiresAt?: string | null;
+  /** False when the tenant has no numeric Hostinger VM. */
+  hasLiveBox?: boolean;
+  /**
+   * Precomputed Hostinger prepaid line (server-side). Null hides the row.
+   */
+  prepaidLine?: string | null;
+  /** Raw `businesses.vps_size` pin, forwarded to change-plan confirm copy. */
+  vpsSizePin?: string | null;
 };
 
 function formatDate(iso: string | null | undefined): string {
@@ -180,7 +190,11 @@ export function PlanCard(props: PlanCardProps) {
     contractAutoRenew,
     commitmentElapsed,
     packAddonOptions = [],
-    currentPackAddons
+    currentPackAddons,
+    boxExpiresAt = null,
+    hasLiveBox,
+    prepaidLine = null,
+    vpsSizePin = null
   } = props;
 
   const [showCancel, setShowCancel] = useState(false);
@@ -322,6 +336,9 @@ export function PlanCard(props: PlanCardProps) {
           <p className="text-xs text-parchment/50 mt-1">
             {tierLabel(tier)} · {periodLabel(billingPeriod)}
           </p>
+          {prepaidLine && (
+            <p className="text-xs text-parchment/40 mt-1">{prepaidLine}</p>
+          )}
         </div>
         <Badge variant={badge.variant}>{badge.text}</Badge>
       </div>
@@ -481,6 +498,9 @@ export function PlanCard(props: PlanCardProps) {
             disabledReason={changePlanBlockedReason}
             packAddonOptions={packAddonOptions}
             currentPackAddons={currentPackAddons}
+            boxExpiresAt={boxExpiresAt}
+            hasLiveBox={hasLiveBox}
+            vpsSizePin={vpsSizePin}
           />
         </div>
       )}

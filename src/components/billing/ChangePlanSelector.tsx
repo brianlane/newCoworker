@@ -1,20 +1,19 @@
 /**
  * Upgrade/downgrade + billing-period switcher. Renders a (tier × period)
  * grid; clicking a non-current combo opens a confirm sheet that spells
- * out the no-proration policy and kicks off
- * `/api/billing/change-plan`. On success the server returns a Stripe
- * Checkout URL which we hard-redirect to.
+ * out the two-axis policy (entitlements now, Hostinger box until prepaid
+ * lapse) and kicks off `/api/billing/change-plan`. On success the server
+ * returns a Stripe Checkout URL which we hard-redirect to.
  *
  * After Stripe Checkout succeeds, the webhook drives the change-plan
- * orchestrator (see `src/lib/billing/change-plan-orchestrator.ts`): SSH
- * backup the old VPS, provision a new one at the new tier, restore data,
- * tear down the old Stripe/Hostinger sub. The user just sees
- * `?planChanged=1` on return.
+ * orchestrator (see `src/lib/billing/change-plan-orchestrator.ts`). The
+ * user just sees `?planChanged=1` on return.
  */
 
 "use client";
 
 import { useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import {
   type BillingPeriod,
@@ -36,6 +35,12 @@ import type {
   MembershipPackAddonOption,
   MembershipPackAddonSelection
 } from "@/lib/billing/membership-pack-addons";
+import {
+  formatPlanChangePaidThroughDate,
+  parseablePaidThroughIso,
+  planChangeConfirmHardwareKey,
+  planChangeWarnsStarterWebhooks
+} from "@/lib/billing/plan-change-copy";
 
 type ChangeablePlan = Exclude<PlanTier, "enterprise">;
 
@@ -47,6 +52,12 @@ type Props = {
   packAddonOptions?: MembershipPackAddonOption[];
   /** Packs the tenant already carries, so the selector does not start empty. */
   currentPackAddons?: MembershipPackAddonSelection;
+  /** `vps_inventory.expires_at` for the live Hostinger box, if known. */
+  boxExpiresAt?: string | null;
+  /** False when the tenant has no numeric Hostinger VM. */
+  hasLiveBox?: boolean;
+  /** Raw `businesses.vps_size` pin. */
+  vpsSizePin?: string | null;
 };
 
 const TIERS: ChangeablePlan[] = ["starter", "standard"];
@@ -86,8 +97,13 @@ export function ChangePlanSelector({
   disabled,
   disabledReason,
   packAddonOptions = [],
-  currentPackAddons
+  currentPackAddons,
+  boxExpiresAt = null,
+  hasLiveBox,
+  vpsSizePin = null
 }: Props) {
+  const t = useTranslations("dashboard.planCard");
+  const locale = useLocale();
   const [selectedTier, setSelectedTier] = useState<ChangeablePlan | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<BillingPeriod | null>(null);
   // Seed from what the tenant already carries. Starting empty meant a tenant
@@ -158,6 +174,27 @@ export function ChangePlanSelector({
     pending && selectedPeriod !== "monthly"
       ? calculateSavingsPercentage(selectedTier, selectedPeriod)
       : 0;
+
+  function hardwareConfirmText(): string {
+    if (!selectedTier) return "";
+    const key = planChangeConfirmHardwareKey({
+      currentTier,
+      selectedTier,
+      vpsSizePin,
+      expiresAt: boxExpiresAt,
+      hasLiveBox
+    });
+    if (key === "confirmKeepDated") {
+      const iso = parseablePaidThroughIso(boxExpiresAt);
+      const date = iso ? formatPlanChangePaidThroughDate(iso, locale) : null;
+      if (date) return t("confirmKeepDated", { date });
+      return t("confirmKeepGeneric");
+    }
+    if (key === "confirmKeepGeneric") return t("confirmKeepGeneric");
+    if (key === "confirmKeepSameHardware") return t("confirmKeepSameHardware");
+    if (key === "confirmMigrate") return t("confirmMigrate");
+    return t("confirmSameTier");
+  }
 
   return (
     <div className="space-y-4">
@@ -244,10 +281,13 @@ export function ChangePlanSelector({
               ? `, renewing at ${renewalRateLabel(selectedTier!, selectedPeriod!)} after the first term`
               : ""}.
             Your current plan will be canceled immediately with no proration or refund.{" "}
-            {selectedTier === currentTier
-              ? "Since your tier isn't changing, your workspace stays exactly where it is; only your billing changes."
-              : "We'll migrate your workspace data to a fresh VPS at the new tier."}
+            {hardwareConfirmText()}
           </p>
+          {selectedTier && planChangeWarnsStarterWebhooks(currentTier, selectedTier) && (
+            <p className="text-xs text-spark-orange" role="status">
+              {t("confirmStarterWebhooks")}
+            </p>
+          )}
           {packAddonOptions.length > 0 && selectedPeriod && (
             <MembershipPackAddOns
               period={selectedPeriod}

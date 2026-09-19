@@ -69,7 +69,8 @@ import { parseEnterpriseModels } from "@/lib/plans/enterprise-models";
 import { ComplianceModuleEditor } from "@/components/admin/ComplianceModuleEditor";
 import { parseComplianceModule } from "@/lib/compliance/module";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
-import { resolveDeployedVpsSize } from "@/lib/vps/size";
+import { resolveDeployedVpsSize, resolveVpsSize } from "@/lib/vps/size";
+import { entitlementBillingMismatch } from "@/lib/billing/plan-change-copy";
 import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
@@ -261,6 +262,11 @@ export default async function BusinessDetailPage({
           <Badge variant={business.tier === "standard" ? "online" : "neutral"}>
             {business.tier}
           </Badge>
+          {entitlementBillingMismatch(business.tier, subscription?.tier) && (
+            <span title={`Entitlement ${business.tier}, Stripe subscription ${subscription?.tier}`}>
+              <Badge variant="error">billing {subscription?.tier}</Badge>
+            </span>
+          )}
         </div>
         <div className="ml-auto flex shrink-0 items-start gap-2">
           {/* Deploy moved off the All Clients table, offline boxes are
@@ -762,6 +768,12 @@ export default async function BusinessDetailPage({
             <dd className="text-parchment font-mono">
               {resolveDeployedVpsSize(business.tier, business.vps_size)}
             </dd>
+            {resolveDeployedVpsSize(business.tier, business.vps_size) !==
+              resolveVpsSize(business.tier, null) && (
+              <dd className="text-xs text-spark-orange mt-0.5">
+                plan default {resolveVpsSize(business.tier, null)}; live box kept
+              </dd>
+            )}
           </div>
           <div>
             <dt className="text-parchment/40 text-xs">Provider / region</dt>

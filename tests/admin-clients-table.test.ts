@@ -20,6 +20,7 @@ function row(overrides: Partial<AdminClientRow> = {}): AdminClientRow {
     status: "online",
     isPaused: false,
     subscriptionStatus: "active",
+    subscriptionTier: "standard",
     ownerQuiet: false,
     marginCents: 15000,
     pinned: false,
@@ -166,7 +167,7 @@ describe("pinRowsFirst", () => {
 
 describe("clientsCsv", () => {
   const HEADER =
-    "name,owner_email,tier,payment,status,paused,churn_risk,margin_usd_per_month," +
+    "name,owner_email,tier,billing_tier,payment,status,paused,churn_risk,margin_usd_per_month," +
     "priority_support_until,created_at,id";
 
   it("serializes header + rows with the payment sentinel and quoting", () => {
@@ -176,7 +177,7 @@ describe("clientsCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines[0]).toBe(HEADER);
     expect(lines[1]).toBe(
-      '"Quote ""Co"", Inc",owner@acme.com,standard,none,online,true,true,150.00,,2026-07-01T00:00:00Z,b1'
+      '"Quote ""Co"", Inc",owner@acme.com,standard,standard,none,online,true,true,150.00,,2026-07-01T00:00:00Z,b1'
     );
   });
 
@@ -188,6 +189,18 @@ describe("clientsCsv", () => {
   it("carries the priority support coverage end when the tenant has one", () => {
     const csv = clientsCsv([row({ prioritySupportUntil: "2026-09-09T00:00:00Z" })]);
     expect(csv.split("\r\n")[1]).toContain(",150.00,2026-09-09T00:00:00Z,2026-07-01T00:00:00Z");
+  });
+
+  it("carries a mismatched Stripe billing tier next to the entitlement", () => {
+    const csv = clientsCsv([
+      row({ tier: "starter", subscriptionTier: "standard" })
+    ]);
+    expect(csv.split("\r\n")[1]).toContain(",starter,standard,");
+  });
+
+  it("leaves billing_tier empty when the business has no subscription row", () => {
+    const csv = clientsCsv([row({ subscriptionTier: null, subscriptionStatus: null })]);
+    expect(csv.split("\r\n")[1]).toContain(",standard,,none,");
   });
 
   it("produces only the header for zero rows", () => {

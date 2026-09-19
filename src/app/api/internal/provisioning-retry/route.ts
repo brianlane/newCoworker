@@ -31,6 +31,7 @@ import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { getBusiness } from "@/lib/db/businesses";
 import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { healPlanChangeAftereffects } from "@/lib/billing/heal-plan-change-aftereffects";
 
 // Vercel Pro ceiling: a full adopt/purchase provision runs ~8-12 minutes.
 // The Edge bridge / pg_cron may stop awaiting sooner, harmless, the
@@ -125,7 +126,22 @@ async function runSweep(request: Request): Promise<Response> {
       });
     }
 
-    return successResponse({ ...result, stuckScan });
+    let planChangeHeal: Awaited<ReturnType<typeof healPlanChangeAftereffects>> = {
+      scanned: 0,
+      actions: []
+    };
+    try {
+      planChangeHeal = await healPlanChangeAftereffects();
+      if (planChangeHeal.actions.length > 0) {
+        logger.info("plan-change aftereffects heal", planChangeHeal);
+      }
+    } catch (err) {
+      logger.warn("plan-change aftereffects heal failed", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    return successResponse({ ...result, stuckScan, planChangeHeal });
   } catch (err) {
     return handleRouteError(err);
   }

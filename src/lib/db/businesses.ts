@@ -435,6 +435,31 @@ export async function listBusinesses(client?: SupabaseClient): Promise<BusinessR
   return (data ?? []) as BusinessRow[];
 }
 
+export type OnlineBusinessVpsPointer = {
+  id: string;
+  tier: BusinessRow["tier"];
+  hostinger_vps_id: string | null;
+};
+
+/**
+ * Online tenants that still point at a Hostinger VM id. The plan-change
+ * heal walks this list to find a stale pointer whose inventory row was
+ * returned to the pool (KIN 2026-09-18: hostinger_vps_id 1936826, zero
+ * assigned inventory).
+ */
+export async function listOnlineBusinessesWithVpsPointer(
+  client?: SupabaseClient
+): Promise<OnlineBusinessVpsPointer[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("id, tier, hostinger_vps_id")
+    .eq("status", "online")
+    .not("hostinger_vps_id", "is", null);
+  if (error) throw new Error(`listOnlineBusinessesWithVpsPointer: ${error.message}`);
+  return (data ?? []) as OnlineBusinessVpsPointer[];
+}
+
 export async function updateBusinessStatus(
   id: string,
   status: BusinessRow["status"],
@@ -495,6 +520,42 @@ export async function updateBusinessVpsSize(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ vps_size: vpsSize }).eq("id", id);
   if (error) throw new Error(`updateBusinessVpsSize: ${error.message}`);
+}
+
+/**
+ * Copy the live subscription tier onto `businesses.tier` so entitlement
+ * gates (external webhooks, SMS tools, etc.) follow the paid plan.
+ *
+ * Change-plan used to write only `subscriptions.tier`. Webhook ingress and
+ * Zapier/Make still read this column, so a Standard → Starter tenant kept
+ * Standard webhooks until something else rewrote it.
+ *
+ * `.select()` is mandatory: an update that matches zero rows returns no
+ * error, so a missed write would look like success.
+ */
+export async function updateBusinessEntitlementTier(
+  id: string,
+  tier: BusinessRow["tier"],
+  client?: SupabaseClient
+): Promise<BusinessRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .update({ tier })
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`updateBusinessEntitlementTier: ${error.message}`);
+  if (!data) {
+    throw new Error(`updateBusinessEntitlementTier: no row written for ${id}`);
+  }
+  const row = data as BusinessRow;
+  if (row.tier !== tier) {
+    throw new Error(
+      `updateBusinessEntitlementTier: read-back tier ${row.tier} !== ${tier}`
+    );
+  }
+  return row;
 }
 
 /**
