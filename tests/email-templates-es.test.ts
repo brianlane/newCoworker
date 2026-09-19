@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
+import { buildPaymentDeclinedEmail } from "@/lib/email/templates/payment-declined";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
 import { buildTeamInviteEmail } from "@/lib/email/templates/team-invite";
@@ -236,5 +237,22 @@ describe("booking owner alert in Spanish", () => {
     expect(ai.body).toContain("Duración: 30 minutos");
     expect(ai.body).toContain("Enlace de video: https://zoom.us/j/123");
     expect(ai.body).toContain("Su nota: Quiere hablar de precios");
+  });
+});
+
+describe("Spanish payment-declined email", () => {
+  it("localizes the decline notice and grace deadline", () => {
+    const { subject, text } = buildPaymentDeclinedEmail({
+      recipientEmail: TO,
+      siteUrl: SITE,
+      failureDetail: "Amex ending 3042, declined (do_not_honor)",
+      graceEndsAt: "2026-10-17T01:04:48.000Z",
+      timeZone: "UTC",
+      locale: "es"
+    });
+    expect(subject).toMatch(/rechazado/i);
+    expect(text).toContain("Amex ending 3042");
+    expect(text).toMatch(/octubre/i);
+    expect(text).toMatch(/Reanudar/);
   });
 });

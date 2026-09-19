@@ -24,15 +24,12 @@ import {
 import { executeLifecyclePlan, executeLifecyclePlanFastPhase } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
-  createCheckoutSession,
-  resolvePriceId
-} from "@/lib/stripe/client";
-import {
   LIFETIME_SUBSCRIPTION_CAP,
   getCustomerProfileById,
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { createResubscribeCheckoutSession } from "@/lib/billing/resubscribe-checkout";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.discriminatedUnion("mode", [
@@ -202,26 +199,16 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "unsupported_reactivation_period", 409);
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const priceId = resolvePriceId(tier, billingPeriod);
-    // Thread the resolved (possibly just-upserted) profile id through so
-    // the webhook's resubscribe orchestrator can increment the lifetime
-    // count against the same row we just cap-checked.
     const metadataProfileId =
       resubscribeProfileId ?? ctxRes.context.subscription.customer_profile_id ?? null;
-    const session = await createCheckoutSession({
-      priceId,
-      successUrl: `${appUrl}/dashboard/billing?reactivated=1`,
-      cancelUrl: `${appUrl}/dashboard/billing`,
-      customerEmail: payer.email ?? undefined,
-      metadata: {
-        businessId: business.id,
-        tier,
-        billingPeriod,
-        userId: user.userId,
-        lifecycleAction: "resubscribe",
-        ...(metadataProfileId ? { customerProfileId: metadataProfileId } : {})
-      }
+    const session = await createResubscribeCheckoutSession({
+      businessId: business.id,
+      ownerEmail: payer.email,
+      tier,
+      billingPeriod,
+      userId: user.userId,
+      customerProfileId: metadataProfileId,
+      stripeCustomerId: ctxRes.context.subscription.stripe_customer_id ?? null
     });
 
     return successResponse({ mode: "resubscribe", checkoutUrl: session.url });

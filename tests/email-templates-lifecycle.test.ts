@@ -12,6 +12,8 @@ import { buildOpsPlanChangeEmail } from "@/lib/email/templates/ops-plan-change";
 import { buildOpsTermAlignmentEmail } from "@/lib/email/templates/ops-term-alignment";
 import { buildOpsDidReleaseFailedEmail } from "@/lib/email/templates/ops-did-release-failed";
 import { buildOpsSubscriptionCanceledEmail } from "@/lib/email/templates/ops-subscription-canceled";
+import { buildOpsPaymentFailedEmail } from "@/lib/email/templates/ops-payment-failed";
+import { buildPaymentDeclinedEmail } from "@/lib/email/templates/payment-declined";
 
 const mailCtx = {
   recipientEmail: "owner@example.com",
@@ -56,7 +58,7 @@ describe("cancel-confirmation email", () => {
     });
     expect(subject).toMatch(/paused/i);
     expect(text).toMatch(/couldn't process your last payment/i);
-    expect(text).toMatch(/Reactivate/);
+    expect(text).toMatch(/Resume/);
     expect(text).toMatch(/2026/);
   });
 
@@ -556,5 +558,75 @@ describe("email-verification template", () => {
     });
     expect(text).toContain(url);
     expect(text).not.toContain("&amp;");
+  });
+});
+
+describe("payment-declined email", () => {
+  it("names the declined card and points at billing Resume", () => {
+    const { subject, text, html } = buildPaymentDeclinedEmail({
+      recipientEmail: "selena@example.com",
+      siteUrl: "[REDACTED]",
+      failureDetail: "Amex ending 3042, declined (card_declined / do_not_honor)",
+      graceEndsAt: "2026-10-17T01:04:48.000Z",
+      timeZone: "America/Phoenix"
+    });
+    expect(subject).toMatch(/declined/i);
+    expect(text).toContain("Amex ending 3042");
+    expect(text).toMatch(/Resume/);
+    expect(text).not.toContain("\u2014");
+    expect(html).toContain("/dashboard/billing");
+  });
+
+  it("uses the generic retention line when no grace deadline is known", () => {
+    const { text } = buildPaymentDeclinedEmail({
+      recipientEmail: "owner@example.com",
+      siteUrl: "[REDACTED]/",
+      failureDetail: "the charge was declined"
+    });
+    expect(text).toMatch(/30 days/);
+  });
+});
+
+describe("ops payment-failed email", () => {
+  it("pages ops with the invoice, decline detail, and auto-cancel next step", () => {
+    const { subject, text, html } = buildOpsPaymentFailedEmail({
+      businessId: "6cc2d7ba-a007-49d4-93a4-586967e147f1",
+      businessName: "Scar Fairy",
+      ownerName: "Selena Breed",
+      ownerEmail: "selena@example.com",
+      tier: "standard",
+      invoiceId: "in_1UGSoIFv205jOP2fQZJohEsm",
+      stripeSubscriptionId: "sub_1TuFa5Fv205jOP2fl1ze0t2n",
+      failureDetail: "Amex ending 3042, declined (card_declined / do_not_honor)",
+      dbStatus: "active",
+      willAutoCancel: true,
+      siteUrl: "[REDACTED]"
+    });
+    expect(subject).toContain("Scar Fairy");
+    expect(subject).toMatch(/Payment failed/);
+    expect(text).toContain("in_1UGSoIFv205jOP2fQZJohEsm");
+    expect(text).toContain("do_not_honor");
+    expect(text).toContain("autoCancelOnPaymentFailure");
+    expect(text).toContain("payment_failed");
+    expect(html).toContain("/admin/6cc2d7ba-a007-49d4-93a4-586967e147f1");
+  });
+
+  it("says auto-cancel was not dispatched when the row is not active", () => {
+    const { text } = buildOpsPaymentFailedEmail({
+      businessId: "biz-1",
+      businessName: "  ",
+      ownerName: "  ",
+      ownerEmail: "owner@example.com",
+      tier: "starter",
+      invoiceId: "in_x",
+      stripeSubscriptionId: null,
+      failureDetail: "declined",
+      dbStatus: "pending",
+      willAutoCancel: false,
+      siteUrl: "[REDACTED]"
+    });
+    expect(text).toContain("(unnamed)");
+    expect(text).toContain("(none)");
+    expect(text).toMatch(/auto-cancel was not dispatched/);
   });
 });

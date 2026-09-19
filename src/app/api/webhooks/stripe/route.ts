@@ -16,8 +16,7 @@ import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
 import {
   planLifecycleAction,
-  planEnableHostingerAutoRenewOps,
-  GRACE_WINDOW_MS
+  planEnableHostingerAutoRenewOps
 } from "@/lib/billing/lifecycle";
 import {
   executeLifecyclePlan,
@@ -68,6 +67,8 @@ import {
   dispatchExternalStripeCancel,
   stripeCancellationDetailsLabel
 } from "@/lib/billing/external-stripe-cancel";
+import { stampPaymentFailedCancel, canceledMirrorPatch } from "@/lib/billing/payment-failed";
+import { notifyInvoicePaymentFailed } from "@/lib/billing/payment-failed-notify";
 import {
   applyPrioritySupportInvoicePaid,
   isPrioritySupportSubscription,
@@ -853,25 +854,18 @@ export async function POST(request: Request) {
           // another orchestrator owns finalization, so from here we
           // unconditionally schedule a grace deadline unless one has
           // already been stamped or the row is already wiped.
-          const graceEndsAt =
-            existing.grace_ends_at ??
-            (existing.wiped_at
-              ? null
-              : new Date(now.getTime() + GRACE_WINDOW_MS).toISOString());
-          // Clear cached Stripe billing-period bounds on cancel so the
-          // Edge voice inbound cannot keep reserving minutes against a
-          // stale period after the subscription is gone. Pair with a
-          // grace deadline so the wipe-sweep picks the row up.
-          await updateSubscription(existing.id, {
-            status: "canceled",
-            stripe_current_period_start: null,
-            stripe_current_period_end: null,
-            stripe_subscription_cached_at: now.toISOString(),
-            grace_ends_at: graceEndsAt,
-            canceled_at: existing.canceled_at ?? now.toISOString(),
-            cancel_reason: existing.cancel_reason,
-            cancel_at_period_end: false
-          });
+          //
+          // Re-read before PATCHing: autoCancel stamps payment_failed
+          // then Stripe-cancels, so `existing` loaded at the top of
+          // this handler is often stale (cancel_reason still null).
+          // canceledMirrorPatch omits a null cancel_reason so we never
+          // overwrite payment_failed to null (Scar Fairy, Sep 16 2026).
+          const latest =
+            (await getSubscriptionByStripeSubscriptionId(sub.id)) ?? existing;
+          await updateSubscription(
+            existing.id,
+            canceledMirrorPatch({ now, existing: latest })
+          );
         } else {
           logger.info("customer.subscription.deleted: no local subscription row for Stripe sub", {
             stripeSubscriptionId: sub.id,
@@ -1099,12 +1093,22 @@ export async function POST(request: Request) {
         //    dunning tail for an already-canceled subscription and we've
         //    already run the teardown.
         if (existing.status === "active") {
-          // Same `after()` wrapper as the `customer.subscription.updated`
-          // dispatch above: must outlive the 200 ack on Vercel
-          // serverless so the SSH backup + Hostinger teardown actually
-          // get to run.
           const dispatchBusinessId = existing.business_id;
           const dispatchEventId = event.id;
+          try {
+            await notifyInvoicePaymentFailed({
+              existing,
+              invoice,
+              stripeSubscriptionId: subscriptionId,
+              willAutoCancel: true
+            });
+          } catch (err) {
+            logger.error("invoice.payment_failed notify threw", {
+              businessId: dispatchBusinessId,
+              eventId: dispatchEventId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
           after(async () => {
             try {
               await dispatchAutoCancelOnPaymentFailure({
@@ -1202,6 +1206,14 @@ async function dispatchAutoCancelOnPaymentFailure(params: {
       });
       return;
     }
+    // Stamp cancel_reason=payment_failed BEFORE Stripe cancel, but leave
+    // status active. The executor's Stripe op emits
+    // customer.subscription.updated/deleted with cancellation_requested
+    // (API cancel, not a customer click). Those webhooks used to race a
+    // still-active row and PATCH cancel_reason null (Scar Fairy, Sep 16
+    // 2026). Flipping status here would block retry if Stripe cancel then
+    // fails (planner and invoice.payment_failed both require active).
+    await stampPaymentFailedCancel(ctxRes.context.subscription);
     await executeLifecyclePlan(planRes.plan, {
       businessId,
       vpsHost: ctxRes.vpsHost,

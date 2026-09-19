@@ -5,7 +5,7 @@ import { getRecentLogs } from "@/lib/db/logs";
 import { listSystemLogs } from "@/lib/db/system-logs";
 import { getProvisioningLogs, type ProvisioningLogPayload } from "@/lib/provisioning/progress";
 import { getBusinessConfig } from "@/lib/db/configs";
-import { getSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, isCanceledInGrace } from "@/lib/db/subscriptions";
 import { listBusinessMembers } from "@/lib/db/business-members";
 import {
   getTelnyxVoiceRouteForBusiness,
@@ -21,6 +21,7 @@ import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { PaymentLinkButton } from "@/components/admin/PaymentLinkButton";
+import { ResubscribeCheckoutButton } from "@/components/admin/ResubscribeCheckoutButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { BillingControlsPanel } from "@/components/admin/BillingControlsPanel";
 import { MembershipDiscountPanel } from "@/components/admin/MembershipDiscountPanel";
@@ -232,6 +233,7 @@ export default async function BusinessDetailPage({
   const systemLogs = [...systemLogById.values()].sort((a, b) => b.id - a.id);
 
   const needsPayment = !subscription || subscription.status === "pending";
+  const needsResubscribe = subscription != null && isCanceledInGrace(subscription);
 
   // What the onboarding nudge would ask this owner to finish. Same function
   // the /api/admin/nudge route runs, so the reasons shown next to the button
@@ -675,6 +677,16 @@ export default async function BusinessDetailPage({
                   opposite ends, so they sit together. */}
               <PaymentLinkButton businessId={businessId} />
               <SkipPaymentButton businessId={businessId} />
+            </div>
+          )}
+          {needsResubscribe && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-parchment/50">
+                Canceled tenant. Mint a Checkout link that attaches this Stripe
+                customer and restores the subscriptions row after they pay. Do
+                not use the Stripe Dashboard for this.
+              </p>
+              <ResubscribeCheckoutButton businessId={businessId} />
             </div>
           )}
         </div>

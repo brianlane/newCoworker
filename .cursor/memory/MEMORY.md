@@ -5,6 +5,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Gemini model eval](project_gemini_model_eval.md) - list Google's models, do not pass an id; adopt flagship only at post-intro price; never promo rates
 - [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers
 - [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha; Cloud Agent PRs squash-merge via cursor-automerge.yml, not Dependabot
+- [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - npm audit wrapper + expiring allowlist; a registry 503 is exit 2, not a stale image-size entry
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
 - [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD
 - [Migration heal traps](project_migration_heal_traps.md) - restamps ship zero-byte files or rename APPLIED DDL; wc -c first
@@ -87,6 +88,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Load-state waits are once per document](project_playwright_load_state_once_per_document.md) - networkidle after a click is a NO-OP
 - [Priority support is a SECOND Stripe subscription](project_priority_support_second_stripe_subscription.md) - invoice.paid needs subscriptionKind gate
 - [Plan change fires subscription.deleted while row looks active](project_change_plan_deleted_webhook_ordering.md) - guard on the replacement row
+- [Payment-failed auto-cancel race](project_payment_failed_cancel_race.md) - stamp payment_failed before Stripe cancel or cancel_reason races to NULL; Scar Fairy Sep 16 2026
 - [voice-bridge escapes root tsc](project_voice_bridge_excluded_from_root_tsc.md) - type errors pass CI, break the redeploy; run its own tsc
 - [AMD false negatives are routine](project_amd_false_negatives_and_prompt_ended.md) - human_residence on voicemail; prompt_ended not iOS-only
 - [Voicemail beep is the only honest speak trigger](project_voicemail_beep_trigger_sep2026.md) - prompt_ended is the first pause (cancelled_amd hangup); Sep 1 email was muted-turn false alarm + mid-word clip; speak only on beep_detected; 40s sweep grace

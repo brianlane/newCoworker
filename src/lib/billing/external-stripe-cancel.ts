@@ -20,7 +20,11 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
-import { updateSubscription, type SubscriptionRow } from "@/lib/db/subscriptions";
+import {
+  getSubscriptionByStripeSubscriptionId,
+  updateSubscription,
+  type SubscriptionRow
+} from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
 import { GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
 
@@ -48,10 +52,21 @@ export async function dispatchExternalStripeCancel(args: {
   cancellationDetails: string | null;
   now?: Date;
   after?: typeof nextAfter;
+  /**
+   * Re-read before deciding. `invoice.payment_failed` stamps
+   * `cancel_reason=payment_failed` then Stripe-cancels; the resulting
+   * `customer.subscription.deleted` often still holds a stale in-memory
+   * row with a null reason. Without a fresh read we would overwrite
+   * payment_failed with stripe_external (Scar Fairy, Sep 16 2026).
+   */
+  readLatest?: typeof getSubscriptionByStripeSubscriptionId;
 }): Promise<ExternalCancelDispatch> {
-  const { existing, eventId, stripeSubscriptionId, cancellationDetails } = args;
+  const { eventId, stripeSubscriptionId, cancellationDetails } = args;
   const now = args.now ?? new Date();
   const schedule = args.after ?? nextAfter;
+  const readLatest = args.readLatest ?? getSubscriptionByStripeSubscriptionId;
+  const latest = (await readLatest(stripeSubscriptionId)) ?? args.existing;
+  const existing = latest;
 
   if (existing.cancel_reason != null && existing.cancel_reason !== "stripe_external") {
     return "skipped";

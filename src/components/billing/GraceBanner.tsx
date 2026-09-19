@@ -1,10 +1,10 @@
 /**
  * Dashboard-wide banner shown whenever the current business is in the
  * post-cancellation grace window (status=`canceled` AND `grace_ends_at` in
- * the future). Explains the wipe deadline and gives a single call-to-
- * action to reactivate. The reactivate button POSTs to
- * `/api/billing/reactivate` with `mode: "resubscribe"` and redirects to
- * the returned Stripe Checkout URL.
+ * the future). Explains the wipe deadline and gives a single Resume
+ * call-to-action. User-cancel Resume starts Checkout immediately.
+ * Payment-failure Resume is the same Checkout, with copy that access
+ * returns only after the card is updated and the charge succeeds.
  *
  * Rendered from the dashboard layout so every dashboard page surfaces the
  * warning, not just `/dashboard/billing`.
@@ -63,8 +63,9 @@ export function GraceBanner({ graceEndsAt, reason }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const days = daysUntil(graceEndsAt);
+  const paymentFailed = reason === "payment_failed";
 
-  async function handleReactivate() {
+  async function handleResume() {
     setLoading(true);
     setError(null);
     try {
@@ -97,10 +98,15 @@ export function GraceBanner({ graceEndsAt, reason }: Props) {
       <div className="flex-1">
         <p className="text-sm font-semibold text-spark-orange">{headline(reason)}</p>
         <p className="text-xs text-parchment/70 mt-1">
+          {paymentFailed
+            ? "Your last payment was declined. Resume opens checkout so you can update your card and pay. Access returns after the payment succeeds. "
+            : "Resume to cancel the wipe and bring your workspace back online. "}
           Your data will be permanently wiped on{" "}
           <span className="font-mono">{formatDate(graceEndsAt)}</span>
-          {days > 0 ? ` (${days} day${days === 1 ? "" : "s"} left).` : "."} Reactivate to cancel
-          the wipe and bring your workspace back online.
+          {days > 0 ? ` (${days} day${days === 1 ? "" : "s"} left).` : "."}
+          {paymentFailed
+            ? " Service may stop after that date if payment is not updated."
+            : ""}
         </p>
         {error && (
           <p className="mt-2 text-xs text-spark-orange" role="alert">
@@ -112,9 +118,9 @@ export function GraceBanner({ graceEndsAt, reason }: Props) {
         size="sm"
         variant="primary"
         loading={loading}
-        onClick={handleReactivate}
+        onClick={handleResume}
       >
-        Reactivate
+        Resume
       </Button>
     </div>
   );

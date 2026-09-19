@@ -68,6 +68,10 @@ import {
   buildOpsSubscriptionCanceledEmail,
   type OpsSubscriptionCanceledInput
 } from "@/lib/email/templates/ops-subscription-canceled";
+import {
+  buildOpsPaymentFailedEmail,
+  type OpsPaymentFailedInput
+} from "@/lib/email/templates/ops-payment-failed";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -617,3 +621,41 @@ export async function sendOpsSubscriptionCanceledEmail(
   }
 }
 
+/**
+ * Fire-and-forget "invoice payment failed" ops alert; never throws.
+ * Used by the Stripe `invoice.payment_failed` webhook so a decline that
+ * auto-cancels is not invisible in the admin inbox.
+ */
+export async function sendOpsPaymentFailedEmail(
+  input: Omit<OpsPaymentFailedInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops payment-failed email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsPaymentFailedEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), {
+      text,
+      html
+    });
+    logger.info("ops payment-failed email sent", {
+      businessId: input.businessId,
+      invoiceId: input.invoiceId,
+      willAutoCancel: input.willAutoCancel,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops payment-failed email failed", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
