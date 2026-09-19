@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   aiBudgetPlanMeter,
   planMeterMinutes,
-  smsPlanMeter,
+  smsPlanMeterFromGrants,
   sumUsageGrants,
-  sumUsageGrantsPurchasedSince,
   voicePlanMeter
 } from "@/lib/plans/usage-meters";
 
@@ -38,59 +37,238 @@ describe("sumUsageGrants", () => {
   });
 });
 
-describe("sumUsageGrantsPurchasedSince", () => {
+describe("smsPlanMeterFromGrants", () => {
+  const included = 5_000;
   const windowStart = "2026-09-01T00:00:00.000Z";
-  const leftover = {
-    purchased: 500,
-    remaining: 100,
-    purchasedAt: "2026-08-10T00:00:00.000Z"
-  };
-  const thisWindow = {
+  const nowMs = Date.parse("2026-09-19T12:00:00.000Z");
+  const leftoverLive = {
     purchased: 500,
     remaining: 300,
-    purchasedAt: "2026-09-05T12:00:00.000Z"
+    purchasedAt: "2026-08-10T00:00:00.000Z",
+    expiresAt: "2026-10-01T00:00:00.000Z"
   };
 
-  it("counts only grants purchased at or after the window start", () => {
-    expect(sumUsageGrantsPurchasedSince([leftover, thisWindow], windowStart)).toEqual({
-      purchased: 500,
-      remaining: 300,
-      consumed: 200
-    });
+  it("counts leftover pack overflow after a window rollover", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [leftoverLive],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 5_500 });
   });
 
-  it("treats a missing window, unparseable purchase time, or empty list as zeros", () => {
-    expect(sumUsageGrantsPurchasedSince([thisWindow], "")).toEqual({
-      purchased: 0,
-      remaining: 0,
-      consumed: 0
-    });
-    expect(sumUsageGrantsPurchasedSince([thisWindow], null)).toEqual({
-      purchased: 0,
-      remaining: 0,
-      consumed: 0
-    });
-    expect(sumUsageGrantsPurchasedSince([thisWindow], undefined)).toEqual({
-      purchased: 0,
-      remaining: 0,
-      consumed: 0
-    });
+  it("drops overflow from a pack that expired this window while another live pack keeps the cap", () => {
     expect(
-      sumUsageGrantsPurchasedSince([{ purchased: 500, remaining: 0, purchasedAt: "nope" }], windowStart)
-    ).toEqual({ purchased: 0, remaining: 0, consumed: 0 });
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          leftoverLive,
+          {
+            purchased: 500,
+            remaining: 0,
+            purchasedAt: "2026-09-05T00:00:00.000Z",
+            expiresAt: "2026-09-10T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
+  });
+
+  it("drops leftover last-window consumption covering an older pack that expired this window", () => {
     expect(
-      sumUsageGrantsPurchasedSince([{ purchased: 500, remaining: 0 }], windowStart)
-    ).toEqual({ purchased: 0, remaining: 0, consumed: 0 });
-    expect(sumUsageGrantsPurchasedSince(null, windowStart)).toEqual({
-      purchased: 0,
-      remaining: 0,
-      consumed: 0
-    });
-    expect(sumUsageGrantsPurchasedSince(undefined, windowStart)).toEqual({
-      purchased: 0,
-      remaining: 0,
-      consumed: 0
-    });
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          leftoverLive,
+          {
+            purchased: 500,
+            remaining: 0,
+            purchasedAt: "2026-07-01T00:00:00.000Z",
+            expiresAt: "2026-09-10T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
+  });
+
+  it("counts same-window pack draw on a still-live grant", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          {
+            purchased: 500,
+            remaining: 300,
+            purchasedAt: "2026-09-05T00:00:00.000Z",
+            expiresAt: "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 5_500 });
+  });
+
+  it("does not wipe included usage after rollover while under cap", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 100,
+        includedCap: included,
+        grants: [{ ...leftoverLive, remaining: 100 }],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 100, cap: 5_500 });
+  });
+
+  it("treats a missing window as no this-period pack draw", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [leftoverLive],
+        windowStart: "",
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [leftoverLive],
+        windowStart: null,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_500 });
+  });
+
+  it("treats missing expiry as live and null grants as no packs", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [{ purchased: 500, remaining: 300, purchasedAt: "2026-08-10T00:00:00.000Z" }],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 5_500 });
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: null,
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_000 });
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: undefined,
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_000 });
+  });
+
+  it("ignores packs that expired in a previous window", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          leftoverLive,
+          {
+            purchased: 500,
+            remaining: 0,
+            purchasedAt: "2026-07-01T00:00:00.000Z",
+            expiresAt: "2026-08-15T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 5_500 });
+  });
+
+  it("uses Date.now when nowMs is omitted", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 4_180,
+        includedCap: included,
+        grants: [
+          {
+            purchased: 500,
+            remaining: 500,
+            purchasedAt: "2026-09-05T00:00:00.000Z",
+            expiresAt: "2099-01-01T00:00:00.000Z"
+          }
+        ],
+        windowStart
+      })
+    ).toEqual({ used: 4_180, cap: 5_500 });
+  });
+
+  it("drops an expired-only grant from both sides", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          {
+            purchased: 500,
+            remaining: 0,
+            purchasedAt: "2026-09-05T00:00:00.000Z",
+            expiresAt: "2026-09-10T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_000, cap: 5_000 });
+  });
+
+  it("stacks two live packs in the denominator", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: 5_200,
+        includedCap: included,
+        grants: [
+          leftoverLive,
+          {
+            purchased: 1_000,
+            remaining: 1_000,
+            purchasedAt: "2026-09-05T00:00:00.000Z",
+            expiresAt: "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 5_200, cap: 6_500 });
+  });
+
+  it("treats garbage SMS amounts as zero", () => {
+    expect(
+      smsPlanMeterFromGrants({
+        usedThisPeriod: Number.NaN,
+        includedCap: Number.NEGATIVE_INFINITY,
+        grants: [{ purchased: -1, remaining: Number.NaN }],
+        windowStart,
+        nowMs
+      })
+    ).toEqual({ used: 0, cap: 0 });
   });
 });
 
@@ -186,115 +364,6 @@ describe("voicePlanMeter (Amy-style Standard 250 min + 30 min pack)", () => {
       unexpiredConsumedSeconds: totals.consumed
     });
     expect(planMeterMinutes(meter)).toEqual({ used: 269, cap: 310 });
-  });
-});
-
-describe("smsPlanMeter", () => {
-  const included = 5_000;
-
-  it("at-cap analog: unused pack raises the denominator, numerator stays period usage", () => {
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 4_180,
-        includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 0
-      })
-    ).toEqual({ used: 4_180, cap: 5_500 });
-  });
-
-  it("after pack usage the numerator includes included+pack draw", () => {
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 5_200,
-        includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 200
-      })
-    ).toEqual({ used: 5_200, cap: 5_500 });
-  });
-
-  it("after expiry the expired pack drops out of both sides", () => {
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 5_200,
-        includedCap: included,
-        unexpiredPurchased: 0,
-        unexpiredConsumed: 0
-      })
-    ).toEqual({ used: 5_000, cap: 5_000 });
-  });
-
-  it("drops expired-pack overflow even when another live pack keeps the cap up", () => {
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 5_200,
-        includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 0
-      })
-    ).toEqual({ used: 5_000, cap: 5_500 });
-  });
-
-  it("does not let leftover last-window consumption cover expired this-period overflow", () => {
-    const leftover = {
-      purchased: 500,
-      remaining: 100,
-      purchasedAt: "2026-08-10T00:00:00.000Z"
-    };
-    const thisWindowConsumed = sumUsageGrantsPurchasedSince(
-      [leftover],
-      "2026-09-01T00:00:00.000Z"
-    ).consumed;
-    expect(thisWindowConsumed).toBe(0);
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 5_200,
-        includedCap: included,
-        unexpiredPurchased: leftover.purchased,
-        unexpiredConsumed: thisWindowConsumed
-      })
-    ).toEqual({ used: 5_000, cap: 5_500 });
-  });
-
-  it("stacks two unexpired text packs", () => {
-    const totals = sumUsageGrants([
-      { purchased: 500, remaining: 300 },
-      { purchased: 1_000, remaining: 1_000 }
-    ]);
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 5_200,
-        includedCap: included,
-        unexpiredPurchased: totals.purchased,
-        unexpiredConsumed: totals.consumed
-      })
-    ).toEqual({ used: 5_200, cap: 6_500 });
-  });
-
-  it("does not subtract leftover pack draw from a new billing window", () => {
-    // Pack still unexpired after rollover (400 consumed last window). This
-    // window has only 100 included sends. Numerator is this-period usage,
-    // denominator still includes the live grant.
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: 100,
-        includedCap: included,
-        unexpiredPurchased: 500,
-        unexpiredConsumed: 400
-      })
-    ).toEqual({ used: 100, cap: 5_500 });
-  });
-
-  it("treats garbage SMS amounts as zero", () => {
-    expect(
-      smsPlanMeter({
-        usedThisPeriod: Number.NaN,
-        includedCap: Number.NEGATIVE_INFINITY,
-        unexpiredPurchased: -1,
-        unexpiredConsumed: Number.NaN
-      })
-    ).toEqual({ used: 0, cap: 0 });
   });
 });
 

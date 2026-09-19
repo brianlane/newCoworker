@@ -39,8 +39,7 @@ import { translatorAllowedForTier } from "@/lib/plans/translator";
 import {
   aiBudgetPlanMeter,
   planMeterMinutes,
-  smsPlanMeter,
-  sumUsageGrantsPurchasedSince,
+  smsPlanMeterFromGrants,
   voicePlanMeter
 } from "@/lib/plans/usage-meters";
 
@@ -83,7 +82,12 @@ export default async function DashboardPage() {
     textsPurchased: 0,
     textsRemaining: 0,
     textsConsumed: 0,
-    grants: [] as { purchased: number; remaining: number; purchasedAt: string | null }[]
+    grants: [] as {
+      purchased: number;
+      remaining: number;
+      purchasedAt: string | null;
+      expiresAt: string | null;
+    }[]
   };
   // Per-surface staff mode for SMS. Defaults to enabled on its own if the
   // read fails, so this never blanks the card.
@@ -154,14 +158,11 @@ export default async function DashboardPage() {
     : null;
   const smsMeter =
     smsWindow !== null && smsCap !== null && Number.isFinite(smsCap)
-      ? smsPlanMeter({
+      ? smsPlanMeterFromGrants({
           usedThisPeriod: smsWindow.used,
           includedCap: smsCap,
-          unexpiredPurchased: smsBonusTotals.textsPurchased,
-          unexpiredConsumed: sumUsageGrantsPurchasedSince(
-            smsBonusTotals.grants,
-            smsWindow.windowStart
-          ).consumed
+          grants: smsBonusTotals.grants,
+          windowStart: smsWindow.windowStart
         })
       : null;
   const aiMeter = chatSpend

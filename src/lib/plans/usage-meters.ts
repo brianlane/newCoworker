@@ -22,8 +22,8 @@ export type PlanMeter = {
 export type UsageGrant = {
   purchased: number;
   remaining: number;
-  /** Grant purchase time. Used to keep leftover last-window draw out of this-period SMS overflow. */
   purchasedAt?: string | null;
+  expiresAt?: string | null;
 };
 
 export type UsageGrantTotals = {
@@ -56,26 +56,23 @@ export function sumUsageGrants(grants: readonly UsageGrant[] | null | undefined)
   return { purchased, remaining, consumed };
 }
 
-/**
- * Lifetime totals for grants purchased at or after `windowStart`. Grants
- * without a parseable purchase time, or a missing/invalid window start, are
- * excluded: leftover consumption from an earlier window must not count as
- * this-period live-pack draw.
- */
-export function sumUsageGrantsPurchasedSince(
-  grants: readonly UsageGrant[] | null | undefined,
-  windowStart: string | null | undefined
-): UsageGrantTotals {
-  const startMs = Date.parse(windowStart ?? "");
-  if (!Number.isFinite(startMs)) {
-    return { purchased: 0, remaining: 0, consumed: 0 };
-  }
-  return sumUsageGrants(
-    (grants ?? []).filter((g) => {
-      const at = Date.parse(g.purchasedAt ?? "");
-      return Number.isFinite(at) && at >= startMs;
-    })
-  );
+function parseMs(value: string | null | undefined): number {
+  return Date.parse(value ?? "");
+}
+
+function purchasedInWindow(g: UsageGrant, startMs: number): boolean {
+  const at = parseMs(g.purchasedAt);
+  return Number.isFinite(at) && at >= startMs;
+}
+
+function isLiveGrant(g: UsageGrant, nowMs: number): boolean {
+  const exp = parseMs(g.expiresAt);
+  return !Number.isFinite(exp) || exp > nowMs;
+}
+
+function expiredInWindow(g: UsageGrant, startMs: number, nowMs: number): boolean {
+  const exp = parseMs(g.expiresAt);
+  return Number.isFinite(exp) && exp > startMs && exp <= nowMs;
 }
 
 /**
@@ -112,17 +109,15 @@ export function voicePlanMeter(input: {
 /**
  * SMS window usage is a single `daily_usage` total (plan + bonus) for the
  * current billing window. Bonus only starts after the included cap, so
- * this-period pack draw is the overflow, capped by consumption on live packs
- * that were purchased in this same window (`sumUsageGrantsPurchasedSince`):
+ * this-period pack draw is the overflow, capped by `unexpiredConsumed`
+ * (this-period draw from packs that are still live, not lifetime leftover).
  *
- * - leftover consumption from last window does not subtract from this-period
- *   included usage (overflow is 0 while under cap)
- * - leftover last-window consumption also cannot keep this-period overflow
- *   from an expired pack in the numerator
- * - usage drawn from a pack that later expires is dropped, even when another
- *   live pack keeps the denominator high
+ * Prefer {@link smsPlanMeterFromGrants}, which derives that consumed figure
+ * from grant purchase/expiry times so leftover packs used this window still
+ * raise the numerator, while overflow from a pack that expired this window
+ * does not.
  */
-export function smsPlanMeter(input: {
+function smsPlanMeter(input: {
   usedThisPeriod: number;
   includedCap: number;
   unexpiredPurchased: number;
@@ -138,6 +133,62 @@ export function smsPlanMeter(input: {
     used: includedUsed + Math.min(overflow, consumed),
     cap: includedCap + purchased
   };
+}
+
+/**
+ * Dashboard SMS PLAN meter. Live grants raise the denominator by full grant
+ * size. Numerator overflow counts as live-pack draw unless a grant that
+ * expired this window can explain it:
+ *
+ * - leftover pack purchased last window, used this window, still live: the
+ *   overflow stays (normal 30-day / period-end survival)
+ * - overflow from a pack that expired this window is dropped, even when
+ *   another live pack keeps the denominator high
+ * - leftover last-window consumption cannot cover that expired overflow
+ */
+export function smsPlanMeterFromGrants(input: {
+  usedThisPeriod: number;
+  includedCap: number;
+  grants: readonly UsageGrant[] | null | undefined;
+  windowStart: string | null | undefined;
+  nowMs?: number;
+}): PlanMeter {
+  const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
+  const startMs = parseMs(input.windowStart);
+  const grants = input.grants ?? [];
+  const live = grants.filter((g) => isLiveGrant(g, nowMs));
+  const livePurchased = sumUsageGrants(live).purchased;
+  const period = finiteNonNeg(input.usedThisPeriod);
+  const includedCap = finiteNonNeg(input.includedCap);
+  const overflow = Math.max(0, period - includedCap);
+
+  if (!Number.isFinite(startMs)) {
+    return smsPlanMeter({
+      usedThisPeriod: period,
+      includedCap,
+      unexpiredPurchased: livePurchased,
+      unexpiredConsumed: 0
+    });
+  }
+
+  const expiredThisWindow = grants.filter((g) => expiredInWindow(g, startMs, nowMs));
+  const newLiveConsumed = sumUsageGrants(live.filter((g) => purchasedInWindow(g, startMs))).consumed;
+  const newExpiredConsumed = sumUsageGrants(
+    expiredThisWindow.filter((g) => purchasedInWindow(g, startMs))
+  ).consumed;
+  const rest = Math.max(0, overflow - newLiveConsumed - newExpiredConsumed);
+  const hasOldExpired = expiredThisWindow.some((g) => !purchasedInWindow(g, startMs));
+  const thisPeriodLive = Math.min(
+    overflow,
+    livePurchased,
+    newLiveConsumed + (hasOldExpired ? 0 : rest)
+  );
+  return smsPlanMeter({
+    usedThisPeriod: period,
+    includedCap,
+    unexpiredPurchased: livePurchased,
+    unexpiredConsumed: thisPeriodLive
+  });
 }
 
 /**

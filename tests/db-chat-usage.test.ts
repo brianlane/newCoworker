@@ -380,7 +380,7 @@ describe("getSmsBonusGrantTotals", () => {
     const builder = {
       select: () => builder,
       eq: () => builder,
-      is: () => builder,
+      is: async () => result,
       gt: async () => result
     };
     return { from: vi.fn(() => builder), rpc: vi.fn() };
@@ -399,20 +399,21 @@ describe("getSmsBonusGrantTotals", () => {
       textsRemaining: 1_300,
       textsConsumed: 200,
       grants: [
-        { purchased: 500, remaining: 300, purchasedAt: null },
-        { purchased: 1_000, remaining: 1_000, purchasedAt: null }
+        { purchased: 500, remaining: 300, purchasedAt: null, expiresAt: null },
+        { purchased: 1_000, remaining: 1_000, purchasedAt: null, expiresAt: null }
       ]
     });
     expect(db.from).toHaveBeenCalledWith("sms_bonus_grants");
   });
 
-  it("keeps purchased_at on each grant so the PLAN meter can drop leftover draw", async () => {
+  it("keeps purchased_at and expires_at so leftover live draw is distinct from expired overflow", async () => {
     const db = stubGrantRows({
       data: [
         {
           texts_purchased: 500,
           texts_remaining: 100,
-          purchased_at: "2026-08-10T00:00:00.000Z"
+          purchased_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2026-10-01T00:00:00.000Z"
         }
       ],
       error: null
@@ -425,7 +426,8 @@ describe("getSmsBonusGrantTotals", () => {
         {
           purchased: 500,
           remaining: 100,
-          purchasedAt: "2026-08-10T00:00:00.000Z"
+          purchasedAt: "2026-08-10T00:00:00.000Z",
+          expiresAt: "2026-10-01T00:00:00.000Z"
         }
       ]
     });
@@ -445,7 +447,7 @@ describe("getSmsBonusGrantTotals", () => {
       textsPurchased: 0,
       textsRemaining: 0,
       textsConsumed: 0,
-      grants: [{ purchased: 0, remaining: 0, purchasedAt: null }]
+      grants: [{ purchased: 0, remaining: 0, purchasedAt: null, expiresAt: null }]
     });
   });
 
@@ -472,9 +474,48 @@ describe("getSmsBonusGrantTotals", () => {
       textsPurchased: 500,
       textsRemaining: 500,
       textsConsumed: 0,
-      grants: [{ purchased: 500, remaining: 500, purchasedAt: null }]
+      grants: [{ purchased: 500, remaining: 500, purchasedAt: null, expiresAt: null }]
     });
     expect(mockCreateClient).toHaveBeenCalled();
+  });
+
+  it("keeps expired grants on the row list but out of live totals", async () => {
+    const db = stubGrantRows({
+      data: [
+        {
+          texts_purchased: 500,
+          texts_remaining: 100,
+          purchased_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2020-01-01T00:00:00.000Z"
+        },
+        {
+          texts_purchased: 1_000,
+          texts_remaining: 1_000,
+          purchased_at: "2026-09-05T00:00:00.000Z",
+          expires_at: "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 1_000,
+      textsRemaining: 1_000,
+      textsConsumed: 0,
+      grants: [
+        {
+          purchased: 500,
+          remaining: 100,
+          purchasedAt: "2026-08-10T00:00:00.000Z",
+          expiresAt: "2020-01-01T00:00:00.000Z"
+        },
+        {
+          purchased: 1_000,
+          remaining: 1_000,
+          purchasedAt: "2026-09-05T00:00:00.000Z",
+          expiresAt: "2026-10-01T00:00:00.000Z"
+        }
+      ]
+    });
   });
 });
 

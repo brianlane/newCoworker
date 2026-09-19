@@ -207,6 +207,7 @@ type SmsBonusGrantRow = {
   purchased: number;
   remaining: number;
   purchasedAt: string | null;
+  expiresAt: string | null;
 };
 
 export type SmsBonusGrantTotals = {
@@ -224,10 +225,10 @@ const EMPTY_SMS_BONUS_TOTALS: SmsBonusGrantTotals = {
 };
 
 /**
- * Unexpired, unvoided SMS pack totals for the PLAN meter. Purchased is the
- * full grant size (denominator). Remaining is leftover balance for billing
- * detail / auto-reload. `grants` carries purchase time so the dashboard can
- * count only this-window pack draw in the numerator. Zeros on error so a
+ * Unvoided SMS pack rows for the PLAN meter, live and recently expired.
+ * Purchased/remaining/consumed totals are live grants only (denominator).
+ * `grants` includes expired rows so the meter can drop this-window expired
+ * overflow without ignoring leftover live-pack draw. Zeros on error so a
  * read blip does not blank the dashboard.
  */
 export async function getSmsBonusGrantTotals(
@@ -237,27 +238,33 @@ export async function getSmsBonusGrantTotals(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("sms_bonus_grants")
-    .select("texts_purchased, texts_remaining, purchased_at")
+    .select("texts_purchased, texts_remaining, purchased_at, expires_at")
     .eq("business_id", businessId)
-    .is("voided_at", null)
-    .gt("expires_at", new Date().toISOString());
+    .is("voided_at", null);
   if (error) {
     console.error("getSmsBonusGrantTotals", error.message);
     return EMPTY_SMS_BONUS_TOTALS;
   }
+  const nowMs = Date.now();
   const grants: SmsBonusGrantRow[] = (data ?? []).map((row) => {
     const r = row as {
       texts_purchased?: number;
       texts_remaining?: number;
       purchased_at?: string | null;
+      expires_at?: string | null;
     };
     return {
       purchased: r.texts_purchased ?? 0,
       remaining: r.texts_remaining ?? 0,
-      purchasedAt: typeof r.purchased_at === "string" ? r.purchased_at : null
+      purchasedAt: typeof r.purchased_at === "string" ? r.purchased_at : null,
+      expiresAt: typeof r.expires_at === "string" ? r.expires_at : null
     };
   });
-  const totals = sumUsageGrants(grants);
+  const live = grants.filter((g) => {
+    const exp = Date.parse(g.expiresAt ?? "");
+    return !Number.isFinite(exp) || exp > nowMs;
+  });
+  const totals = sumUsageGrants(live);
   return {
     textsPurchased: totals.purchased,
     textsRemaining: totals.remaining,
