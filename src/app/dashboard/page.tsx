@@ -31,11 +31,17 @@ import { StaffSmsToggle } from "@/components/dashboard/StaffSmsToggle";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
-import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
+import { getChatSpendSnapshotForBusiness, getSmsBonusGrantTotals } from "@/lib/db/chat-usage";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import { getBillingWindowUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { translatorAllowedForTier } from "@/lib/plans/translator";
+import {
+  aiBudgetPlanMeter,
+  planMeterMinutes,
+  smsPlanMeter,
+  voicePlanMeter
+} from "@/lib/plans/usage-meters";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +78,7 @@ export default async function DashboardPage() {
   let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
   let voiceSnapshot: Awaited<ReturnType<typeof getVoiceBillingSnapshotForBusiness>> | null = null;
   let smsUsedThisPeriod: number | null = null;
+  let smsBonusTotals = { textsPurchased: 0, textsRemaining: 0, textsConsumed: 0 };
   // Per-surface staff mode for SMS. Defaults to enabled on its own if the
   // read fails, so this never blanks the card.
   let staffSmsReplyEnabled = true;
@@ -84,7 +91,8 @@ export default async function DashboardPage() {
       chatSpend,
       voiceSnapshot,
       smsUsedThisPeriod,
-      staffSmsReplyEnabled
+      staffSmsReplyEnabled,
+      smsBonusTotals
     ] = await Promise.all([
       getRecentActivity(business.id, 10, undefined, business.tier),
       getLatestProvisioningStatus(business.id),
@@ -101,7 +109,12 @@ export default async function DashboardPage() {
         // ceiled so the displayed remainder is never more than Postgres allows.
         .then((t) => Math.ceil(t.sms_text_units))
         .catch(() => null),
-      staffModeEnabled(business.id, "sms")
+      staffModeEnabled(business.id, "sms"),
+      getSmsBonusGrantTotals(business.id, db).catch(() => ({
+        textsPurchased: 0,
+        textsRemaining: 0,
+        textsConsumed: 0
+      }))
     ]);
   }
 
@@ -116,6 +129,35 @@ export default async function DashboardPage() {
           { phone: business.phone ?? null, timezone: business.timezone ?? null }
         )
       : null;
+
+  // PLAN meters: included allotment + full grant size of unexpired packs
+  // (not leftover pack balance). Auto-reload still uses remaining headroom.
+  const voiceMeter = voiceSnapshot
+    ? planMeterMinutes(
+        voicePlanMeter({
+          committedIncludedSeconds: voiceSnapshot.committedIncludedSeconds,
+          tierCapSeconds: voiceSnapshot.tierCapSeconds,
+          unexpiredPurchasedSeconds: voiceSnapshot.bonusSecondsPurchased,
+          unexpiredConsumedSeconds: voiceSnapshot.bonusSecondsConsumed
+        })
+      )
+    : null;
+  const smsMeter =
+    smsUsedThisPeriod !== null && smsCap !== null && Number.isFinite(smsCap)
+      ? smsPlanMeter({
+          usedThisPeriod: smsUsedThisPeriod,
+          includedCap: smsCap,
+          unexpiredPurchased: smsBonusTotals.textsPurchased,
+          unexpiredConsumed: smsBonusTotals.textsConsumed
+        })
+      : null;
+  const aiMeter = chatSpend
+    ? aiBudgetPlanMeter({
+        spendMicros: chatSpend.spendMicros,
+        baseCapMicros: chatSpend.baseCapMicros,
+        unexpiredCreditMicros: chatSpend.creditMicros
+      })
+    : null;
 
   // Verification status. The auth user's `email_confirmed_at` is
   // authoritative, a signed-in owner whose auth email is confirmed is
@@ -232,10 +274,10 @@ export default async function DashboardPage() {
                 {business.tier.charAt(0).toUpperCase() + business.tier.slice(1)}
               </Badge>
               <p className="mt-2 text-xs text-parchment/50 leading-relaxed">
-                {voiceSnapshot
+                {voiceMeter
                   ? t("voiceUsage", {
-                      used: Math.round(voiceSnapshot.committedIncludedSeconds / 60).toLocaleString(),
-                      cap: Math.round(voiceSnapshot.tierCapSeconds / 60).toLocaleString()
+                      used: voiceMeter.used.toLocaleString(),
+                      cap: voiceMeter.cap.toLocaleString()
                     })
                   : voiceMinutesLine(
                       business.tier as PlanTier,
@@ -243,10 +285,10 @@ export default async function DashboardPage() {
                       locale
                     )}
                 <br />
-                {smsUsedThisPeriod !== null && smsCap !== null && Number.isFinite(smsCap)
+                {smsMeter
                   ? t("textsUsage", {
-                      used: smsUsedThisPeriod.toLocaleString(),
-                      cap: smsCap.toLocaleString()
+                      used: smsMeter.used.toLocaleString(),
+                      cap: smsMeter.cap.toLocaleString()
                     })
                   : smsMonthlyLine(
                       business.tier as PlanTier,
@@ -254,12 +296,12 @@ export default async function DashboardPage() {
                       locale,
                       smsCap ?? undefined
                     )}
-                {chatSpend && (
+                {aiMeter && (
                   <>
                     <br />
                     {t("aiBudgetUsage", {
-                      spent: `$${(chatSpend.spendMicros / 1_000_000).toFixed(2)}`,
-                      cap: `$${(chatSpend.effectiveCapMicros / 1_000_000).toFixed(2)}`
+                      spent: `$${(aiMeter.used / 1_000_000).toFixed(2)}`,
+                      cap: `$${(aiMeter.cap / 1_000_000).toFixed(2)}`
                     })}
                   </>
                 )}

@@ -14,7 +14,8 @@ import {
   getFleetCurrentAiSpendMicros,
   getFleetCurrentAiSpendMicrosByBusiness,
   getSmsBonusSoonestExpiry,
-  getSmsBonusTextsRemaining
+  getSmsBonusTextsRemaining,
+  getSmsBonusGrantTotals
 } from "@/lib/db/chat-usage";
 
 type MaybeSingleResult = { data: unknown; error: { message: string } | null };
@@ -368,6 +369,78 @@ describe("getSmsBonusTextsRemaining", () => {
     const db = stubDb({ rpcResults: { sms_bonus_texts_remaining: { data: 5, error: null } } });
     mockCreateClient.mockResolvedValueOnce(db);
     await expect(getSmsBonusTextsRemaining("biz-1")).resolves.toBe(5);
+    expect(mockCreateClient).toHaveBeenCalled();
+  });
+});
+
+describe("getSmsBonusGrantTotals", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  function stubGrantRows(result: { data: unknown; error: { message: string } | null }) {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      is: () => builder,
+      gt: async () => result
+    };
+    return { from: vi.fn(() => builder), rpc: vi.fn() };
+  }
+
+  it("sums purchased, remaining, and consumed across unexpired grants", async () => {
+    const db = stubGrantRows({
+      data: [
+        { texts_purchased: 500, texts_remaining: 300 },
+        { texts_purchased: 1_000, texts_remaining: 1_000 }
+      ],
+      error: null
+    });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 1_500,
+      textsRemaining: 1_300,
+      textsConsumed: 200
+    });
+    expect(db.from).toHaveBeenCalledWith("sms_bonus_grants");
+  });
+
+  it("treats null rows and missing fields as zeros", async () => {
+    const db = stubGrantRows({ data: null, error: null });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0
+    });
+
+    const dbEmpty = stubGrantRows({ data: [{}], error: null });
+    await expect(getSmsBonusGrantTotals("biz-1", dbEmpty as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0
+    });
+  });
+
+  it("returns zeros on error rather than throwing", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = stubGrantRows({ data: null, error: { message: "boom" } });
+    await expect(getSmsBonusGrantTotals("biz-1", db as never)).resolves.toEqual({
+      textsPurchased: 0,
+      textsRemaining: 0,
+      textsConsumed: 0
+    });
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed", async () => {
+    const db = stubGrantRows({
+      data: [{ texts_purchased: 500, texts_remaining: 500 }],
+      error: null
+    });
+    mockCreateClient.mockResolvedValueOnce(db);
+    await expect(getSmsBonusGrantTotals("biz-1")).resolves.toEqual({
+      textsPurchased: 500,
+      textsRemaining: 500,
+      textsConsumed: 0
+    });
     expect(mockCreateClient).toHaveBeenCalled();
   });
 });

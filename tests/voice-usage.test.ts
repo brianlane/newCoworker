@@ -6,6 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
+import { planMeterMinutes, voicePlanMeter } from "@/lib/plans/usage-meters";
 
 function makeBusinessesResult(data: unknown, error: unknown = null) {
   return {
@@ -204,6 +205,8 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
     const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
     expect(snap?.reservedIncludedInflight).toBe(0);
     expect(snap?.bonusSecondsAvailable).toBe(0);
+    expect(snap?.bonusSecondsPurchased).toBe(0);
+    expect(snap?.bonusSecondsConsumed).toBe(0);
   });
 
   it("returns snapshot with headroom and bonus", async () => {
@@ -232,6 +235,8 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
       reservedIncludedInflight: 100,
       includedHeadroomSeconds: 400,
       bonusSecondsAvailable: 120,
+      bonusSecondsPurchased: 0,
+      bonusSecondsConsumed: 0,
       // The one grant holding minutes carries no expiry in this fixture, and
       // the other holds none, so there is no date to show.
       bonusSoonestExpiresAt: null
@@ -257,7 +262,57 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
     });
     const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
     expect(snap?.bonusSecondsAvailable).toBe(2400);
+    expect(snap?.bonusSecondsPurchased).toBe(0);
+    expect(snap?.bonusSecondsConsumed).toBe(0);
     expect(snap?.bonusSoonestExpiresAt).toBe("2026-05-20T00:00:00.000Z");
+  });
+
+  it("counts unexpired pack grant size (not leftover) for the PLAN meter", async () => {
+    const client = mockClient({
+      businesses: makeBusinessesResult({ tier: "standard", enterprise_limits: null }),
+      subscriptions: makeSubResult({ stripe_current_period_start: "2026-04-01T00:00:00.000Z" }),
+      voice_billing_period_usage: makeUsageResult({
+        tier_cap_seconds: 15_000,
+        committed_included_seconds: 15_000
+      }),
+      voice_reservations: makeResvResult([]),
+      voice_bonus_grants: makeBonusResult([
+        { seconds_purchased: 1_800, seconds_remaining: 660, expires_at: "2026-05-20T00:00:00.000Z" },
+        // Drained but unexpired: still adds its full grant to the denominator.
+        { seconds_purchased: 1_800, seconds_remaining: 0, expires_at: "2026-06-01T00:00:00.000Z" }
+      ])
+    });
+    const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
+    expect(snap?.bonusSecondsPurchased).toBe(3_600);
+    expect(snap?.bonusSecondsConsumed).toBe(2_940);
+    expect(snap?.bonusSecondsAvailable).toBe(660);
+  });
+
+  it("feeds the PLAN meter 269/280 for the Amy at-cap + 30-min pack case", async () => {
+    const client = mockClient({
+      businesses: makeBusinessesResult({ tier: "standard", enterprise_limits: null }),
+      subscriptions: makeSubResult({ stripe_current_period_start: "2026-04-01T00:00:00.000Z" }),
+      voice_billing_period_usage: makeUsageResult({
+        tier_cap_seconds: 15_000,
+        committed_included_seconds: 15_000
+      }),
+      voice_reservations: makeResvResult([]),
+      voice_bonus_grants: makeBonusResult([
+        { seconds_purchased: 1_800, seconds_remaining: 660 }
+      ])
+    });
+    const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
+    expect(snap).not.toBeNull();
+    expect(
+      planMeterMinutes(
+        voicePlanMeter({
+          committedIncludedSeconds: snap!.committedIncludedSeconds,
+          tierCapSeconds: snap!.tierCapSeconds,
+          unexpiredPurchasedSeconds: snap!.bonusSecondsPurchased,
+          unexpiredConsumedSeconds: snap!.bonusSecondsConsumed
+        })
+      )
+    ).toEqual({ used: 269, cap: 280 });
   });
 
   it("keys the snapshot on the current month-window for a prepaid multi-month period", async () => {
