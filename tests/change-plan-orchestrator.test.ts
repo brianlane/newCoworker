@@ -1941,7 +1941,7 @@ describe("runChangePlanFromCheckout", () => {
     expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
   });
 
-  it("warns when there is no numeric VM id to wait on for the voice bridge", async () => {
+  it("provisions and waits on the new VM when hostinger_vps_id is non-numeric", async () => {
     getBusinessMock.mockResolvedValueOnce({
       id: "biz-1",
       owner_email: "owner@example.com",
@@ -1950,7 +1950,28 @@ describe("runChangePlanFromCheckout", () => {
       status: "online"
     });
     await runChangePlanFromCheckout(makeSession(), "evt_no_heartbeat_vm");
+    expect(orchestrateProvisioningMock).toHaveBeenCalled();
+    expect(waitForVoiceBridgeHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", vpsId: "2002" })
+    );
+    expect(createSubscriptionMock).toHaveBeenCalled();
+  });
+
+  it("warns when a same-tier switch has no numeric VM id to wait on for the voice bridge", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "pending",
+      customer_profile_id: "prof-1",
+      status: "online"
+    });
+    await runChangePlanFromCheckout(starterMonthlySession(), "evt_same_tier_no_heartbeat_vm");
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(waitForVoiceBridgeHeartbeatMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "changePlan: no numeric VM id to wait on for voice-bridge heartbeat",
+      expect.objectContaining({ businessId: "biz-1", heartbeatVpsId: "pending" })
+    );
     expect(createSubscriptionMock).toHaveBeenCalled();
   });
 
