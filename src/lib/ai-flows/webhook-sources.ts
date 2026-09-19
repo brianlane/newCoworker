@@ -57,7 +57,7 @@ type FromMatchesLike = { type: string; value?: string | null };
  * lead intake. The Standard webhook gate refuses EXTERNAL events only, so a
  * flow pinned solely to one of these must not look blocked on Starter.
  */
-export const INTERNAL_WEBHOOK_SOURCES: ReadonlySet<string> = new Set([
+const INTERNAL_WEBHOOK_SOURCES: ReadonlySet<string> = new Set([
   "prospect_outreach",
   "document_renewal",
   "backlog_import"

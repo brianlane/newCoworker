@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   flowEnabledStatusKind,
-  INTERNAL_WEBHOOK_SOURCES,
   webhookFlowBlockedOnStarter,
   webhookGatePlanLabel,
   webhookTriggerBlockedOnStarter
@@ -26,12 +25,44 @@ const GENERIC_WEBHOOK = {
   trigger: { channel: "webhook" as const, conditions: [] }
 };
 
-describe("INTERNAL_WEBHOOK_SOURCES", () => {
-  it("pins the live internal source labels so a rename cannot silently start gating them", () => {
-    expect(INTERNAL_WEBHOOK_SOURCES.has(PROSPECT_OUTREACH_SOURCE)).toBe(true);
-    expect(INTERNAL_WEBHOOK_SOURCES.has(DEFAULT_BACKLOG_SOURCE)).toBe(true);
-    expect(INTERNAL_WEBHOOK_SOURCES.has("document_renewal")).toBe(true);
-    expect(INTERNAL_WEBHOOK_SOURCES.has(META_LEAD_ADS_SOURCE)).toBe(false);
+describe("internal webhook sources stay ungated", () => {
+  it("does not block platform producers that reuse the webhook channel", () => {
+    expect(
+      webhookTriggerBlockedOnStarter(
+        {
+          channel: "webhook",
+          conditions: [{ type: "from_matches", value: PROSPECT_OUTREACH_SOURCE }]
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      webhookTriggerBlockedOnStarter(
+        {
+          channel: "webhook",
+          conditions: [{ type: "from_matches", value: DEFAULT_BACKLOG_SOURCE }]
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      webhookTriggerBlockedOnStarter(
+        {
+          channel: "webhook",
+          conditions: [{ type: "from_matches", value: "document_renewal" }]
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      webhookTriggerBlockedOnStarter(
+        {
+          channel: "webhook",
+          conditions: [{ type: "from_matches", value: META_LEAD_ADS_SOURCE }]
+        },
+        false
+      )
+    ).toBe(true);
   });
 });
 

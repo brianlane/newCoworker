@@ -10,13 +10,13 @@
 
 import { boxHasPaidTimeLeft, shouldMigrateHardwareForPlanChange } from "@/lib/billing/plan-change-hardware";
 
-export type PlanChangeHardwareStory =
+type PlanChangeHardwareStory =
   | "same_tier"
   | "keep_until_lapse"
   | "keep_same_hardware"
   | "migrate_now";
 
-export type PlanChangeConfirmHardwareKey =
+type PlanChangeConfirmHardwareKey =
   | "confirmSameTier"
   | "confirmKeepDated"
   | "confirmKeepGeneric"
@@ -28,7 +28,7 @@ export type PlanChangeSuccessBannerKey =
   | "planChangedKeepGeneric"
   | "planChangedMigrate";
 
-export function planChangeHardwareStory(input: {
+function planChangeHardwareStory(input: {
   currentTier: "starter" | "standard";
   selectedTier: "starter" | "standard";
   vpsSizePin?: string | null;
@@ -54,7 +54,7 @@ export function planChangeHardwareStory(input: {
 }
 
 /** Confirm-sheet key for the hardware paragraph (literal catalog keys). */
-export function planChangeConfirmHardwareKey(
+function planChangeConfirmHardwareKey(
   input: Parameters<typeof planChangeHardwareStory>[0]
 ): PlanChangeConfirmHardwareKey {
   const story = planChangeHardwareStory(input);
@@ -102,7 +102,7 @@ export const STARTER_DOWNGRADE_LOSS_CATALOG_KEYS = {
   call_intel_and_browser: "lossCallIntelAndBrowser"
 } as const satisfies Record<StarterDowngradeLossId, string>;
 
-export function starterDowngradeLossIds(
+function starterDowngradeLossIds(
   currentTier: "starter" | "standard",
   selectedTier: "starter" | "standard"
 ): readonly StarterDowngradeLossId[] {
@@ -143,7 +143,7 @@ function starterDowngradeKeepIds(
  * hardware. Hardware copy stays direction-agnostic; Starter-only flags
  * carry the "prepaid box does not keep Standard features" honesty line.
  */
-export type PlanChangeConfirmPreview = {
+type PlanChangeConfirmPreview = {
   destinationTier: "starter" | "standard";
   showsEntitlementFlipNow: boolean;
   showsStarterFeatureSplit: boolean;

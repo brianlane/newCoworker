@@ -7,158 +7,124 @@ import {
   entitlementBillingMismatch,
   formatPlanChangePaidThroughDate,
   parseablePaidThroughIso,
-  planChangeConfirmHardwareKey,
   planChangeConfirmPreview,
-  planChangeHardwareStory,
   planChangeSuccessBannerKey,
   showServerPrepaidLine,
   STARTER_DOWNGRADE_KEEP_CATALOG_KEYS,
   STARTER_DOWNGRADE_KEEP_IDS,
   STARTER_DOWNGRADE_LOSS_CATALOG_KEYS,
-  STARTER_DOWNGRADE_LOSS_IDS,
-  starterDowngradeLossIds
+  STARTER_DOWNGRADE_LOSS_IDS
 } from "@/lib/billing/plan-change-copy";
 
 const NOW_MS = Date.parse("2026-09-18T15:25:00.000Z");
 const FUTURE_EXPIRY = "2026-09-28T00:00:00.000Z";
 const PAST_EXPIRY = "2026-09-18T15:24:00.000Z";
 
-describe("planChangeHardwareStory", () => {
+describe("planChangeConfirmPreview hardware key", () => {
   it("same-tier period switches stay on the current server", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "starter",
         selectedTier: "starter",
         expiresAt: PAST_EXPIRY,
         nowMs: NOW_MS
-      })
-    ).toBe("same_tier");
+      }).hardwareKey
+    ).toBe("confirmSameTier");
   });
 
   it("keeps the box on Standard → Starter while prepaid time remains (KIN)", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "standard",
         selectedTier: "starter",
         vpsSizePin: "kvm2",
         expiresAt: FUTURE_EXPIRY,
         nowMs: NOW_MS
-      })
-    ).toBe("keep_until_lapse");
+      }).hardwareKey
+    ).toBe("confirmKeepDated");
   });
 
   it("keeps the box on Starter → Standard while prepaid time remains", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "starter",
         selectedTier: "standard",
         expiresAt: FUTURE_EXPIRY,
         nowMs: NOW_MS
-      })
-    ).toBe("keep_until_lapse");
+      }).hardwareKey
+    ).toBe("confirmKeepDated");
   });
 
   it("migrates a lapsed unpinned Standard kvm8 box down to Starter", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "standard",
         selectedTier: "starter",
         vpsSizePin: null,
         expiresAt: PAST_EXPIRY,
         nowMs: NOW_MS
-      })
-    ).toBe("migrate_now");
+      }).hardwareKey
+    ).toBe("confirmMigrate");
   });
 
   it("keeps same-size hardware after lapse instead of promising a migrate", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "starter",
         selectedTier: "standard",
         vpsSizePin: "kvm2",
         expiresAt: PAST_EXPIRY,
         nowMs: NOW_MS
-      })
-    ).toBe("keep_same_hardware");
+      }).hardwareKey
+    ).toBe("confirmKeepSameHardware");
   });
 
   it("migrates when there is no live box even if sizes would match", () => {
     expect(
-      planChangeHardwareStory({
+      planChangeConfirmPreview({
         currentTier: "starter",
         selectedTier: "standard",
         vpsSizePin: "kvm2",
         expiresAt: PAST_EXPIRY,
         hasLiveBox: false,
         nowMs: NOW_MS
-      })
-    ).toBe("migrate_now");
-  });
-});
-
-describe("planChangeConfirmHardwareKey", () => {
-  it("names the keep-until-lapse day when prepaid time is parseable", () => {
-    expect(
-      planChangeConfirmHardwareKey({
-        currentTier: "standard",
-        selectedTier: "starter",
-        expiresAt: FUTURE_EXPIRY,
-        nowMs: NOW_MS
-      })
-    ).toBe("confirmKeepDated");
+      }).hardwareKey
+    ).toBe("confirmMigrate");
   });
 
   it("uses generic keep copy when expiry is unknown", () => {
     expect(
-      planChangeConfirmHardwareKey({
+      planChangeConfirmPreview({
         currentTier: "starter",
         selectedTier: "standard",
         expiresAt: null,
         nowMs: NOW_MS
-      })
+      }).hardwareKey
     ).toBe("confirmKeepGeneric");
-  });
-
-  it("branches same-tier, migrate, and same-size stay", () => {
-    expect(
-      planChangeConfirmHardwareKey({
-        currentTier: "standard",
-        selectedTier: "standard",
-        expiresAt: FUTURE_EXPIRY,
-        nowMs: NOW_MS
-      })
-    ).toBe("confirmSameTier");
-    expect(
-      planChangeConfirmHardwareKey({
-        currentTier: "standard",
-        selectedTier: "starter",
-        vpsSizePin: null,
-        expiresAt: PAST_EXPIRY,
-        nowMs: NOW_MS
-      })
-    ).toBe("confirmMigrate");
-    expect(
-      planChangeConfirmHardwareKey({
-        currentTier: "starter",
-        selectedTier: "standard",
-        vpsSizePin: "kvm2",
-        expiresAt: PAST_EXPIRY,
-        nowMs: NOW_MS
-      })
-    ).toBe("confirmKeepSameHardware");
   });
 });
 
 describe("starterDowngradeLossIds", () => {
   it("is empty unless the confirm is a cut onto Starter", () => {
-    expect(starterDowngradeLossIds("standard", "starter").length).toBeGreaterThan(0);
-    expect(starterDowngradeLossIds("starter", "standard")).toEqual([]);
-    expect(starterDowngradeLossIds("starter", "starter")).toEqual([]);
-    expect(starterDowngradeLossIds("standard", "standard")).toEqual([]);
+    expect(
+      planChangeConfirmPreview({ currentTier: "standard", selectedTier: "starter" }).lossIds.length
+    ).toBeGreaterThan(0);
+    expect(
+      planChangeConfirmPreview({ currentTier: "starter", selectedTier: "standard" }).lossIds
+    ).toEqual([]);
+    expect(
+      planChangeConfirmPreview({ currentTier: "starter", selectedTier: "starter" }).lossIds
+    ).toEqual([]);
+    expect(
+      planChangeConfirmPreview({ currentTier: "standard", selectedTier: "standard" }).lossIds
+    ).toEqual([]);
   });
 
   it("lists webhook, API-key, and other already-gated Standard surfaces", () => {
-    const ids = starterDowngradeLossIds("standard", "starter");
+    const ids = planChangeConfirmPreview({
+      currentTier: "standard",
+      selectedTier: "starter"
+    }).lossIds;
     expect(ids).toEqual([...STARTER_DOWNGRADE_LOSS_IDS]);
     expect(ids[0]).toBe("incoming_webhooks");
     expect(ids[1]).toBe("api_keys");
