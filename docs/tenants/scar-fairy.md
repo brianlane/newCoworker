@@ -120,6 +120,27 @@ and still want Selena's confirmation.
   the one that now renews, at $24.49 as her own. Truly's Stripe period end
   must not touch it. The old Aug 8 date belonged to `1815606`, which she is no
   longer on; that box is pooled `never_renew` and lapses on its own.
+- **2026-09-16 payment-failed auto-cancel.** At ~6:04:48 PM America/Phoenix
+  Stripe sent `invoice.payment_failed` on Standard monthly sub
+  `sub_1TuFa5Fv205jOP2fl1ze0t2n` (customer `cus_Uu3hTLCgROTtbP`, invoice
+  `in_1UGSoIFv205jOP2fQZJohEsm`). Amex ending 3042, `card_declined` /
+  `do_not_honor`. Our webhook (`src/app/api/webhooks/stripe/route.ts`)
+  dispatched `autoCancelOnPaymentFailure` → `buildCancelPlan` emitted Stripe
+  `cancel_subscription`. About 10 seconds later Stripe showed the sub
+  canceled with `cancellation_details.reason = cancellation_requested`, that
+  is what an API cancel looks like, not Selena clicking Cancel. The DB row
+  landed `status=canceled`, `canceled_at=2026-09-17 01:04:59+00`, grace
+  +30d, but `cancel_reason` NULL: autoCancel wrote Stripe cancel before the
+  `payment_failed` stamp, then `customer.subscription.updated` / `.deleted`
+  raced the still-active row and the deleted fallback PATCHed
+  `cancel_reason: existing.cancel_reason` while existing was still null.
+  Do **not** void the orphan invoice or mutate this Stripe customer from
+  ops. Resume is a resubscribe Checkout that attaches `cus_Uu3hTLCgROTtbP`
+  and `lifecycleAction=resubscribe`. Admin mints that link from the tenant
+  page. Owner now gets a payment-declined email on `invoice.payment_failed`.
+  The race fix stamps `payment_failed` before Stripe cancel, re-reads
+  before the external-cancel mirror, and omits a null `cancel_reason` from
+  the deleted fallback PATCH.
 
 ## One-shots
 
@@ -150,4 +171,5 @@ The 2026-07-29 cutover predates these and was run via
 
 Signup / new-signup alert work around PR #710. Cutover and pool policy: PRs
 #999, #1008, #1011. Boxless-tenant alert skip (Truly side of the same night):
-PR #1016.
+PR #1016. Sep 16 2026 payment-failed auto-cancel (Amex •3042, our webhook
+API-canceled the Stripe sub, `cancel_reason` raced to NULL): see Sharp edges.

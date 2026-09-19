@@ -38,7 +38,8 @@ import {
   sendOpsDeployFailedEmail,
   sendOpsCronSweepHealthEmail,
   sendOpsIntakeCompletedEmail,
-  sendOpsSubscriptionCanceledEmail
+  sendOpsSubscriptionCanceledEmail,
+  sendOpsPaymentFailedEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -1201,6 +1202,91 @@ describe("sendOpsSubscriptionCanceledEmail", () => {
     await expect(sendOpsSubscriptionCanceledEmail(canceledInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops subscription-canceled email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsPaymentFailedEmail", () => {
+  const failedInput = {
+    businessId: "6cc2d7ba-a007-49d4-93a4-586967e147f1",
+    businessName: "Scar Fairy",
+    ownerName: "Selena Breed",
+    ownerEmail: "selena@example.com",
+    tier: "standard",
+    invoiceId: "in_1UGSoIFv205jOP2fQZJohEsm",
+    stripeSubscriptionId: "sub_1TuFa5Fv205jOP2fl1ze0t2n",
+    failureDetail: "Amex ending 3042, declined (card_declined / do_not_honor)",
+    dbStatus: "active",
+    willAutoCancel: true
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "standard" } as never);
+  });
+
+  it("sends the payment-failed alert to the ops inbox with an admin deep link", async () => {
+    await expect(sendOpsPaymentFailedEmail(failedInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      expect.stringMatching(/^team@/),
+      expect.stringContaining("Payment failed, Scar Fairy"),
+      expect.objectContaining({
+        text: expect.stringContaining("do_not_honor"),
+        html: expect.stringContaining("/admin/6cc2d7ba-a007-49d4-93a4-586967e147f1")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops payment-failed email sent",
+      expect.objectContaining({
+        businessId: "6cc2d7ba-a007-49d4-93a4-586967e147f1",
+        invoiceId: "in_1UGSoIFv205jOP2fQZJohEsm",
+        willAutoCancel: true
+      })
+    );
+  });
+
+  it("tier-tags enterprise subjects", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({ tier: "enterprise" } as never);
+    await sendOpsPaymentFailedEmail({ ...failedInput, tier: "enterprise" });
+    expect(sendOwnerEmailMock.mock.calls[0][2]).toContain("[ENTERPRISE]");
+  });
+
+  it("falls back to localhost when no app URL is set", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsPaymentFailedEmail(failedInput);
+    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("[REDACTED]");
+  });
+
+  it("skips without a Resend key rather than throwing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsPaymentFailedEmail(failedInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops payment-failed email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ businessId: "6cc2d7ba-a007-49d4-93a4-586967e147f1" })
+    );
+  });
+
+  it("swallows a send failure", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("resend down"));
+    await expect(sendOpsPaymentFailedEmail(failedInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops payment-failed email failed",
+      expect.objectContaining({ error: "resend down" })
+    );
+  });
+
+  it("stringifies a non-Error send failure", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsPaymentFailedEmail(failedInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops payment-failed email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

@@ -589,6 +589,7 @@ export default async function BillingPage(props: {
         renewalAt={renewalAt}
         periodEnd={subscription?.stripe_current_period_end ?? null}
         graceEndsAt={subscription?.grace_ends_at ?? null}
+        cancelReason={subscription?.cancel_reason ?? null}
         canRefund={canRefund}
         refundBlockedReason={refundBlockedReason}
         canChangePlan={canChangePlan}

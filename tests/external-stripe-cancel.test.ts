@@ -7,6 +7,7 @@ const {
   executeFastMock,
   executeSlowMock,
   updateSubscriptionMock,
+  getByStripeIdMock,
   getBusinessMock,
   sendOwnerEmailMock,
   sendOpsCanceledMock,
@@ -18,6 +19,7 @@ const {
   executeFastMock: vi.fn(),
   executeSlowMock: vi.fn(),
   updateSubscriptionMock: vi.fn(),
+  getByStripeIdMock: vi.fn(),
   getBusinessMock: vi.fn(),
   sendOwnerEmailMock: vi.fn(),
   sendOpsCanceledMock: vi.fn(),
@@ -37,7 +39,11 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
 
 vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
-  return { ...actual, updateSubscription: updateSubscriptionMock };
+  return {
+    ...actual,
+    updateSubscription: updateSubscriptionMock,
+    getSubscriptionByStripeSubscriptionId: getByStripeIdMock
+  };
 });
 
 vi.mock("@/lib/db/businesses", () => ({
@@ -153,6 +159,7 @@ describe("dispatchExternalStripeCancel", () => {
     updateSubscriptionMock.mockResolvedValue(undefined);
     sendOwnerEmailMock.mockResolvedValue(undefined);
     sendOpsCanceledMock.mockResolvedValue(true);
+    getByStripeIdMock.mockResolvedValue(null);
     getBusinessMock.mockResolvedValue({
       name: "Scar Fairy",
       owner_name: "Selena",
@@ -171,6 +178,48 @@ describe("dispatchExternalStripeCancel", () => {
     expect(dispatched).toBe("skipped");
     expect(loadLifecycleContextMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("skips when a re-read already has payment_failed (Scar Fairy stamp-before-cancel race)", async () => {
+    // invoice.payment_failed stamps payment_failed then Stripe-cancels.
+    // The resulting customer.subscription.deleted still holds a stale
+    // in-memory row (active, cancel_reason null). Without the re-read we
+    // would overwrite payment_failed with stripe_external.
+    getByStripeIdMock.mockResolvedValueOnce(
+      makeSub({
+        status: "canceled",
+        cancel_reason: "payment_failed",
+        canceled_at: NOW.toISOString(),
+        grace_ends_at: "2026-10-17T01:04:59.000Z"
+      })
+    );
+    const dispatched = await dispatchExternalStripeCancel({
+      existing: makeSub({ status: "active", cancel_reason: null }),
+      eventId: "evt_scar_race",
+      stripeSubscriptionId: "sub_1TuFa5Fv205jOP2fl1ze0t2n",
+      cancellationDetails: "cancellation_requested",
+      now: NOW
+    });
+    expect(dispatched).toBe("skipped");
+    expect(loadLifecycleContextMock).not.toHaveBeenCalled();
+    expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    expect(getByStripeIdMock).toHaveBeenCalledWith("sub_1TuFa5Fv205jOP2fl1ze0t2n");
+  });
+
+  it("honors an injected readLatest over the module default", async () => {
+    const readLatest = vi.fn().mockResolvedValue(
+      makeSub({ status: "canceled", cancel_reason: "admin_force" })
+    );
+    const dispatched = await dispatchExternalStripeCancel({
+      existing: makeSub({ cancel_reason: null }),
+      eventId: "evt_injected",
+      stripeSubscriptionId: "sub_stripe_1",
+      cancellationDetails: null,
+      readLatest
+    });
+    expect(dispatched).toBe("skipped");
+    expect(readLatest).toHaveBeenCalledWith("sub_stripe_1");
+    expect(getByStripeIdMock).not.toHaveBeenCalled();
   });
 
   it("runs lifecycle when the row is still active", async () => {

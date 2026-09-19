@@ -222,6 +222,14 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
   executeLifecyclePlanSlowPhase: mockExecuteLifecyclePlanSlowPhase
 }));
 
+const { mockNotifyInvoicePaymentFailed } = vi.hoisted(() => ({
+  mockNotifyInvoicePaymentFailed: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock("@/lib/billing/payment-failed-notify", () => ({
+  notifyInvoicePaymentFailed: mockNotifyInvoicePaymentFailed
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: {
     error: vi.fn(),
@@ -1982,6 +1990,7 @@ describe("stripe webhook route", () => {
     expect(updateSubscription).not.toHaveBeenCalled();
     // No autoCancel dispatch either, that's the active-row path only.
     expect(afterCallbacks.length).toBe(0);
+    expect(mockNotifyInvoicePaymentFailed).not.toHaveBeenCalled();
   });
 
   it("does not clobber a canceled lifecycle row when Stripe keeps sending dunning statuses", async () => {
@@ -2819,6 +2828,98 @@ describe("stripe webhook route", () => {
     expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
   });
 
+  it("omits a null cancel_reason on the deleted fallback so a concurrent payment_failed stamp is not wiped", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_null_reason",
+      business_id: "biz_null_reason",
+      status: "canceled",
+      cancel_reason: null,
+      cancel_at_period_end: true,
+      grace_ends_at: null,
+      canceled_at: "2026-09-17T01:04:59.000Z",
+      wiped_at: null
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_null_reason",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_null_reason",
+          metadata: { businessId: "biz_null_reason" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("[REDACTED]/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledTimes(1);
+    const patch = vi.mocked(updateSubscription).mock.calls[0][1] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty("cancel_reason");
+    expect(patch.status).toBe("canceled");
+  });
+
+  it("preserves payment_failed on deleted fallback after a stamp-before-cancel re-read", async () => {
+    const staleActive = {
+      id: "local_sub_scar_race",
+      business_id: "6cc2d7ba-a007-49d4-93a4-586967e147f1",
+      status: "active",
+      cancel_reason: null,
+      cancel_at_period_end: false,
+      grace_ends_at: null,
+      canceled_at: null,
+      wiped_at: null,
+      stripe_subscription_id: "sub_1TuFa5Fv205jOP2fl1ze0t2n",
+      tier: "standard",
+      hostinger_billing_subscription_id: "hbs-1",
+      customer_profile_id: null,
+      vps_stopped_at: null
+    };
+    const stamped = {
+      ...staleActive,
+      status: "canceled",
+      cancel_reason: "payment_failed",
+      canceled_at: "2026-09-17T01:04:59.000Z",
+      grace_ends_at: "2026-10-17T01:04:59.000Z"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId)
+      .mockResolvedValueOnce(staleActive as never)
+      .mockResolvedValue(stamped as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_scar_deleted_race",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_1TuFa5Fv205jOP2fl1ze0t2n",
+          metadata: { businessId: "6cc2d7ba-a007-49d4-93a4-586967e147f1" },
+          cancellation_details: { reason: "cancellation_requested" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("[REDACTED]/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mockExecuteLifecyclePlanFastPhase).not.toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_scar_race",
+      expect.objectContaining({
+        status: "canceled",
+        cancel_reason: "payment_failed"
+      })
+    );
+  });
+
   it("runs externalStripeCancel on subscription.updated active to canceled without cancel_at_period_end", async () => {
     const existing = {
       id: "local_sub_portal",
@@ -3339,10 +3440,101 @@ describe("stripe webhook route", () => {
       expect(response.status).toBe(200);
       expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
       expect(afterCallbacks.length).toBe(1);
+      expect(mockNotifyInvoicePaymentFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          willAutoCancel: true,
+          stripeSubscriptionId: "sub_invfail"
+        })
+      );
 
       await flushAfterCallbacks();
 
       expect(mockLoadLifecycleContext).toHaveBeenCalledWith("biz_invfail");
+      expect(updateSubscription).toHaveBeenCalledWith(
+        "sub_row_invfail",
+        expect.objectContaining({
+          status: "canceled",
+          cancel_reason: "payment_failed"
+        })
+      );
+      expect(mockExecuteLifecyclePlan).toHaveBeenCalled();
+      const stampOrder = vi.mocked(updateSubscription).mock.invocationCallOrder[0];
+      const execOrder = mockExecuteLifecyclePlan.mock.invocationCallOrder[0];
+      expect(stampOrder).toBeLessThan(execOrder);
+    });
+
+    it("still schedules auto-cancel when invoice.payment_failed notify throws", async () => {
+      mockNotifyInvoicePaymentFailed.mockRejectedValueOnce(new Error("resend down"));
+      mockLoadLifecycleContext.mockResolvedValue({
+        ok: true,
+        context: {
+          subscription: { id: "sub_row_notify_fail", status: "active", customer_profile_id: null },
+          profile: null,
+          now: new Date(),
+          vpsHost: null
+        },
+        vpsHost: null
+      } as never);
+      vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+        id: "local_sub_notify_fail",
+        business_id: "biz_notify_fail",
+        status: "active",
+        stripe_subscription_id: "sub_notify_fail"
+      } as never);
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_notify_fail",
+        type: "invoice.payment_failed",
+        data: {
+          object: {
+            id: "in_notify_fail",
+            parent: { subscription_details: { subscription: "sub_notify_fail" } }
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("[REDACTED]/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+      expect(response.status).toBe(200);
+      expect(afterCallbacks.length).toBe(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        "invoice.payment_failed notify threw",
+        expect.objectContaining({ error: "resend down" })
+      );
+    });
+
+    it("does not notify or auto-cancel invoice.payment_failed on an already-canceled row", async () => {
+      vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+        id: "local_sub_already",
+        business_id: "biz_already",
+        status: "canceled",
+        cancel_reason: "payment_failed",
+        stripe_subscription_id: "sub_already"
+      } as never);
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_already",
+        type: "invoice.payment_failed",
+        data: {
+          object: {
+            id: "in_already",
+            parent: { subscription_details: { subscription: "sub_already" } }
+          }
+        }
+      } as never);
+      const response = await POST(
+        new Request("[REDACTED]/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+      expect(response.status).toBe(200);
+      expect(mockNotifyInvoicePaymentFailed).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(0);
     });
 
     it("schedules runChangePlanFromCheckout via after() on lifecycleAction=changePlan", async () => {

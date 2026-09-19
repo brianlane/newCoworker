@@ -33,6 +33,13 @@ export type CheckoutParams = {
   successUrl: string;
   cancelUrl: string;
   customerEmail?: string;
+  /**
+   * Existing Stripe customer id. When set, Checkout attaches this customer
+   * and `customerEmail` is omitted (Stripe rejects both on one session).
+   * Resubscribe / admin recovery must pass this so the webhook restores
+   * the same customer the canceled subscription used.
+   */
+  customer?: string;
   metadata?: Record<string, string>;
   discountCouponId?: string;
   /**
@@ -145,7 +152,11 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
     line_items: lineItems,
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
-    customer_email: params.customerEmail,
+    ...(params.customer
+      ? { customer: params.customer }
+      : params.customerEmail
+        ? { customer_email: params.customerEmail }
+        : {}),
     billing_address_collection: "auto",
     discounts: params.discountPromotionCodeId
       ? [{ promotion_code: params.discountPromotionCodeId }]

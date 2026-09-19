@@ -211,6 +211,19 @@ describe("stripe/client", () => {
     );
   });
 
+  it("createCheckoutSession attaches an existing customer and omits customer_email", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_standard",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      customer: "cus_Uu3hTLCgROTtbP",
+      customerEmail: "selena@example.com"
+    });
+    const params = mockSessionCreate.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(params.customer).toBe("cus_Uu3hTLCgROTtbP");
+    expect(params).not.toHaveProperty("customer_email");
+  });
+
   it("createCheckoutSession adds recurring pack add-on lines with quantity", async () => {
     await createCheckoutSession({
       priceId: "price_mock_starter",

@@ -35,6 +35,7 @@ import type {
   MembershipPackAddonOption,
   MembershipPackAddonSelection
 } from "@/lib/billing/membership-pack-addons";
+import type { CancelReason } from "@/lib/db/subscriptions";
 
 type StatusKind =
   | "active"
@@ -51,6 +52,8 @@ export type PlanCardProps = {
   renewalAt: string | null;
   periodEnd: string | null;
   graceEndsAt: string | null;
+  /** Why the row is canceled / scheduled to cancel. Distinguishes Resume copy. */
+  cancelReason?: CancelReason | null;
   canRefund: boolean;
   refundBlockedReason?: string | null;
   canChangePlan: boolean;
@@ -182,6 +185,7 @@ export function PlanCard(props: PlanCardProps) {
     renewalAt,
     periodEnd,
     graceEndsAt,
+    cancelReason = null,
     canRefund,
     refundBlockedReason,
     canChangePlan,
@@ -213,6 +217,7 @@ export function PlanCard(props: PlanCardProps) {
     status === "active" || status === "active_cancel_at_period_end";
   const alreadyPeriodEnd = status === "active_cancel_at_period_end";
   const inGrace = status === "canceled_in_grace";
+  const paymentFailedGrace = inGrace && cancelReason === "payment_failed";
 
   const isTermPlan =
     tier !== null &&
@@ -385,12 +390,12 @@ export function PlanCard(props: PlanCardProps) {
             loading={undoLoading}
             onClick={undoPeriodEnd}
           >
-            {t("keepMyPlan")}
+            {t("resume")}
           </Button>
         )}
         {inGrace && (
           <Button size="sm" variant="primary" loading={resubLoading} onClick={resubscribe}>
-            {t("reactivate")}
+            {t("resume")}
           </Button>
         )}
         {stripeCustomerId && (
@@ -409,6 +414,14 @@ export function PlanCard(props: PlanCardProps) {
       {resubError && (
         <p className="mt-2 text-xs text-spark-orange" role="alert">
           {resubError}
+        </p>
+      )}
+      {alreadyPeriodEnd && (
+        <p className="mt-2 text-xs text-parchment/50">{t("resumeKeepPlanHint")}</p>
+      )}
+      {inGrace && (
+        <p className="mt-2 text-xs text-parchment/50">
+          {paymentFailedGrace ? t("resumePaymentFailedHint") : t("resumeCanceledHint")}
         </p>
       )}
 

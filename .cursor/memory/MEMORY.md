@@ -87,6 +87,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Load-state waits are once per document](project_playwright_load_state_once_per_document.md) - networkidle after a click is a NO-OP
 - [Priority support is a SECOND Stripe subscription](project_priority_support_second_stripe_subscription.md) - invoice.paid needs subscriptionKind gate
 - [Plan change fires subscription.deleted while row looks active](project_change_plan_deleted_webhook_ordering.md) - guard on the replacement row
+- [Payment-failed auto-cancel race](project_payment_failed_cancel_race.md) - stamp payment_failed before Stripe cancel or cancel_reason races to NULL; Scar Fairy Sep 16 2026
 - [voice-bridge escapes root tsc](project_voice_bridge_excluded_from_root_tsc.md) - type errors pass CI, break the redeploy; run its own tsc
 - [AMD false negatives are routine](project_amd_false_negatives_and_prompt_ended.md) - human_residence on voicemail; prompt_ended not iOS-only
 - [Voicemail beep is the only honest speak trigger](project_voicemail_beep_trigger_sep2026.md) - prompt_ended is the first pause (cancelled_amd hangup); Sep 1 email was muted-turn false alarm + mid-word clip; speak only on beep_detected; 40s sweep grace

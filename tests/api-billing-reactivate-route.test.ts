@@ -100,7 +100,8 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       wiped_at: null,
       customer_profile_id: "prof_1",
       cancel_at_period_end: false,
-      stripe_subscription_id: "sub_old"
+      stripe_subscription_id: "sub_old",
+      stripe_customer_id: "cus_Uu3hTLCgROTtbP"
     },
     profile: {
       id: "prof_1",
@@ -279,6 +280,7 @@ describe("/api/billing/reactivate", () => {
       expect(createCheckoutSessionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           priceId: "price_starter_monthly",
+          customer: "cus_Uu3hTLCgROTtbP",
           metadata: expect.objectContaining({
             businessId: "biz_1",
             tier: "starter",
@@ -288,6 +290,7 @@ describe("/api/billing/reactivate", () => {
           })
         })
       );
+      expect(createCheckoutSessionMock.mock.calls[0][0]).not.toHaveProperty("customerEmail");
     });
 
     it("allows resubscribe with explicit tier/period override", async () => {
