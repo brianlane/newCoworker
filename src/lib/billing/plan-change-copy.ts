@@ -66,11 +66,48 @@ export function planChangeConfirmHardwareKey(
     : "confirmKeepGeneric";
 }
 
-export function planChangeWarnsStarterWebhooks(
+function planChangeWarnsStarterWebhooks(
   currentTier: "starter" | "standard",
   selectedTier: "starter" | "standard"
 ): boolean {
   return selectedTier === "starter" && currentTier !== "starter";
+}
+
+/**
+ * Standard-only surfaces that flip off the moment `businesses.tier` becomes
+ * Starter. Order is the confirm-sheet list: webhooks and API keys first
+ * (the KIN gap), then the other server-side plan gates.
+ */
+export const STARTER_DOWNGRADE_LOSS_IDS = [
+  "incoming_webhooks",
+  "api_keys",
+  "messenger_and_widget",
+  "outbound_ai_calls",
+  "prospecting",
+  "scheduled_outreach",
+  "team_chat_and_push",
+  "call_intel_and_browser"
+] as const;
+
+export type StarterDowngradeLossId = (typeof STARTER_DOWNGRADE_LOSS_IDS)[number];
+
+export const STARTER_DOWNGRADE_LOSS_CATALOG_KEYS = {
+  incoming_webhooks: "lossIncomingWebhooks",
+  api_keys: "lossApiKeys",
+  messenger_and_widget: "lossMessengerAndWidget",
+  outbound_ai_calls: "lossOutboundAiCalls",
+  prospecting: "lossProspecting",
+  scheduled_outreach: "lossScheduledOutreach",
+  team_chat_and_push: "lossTeamChatAndPush",
+  call_intel_and_browser: "lossCallIntelAndBrowser"
+} as const satisfies Record<StarterDowngradeLossId, string>;
+
+export function starterDowngradeLossIds(
+  currentTier: "starter" | "standard",
+  selectedTier: "starter" | "standard"
+): readonly StarterDowngradeLossId[] {
+  if (!planChangeWarnsStarterWebhooks(currentTier, selectedTier)) return [];
+  return STARTER_DOWNGRADE_LOSS_IDS;
 }
 
 /** True when a parseable expires_at is still in the future. */

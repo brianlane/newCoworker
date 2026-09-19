@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import en from "../messages/en.json";
 import {
   entitlementBillingMismatch,
   formatPlanChangePaidThroughDate,
@@ -7,8 +10,10 @@ import {
   planChangeConfirmHardwareKey,
   planChangeHardwareStory,
   planChangeSuccessBannerKey,
-  planChangeWarnsStarterWebhooks,
-  showServerPrepaidLine
+  showServerPrepaidLine,
+  STARTER_DOWNGRADE_LOSS_CATALOG_KEYS,
+  STARTER_DOWNGRADE_LOSS_IDS,
+  starterDowngradeLossIds
 } from "@/lib/billing/plan-change-copy";
 
 const NOW_MS = Date.parse("2026-09-18T15:25:00.000Z");
@@ -141,12 +146,53 @@ describe("planChangeConfirmHardwareKey", () => {
   });
 });
 
-describe("planChangeWarnsStarterWebhooks", () => {
-  it("warns only when downgrading onto Starter", () => {
-    expect(planChangeWarnsStarterWebhooks("standard", "starter")).toBe(true);
-    expect(planChangeWarnsStarterWebhooks("starter", "standard")).toBe(false);
-    expect(planChangeWarnsStarterWebhooks("starter", "starter")).toBe(false);
-    expect(planChangeWarnsStarterWebhooks("standard", "standard")).toBe(false);
+describe("starterDowngradeLossIds", () => {
+  it("is empty unless the confirm is a cut onto Starter", () => {
+    expect(starterDowngradeLossIds("standard", "starter").length).toBeGreaterThan(0);
+    expect(starterDowngradeLossIds("starter", "standard")).toEqual([]);
+    expect(starterDowngradeLossIds("starter", "starter")).toEqual([]);
+    expect(starterDowngradeLossIds("standard", "standard")).toEqual([]);
+  });
+
+  it("lists webhook, API-key, and other already-gated Standard surfaces", () => {
+    const ids = starterDowngradeLossIds("standard", "starter");
+    expect(ids).toEqual([...STARTER_DOWNGRADE_LOSS_IDS]);
+    expect(ids[0]).toBe("incoming_webhooks");
+    expect(ids[1]).toBe("api_keys");
+    expect(ids).toContain("messenger_and_widget");
+    expect(ids).toContain("outbound_ai_calls");
+    expect(ids).toContain("prospecting");
+    expect(ids).toContain("scheduled_outreach");
+    expect(ids).toContain("team_chat_and_push");
+    expect(ids).toContain("call_intel_and_browser");
+    expect(ids.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("has a catalog line for every loss id, and each line names the feature", () => {
+    const catalog = en.dashboard.planCard;
+    for (const id of STARTER_DOWNGRADE_LOSS_IDS) {
+      const key = STARTER_DOWNGRADE_LOSS_CATALOG_KEYS[id];
+      const line = catalog[key];
+      expect(typeof line, key).toBe("string");
+      expect(line.length, key).toBeGreaterThan(20);
+    }
+    expect(catalog.lossIncomingWebhooks).toMatch(/Zapier/);
+    expect(catalog.lossIncomingWebhooks).toMatch(/Meta/);
+    expect(catalog.lossIncomingWebhooks).toMatch(/REST/);
+    expect(catalog.lossApiKeys).toMatch(/API key/i);
+    expect(catalog.confirmStarterLossLead).toMatch(/stop immediately/i);
+    expect(catalog.confirmStarterLossKeep).toMatch(/remain/i);
+  });
+
+  it("is rendered as a scannable list on the change-plan confirm sheet", () => {
+    const source = readFileSync(
+      join(__dirname, "../src/components/billing/ChangePlanSelector.tsx"),
+      "utf8"
+    );
+    expect(source).toContain("starterDowngradeLossIds");
+    expect(source).toContain("confirmStarterLossLead");
+    expect(source).toContain("<ul");
+    expect(source).toContain("lossIncomingWebhooks");
   });
 });
 

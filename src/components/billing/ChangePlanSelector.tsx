@@ -39,7 +39,8 @@ import {
   formatPlanChangePaidThroughDate,
   parseablePaidThroughIso,
   planChangeConfirmHardwareKey,
-  planChangeWarnsStarterWebhooks
+  starterDowngradeLossIds,
+  type StarterDowngradeLossId
 } from "@/lib/billing/plan-change-copy";
 
 type ChangeablePlan = Exclude<PlanTier, "enterprise">;
@@ -196,6 +197,29 @@ export function ChangePlanSelector({
     return t("confirmSameTier");
   }
 
+  function starterLossLine(id: StarterDowngradeLossId): string {
+    switch (id) {
+      case "incoming_webhooks":
+        return t("lossIncomingWebhooks");
+      case "api_keys":
+        return t("lossApiKeys");
+      case "messenger_and_widget":
+        return t("lossMessengerAndWidget");
+      case "outbound_ai_calls":
+        return t("lossOutboundAiCalls");
+      case "prospecting":
+        return t("lossProspecting");
+      case "scheduled_outreach":
+        return t("lossScheduledOutreach");
+      case "team_chat_and_push":
+        return t("lossTeamChatAndPush");
+      case "call_intel_and_browser":
+        return t("lossCallIntelAndBrowser");
+    }
+  }
+
+  const starterLossIds = selectedTier ? starterDowngradeLossIds(currentTier, selectedTier) : [];
+
   return (
     <div className="space-y-4">
       {disabled && disabledReason && (
@@ -283,10 +307,16 @@ export function ChangePlanSelector({
             Your current plan will be canceled immediately with no proration or refund.{" "}
             {hardwareConfirmText()}
           </p>
-          {selectedTier && planChangeWarnsStarterWebhooks(currentTier, selectedTier) && (
-            <p className="text-xs text-spark-orange" role="status">
-              {t("confirmStarterWebhooks")}
-            </p>
+          {starterLossIds.length > 0 && (
+            <div className="text-xs text-spark-orange space-y-1.5" role="status">
+              <p className="font-semibold">{t("confirmStarterLossLead")}</p>
+              <ul className="list-disc pl-4 space-y-1 text-spark-orange/90">
+                {starterLossIds.map((id) => (
+                  <li key={id}>{starterLossLine(id)}</li>
+                ))}
+              </ul>
+              <p>{t("confirmStarterLossKeep")}</p>
+            </div>
           )}
           {packAddonOptions.length > 0 && selectedPeriod && (
             <MembershipPackAddOns

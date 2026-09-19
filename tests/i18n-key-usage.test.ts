@@ -26,6 +26,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import { SIDEBAR_ITEMS } from "../src/lib/dashboard/sidebar-items";
+import { STARTER_DOWNGRADE_LOSS_CATALOG_KEYS } from "../src/lib/billing/plan-change-copy";
 
 const ROOT = join(__dirname, "..");
 const SRC = join(ROOT, "src");
@@ -183,6 +184,22 @@ describe("translation keys referenced in src/ exist in the catalogs", () => {
         `marketing.features.${key}.description`
       ).toBe(true);
     }
+  });
+
+  it("Starter downgrade loss keys exist under planCard and the plan-change email", () => {
+    const keys = Object.values(STARTER_DOWNGRADE_LOSS_CATALOG_KEYS);
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(catalogHas(`dashboard.planCard.${key}`), `dashboard.planCard.${key}`).toBe(true);
+      expect(
+        catalogHas(`emails.cancelConfirmation.${key}`),
+        `emails.cancelConfirmation.${key}`
+      ).toBe(true);
+    }
+    expect(catalogHas("dashboard.planCard.confirmStarterLossLead")).toBe(true);
+    expect(catalogHas("dashboard.planCard.confirmStarterLossKeep")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.upgradeStarterCutsLead")).toBe(true);
+    expect(catalogHas("emails.cancelConfirmation.upgradeStarterCutsKeep")).toBe(true);
   });
 
   it("industry i18nKeys exist under marketing.industries", () => {

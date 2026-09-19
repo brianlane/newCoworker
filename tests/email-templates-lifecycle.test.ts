@@ -80,6 +80,11 @@ describe("cancel-confirmation email", () => {
     expect(text).toMatch(/plan is live now/i);
     expect(text).toMatch(/prepaid/i);
     expect(text).not.toMatch(/fresh server/i);
+    expect(text).toMatch(/If this change moved you to Starter/i);
+    expect(text).toMatch(/incoming webhooks/i);
+    expect(text).toMatch(/Meta/i);
+    expect(text).toMatch(/API keys/i);
+    expect(text).toMatch(/remain/i);
     expect(html).toContain("/dashboard");
   });
 

@@ -53,6 +53,83 @@ export const FIRST_PARTY_WEBHOOK_SOURCES: Record<string, WebhookSourceCopy> = {
 type FromMatchesLike = { type: string; value?: string | null };
 
 /**
+ * Webhook `from_matches` labels that are platform producers, not outside
+ * lead intake. The Standard webhook gate refuses EXTERNAL events only, so a
+ * flow pinned solely to one of these must not look blocked on Starter.
+ */
+export const INTERNAL_WEBHOOK_SOURCES: ReadonlySet<string> = new Set([
+  "prospect_outreach",
+  "document_renewal",
+  "backlog_import"
+]);
+
+type WebhookTriggerLike = {
+  channel?: string | null;
+  conditions?: ReadonlyArray<FromMatchesLike> | null;
+};
+
+type WebhookDefinitionLike = {
+  trigger?: WebhookTriggerLike | null;
+  triggers?: ReadonlyArray<WebhookTriggerLike> | null;
+};
+
+function fromMatchesSources(
+  conditions: ReadonlyArray<FromMatchesLike> | null | undefined
+): string[] {
+  const out: string[] = [];
+  for (const condition of conditions ?? []) {
+    if (condition.type !== "from_matches") continue;
+    const value = condition.value?.trim();
+    if (value) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * True when this trigger would receive outside webhook traffic that Starter
+ * refuses. Internal-only pins stay false.
+ */
+export function webhookTriggerBlockedOnStarter(
+  trigger: WebhookTriggerLike | null | undefined,
+  webhooksAllowed: boolean
+): boolean {
+  if (webhooksAllowed) return false;
+  if (!trigger || trigger.channel !== "webhook") return false;
+  const sources = fromMatchesSources(trigger.conditions);
+  if (sources.length > 0 && sources.every((source) => INTERNAL_WEBHOOK_SOURCES.has(source))) {
+    return false;
+  }
+  return true;
+}
+
+/** True when any webhook trigger on the flow is blocked on Starter. */
+export function webhookFlowBlockedOnStarter(
+  definition: WebhookDefinitionLike | null | undefined,
+  webhooksAllowed: boolean
+): boolean {
+  if (webhooksAllowed || !definition) return false;
+  if (webhookTriggerBlockedOnStarter(definition.trigger, false)) return true;
+  return (definition.triggers ?? []).some((trigger) =>
+    webhookTriggerBlockedOnStarter(trigger, false)
+  );
+}
+
+export type FlowEnabledStatusKind = "off" | "enabled" | "saved_no_webhooks";
+
+/**
+ * List/detail pill kind. A saved, still-enabled webhook flow on Starter is
+ * not ENABLED: it will not receive outside leads.
+ */
+export function flowEnabledStatusKind(
+  enabled: boolean,
+  webhookBlockedOnStarter: boolean
+): FlowEnabledStatusKind {
+  if (!enabled) return "off";
+  if (webhookBlockedOnStarter) return "saved_no_webhooks";
+  return "enabled";
+}
+
+/**
  * The first-party source this webhook trigger is pinned to, or null when the
  * flow is fed by a bridge or the public API.
  *

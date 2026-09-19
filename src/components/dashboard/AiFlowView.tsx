@@ -13,7 +13,8 @@ import {
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
 import { formatDurationMinutes } from "@/lib/ai-flows/duration";
-import { describeWebhookTriggerSource } from "@/lib/ai-flows/webhook-sources";
+import { describeWebhookTriggerSource, webhookTriggerBlockedOnStarter } from "@/lib/ai-flows/webhook-sources";
+import { StarterWebhookGateBanner } from "@/components/dashboard/StarterWebhookGateBanner";
 import type { StepStats } from "@/lib/ai-flows/tree";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
@@ -98,11 +99,13 @@ function conditionLabel(c: TriggerCondition): string {
 function TriggerView({
   trigger,
   heading = "Trigger",
-  calendarPausedCopy
+  calendarPausedCopy,
+  webhooksEnabled = true
 }: {
   trigger: FlowTrigger;
   heading?: string;
   calendarPausedCopy?: string | null;
+  webhooksEnabled?: boolean;
 }) {
   // Our own integrations ride the webhook channel, so a flow pinned to one of
   // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
@@ -110,9 +113,11 @@ function TriggerView({
   // is choosing a channel type, not for a flow whose source we already know.
   const webhookSource =
     trigger.channel === "webhook" ? describeWebhookTriggerSource(trigger.conditions) : null;
+  const webhookBlocked = webhookTriggerBlockedOnStarter(trigger, webhooksEnabled);
   return (
     <section className={sectionClass}>
       <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">{heading}</h3>
+      {webhookBlocked ? <StarterWebhookGateBanner compact /> : null}
       <Row
         label="Starts when"
         value={webhookSource?.label ?? CHANNEL_LABELS[trigger.channel]}
@@ -1039,7 +1044,8 @@ export function AiFlowView({
   definition,
   coworkerEmail,
   statsByStepId,
-  calendarPausedCopy
+  calendarPausedCopy,
+  webhooksEnabled = true
 }: {
   definition: AiFlowDefinition;
   /** The business's AI mailbox address, shown as the sender for platform-path emails. */
@@ -1048,6 +1054,8 @@ export function AiFlowView({
   statsByStepId?: Record<string, StepStats>;
   /** Honest pause when every Calendly PAT needs reconnect. */
   calendarPausedCopy?: string | null;
+  /** False on Starter: webhook triggers show the informational gate. */
+  webhooksEnabled?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -1078,6 +1086,7 @@ export function AiFlowView({
         trigger={definition.trigger}
         heading={definition.triggers?.length ? "Trigger 1 (any one starts the flow)" : "Trigger"}
         calendarPausedCopy={calendarPausedCopy}
+        webhooksEnabled={webhooksEnabled}
       />
       {(definition.triggers ?? []).map((t, i) => (
         <TriggerView
@@ -1085,6 +1094,7 @@ export function AiFlowView({
           trigger={t}
           heading={`Trigger ${i + 2} (or)`}
           calendarPausedCopy={calendarPausedCopy}
+          webhooksEnabled={webhooksEnabled}
         />
       ))}
       <section className="space-y-3">
