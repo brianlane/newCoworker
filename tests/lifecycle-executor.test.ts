@@ -1353,7 +1353,8 @@ describe("executeLifecyclePlan refund handling", () => {
           cancelReason: "stripe_external",
           cancelPath: "stripe_external",
           graceEndsAt: "2026-10-17T01:04:59.000Z",
-          hostingerExpiresAt: "2026-09-30T00:00:00.000Z"
+          hostingerExpiresAt: "2026-09-30T00:00:00.000Z",
+          stripeCancellationDetails: "cancellation_requested / unused"
         }
       ]
     };
@@ -1369,6 +1370,26 @@ describe("executeLifecyclePlan refund handling", () => {
         text: expect.stringContaining("Cancel path: stripe_external"),
         html: expect.stringContaining("/admin/biz_ops")
       })
+    );
+    expect((sendOwnerEmailMock.mock.calls[0][3] as { text: string }).text).toContain(
+      "Stripe cancellation details: cancellation_requested / unused"
+    );
+
+    sendOwnerEmailMock.mockClear();
+    const withoutDetails: LifecyclePlan = {
+      ...canceledPlan,
+      emailsToSend: [
+        {
+          ...canceledPlan.emailsToSend[0],
+          stripeCancellationDetails: undefined
+        }
+      ]
+    };
+    await executeLifecyclePlan(withoutDetails, { businessId: "biz_ops", vpsHost: null }, {
+      sendEmail: sendOwnerEmailMock
+    });
+    expect((sendOwnerEmailMock.mock.calls[0][3] as { text: string }).text).not.toContain(
+      "Stripe cancellation details:"
     );
 
     delete process.env.NEXT_PUBLIC_APP_URL;

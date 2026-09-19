@@ -211,7 +211,8 @@ describe("dispatchExternalStripeCancel", () => {
           }),
           expect.objectContaining({
             type: "send_ops_subscription_canceled",
-            cancelReason: "stripe_external"
+            cancelReason: "stripe_external",
+            stripeCancellationDetails: "cancellation_requested"
           })
         ])
       }),

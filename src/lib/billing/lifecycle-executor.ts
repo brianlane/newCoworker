@@ -851,6 +851,7 @@ async function runEmailOp(
         cancelPath: op.cancelPath,
         graceEndsAt: op.graceEndsAt,
         hostingerExpiresAt: op.hostingerExpiresAt,
+        stripeCancellationDetails: op.stripeCancellationDetails ?? null,
         siteUrl
       });
       await send(apiKey, toEmail, subject, { text, html });

@@ -168,28 +168,6 @@ export function CancelSheet({
           </p>
         </div>
 
-        <div className="space-y-1.5">
-          <p className="text-xs text-parchment/50 uppercase tracking-wider">
-            {t("cancelConfirmTimingLabel")}
-          </p>
-          {canRefund ? (
-            <p className="text-xs text-parchment/80">
-              {t("cancelTimingRefundGeneric")}
-            </p>
-          ) : null}
-          <p className="text-xs text-parchment/80">
-            {periodEnd
-              ? t("cancelTimingPeriodEnd", { date: periodLabel })
-              : t("cancelTimingPeriodEndGeneric")}
-          </p>
-          {canRefund && hardwareText("refund") ? (
-            <p className="text-xs text-parchment/60">{hardwareText("refund")}</p>
-          ) : null}
-          {hardwareText("period_end") ? (
-            <p className="text-xs text-parchment/60">{hardwareText("period_end")}</p>
-          ) : null}
-        </div>
-
         <div className="text-xs text-parchment/80 space-y-1.5">
           <p className="font-semibold text-parchment">{t("cancelConfirmKeepLabel")}</p>
           <ul className="list-disc pl-4 space-y-1">
@@ -210,9 +188,17 @@ export function CancelSheet({
 
         <p className="text-xs text-parchment/50">{t("cancelAlternative")}</p>
 
+        <p className="text-xs text-parchment/50 uppercase tracking-wider">
+          {t("cancelConfirmTimingLabel")}
+        </p>
+
         {canRefund ? (
           <div className="rounded-lg border border-claw-green/30 bg-claw-green/5 p-4 space-y-2">
             <p className="text-sm font-semibold text-parchment">{t("cancelRefundTitle")}</p>
+            <p className="text-xs text-parchment/80">{t("cancelTimingRefundGeneric")}</p>
+            {hardwareText("refund") ? (
+              <p className="text-xs text-parchment/60">{hardwareText("refund")}</p>
+            ) : null}
             <p className="text-xs text-parchment/60">{t("cancelRefundBody")}</p>
             <Button
               size="sm"
@@ -249,6 +235,14 @@ export function CancelSheet({
         ) : (
           <div className="rounded-lg border border-parchment/15 bg-parchment/5 p-4 space-y-2">
             <p className="text-sm font-semibold text-parchment">{t("cancelPeriodEndTitle")}</p>
+            <p className="text-xs text-parchment/80">
+              {periodEnd
+                ? t("cancelTimingPeriodEnd", { date: periodLabel })
+                : t("cancelTimingPeriodEndGeneric")}
+            </p>
+            {hardwareText("period_end") ? (
+              <p className="text-xs text-parchment/60">{hardwareText("period_end")}</p>
+            ) : null}
             <p className="text-xs text-parchment/60">
               {t("cancelPeriodEndBody", { date: periodLabel })}
             </p>

@@ -128,6 +128,20 @@ describe("refund policy copy matches the shipped refund policy", () => {
       "utf8"
     );
     expect(sheet).toMatch(/cancelRefundBody/);
+    // Timing copy is scoped to each action card so refund (stop now) and
+    // period-end (keep access until date) cannot print as one mixed block.
+    const refundTitle = sheet.indexOf("cancelRefundTitle");
+    const refundTiming = sheet.indexOf("cancelTimingRefundGeneric");
+    const refundCta = sheet.indexOf("cancelRefundCta");
+    expect(refundTitle).toBeGreaterThan(-1);
+    expect(refundTiming).toBeGreaterThan(refundTitle);
+    expect(refundCta).toBeGreaterThan(refundTiming);
+    const periodTitle = sheet.indexOf("cancelPeriodEndTitle");
+    const periodTiming = sheet.indexOf("cancelTimingPeriodEnd");
+    const periodCta = sheet.indexOf("cancelPeriodEndCta");
+    expect(periodTitle).toBeGreaterThan(-1);
+    expect(periodTiming).toBeGreaterThan(periodTitle);
+    expect(periodCta).toBeGreaterThan(periodTiming);
     const catalog = JSON.parse(
       readFileSync(join(ROOT, "messages/en.json"), "utf8")
     ) as { dashboard: { planCard: { cancelRefundBody: string } } };

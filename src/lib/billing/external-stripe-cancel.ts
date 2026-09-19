@@ -62,7 +62,13 @@ export async function dispatchExternalStripeCancel(args: {
       subscription: existing
     });
     if (ctxRes?.ok) {
-      const planRes = planLifecycleAction({ type: "externalStripeCancel" }, ctxRes.context);
+      const planRes = planLifecycleAction(
+        {
+          type: "externalStripeCancel",
+          stripeCancellationDetails: cancellationDetails
+        },
+        ctxRes.context
+      );
       if (planRes.ok) {
         const extra = {
           businessId: existing.business_id,

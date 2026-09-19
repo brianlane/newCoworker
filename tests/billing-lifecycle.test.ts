@@ -180,6 +180,7 @@ describe("planLifecycleAction: cancelWithRefund", () => {
         tier: "starter"
       })
     );
+    expect(plan.emailsToSend[2]).not.toHaveProperty("stripeCancellationDetails");
   });
 
   it("asks ops for the manual hPanel deletion with owner + refund context", () => {
@@ -860,7 +861,10 @@ describe("planLifecycleAction: periodEndReached", () => {
 describe("planLifecycleAction: externalStripeCancel", () => {
   it("stamps stripe_external, skips Stripe cancel, and emails owner plus ops", () => {
     const res = planLifecycleAction(
-      { type: "externalStripeCancel" },
+      {
+        type: "externalStripeCancel",
+        stripeCancellationDetails: "cancellation_requested / too_expensive"
+      },
       makeCtx({
         businessName: "Scar Fairy",
         hostingerBillingExpiresAt: "2026-10-01T00:00:00.000Z"
@@ -893,7 +897,8 @@ describe("planLifecycleAction: externalStripeCancel", () => {
         businessName: "Scar Fairy",
         cancelReason: "stripe_external",
         cancelPath: "stripe_external",
-        hostingerExpiresAt: "2026-10-01T00:00:00.000Z"
+        hostingerExpiresAt: "2026-10-01T00:00:00.000Z",
+        stripeCancellationDetails: "cancellation_requested / too_expensive"
       })
     );
   });

@@ -238,6 +238,8 @@ export type EmailOp =
       cancelPath: string;
       graceEndsAt: string | null;
       hostingerExpiresAt: string | null;
+      /** Stripe cancellation_details, when the webhook carried them. */
+      stripeCancellationDetails?: string | null;
     }
   | {
       /**
@@ -314,6 +316,7 @@ export type LifecycleAction =
        * or API). We skip the Stripe cancel op and still run grace + emails.
        */
       type: "externalStripeCancel";
+      stripeCancellationDetails?: string | null;
     }
   | { type: "graceExpiredWipe" };
 
@@ -433,7 +436,7 @@ export function planLifecycleAction(
     case "adminForceCancel":
       return planAdminForceCancel(ctx);
     case "externalStripeCancel":
-      return planExternalStripeCancel(ctx);
+      return planExternalStripeCancel(ctx, action.stripeCancellationDetails);
     case "graceExpiredWipe":
       return planGraceExpiredWipe(ctx);
   }
@@ -767,7 +770,10 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
   return { ok: true, plan };
 }
 
-function planExternalStripeCancel(ctx: LifecycleContext): LifecyclePlanResult {
+function planExternalStripeCancel(
+  ctx: LifecycleContext,
+  stripeCancellationDetails?: string | null
+): LifecyclePlanResult {
   const { subscription: sub } = ctx;
   /* v8 ignore next -- tests use explicit clocks; runtime default is a deterministic fallback. */
   const now = ctx.now ?? new Date();
@@ -783,7 +789,8 @@ function planExternalStripeCancel(ctx: LifecycleContext): LifecyclePlanResult {
       now,
       cancelReason: "stripe_external",
       includeRefund: false,
-      skipStripeCancel: true
+      skipStripeCancel: true,
+      stripeCancellationDetails
     })
   };
 }
@@ -999,6 +1006,7 @@ function opsSubscriptionCanceledEmailOp(
     cancelReason: CancelReason;
     cancelPath: string;
     graceEndsAt: string | null;
+    stripeCancellationDetails?: string | null;
   }
 ): Extract<EmailOp, { type: "send_ops_subscription_canceled" }> {
   const sub = ctx.subscription;
@@ -1012,7 +1020,10 @@ function opsSubscriptionCanceledEmailOp(
     cancelReason: args.cancelReason,
     cancelPath: args.cancelPath,
     graceEndsAt: args.graceEndsAt,
-    hostingerExpiresAt: ctx.hostingerBillingExpiresAt ?? null
+    hostingerExpiresAt: ctx.hostingerBillingExpiresAt ?? null,
+    ...(args.stripeCancellationDetails
+      ? { stripeCancellationDetails: args.stripeCancellationDetails }
+      : {})
   };
 }
 
@@ -1036,6 +1047,7 @@ function buildCancelPlan(args: {
   graceMs?: number;
   skipStripeCancel?: boolean;
   includeOpsCancelAlert?: boolean;
+  stripeCancellationDetails?: string | null;
 }): LifecyclePlan {
   const {
     ctx,
@@ -1044,7 +1056,8 @@ function buildCancelPlan(args: {
     includeRefund,
     graceMs = GRACE_WINDOW_MS,
     skipStripeCancel = false,
-    includeOpsCancelAlert = true
+    includeOpsCancelAlert = true,
+    stripeCancellationDetails
   } = args;
   const sub = ctx.subscription;
   const profileId = sub.customer_profile_id ?? ctx.profile?.id ?? null;
@@ -1202,7 +1215,8 @@ function buildCancelPlan(args: {
       opsSubscriptionCanceledEmailOp(ctx, {
         cancelReason,
         cancelPath: cancelPathForReason(cancelReason),
-        graceEndsAt: graceEndsAtIso
+        graceEndsAt: graceEndsAtIso,
+        stripeCancellationDetails
       })
     );
   }
