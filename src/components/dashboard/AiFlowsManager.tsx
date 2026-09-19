@@ -67,7 +67,10 @@ import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard"
 import { NewLeadIntakeCard } from "@/components/dashboard/NewLeadIntakeCard";
 import { FlowEnabledStatusPill } from "@/components/dashboard/FlowEnabledStatusPill";
 import { StarterWebhookGateBanner } from "@/components/dashboard/StarterWebhookGateBanner";
-import { webhookFlowBlockedOnStarter } from "@/lib/ai-flows/webhook-sources";
+import {
+  webhookFlowBlockedOnStarter,
+  webhookTriggerBlockedOnStarter
+} from "@/lib/ai-flows/webhook-sources";
 import type { DismissibleCardKey } from "@/lib/dashboard/dismissed-cards";
 import {
   ContactRefPicker,
@@ -2200,9 +2203,10 @@ export function AiFlowsManager({
           )}
           {editor.channel === "webhook" && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-1.5">
-              {!webhooksEnabled && (
-                <StarterWebhookGateBanner compact currentTier={currentTier} />
-              )}
+              {webhookTriggerBlockedOnStarter(
+                { channel: "webhook", conditions: editor.conditions },
+                webhooksEnabled
+              ) && <StarterWebhookGateBanner compact currentTier={currentTier} />}
               <p className="text-[11px] text-parchment/60">
                 This runs when an outside tool (Zapier, Make.com, or any API client) sends an
                 event to your coworker&apos;s webhook address. Point the tool at{" "}

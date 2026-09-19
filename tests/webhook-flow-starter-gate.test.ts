@@ -297,7 +297,9 @@ describe("flow-detail copy and wiring", () => {
     expect(view).toContain("webhookTriggerBlockedOnStarter");
     expect(view).toContain("StarterWebhookGateBanner");
     expect(manager).toContain("webhookFlowBlockedOnStarter");
+    expect(manager).toContain("webhookTriggerBlockedOnStarter");
     expect(manager).toContain("FlowEnabledStatusPill");
+    expect(manager).not.toMatch(/!webhooksEnabled && \(\s*<StarterWebhookGateBanner/);
     expect(banner).toContain("webhookGateCurrentPlan");
     expect(banner).toContain("webhookGateRequiredPlan");
     expect(banner).toContain("webhookGateBlockedOutcome");
