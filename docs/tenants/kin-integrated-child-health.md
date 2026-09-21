@@ -1,11 +1,12 @@
 # KIN Integrated Child Health (Kingsley Moyo)
 
-Business id: `a912aff5-dd87-49fb-ad6a-477acefb66c0`. Paid Standard → Starter
-monthly on 2026-09-18 (Stripe `sub_1UH3YqFv205jOP2fKIp4fEvy`); until the
-plan-change heal lands, `businesses.tier` may still read `standard`. Signed up
-self-serve 2026-08-24 after a re-issued payment link (the first checkout was
-abandoned Aug 21; the payment-link tooling in PR #1591 exists because of this
-account). Box `srv1936826` (KVM 2; adopted after the Aug 28 term-renewal
+Business id: `a912aff5-dd87-49fb-ad6a-477acefb66c0`. Starter tier, monthly.
+Signed up self-serve on Standard 2026-08-24 after a re-issued payment link
+(the first checkout was abandoned Aug 21; the payment-link tooling in PR
+#1591 exists because of this account). Downgraded to Starter on 2026-09-18
+(Stripe `sub_1UH3YqFv205jOP2fKIp4fEvy`). The plan-change heal has landed:
+`businesses.tier` is `starter`, and vm 1936826 is assigned to this business
+again. Box `srv1936826` (KVM 2; adopted after the Aug 28 term-renewal
 purchase, old pool box `srv1864812` retired). Timezone America/Edmonton.
 Priority support until ~2026-09-23 (James-referral deal: white-glove and
 build fees waived, 30 days priority support).
@@ -232,18 +233,20 @@ they are a distinct human.
   `wait_for_reply` stamped `suppress_reply` on every inbound, so a lead who
   answered the last nudge got silence. The engine now mutes only when the
   flow set `suppressDefaultReply`. KIN's cadence does not.
-- **2026-09-18 Standard → Starter left the live box pooled with no
-  replacement.** Paid monthly change. `upgrade_switch` returned vm 1936826
-  to the pool (~8:25 AM PT) while that box still had prepaid time
-  (`expires_at` 2026-09-28). `businesses.hostinger_vps_id` still pointed
-  at it, `businesses.tier` stayed `standard`, and no inventory row was
-  assigned. Voice-bridge last heartbeat 2026-09-18T15:24:37Z; inbound calls
-  failed. The worker had started at 8:24:46 with no assigned box. A paid
-  box must stay assigned until it lapses; only `businesses.tier` flips
-  immediately. Generic heal on the provisioning-retry watchdog reclaims a
-  pooled VM the business still points at (never stealing a row assigned to
-  someone else), starts it, waits for a voice-bridge heartbeat, and copies
-  `subscriptions.tier` onto `businesses.tier`. Do not hardcode this business id.
+- **2026-09-18 Standard to Starter briefly pooled the live box.** Paid
+  monthly change. `upgrade_switch` returned vm 1936826 to the pool (~8:25 AM
+  PT) while that box still had prepaid time (`expires_at` 2026-09-28).
+  `businesses.hostinger_vps_id` still pointed at it, `businesses.tier` stayed
+  `standard`, and no inventory row was assigned. Voice-bridge last heartbeat
+  2026-09-18T15:24:37Z; inbound calls failed. The worker had started at
+  8:24:46 with no assigned box. A paid box must stay assigned until it
+  lapses; only `businesses.tier` flips immediately. The provisioning-retry
+  watchdog reclaims a pooled VM the business still points at (never stealing
+  a row assigned to someone else), starts it, waits for a voice-bridge
+  heartbeat, and copies `subscriptions.tier` onto `businesses.tier`. That
+  heal has run: on 2026-09-21 the tier reads `starter`, vm 1936826 is
+  `assigned` to this business, and the box heartbeat is current. Do not
+  hardcode this business id.
 
 ## One-shots
 
@@ -294,7 +297,12 @@ they are a distinct human.
 - 2026-09-05: Brian confirmed the enabled state is intentional and the
   wording-approval gate is no longer blocking; this dossier's stale "stays
   disabled" wording corrected (15 runs on the flow at that point).
-- 2026-09-18: paid Standard → Starter monthly. Change-plan pooled vm 1936826
-  (`upgrade_switch`) and did not assign a replacement; `businesses.tier`
-  stayed `standard`; voice bridge went stale; inbound calls failed. See
-  Sharp edges.
+- 2026-09-18: paid Standard to Starter monthly. Change-plan pooled vm
+  1936826 (`upgrade_switch`) and did not assign a replacement;
+  `businesses.tier` stayed `standard`; voice bridge went stale; inbound
+  calls failed. The provisioning-retry heal has since run. See Sharp edges.
+- 2026-09-21: the morning usage review scored September's calendar-month
+  total (291 text units, almost all of it from the Standard period, cap
+  5,000) against the new Starter cap of 150. The period that meters them
+  had 3 units. The review now reads `sms_billing_window_usage` instead of
+  summing from the 1st of the month.

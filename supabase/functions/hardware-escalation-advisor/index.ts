@@ -37,13 +37,13 @@ import {
   buildEscalationAdviceEmail,
   evaluateEscalationSignals,
   isAdvisorFleetCandidate,
+  smsTextUnitsFromBillingWindow,
   weeklyPeriodKey,
   type AdvisorAutoReload,
   type AdvisorBusiness,
   type AdvisorHostMetrics,
   type BusinessAdvice,
-  type CallInterval,
-  type DailyUsageRow
+  type CallInterval
 } from "../_shared/hardware_escalation.ts";
 
 const WINDOW_DAYS = ADVISOR_WINDOW_DAYS;
@@ -151,34 +151,27 @@ serve(async (req: Request) => {
   // days = exactly WINDOW_DAYS calendar days.
   const windowStartDate = isoDaysAgo(WINDOW_DAYS - 1, now).slice(0, 10);
   const windowStartIso = `${windowStartDate}T00:00:00.000Z`;
-  const monthStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-    .toISOString()
-    .slice(0, 10);
 
-  // daily_usage feeds only the month-to-date SMS total, its voice/peak
-  // columns have no live writer (see _shared/hardware_escalation.ts).
+  // Text units in each tenant's current billing period. This is the same
+  // `sms_billing_window_usage` row the dashboard and `try_reserve_sms_outbound_slot`
+  // use. Summing `daily_usage` from the 1st of the UTC month scored usage
+  // from a previous plan against the cap the tenant holds today.
   //
-  // `sms_text_units`, NOT `sms_sent`. The caps are denominated in carrier
-  // parts and Postgres enforces them on units, while `sms_sent` counts
-  // MESSAGES. The fleet averages ~2.5 parts per message, so summing
-  // `sms_sent` against a unit cap fired ~2.5x too late and put two different
-  // ledgers next to each other in the operator's email (Amy, Aug 2026: 1019
-  // messages read as 20% of the 5000-unit cap, the real figure was 2601
-  // units, 52%).
-  let usageRows: DailyUsageRow[];
+  // A failed read fails the run. Storing zero for a tenant we could not
+  // measure would drop them out of the digest.
+  const smsPeriodUnits = new Map<string, number>();
   try {
-    usageRows = await fetchAllPages<DailyUsageRow>((from, to) =>
-      supabase
-        .from("daily_usage")
-        .select("business_id, usage_date, sms_text_units")
-        .in("business_id", ids)
-        .gte("usage_date", monthStartDate)
-        .order("usage_date", { ascending: true })
-        .order("business_id", { ascending: true })
-        .range(from, to)
+    await Promise.all(
+      businesses.map(async (biz) => {
+        const { data, error } = await supabase.rpc("sms_billing_window_usage", {
+          p_business_id: biz.id
+        });
+        if (error) throw new Error(error.message);
+        smsPeriodUnits.set(biz.id, smsTextUnitsFromBillingWindow(data));
+      })
     );
   } catch (err) {
-    console.error("daily_usage select failed", err);
+    console.error("sms_billing_window_usage failed", err);
     return new Response("select failed", { status: 500 });
   }
 
@@ -269,14 +262,6 @@ serve(async (req: Request) => {
   const errorCounts = new Map<string, number>();
   for (const row of errRows) {
     errorCounts.set(row.business_id, (errorCounts.get(row.business_id) ?? 0) + 1);
-  }
-
-  const smsMonthToDate = new Map<string, number>();
-  for (const row of usageRows) {
-    smsMonthToDate.set(
-      row.business_id,
-      (smsMonthToDate.get(row.business_id) ?? 0) + Number(row.sms_text_units ?? 0)
-    );
   }
 
   // Host CPU/memory aggregates. This is the read that lets the advisor say
@@ -474,7 +459,7 @@ serve(async (req: Request) => {
       windowStartYmd: windowStartDate,
       windowEndYmd: now.toISOString().slice(0, 10),
       windowVoiceSeconds: voiceSecondsByBiz.get(biz.id) ?? 0,
-      monthToDateSmsUnits: smsMonthToDate.get(biz.id) ?? 0,
+      billingPeriodSmsUnits: smsPeriodUnits.get(biz.id) ?? 0,
       onBoxErrorCount: errorCounts.get(biz.id) ?? 0,
       hostMetrics: metricsByBiz.get(biz.id) ?? [],
       localModelTurns: localTurnsByBiz.get(biz.id) ?? 0,

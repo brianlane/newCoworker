@@ -63,5 +63,10 @@ the anchor's time-of-day on the same day. Both render as one date.
 - `getCalendarMonthUsageTotals` was deleted (last caller gone). The fleet
   rollups (`getFleetCalendarMonthUsage*`) are platform-cost estimates and
   correctly remain calendar-month.
+- The hardware-escalation advisor was the last reader that reimplemented
+  the window in TS (calendar month from the 1st). It now calls
+  `sms_billing_window_usage`. Do not put that sum back. A mid-month
+  downgrade makes the calendar total and the enforced period disagree
+  (KIN, 2026-09-21).
 
 Related: [[project_weighted_sms_metering]], [[project_cron_timeout_three_layers]].

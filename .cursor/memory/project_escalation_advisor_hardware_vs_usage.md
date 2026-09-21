@@ -26,6 +26,13 @@ Rewritten in PR #1577 (with #1575 and #1576 as groundwork):
   are suppressed when auto-reload is armed on an un-revoked card.
 - `sms_volume` moved from `daily_usage.sms_sent` (messages) to
   `sms_text_units` (carrier parts). It had been firing ~2.5x too late.
+- `sms_volume` reads `sms_billing_window_usage` (the Stripe-anchored
+  period), not a sum of `daily_usage` from the 1st of the UTC month.
+  The calendar-month sum flagged KIN on 2026-09-21: 291 September units
+  against the new Starter cap of 150, while the Starter period that
+  actually meters them (started 2026-09-18) had 3. A failed window read
+  must fail the run. Zero is a real reading, and a failed read stored as
+  zero drops an over-cap tenant out of the digest.
 
 **The AI budget is the ONE budget with a real hardware consequence.** Over
 cap, `pickSmsTurn` routes SMS, owner chat, and webchat to the local twin
