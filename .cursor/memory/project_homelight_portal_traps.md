@@ -468,3 +468,35 @@ applied. Do not re-apply. Do not requeue Debra's run. Do not `--click` a live
 
 See [[homelight-claim-state-own-claim-as-rival]], [[homelight-claim-calls-cell]].
 
+## homelight-claim-again-missing-control
+
+**`claim_again` clicking "Call me again" dead-letters the run when HomeLight
+does not show that button.** Natasha W. (San Tan Valley AZ, ~$547K, runs
+`7ce0e9c3` and `06229aed`, 2026-09-21 ~15:36Z / 8:36 AM PT). `claim_mode=call`,
+`already_claimed=no`, `wait_hl_call=no_call`. `claim_state` was "Other
+brokerage: another agent has it" (the Debra M. overlay, often OUR claim).
+`recall_gate` then required `click_text "Call me again"`. The button was
+not on the page. `continueWhenText` is "We're calling you", which that
+page also lacked, so both runs died terminal and seller intro never ran.
+The `_ssgManifest.js` / `_buildManifest.js` 404s in the same log line are
+usual HomeLight noise, identical on a healthy probe.
+
+`continueWhenText: "HomeLight"` was too broad (referrals list looked
+satisfied). Narrowing it to "We're calling you" then failed when that
+success page was not showing. A missing button after CLICK_TEXT_APPEAR_MS
+is gone, not late.
+
+**How to apply:**
+- Platform: `browse_action.continueWhenMissingControl`. After the appear
+  wait, a "no matching control on the page" error skips the step and the
+  run carries on. Page markers still win. Optional `missingControlSaveAs`
+  writes "missing". Warn log `ai_flow_browse_action_missing_control` (the
+  run is not dying, so not error-level). Not optional click_text: that
+  would skip before waiting.
+- Amy: `homelight-claim-again-missing.ts` opts `claim_again` in, skips
+  `wait_hl_call2` when missing, notifies the team. Merge does not apply
+  it. Do not requeue Natasha's runs. Do not `--click` a live `hmlt.co`
+  URL.
+
+See [[homelight-own-claim-overlay]], [[homelight-nocall-contact-delay]].
+

@@ -38,6 +38,34 @@
 /** What the page's markers say to do with the rest of the run. */
 export type PageMarkerVerdict = "none" | "end_run" | "continue_run";
 
+/**
+ * What a failed browse_action should do with the rest of the run.
+ *
+ * Page markers still win: if the failure page already proves the step is done
+ * (`skipWhenText` / `continueWhenText`), that verdict is the one to follow.
+ * `missing_control_continue` is the leftover case: the click waited for the
+ * control (CLICK_TEXT_APPEAR_MS) and the page still has no matching button,
+ * AND the author opted into `continueWhenMissingControl`. That is a gone
+ * control, not a late one. The step is skipped and the run carries on.
+ */
+export type BrowseActionFailureVerdict = PageMarkerVerdict | "missing_control_continue";
+
+/**
+ * Exact phrase `vps/aiflow-render/actions.mjs` throws when `click_text` finds
+ * nothing after the appear wait. Matched as a substring of the worker's
+ * condensed error, which prefixes the kind/target and may append render
+ * diagnostics (HomeLight's usual `_ssgManifest.js` 404s).
+ */
+export const MISSING_CONTROL_ERROR_NEEDLE = "no matching control on the page";
+
+/** Value written to `missingControlSaveAs` when the missing-control path fires. */
+export const MISSING_CONTROL_VAR_VALUE = "missing";
+
+/** True when this browse_action error is a click_text miss after the appear wait. */
+export function isMissingControlError(error: string): boolean {
+  return error.toLowerCase().includes(MISSING_CONTROL_ERROR_NEEDLE);
+}
+
 /** Case-insensitive substring match across every page source the caller holds. */
 function anySourceContains(sources: (string | null | undefined)[], marker: string): boolean {
   const needle = marker.toLowerCase();
@@ -60,5 +88,28 @@ export function classifyPageMarkers(
   if (skip && anySourceContains(sources, skip)) return "end_run";
   const cont = markers.continueWhenText?.trim();
   if (cont && anySourceContains(sources, cont)) return "continue_run";
+  return "none";
+}
+
+/**
+ * Classify a failed browse_action. Page-marker guards run first (same
+ * precedence as classifyPageMarkers). If they do not fire and the author
+ * opted into continueWhenMissingControl, a "no matching control" error
+ * continues the run instead of dead-lettering it.
+ */
+export function classifyBrowseActionFailure(
+  sources: (string | null | undefined)[],
+  error: string,
+  markers: {
+    skipWhenText?: string;
+    continueWhenText?: string;
+    continueWhenMissingControl?: boolean;
+  }
+): BrowseActionFailureVerdict {
+  const page = classifyPageMarkers(sources, markers);
+  if (page !== "none") return page;
+  if (markers.continueWhenMissingControl === true && isMissingControlError(error)) {
+    return "missing_control_continue";
+  }
   return "none";
 }

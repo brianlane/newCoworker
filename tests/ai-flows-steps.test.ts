@@ -2483,6 +2483,45 @@ describe("planStep: browse_action continueWhenText", () => {
   });
 });
 
+describe("planStep: browse_action continueWhenMissingControl", () => {
+  const base: FlowStep = {
+    id: "again",
+    type: "browse_action",
+    urlVar: "lead_url",
+    actions: [{ kind: "click_text", target: "Call me again" }]
+  };
+  it("forwards the flag and save-as var", () => {
+    const step: FlowStep = {
+      ...base,
+      continueWhenMissingControl: true,
+      missingControlSaveAs: "claim_again_click"
+    };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(
+      r.ok && r.action.kind === "browse_action" && r.action.continueWhenMissingControl
+    ).toBe(true);
+    expect(
+      r.ok && r.action.kind === "browse_action" && r.action.missingControlSaveAs
+    ).toBe("claim_again_click");
+  });
+  it("omits both when unset", () => {
+    const r = planStep(base, { vars: { lead_url: "https://x" } });
+    expect(
+      r.ok && r.action.kind === "browse_action" && "continueWhenMissingControl" in r.action
+    ).toBe(false);
+    expect(
+      r.ok && r.action.kind === "browse_action" && "missingControlSaveAs" in r.action
+    ).toBe(false);
+  });
+  it("omits a false flag so the worker does not treat it as opted in", () => {
+    const step: FlowStep = { ...base, continueWhenMissingControl: false };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(
+      r.ok && r.action.kind === "browse_action" && "continueWhenMissingControl" in r.action
+    ).toBe(false);
+  });
+});
+
 describe("planStep: recall_url", () => {
   it("gathers normalized, deduped keys from participants and keyVars", () => {
     const step: FlowStep = {

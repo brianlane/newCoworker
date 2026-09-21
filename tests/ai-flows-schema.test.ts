@@ -1796,6 +1796,57 @@ describe("browse_action step", () => {
     expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
   });
 
+  it("accepts continueWhenMissingControl with a save-as var", () => {
+    const withFlag = JSON.parse(JSON.stringify(actionInput));
+    withFlag.steps[1].continueWhenMissingControl = true;
+    withFlag.steps[1].missingControlSaveAs = "claim_again_click";
+    withFlag.steps.push({
+      id: "wait2",
+      type: "notify_owner",
+      message: "button was gone",
+      when: { var: "claim_again_click", equals: "missing" }
+    });
+    const def = parseAiFlowDefinition(withFlag);
+    const step = def.steps[1];
+    expect(step.type === "browse_action" && step.continueWhenMissingControl).toBe(true);
+    expect(step.type === "browse_action" && step.missingControlSaveAs).toBe("claim_again_click");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts continueWhenMissingControl without a save-as var", () => {
+    const withFlag = JSON.parse(JSON.stringify(actionInput));
+    withFlag.steps[1].continueWhenMissingControl = true;
+    const def = parseAiFlowDefinition(withFlag);
+    expect(def.steps[1].type === "browse_action" && def.steps[1].continueWhenMissingControl).toBe(
+      true
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects missingControlSaveAs without continueWhenMissingControl", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].missingControlSaveAs = "claim_again_click";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("missingControlSaveAs without continueWhenMissingControl")
+      )
+    ).toBe(true);
+  });
+
+  it("rejects continueWhenMissingControl on a forEachLink loop", () => {
+    const loop = JSON.parse(JSON.stringify(actionInput));
+    loop.steps[1].forEachLink = "a.lead";
+    loop.steps[1].screenshot = false;
+    const def = parseAiFlowDefinition(loop);
+    (def.steps[1] as { continueWhenMissingControl?: boolean }).continueWhenMissingControl = true;
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("can't combine forEachLink with continueWhenMissingControl")
+      )
+    ).toBe(true);
+  });
+
   it("validates {{vars.x}} ordering inside fill values", () => {
     const bad = JSON.parse(JSON.stringify(actionInput));
     bad.steps[1].actions[1].valueTemplate = "{{vars.ghost}}";

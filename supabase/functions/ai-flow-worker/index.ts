@@ -152,7 +152,11 @@ import {
   renderErrorFields,
   renderErrorKind
 } from "../_shared/ai_flows/browse.ts";
-import { classifyPageMarkers } from "../_shared/ai_flows/page_markers.ts";
+import {
+  classifyBrowseActionFailure,
+  classifyPageMarkers,
+  MISSING_CONTROL_VAR_VALUE
+} from "../_shared/ai_flows/page_markers.ts";
 import {
   isRecipientOptedOut,
   prepareSmsBody
@@ -4498,28 +4502,69 @@ async function browseActionStepAttempt(
         //                    there loses the filing, the owner email and the
         //                    teammate hand-off for a lead we now own.
         //
-        // skipWhenText wins when both fire; see classifyPageMarkers.
-        const actionVerdict = classifyPageMarkers([readPageSource(parsedBody)], action);
+        // skipWhenText wins when both fire; see classifyBrowseActionFailure.
+        // continueWhenMissingControl is the leftover: the click waited for the
+        // control and the page still has no matching button. That is a gone
+        // control, not a late one. Skip this step, keep the rest of the run,
+        // and (when missingControlSaveAs is set) write "missing" so a later
+        // when can skip the wait or text the owner. Warn, not error: the run
+        // is not dying, and error-level is reserved for terminal failures.
+        const actionError = detail || "a page action failed";
+        const actionVerdict = classifyBrowseActionFailure(
+          [readPageSource(parsedBody)],
+          actionError,
+          action
+        );
         if (actionVerdict !== "none") {
           const ending = actionVerdict === "end_run";
-          const marker = (ending ? action.skipWhenText : action.continueWhenText) ?? "";
+          const missing = actionVerdict === "missing_control_continue";
+          const marker = ending
+            ? (action.skipWhenText ?? "")
+            : missing
+              ? ""
+              : (action.continueWhenText ?? "");
+          if (missing && action.missingControlSaveAs) {
+            scope.vars[action.missingControlSaveAs] = MISSING_CONTROL_VAR_VALUE;
+          }
           await systemLog(supabase, {
             businessId: run.business_id,
             source: "aiflow",
-            level: "info",
+            level: missing ? "warn" : "info",
             event: ending
               ? "ai_flow_browse_action_skipped_terminal"
-              : "ai_flow_browse_action_already_satisfied",
+              : missing
+                ? "ai_flow_browse_action_missing_control"
+                : "ai_flow_browse_action_already_satisfied",
             message: ending
               ? `browse_action skipped: page already in terminal state ("${marker}")`
-              : `browse_action skipped: page already in the desired state ("${marker}"), continuing the run`,
-            payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+              : missing
+                ? `browse_action skipped: ${actionError}, continuing the run`
+                : `browse_action skipped: page already in the desired state ("${marker}"), continuing the run`,
+            payload: {
+              run_id: run.id,
+              flow_id: run.flow_id,
+              step_index: index,
+              step_id: stepId,
+              ...(missing && action.missingControlSaveAs
+                ? { missing_control_var: action.missingControlSaveAs }
+                : {})
+            }
           });
           return {
             kind: "ok",
             skipped: true,
             ...(ending ? { endRun: true } : {}),
-            result: { skipped: ending ? "already_done" : "already_satisfied", marker, ...diag }
+            result: {
+              skipped: ending ? "already_done" : missing ? "missing_control" : "already_satisfied",
+              ...(marker ? { marker } : {}),
+              ...(missing ? { detail: actionError } : {}),
+              ...(missing && action.missingControlSaveAs
+                ? {
+                    vars: { [action.missingControlSaveAs]: MISSING_CONTROL_VAR_VALUE }
+                  }
+                : {}),
+              ...diag
+            }
           };
         }
         // A control that "does not exist" very often does exist and simply

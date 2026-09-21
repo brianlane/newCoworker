@@ -1134,6 +1134,20 @@ export type FlowStep =
        */
       continueWhenText?: string;
       /**
+       * Soft-fail: when an action fails with "no matching control on the page"
+       * AFTER the appear wait, skip this step and keep the rest of the run
+       * going. Distinct from continueWhenText (needs a success phrase on the
+       * failure page). Consulted only after CLICK_TEXT_APPEAR_MS, and only for
+       * that missing-control error. skipWhenText / continueWhenText still win
+       * when the failure page matches them.
+       */
+      continueWhenMissingControl?: boolean;
+      /**
+       * Optional var written as "missing" when continueWhenMissingControl
+       * fires, so a later when can skip the follow-up wait or text the owner.
+       */
+      missingControlSaveAs?: string;
+      /**
        * Postcondition: after every action completed, the page's VISIBLE text
        * must show this marker (case-insensitive) within the render service's
        * expect window, or the step fails exactly like an action failure and

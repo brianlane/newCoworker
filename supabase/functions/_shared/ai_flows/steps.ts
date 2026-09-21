@@ -687,6 +687,16 @@ export type StepAction =
        */
       continueWhenText?: string;
       /**
+       * Soft-fail: skip this step and keep the run going when the action error
+       * is "no matching control on the page" after the appear wait. See
+       * FlowStep.continueWhenMissingControl. Page markers still win.
+       */
+      continueWhenMissingControl?: boolean;
+      /**
+       * Var written as "missing" when continueWhenMissingControl fires.
+       */
+      missingControlSaveAs?: string;
+      /**
        * Postcondition the render service holds the page to AFTER the actions:
        * visible text must show this marker or the step fails like an action
        * failure (and the markers above classify it), see FlowStep.expectText.
@@ -1827,6 +1837,12 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             : {}),
           ...(step.continueWhenText && step.continueWhenText.trim()
             ? { continueWhenText: step.continueWhenText.trim() }
+            : {}),
+          ...(step.continueWhenMissingControl === true
+            ? { continueWhenMissingControl: true }
+            : {}),
+          ...(step.missingControlSaveAs
+            ? { missingControlSaveAs: step.missingControlSaveAs }
             : {}),
           ...(step.expectText && step.expectText.trim()
             ? { expectText: step.expectText.trim() }

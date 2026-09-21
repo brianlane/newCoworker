@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyPageMarkers } from "../supabase/functions/_shared/ai_flows/page_markers.ts";
+import {
+  classifyBrowseActionFailure,
+  classifyPageMarkers,
+  isMissingControlError,
+  MISSING_CONTROL_ERROR_NEEDLE
+} from "../supabase/functions/_shared/ai_flows/page_markers.ts";
 
 /**
  * The rule that decides what a browse step does when the page says it is done.
@@ -100,5 +105,72 @@ describe("classifyPageMarkers", () => {
 
   it("returns none for an empty source list", () => {
     expect(classifyPageMarkers([], { skipWhenText: "already been claimed" })).toBe("none");
+  });
+});
+
+describe("isMissingControlError", () => {
+  it("matches the render-service needle case-insensitively, including wrapped errors", () => {
+    expect(MISSING_CONTROL_ERROR_NEEDLE).toBe("no matching control on the page");
+    expect(isMissingControlError('click_text "Call me again": no matching control on the page')).toBe(
+      true
+    );
+    expect(isMissingControlError("NO MATCHING CONTROL ON THE PAGE | consoleErrors(7)")).toBe(true);
+    expect(isMissingControlError("Timeout 10000ms exceeded")).toBe(false);
+  });
+});
+
+describe("classifyBrowseActionFailure", () => {
+  const MISS = 'click_text "Call me again": no matching control on the page';
+  const OVERLAY = "<p>This referral has already been claimed by another agent.</p>";
+  const CALLING = "We're calling you at (602) 805-3377";
+
+  it("returns none when the flag is off, even on a missing-control error", () => {
+    expect(classifyBrowseActionFailure([OVERLAY], MISS, {})).toBe("none");
+    expect(
+      classifyBrowseActionFailure([OVERLAY], MISS, { continueWhenMissingControl: false })
+    ).toBe("none");
+  });
+
+  it("continues on a missing-control error when the flag is on", () => {
+    expect(
+      classifyBrowseActionFailure([OVERLAY], MISS, { continueWhenMissingControl: true })
+    ).toBe("missing_control_continue");
+  });
+
+  it("still matches the needle inside the worker's condensed error plus 404 diagnostics", () => {
+    const wrapped =
+      "browse_action: click_text \"Call me again\": no matching control on the page | " +
+      "consoleErrors(7): Failed to load resource: the server responded with a status of 404 ()";
+    expect(
+      classifyBrowseActionFailure(["<html></html>"], wrapped, { continueWhenMissingControl: true })
+    ).toBe("missing_control_continue");
+  });
+
+  it("does not treat other action failures as a missing control", () => {
+    expect(
+      classifyBrowseActionFailure(
+        [OVERLAY],
+        'click_text "Call me again": Timeout 10000ms exceeded',
+        { continueWhenMissingControl: true }
+      )
+    ).toBe("none");
+  });
+
+  it("lets continueWhenText win over the missing-control flag", () => {
+    expect(
+      classifyBrowseActionFailure([CALLING], MISS, {
+        continueWhenText: "We're calling you",
+        continueWhenMissingControl: true
+      })
+    ).toBe("continue_run");
+  });
+
+  it("lets skipWhenText win over the missing-control flag", () => {
+    expect(
+      classifyBrowseActionFailure([OVERLAY], MISS, {
+        skipWhenText: "already been claimed",
+        continueWhenMissingControl: true
+      })
+    ).toBe("end_run");
   });
 });

@@ -1623,6 +1623,21 @@ Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`) at
 trunk 28, `claim_state` names Claimed By and the already-claimed dialog,
 `card.screenshot` gone, `route.attachScreenshot` gone,
 `qt_email.attachScreenshot` still true. Second dry-run: already applied),
+`homelight-claim-again-missing.ts` +
+`homelight-claim-again-missing-definition.ts` (Sep 21 2026: Natasha W.,
+San Tan Valley AZ, ~$547K, runs `7ce0e9c3` and `06229aed`. Call-mode.
+`wait_hl_call` recorded `no_call`. `claim_state` was Other brokerage (the
+overlay Debra M. already taught is often ours). `claim_again` then died
+on `click_text "Call me again": no matching control`. `continueWhenText`
+is `We're calling you`, which that page also lacked, so the run
+dead-lettered and seller intro never ran. HomeLight `_ssgManifest.js` /
+`_buildManifest.js` 404s in the log are usual portal noise. Platform
+flag `continueWhenMissingControl` skips the click after the appear wait
+and keeps the run going; this one-shot opts `claim_again` in, writes
+`claim_again_click=missing`, skips the second wait, and texts the team.
+Do not requeue those runs. Do not click Claim on a live `hmlt.co` URL.
+Merge does not apply it: `npx tsx scripts/oneshot/homelight-claim-again-missing.ts --apply`
+after merge. Pinned by `tests/oneshot-homelight-claim-again-missing.test.ts`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
