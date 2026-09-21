@@ -50,7 +50,14 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   // and meters it from the exact usageMetadata it sees. Priced modality-aware:
   // text in $0.75 / out $4.50, audio in $3.00 / out $12.00 per 1M tokens
   // (audio ≈ 25 tokens/sec). Nearly all of a call's tokens are audio.
+  // The preview id stays priced so calls metered before the 3.8-live
+  // cutover still hit this row. Google's pricing page lists the same
+  // Standard rates for both ids (no separate intro promo on this SKU).
   "gemini-3.1-flash-live-preview": { in: 0.75, out: 4.5, audioIn: 3.0, audioOut: 12.0 },
+  // Gemini 3.8 Live (GA Sep 2026): the voice-bridge default. Same Standard
+  // list price as the 3.1 preview: text $0.75/$4.50, audio $3.00/$12.00
+  // ($0.005/min in, $0.018/min out at 25 audio tokens/sec).
+  "gemini-3.8-live": { in: 0.75, out: 4.5, audioIn: 3.0, audioOut: 12.0 },
   // Gemini 3.5 Flash (GA May 2026). Output price includes thinking tokens, so
   // a medium/high reasoning compile is billed entirely at this rate.
   "gemini-3.5-flash": { in: 1.5, out: 9.0 },

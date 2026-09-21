@@ -2084,7 +2084,7 @@ function main(): void {
           }
           const warnBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_WARN_BEFORE_MS", 60 * 1000);
           const finalNudgeBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_FINAL_NUDGE_MS", 15 * 1000);
-          const model = process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview";
+          const model = process.env.GEMINI_LIVE_MODEL ?? "gemini-3.8-live";
 
           // Prime Gemini's system instruction with the Rowboat vault so
           // identity/tone/long-term memory/website knowledge is already in

@@ -61,13 +61,15 @@ describe("geminiPriceFor", () => {
     expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
   });
 
-  it("carries modality-aware audio rates for the Gemini Live voice model", () => {
-    expect(geminiPriceFor("gemini-3.1-flash-live-preview")).toEqual({
+  it("carries modality-aware audio rates for the Gemini Live voice models", () => {
+    const liveRates = {
       in: 0.75,
       out: 4.5,
       audioIn: 3.0,
       audioOut: 12.0
-    });
+    };
+    expect(geminiPriceFor("gemini-3.1-flash-live-preview")).toEqual(liveRates); // pragma: allowlist secret
+    expect(geminiPriceFor("gemini-3.8-live")).toEqual(liveRates);
   });
 });
 

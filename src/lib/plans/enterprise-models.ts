@@ -158,6 +158,14 @@ const liveModel = z
   .refine((m) => !m.includes("translate"), {
     message:
       "Translate-flavored live models support no tools or instructions, so they cannot run the phone coworker"
+  })
+  .refine((m) => !m.includes("transcribe"), {
+    message:
+      "Transcribe-flavored live models are speech-to-text, so they cannot run the phone coworker"
+  })
+  .refine((m) => !m.includes("extended-thinking"), {
+    message:
+      "Extended-thinking live models require async tools, and the phone bridge waits for each tool result"
   });
 
 export const enterpriseModelsSchema = z

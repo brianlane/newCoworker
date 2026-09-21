@@ -29,7 +29,7 @@ export function pickUpstream(model) {
  * budget the dashboard shows.
  *
  * The ONLY gemini spend NOT metered here is Gemini Live (the real-time
- * audio-to-audio model, e.g. gemini-3.1-flash-live-preview): it never reaches
+ * audio-to-audio model, e.g. gemini-3.8-live): it never reaches
  * this router, the voice-bridge holds that WebSocket directly and meters it
  * separately from the exact `usageMetadata` it sees. We guard on the `live`
  * substring defensively so a stray Live completion here could never

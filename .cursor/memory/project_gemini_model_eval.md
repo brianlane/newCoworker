@@ -46,3 +46,18 @@ after; the bump itself is a separate change from the checker. SMS/lite
 and webchat stayed put. `GEMINI_ROWBOAT_MODEL` on Vercel and the laptop
 `.env` can still override the script default on new provisions and
 redeploys.
+
+The voice-bridge pin moved to `gemini-3.8-live` after issue #1879
+(2026-09-21), off the preview id it had been using. That issue's
+`generateContent` 400 is the Live API saying the id is WebSocket-only.
+Google's pricing page lists the same Standard rates for both ids:
+text $0.75/$4.50, audio $3/$12 per 1M ($0.005/min in, $0.018/min out).
+`gemini-3.8-live-extended-thinking` is the same version and the wrong
+product: it requires NON_BLOCKING tools, and the bridge stamps
+`behavior: BLOCKING` on every declaration (`withBlockingToolBehavior`).
+The enterprise voice slot rejects translate, transcribe, and
+extended-thinking. A laptop or Vercel `GEMINI_LIVE_MODEL` still
+overrides `deploy-client.sh` on redeploy, same trap as the Rowboat pin.
+Proactive audio on 3.8 Live means the model may stay silent when speech
+is not directed at it. The bridge still sends the greeting cue. Do not
+set `proactiveAudio: false` (that 400s) or `thinkingConfig`.
