@@ -106,7 +106,19 @@ a key to accept it. Everything downstream follows from that:
   `hmlt.co` URL. Applied Sep 16 2026 after merge of PR #1862 (`8aaa4026`)
   at 2026-09-16T19:08:41Z. Live: `claim_state` names Claimed By and the
   already-claimed dialog, `card.screenshot` gone, `route.attachScreenshot`
-  gone, `qt_email.attachScreenshot` still true.
+  gone,   `qt_email.attachScreenshot` still true.
+- **A missing "Call me again" must not dead-letter the run.** Natasha W.
+  (San Tan Valley AZ, ~$547K, runs `7ce0e9c3` / `06229aed`, 2026-09-21):
+  `wait_hl_call` recorded `no_call`. `claim_state` was Other brokerage.
+  `recall_gate` clicked "Call me again". The button was not on the page
+  (overlay / copy change; the `_ssgManifest.js` 404s are usual noise).
+  `continueWhenText: "We're calling you"` did not match, so the step
+  failed terminal and seller intro never ran. Platform:
+  `browse_action.continueWhenMissingControl` (after CLICK_TEXT_APPEAR_MS,
+  missing-control is a skip). Amy: `homelight-claim-again-missing.ts`
+  opts `claim_again` in, writes `claim_again_click=missing`, skips
+  `wait_hl_call2`, notifies the team. Do not requeue those runs. Do not
+  `--click` a live `hmlt.co` URL. Merge does not apply it.
 - **Requesting the claim callback is not the same as claiming, and the copy
   used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
   "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
@@ -456,6 +468,17 @@ Claimed By Amy Laidlaw and the already-claimed dialog, `claim_verify.when`
 is `claim_mode notEquals none`, `card.screenshot` gone,
 `route.attachScreenshot` gone, `qt_email.attachScreenshot` still true.
 Second dry-run: already applied, nothing to do. Do not re-apply),
+`homelight-claim-again-missing.ts` +
+`homelight-claim-again-missing-definition.ts` (Sep 21 2026: Natasha W.,
+San Tan Valley AZ, ~$547K, runs `7ce0e9c3` / `06229aed`. Call-mode,
+`no_call`, claim_state Other brokerage. `claim_again` died on
+`click_text "Call me again": no matching control`. The calling-you
+`continueWhenText` did not match. Platform `continueWhenMissingControl`
+plus this one-shot: opt the step in, write `claim_again_click=missing`,
+skip `wait_hl_call2`, notify the team. Unique ids kept.
+`SHIFT_UNSAFE_RESUME_IDS` is empty. Do not requeue those runs. Do not
+`--click` a live `hmlt.co` URL. Merge does not apply it. Pinned by
+`tests/oneshot-homelight-claim-again-missing.test.ts`),
 `patch-homelight-team-copy-labels.ts` (Aug 27 2026, fleet
 fallback-composition audit: the portal extraction misses so often that
 lead_phone held its 'none' fallback on 19 of the 25 most recent runs, and the
@@ -481,6 +504,7 @@ PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 Same day's portal-note row click: `amy-homelight-portal-note-row.ts`.
 Arletta L. (Sep 15 2026, run `61550503`): `homelight-claim-calls-cell.ts`.
 Debra M. (Sep 16 2026, run `aaeb08fb`): `homelight-own-claim-overlay.ts`.
+Natasha W. (Sep 21 2026, runs `7ce0e9c3` / `06229aed`): `homelight-claim-again-missing.ts`.
 
 ## The agent dashboard, read live 2026-08-18
 

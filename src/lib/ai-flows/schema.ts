@@ -1777,6 +1777,21 @@ const nonBranchStepMembers = [
     // flow can be safely re-run for the same lead.
     // skipWhenText is evaluated FIRST and wins when both markers match.
     continueWhenText: z.string().min(1).max(200).optional(),
+    // Soft-fail: when an action fails with "no matching control on the page"
+    // AFTER the render service's appear wait, skip this step and keep the rest
+    // of the run going. Distinct from continueWhenText, which needs a success
+    // phrase on the failure page. HomeLight's post-claim "Call me again" is
+    // the case: the overlay / a broken page / a copy change leaves no button
+    // and no "We're calling you", and dead-lettering there drops seller intro
+    // and the late ladder. Not the same as optional click_text: that would
+    // skip before waiting, which is the hydration-lag bug CLICK_TEXT_APPEAR_MS
+    // exists to stop. This flag is consulted only after that wait, and only
+    // for the missing-control error (other failures stay loud).
+    continueWhenMissingControl: z.boolean().optional(),
+    // Optional var written as "missing" when continueWhenMissingControl fires,
+    // so a later when can skip the follow-up wait or text the owner. Only
+    // valid alongside the flag (validateDefinitionSemantics).
+    missingControlSaveAs: varName.optional(),
     // Postcondition: after every action completed, the page's VISIBLE text must
     // show this marker (case-insensitive) within the render service's expect
     // window, or the step fails exactly like an action failure (failure shots,
@@ -2817,6 +2832,17 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           `Step "${step.id}" can't combine forEachLink with expectText; a loop has no single after-page to hold to the expectation.`
         );
       }
+      if (step.continueWhenMissingControl) {
+        issues.push(
+          `Step "${step.id}" can't combine forEachLink with continueWhenMissingControl; a loop has no single failure page to classify.`
+        );
+      }
+    }
+
+    if (step.type === "browse_action" && step.missingControlSaveAs && !step.continueWhenMissingControl) {
+      issues.push(
+        `Step "${step.id}" sets missingControlSaveAs without continueWhenMissingControl.`
+      );
     }
 
     // forEachLinkMatchVar narrows a forEachLink loop to rows naming one of the
@@ -3406,6 +3432,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       // Same-pass extraction registers its produced vars for LATER steps, just
       // like browse_extract.
       for (const f of step.fields ?? []) vars.add(f.name);
+      if (step.missingControlSaveAs) vars.add(step.missingControlSaveAs);
       // A forEachLink sweep publishes its measured outcome when it ends:
       // `<id>_updated` (items whose sequence completed, across every chained
       // pass) and `<id>_left` (items still listed when the loop stopped), so

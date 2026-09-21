@@ -820,11 +820,12 @@ function editorTrigger(s: EditorState): FlowTrigger {
 
 /**
  * browse_action looping (forEachLink) is mutually exclusive with same-pass
- * extraction, screenshot, and remember-link (enforced in
- * validateDefinitionSemantics). The builder HIDES those controls while a
- * forEachLink selector is set but keeps their values in editor state, so
- * clearing the selector restores them without data loss. We strip them here, at
- * save time, so the persisted definition is always valid.
+ * extraction, screenshot, remember-link, expectText, and
+ * continueWhenMissingControl (enforced in validateDefinitionSemantics). The
+ * builder HIDES those controls while a forEachLink selector is set but keeps
+ * their values in editor state, so clearing the selector restores them without
+ * data loss. We strip them here, at save time, so the persisted definition is
+ * always valid.
  */
 function sanitizeStepForSave(step: FlowStep): FlowStep {
   // branch: recurse so nested arm/else steps get the same save-time cleanup
@@ -5181,6 +5182,33 @@ function StepFields({
           continueExample="you accepted this lead"
           continueMeaning="This step already worked, so the later steps that file the lead and tell your team still need to run."
         />
+        {!step.forEachLink && (
+          <>
+            <label className="flex items-center gap-2 text-xs text-parchment/70">
+              <input
+                type="checkbox"
+                checked={step.continueWhenMissingControl === true}
+                onChange={(ev) =>
+                  patchStep(index, {
+                    continueWhenMissingControl: ev.target.checked ? true : undefined,
+                    ...(ev.target.checked ? {} : { missingControlSaveAs: undefined })
+                  })
+                }
+              />
+              If the button is missing after waiting, keep going (do not fail the run)
+            </label>
+            {step.continueWhenMissingControl === true && (
+              <Field
+                label="Write this variable as missing when the button was gone (optional)"
+                value={step.missingControlSaveAs ?? ""}
+                onChange={(v) =>
+                  patchStep(index, { missingControlSaveAs: v.trim() ? v.trim() : undefined })
+                }
+                help='A later step can then wait only when this is not "missing", or text you when it is.'
+              />
+            )}
+          </>
+        )}
         <div className="space-y-1 rounded-lg border border-parchment/10 bg-deep-ink/30 p-3">
           <p className="text-xs font-semibold text-parchment/80">Proof it worked (optional)</p>
           <input

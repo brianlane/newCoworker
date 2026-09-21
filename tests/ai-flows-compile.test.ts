@@ -59,6 +59,12 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("continueWhenText does not");
   });
 
+  it("teaches continueWhenMissingControl as the gone-button continue", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("continueWhenMissingControl");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("missingControlSaveAs");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("no matching control");
+  });
+
   it("teaches the wait steps and the no-reply branching pattern", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"sleep"');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"wait_for_reply"');
