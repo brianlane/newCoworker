@@ -13,6 +13,7 @@ import {
   isAdvisorFleetCandidate,
   nextSizeUp,
   signalCategory,
+  smsTextUnitsFromBillingWindow,
   weeklyPeriodKey,
   type AdvisorHostMetrics,
   type BusinessAdvice,
@@ -53,7 +54,7 @@ function evaluateInput(overrides: Partial<EvaluateInput> = {}): EvaluateInput {
     windowStartYmd: "2026-07-01",
     windowEndYmd: "2026-07-07",
     windowVoiceSeconds: 0,
-    monthToDateSmsUnits: 0,
+    billingPeriodSmsUnits: 0,
     onBoxErrorCount: 0,
     limits: {
       maxConcurrentCalls: 1,
@@ -477,16 +478,33 @@ describe("evaluateEscalationSignals", () => {
     expect(advice).toBeNull();
   });
 
+  it("reads text units from a billing-window payload", () => {
+    expect(smsTextUnitsFromBillingWindow({ sms_text_units: 3 })).toBe(3);
+    expect(smsTextUnitsFromBillingWindow({ sms_text_units: "2.2" })).toBe(2.2);
+    expect(smsTextUnitsFromBillingWindow({ sms_text_units: 0 })).toBe(0);
+  });
+
+  it("refuses a billing-window payload that is not a unit count", () => {
+    expect(() => smsTextUnitsFromBillingWindow(null)).toThrow(/no payload/);
+    expect(() => smsTextUnitsFromBillingWindow("3")).toThrow(/no payload/);
+    expect(() => smsTextUnitsFromBillingWindow({})).toThrow(/non-numeric/);
+    expect(() => smsTextUnitsFromBillingWindow({ sms_text_units: null })).toThrow(/non-numeric/);
+    expect(() => smsTextUnitsFromBillingWindow({ sms_text_units: "soon" })).toThrow(/non-numeric/);
+    expect(() => smsTextUnitsFromBillingWindow({ sms_text_units: Number.POSITIVE_INFINITY })).toThrow(
+      /non-numeric/
+    );
+  });
+
   it("fires sms_volume at 80% of the monthly cap, in TEXT UNITS", () => {
-    const advice = evaluateEscalationSignals(evaluateInput({ monthToDateSmsUnits: 80 }));
+    const advice = evaluateEscalationSignals(evaluateInput({ billingPeriodSmsUnits: 80 }));
     expect(advice!.signals).toEqual([
-      { kind: "sms_volume", monthToDateUnits: 80, capUnits: 100, packUnits: 0 }
+      { kind: "sms_volume", periodUnits: 80, capUnits: 100, packUnits: 0 }
     ]);
   });
 
   it("counts purchased packs toward the SMS allowance", () => {
     const advice = evaluateEscalationSignals(
-      evaluateInput({ monthToDateSmsUnits: 80, smsBonusUnits: 500 })
+      evaluateInput({ billingPeriodSmsUnits: 80, smsBonusUnits: 500 })
     );
     expect(advice).toBeNull();
   });
@@ -494,7 +512,7 @@ describe("evaluateEscalationSignals", () => {
   it("suppresses sms_volume for an armed SMS auto-reload", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({
-        monthToDateSmsUnits: 95,
+        billingPeriodSmsUnits: 95,
         autoReload: { voiceArmed: false, smsArmed: true, hasCard: true }
       })
     );
@@ -504,7 +522,7 @@ describe("evaluateEscalationSignals", () => {
   it("skips sms_volume when the cap is not finite", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({
-        monthToDateSmsUnits: 10_000,
+        billingPeriodSmsUnits: 10_000,
         limits: {
           maxConcurrentCalls: 1,
           voiceIncludedSecondsPerStripePeriod: 1_500,
@@ -518,7 +536,7 @@ describe("evaluateEscalationSignals", () => {
   it("skips sms_volume when there is no allowance at all", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({
-        monthToDateSmsUnits: 10,
+        billingPeriodSmsUnits: 10,
         limits: {
           maxConcurrentCalls: 1,
           voiceIncludedSecondsPerStripePeriod: 1_500,
@@ -567,7 +585,7 @@ describe("evaluateEscalationSignals", () => {
         hostMetrics: metricsRows(8, { load1Mean: 2.4, memAvailableMinMib: 200 }),
         localModelTurns: 2,
         windowVoiceSeconds: 20 * 60,
-        monthToDateSmsUnits: 95,
+        billingPeriodSmsUnits: 95,
         onBoxErrorCount: 40
       })
     );
@@ -659,7 +677,7 @@ describe("buildEscalationAdviceEmail", () => {
     { kind: "local_model_fallback", localTurns: 14, refusedTurns: 0, hasLocalModel: true },
     { kind: "system_errors", errorCount: 30 },
     { kind: "voice_volume", projectedMonthlyMinutes: 40, includedMinutes: 25, packMinutes: 0 },
-    { kind: "sms_volume", monthToDateUnits: 90, capUnits: 100, packUnits: 0 }
+    { kind: "sms_volume", periodUnits: 90, capUnits: 100, packUnits: 0 }
   ];
 
   it("names the tenant in a single-candidate subject and describes every signal", () => {
@@ -678,7 +696,7 @@ describe("buildEscalationAdviceEmail", () => {
     expect(text).toContain("14 replies generated on the box's own model, AI budget exhausted");
     expect(text).toContain("30 on-box error logs in the last 7 days (rowboat/ollama/voice)");
     expect(text).toContain("on pace for ~40 voice min/month (25 included, no packs held)");
-    expect(text).toContain("90 SMS text units month-to-date (cap 100, no packs held)");
+    expect(text).toContain("90 SMS text units this billing period (cap 100, no packs held)");
     expect(text).toContain("escalate kvm2 → kvm4 from the admin panel");
     expect(text).toContain("https://app.example.com/admin/biz-1");
   });
@@ -714,13 +732,13 @@ describe("buildEscalationAdviceEmail", () => {
   it("counts usage-only tenants in a plural subject", () => {
     const one = advice({
       recommendedSize: null,
-      signals: [{ kind: "sms_volume", monthToDateUnits: 90, capUnits: 100, packUnits: 0 }]
+      signals: [{ kind: "sms_volume", periodUnits: 90, capUnits: 100, packUnits: 0 }]
     });
     const two = advice({
       businessId: "biz-2",
       businessName: "Big Corp",
       recommendedSize: null,
-      signals: [{ kind: "sms_volume", monthToDateUnits: 4200, capUnits: 5000, packUnits: 0 }]
+      signals: [{ kind: "sms_volume", periodUnits: 4200, capUnits: 5000, packUnits: 0 }]
     });
     const { subject } = buildEscalationAdviceEmail([one, two], "https://app.example.com");
     expect(subject).toBe("[ops] Usage review, 2 tenants");
@@ -756,14 +774,14 @@ describe("buildEscalationAdviceEmail", () => {
               includedMinutes: 250,
               packMinutes: 240
             },
-            { kind: "sms_volume", monthToDateUnits: 4800, capUnits: 5000, packUnits: 500 }
+            { kind: "sms_volume", periodUnits: 4800, capUnits: 5000, packUnits: 500 }
           ]
         })
       ],
       "https://app.example.com"
     );
     expect(text).toContain("on pace for ~400 voice min/month (250 included + 240 from packs)");
-    expect(text).toContain("4800 SMS text units month-to-date (cap 5000 + 500 from packs)");
+    expect(text).toContain("4800 SMS text units this billing period (cap 5000 + 500 from packs)");
   });
 
   it("distinguishes a degraded reply from a refused one", () => {
@@ -880,7 +898,7 @@ describe("adviceLogMessage", () => {
         advice({
           signals: [
             { kind: "local_model_fallback", localTurns: 2, refusedTurns: 0, hasLocalModel: true },
-            { kind: "sms_volume", monthToDateUnits: 90, capUnits: 100, packUnits: 0 }
+            { kind: "sms_volume", periodUnits: 90, capUnits: 100, packUnits: 0 }
           ]
         })
       )

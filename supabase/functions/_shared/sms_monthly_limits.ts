@@ -1,7 +1,8 @@
 /**
  * Canonical monthly SMS caps for non-enterprise tiers, denominated in TEXT
- * UNITS (UTC calendar month; sum of `daily_usage.sms_text_units`): one unit
- * per carrier part for SMS, 2.2 for an MMS (see _shared/sms_text_units.ts).
+ * UNITS (the Stripe-anchored billing period, via `sms_billing_window_usage`,
+ * summing `daily_usage.sms_text_units`): one unit per carrier part for SMS,
+ * 2.2 for an MMS (see _shared/sms_text_units.ts).
  * Keep in sync with Postgres `nonenterprise_monthly_sms_cap` /
  * `try_reserve_sms_outbound_slot` in migrations and with app `TIER_LIMITS`
  * via `limits.ts`.

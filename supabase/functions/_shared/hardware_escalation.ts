@@ -58,13 +58,15 @@
  *     this fires at a tenant sitting on 600 purchased minutes, which is the
  *     same defect `20260822061519_voice_low_balance_counts_bonus.sql` fixed
  *     for the low-balance email.
- *   - sms_volume: month-to-date SMS against the monthly cap plus unexpired
- *     `sms_bonus_grants`. Denominated in TEXT UNITS
- *     (`daily_usage.sms_text_units`), which is what Postgres actually
- *     enforces. It previously summed `daily_usage.sms_sent`, a count of
- *     MESSAGES, against a cap denominated in units: the fleet averages ~2.5
- *     parts per message, so the signal fired ~2.5x too late and the email
- *     compared two different things to the operator's face.
+ *   - sms_volume: SMS used in the tenant's current billing period, against
+ *     the monthly cap plus unexpired `sms_bonus_grants`. The number comes
+ *     from `sms_billing_window_usage` (text units), the same window and
+ *     ledger `try_reserve_sms_outbound_slot` enforces. It previously summed
+ *     `daily_usage` from the 1st of the UTC month, so a mid-month downgrade
+ *     was scored against the new, smaller cap (KIN, 2026-09-21: 291
+ *     calendar-month units, 3 in the Starter period). Before that it summed
+ *     `sms_sent`, a count of MESSAGES, against a unit cap, and fired ~2.5x
+ *     too late.
  *
  * Dependency-free (caller injects rows) so vitest covers it under the
  * shared 100% gate, mirroring cap_alerts.ts / voice_bridge_health.ts.
@@ -100,17 +102,25 @@ export function isAdvisorFleetCandidate(row: AdvisorFleetRow): boolean {
   return true;
 }
 
-export type DailyUsageRow = {
-  business_id: string;
-  usage_date: string;
-  /**
-   * Carrier PARTS, weighted (MMS counts 2.2). This is the ledger the caps
-   * are denominated in and the one `try_reserve_sms_outbound_slot` refuses
-   * against. The sibling `sms_sent` column counts messages and must not be
-   * compared to a cap.
-   */
-  sms_text_units: number;
-};
+/**
+ * Text units from one `sms_billing_window_usage` payload.
+ *
+ * Throws when the payload is missing or `sms_text_units` is not a finite
+ * number. Zero is a real reading (the tenant sent nothing this period). A
+ * failed read that collapses to zero would drop an over-cap tenant out of
+ * the digest, so the caller must fail the run instead.
+ */
+export function smsTextUnitsFromBillingWindow(data: unknown): number {
+  if (data == null || typeof data !== "object") {
+    throw new Error("sms_billing_window_usage returned no payload");
+  }
+  const raw = (data as { sms_text_units?: unknown }).sms_text_units;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) {
+    throw new Error("sms_billing_window_usage returned a non-numeric sms_text_units");
+  }
+  return n;
+}
 
 /** One call's [start, end) wall-clock interval (epoch ms). */
 export type CallInterval = {
@@ -152,7 +162,7 @@ export type AdvisorThresholds = {
   concurrencySaturationDays: number;
   /** Fraction of the monthly voice allowance (included + packs), extrapolated. */
   voiceUtilization: number;
-  /** Fraction of the monthly SMS allowance (cap + packs), month-to-date. */
+  /** Fraction of the SMS allowance (cap + packs) used in the current billing period. */
   smsUtilization: number;
   /** Error-level on-box system_logs rows in the window. */
   systemErrorCount: number;
@@ -220,7 +230,7 @@ export type EscalationSignal =
       includedMinutes: number;
       packMinutes: number;
     }
-  | { kind: "sms_volume"; monthToDateUnits: number; capUnits: number; packUnits: number };
+  | { kind: "sms_volume"; periodUnits: number; capUnits: number; packUnits: number };
 
 export type SignalCategory = "hardware" | "usage";
 
@@ -343,12 +353,13 @@ export type EvaluateInput = {
   /** This business's settled billable voice seconds in the window (voice_settlements). */
   windowVoiceSeconds: number;
   /**
-   * Month-to-date SMS in TEXT UNITS (`daily_usage.sms_text_units`), the
-   * ledger `try_reserve_sms_outbound_slot` actually enforces. NOT
-   * `sms_sent`: that counts messages, the caps count carrier parts, and the
-   * fleet averages ~2.5 parts per message.
+   * SMS text units already used in this tenant's current billing period.
+   * The caller must pass `sms_billing_window_usage`'s `sms_text_units`, not
+   * a sum of `daily_usage` from the 1st of the UTC month: the cap refuses
+   * sends against the billing period, and a calendar-month total judges
+   * last period's usage (or a previous plan's) against today's cap.
    */
-  monthToDateSmsUnits: number;
+  billingPeriodSmsUnits: number;
   /** Error-level on-box system_logs count in the window. */
   onBoxErrorCount: number;
   /**
@@ -499,12 +510,12 @@ export function evaluateEscalationSignals(input: EvaluateInput): BusinessAdvice 
   if (
     Number.isFinite(capUnits) &&
     smsAllowance > 0 &&
-    input.monthToDateSmsUnits >= smsAllowance * t.smsUtilization &&
+    input.billingPeriodSmsUnits >= smsAllowance * t.smsUtilization &&
     !autoReloadCovers(input.autoReload ?? null, "sms")
   ) {
     signals.push({
       kind: "sms_volume",
-      monthToDateUnits: input.monthToDateSmsUnits,
+      periodUnits: input.billingPeriodSmsUnits,
       capUnits,
       packUnits
     });
@@ -576,7 +587,7 @@ function describeSignal(sig: EscalationSignal): string {
     sig.packUnits > 0
       ? `cap ${sig.capUnits} + ${sig.packUnits} from packs`
       : `cap ${sig.capUnits}, no packs held`;
-  return `${sig.monthToDateUnits} SMS text units month-to-date (${cap})`;
+  return `${sig.periodUnits} SMS text units this billing period (${cap})`;
 }
 
 function hardwareBlock(a: BusinessAdvice, siteUrl: string): string {
