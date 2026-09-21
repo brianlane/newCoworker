@@ -176,14 +176,20 @@ describe("decideTelnyxRateDrift", () => {
 });
 
 describe("the pins the Monday job has to commit", () => {
-  it("moves the real toBe(0.9) pins and the workflow git-adds each file", () => {
+  it("moves the live toBe pins from whatever they currently are, and the workflow git-adds each file", () => {
     const workflow = readFileSync(".github/workflows/telnyx-voice-rate-cutover.yml", "utf8");
     for (const path of CONSTANT_PIN_PATHS) {
       expect(workflow).toContain(path);
       const source = readFileSync(path, "utf8");
-      const moved = retargetConstantPins(source, 0.9, 0.96, path);
-      expect(moved).toContain("voiceTelnyxCentsPerMinute).toBe(0.96)");
-      expect(moved).not.toContain("voiceTelnyxCentsPerMinute).toBe(0.9)");
+      const match = /voiceTelnyxCentsPerMinute\)\.toBe\(([\d.]+)\)/.exec(source);
+      expect(match, `${path} has a pin`).not.toBeNull();
+      const current = Number(match?.[1]);
+      // A later cutover rewrites these files away from 0.9. The test has to
+      // start from the number that is actually in the file, or that PR's CI fails.
+      const next = current === 1.11 ? 1.12 : 1.11;
+      const moved = retargetConstantPins(source, current, next, path);
+      expect(moved).toContain(`voiceTelnyxCentsPerMinute).toBe(${next})`);
+      expect(moved).not.toContain(`voiceTelnyxCentsPerMinute).toBe(${current})`);
     }
   });
 });
