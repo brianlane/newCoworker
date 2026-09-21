@@ -122,6 +122,10 @@ jobs:
         # would make every Monday re-apply the same delta.
         run: npx tsx .github/scripts/telnyx-rate-drift.ts < /tmp/voice-zone-report.json
 
+      # The drift script moves the toBe() pins in these two files in the same
+      # write as the constant (CONSTANT_PIN_PATHS). This step then checks the
+      # surcharge math still holds. A pin left at the old number fails here
+      # and the PR never opens.
       - name: Verify the edited model still passes its own tests
         if: steps.window.outputs.run == 'true' && steps.drift.outputs.changed == 'true'
         run: npx vitest run tests/enterprise-pricing.test.ts tests/voice-zone-rates.test.ts
@@ -150,7 +154,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add src/lib/plans/enterprise-pricing.ts .github/telnyx-rate-calibration.json
+          # CONSTANT_PIN_PATHS in .github/scripts/telnyx-rate-drift.ts. A test
+          # fails when this list drops one of those paths.
+          git add src/lib/plans/enterprise-pricing.ts .github/telnyx-rate-calibration.json \
+            tests/enterprise-pricing.test.ts tests/voice-zone-rates.test.ts
           {
             echo "Telnyx voice rate cutover: recalibrate the per-minute constant"
             echo
