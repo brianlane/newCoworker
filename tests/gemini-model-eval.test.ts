@@ -276,6 +276,18 @@ describe("recommendForPin", () => {
     ).toBe("skip");
   });
 
+  it("waits when a GA live id replaces a same-version preview pin", () => {
+    const preview = fakePin({
+      id: "live-preview",
+      defaultModel: "gemini-2.5-flash-live-preview",
+      family: "live",
+      acceptsFamilies: ["live"],
+      autoAdopt: false
+    });
+    expect(recommendForPin(preview, "gemini-2.5-flash-live", ctx).verdict).toBe("wait");
+    expect(recommendForPin(preview, "gemini-2.0-flash-live", ctx).verdict).toBe("skip");
+  });
+
   it("does not wait on a same-version live id when the pin is already GA", () => {
     const gaLive = fakePin({
       id: "live-ga",
