@@ -10,7 +10,7 @@ remember before running anything here.
 | | |
 | --- | --- |
 | Business id | `8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d` |
-| Tier / box | enterprise, VPS `1806097` (KVM1: 1 vCPU / 4GB) |
+| Tier / box | standard, VPS `1806097` (KVM1: 1 vCPU / 4GB) |
 | DID | `+16023131823` (also the homepage demo line) |
 | Owner | New Coworker Team |
 | Onboarded | 2026-07-16 (`scripts/oneshot/onboard-hq-tenant.ts`) |
@@ -32,13 +32,19 @@ the summary.
 - **The e2e / smoke default.** Anything in `debug/` that writes without an
   explicit business id writes here.
 - **Tenant zero for Prospecting.** Our own outbound outreach runs through our
-  own product: Places discovery across Phoenix-metro trades (12 paid queries
-  a day on the Enterprise budget, double the Standard 6), a pitch built
+  own product: Places discovery across Phoenix-metro trades (the Standard
+  budget, 6 paid queries a day), a pitch built
   from what each prospect's site is missing, sent from HQ's connected Gmail
   as `team@` on the product domain (`outreach_settings.send_as_email`, #1806).
   Configured by `configure-hq-prospecting.ts` in **manual mode**; Brian has
   since flipped it to **auto** from the Marketing page (verified live
-  2026-09-06: mode `auto`, cap 12, 135 sent). Since Sep 2026 the first email
+  2026-09-06: mode `auto`, cap 12, 135 sent). The typed footer postal address is
+  waived for HQ by business id (`postalAddressRequiredFor`), the same
+  treatment Enterprise gets by plan: the live row is Standard, so the plan
+  waiver does not cover it, and the Marketing page was blocking sends on an
+  empty address. With no address on the business profile either, the footer
+  is the unsubscribe line alone. That is our own compliance judgement.
+  CAN-SPAM still wants a physical address. Since Sep 2026 the first email
   ends on a reply ask and only the day-10 follow-up carries the booking link
   (README, "The first email asks; the follow-up books"). See the README's
   Prospecting section. The HQ Claude/ChatGPT connector can read the

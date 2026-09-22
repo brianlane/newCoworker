@@ -11,6 +11,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { QUERIES_PER_RUN } from "@/lib/outreach/discover";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 
 export const PROSPECTING_UPGRADE_MESSAGE =
   "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.";
@@ -34,6 +35,28 @@ export function prospectingAllowedForTier(tier: string | null | undefined): bool
  */
 export function postalAddressRequiredForTier(tier: string | null | undefined): boolean {
   return tier !== "enterprise";
+}
+
+/**
+ * The same gate, for one business.
+ *
+ * Enterprise is exempt by plan. HQ is exempt by identity, even though the
+ * live HQ row is Standard: our own outbound mail is sent on our own
+ * compliance judgement, and the Marketing page was still demanding a typed
+ * address because the plan gate does not see that. Every other Standard
+ * tenant still has to type one. A stale `postal_address_exempt` on a
+ * downgraded customer does not count: the id check is the only exception
+ * outside the plan.
+ *
+ * CAN-SPAM has no such exemption. An exempt sender with no address on file
+ * is sending commercial mail without the physical address the law asks for.
+ */
+export function postalAddressRequiredFor(
+  businessId: string,
+  tier: string | null | undefined
+): boolean {
+  if (businessId === HQ_BUSINESS_ID) return false;
+  return postalAddressRequiredForTier(tier);
 }
 
 /**
@@ -80,5 +103,8 @@ export async function postalAddressRequiredForBusiness(
   businessId: string,
   client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
 ): Promise<boolean> {
-  return postalAddressRequiredForTier(await prospectingTierForBusiness(businessId, client));
+  return postalAddressRequiredFor(
+    businessId,
+    await prospectingTierForBusiness(businessId, client)
+  );
 }

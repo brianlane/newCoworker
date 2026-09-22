@@ -38,14 +38,24 @@ const prospectingTierSpy = vi.fn(async (): Promise<string | null> => "standard")
 const allowedForTier = (tier: string | null | undefined) =>
   tier === "standard" || tier === "enterprise";
 const postalRequiredForTier = (tier: string | null | undefined) => tier !== "enterprise";
+/**
+ * Mirrors postalAddressRequiredFor: Enterprise by plan, HQ by identity.
+ * The real function is covered in plans-prospecting.test.ts; this fake exists
+ * so the owner tests can pick a plan and still see the HQ exception.
+ */
+const HQ_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
+const postalRequiredFor = (businessId: string, tier: string | null | undefined) =>
+  businessId === HQ_ID ? false : postalRequiredForTier(tier);
 vi.mock("@/lib/plans/prospecting", () => ({
   PROSPECTING_UPGRADE_MESSAGE:
     "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.",
   prospectingTierForBusiness: (...a: unknown[]) => prospectingTierSpy(...(a as [])),
   prospectingAllowedForBusiness: async (...a: unknown[]) =>
     allowedForTier(await prospectingTierSpy(...(a as []))),
-  postalAddressRequiredForBusiness: async (...a: unknown[]) =>
-    postalRequiredForTier(await prospectingTierSpy(...(a as []))),
+  postalAddressRequiredFor: (businessId: string, tier: string | null | undefined) =>
+    postalRequiredFor(businessId, tier),
+  postalAddressRequiredForBusiness: async (businessId: string, ...a: unknown[]) =>
+    postalRequiredFor(businessId, await prospectingTierSpy(...(a as []))),
   prospectingAllowedForTier: (tier: string | null | undefined) => allowedForTier(tier),
   postalAddressRequiredForTier: (tier: string | null | undefined) => postalRequiredForTier(tier)
 }));
@@ -493,6 +503,28 @@ describe("the Enterprise postal-address waiver", () => {
     const standard = await loadProspectingView(BIZ, {} as never);
     expect(standard.postalAddressRequired).toBe(true);
     expect(standard.blockers).toEqual(["postalAddress"]);
+  });
+
+  it("lets HQ switch on with no address on Standard, and drops the panel blocker", async () => {
+    // HQ's live row is Standard, so the Enterprise plan waiver does not cover
+    // it. The exemption is by business id, and it is still written down so
+    // the check constraint can see it.
+    prospectingTierSpy.mockResolvedValue("standard");
+    await saveProspectingSettings(HQ_ID, input({ postalAddress: "" }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      HQ_ID,
+      expect.objectContaining({
+        mode: "auto",
+        postal_address: null,
+        postal_address_exempt: true
+      }),
+      expect.anything()
+    );
+
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ postal_address: null }));
+    const view = await loadProspectingView(HQ_ID, {} as never);
+    expect(view.postalAddressRequired).toBe(false);
+    expect(view.blockers).not.toContain("postalAddress");
   });
 });
 

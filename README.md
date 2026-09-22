@@ -2687,13 +2687,15 @@ carries no send step at all, and a test pins that.
   `off` impossible without an offer line, and without a postal address unless
   the row carries an explicit waiver. You cannot switch this on without the
   things the email legally needs.
-- **The postal-address waiver is Enterprise-only, and it is recorded rather
-  than inferred.** `postalAddressRequiredForTier`
-  (src/lib/plans/prospecting.ts) exempts Enterprise from typing an address
-  into the panel; the save path writes that decision into
+- **The postal-address waiver is Enterprise, plus HQ, and it is recorded
+  rather than inferred.** `postalAddressRequiredFor`
+  (src/lib/plans/prospecting.ts) exempts Enterprise by plan, and exempts HQ
+  (`HQ_BUSINESS_ID`) by identity even though the live HQ row is Standard.
+  The save path writes that decision into
   `outreach_settings.postal_address_exempt`, which is the column the check
-  constraint reads. So the schema still refuses a Standard tenant with no
-  address, and a row that was allowed on without one says why on its face.
+  constraint reads. So the schema still refuses any other Standard tenant
+  with no address, and a row that was allowed on without one says why on
+  its face.
   The footer line itself is not waived by default: for an exempt tenant,
   `resolveTenant` falls back to the business profile address
   (`businesses.address`), and only when they have no address anywhere does the
@@ -2704,9 +2706,11 @@ carries no send step at all, and a test pins that.
   Marketing page saying outreach cannot run while the sweep sends anyway is
   the worst behavior on offer. The tier is re-read on every send, so a
   downgrade that leaves a stale `postal_address_exempt` behind stops rather
-  than riding the profile address. Note the legal position
-  this leaves: CAN-SPAM has no Enterprise exemption, so an exempt tenant with
-  no address on file is sending commercial mail without the physical address
+  than riding the profile address. HQ is the exception to that re-read: the
+  send path waives it by business id, so a Standard tier does not put the
+  blocker back. Note the legal position this leaves: CAN-SPAM has no
+  Enterprise exemption and no HQ exemption, so an exempt sender with no
+  address on file is sending commercial mail without the physical address
   the law asks for, on their own compliance judgement rather than the
   platform's.
 - Every pitch and every follow-up carries a working prospect-scoped

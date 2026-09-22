@@ -13,9 +13,10 @@
  *      Enabling it is a separate, deliberate click, because it is what files
  *      and tags the people we email.
  *   2. Writes HQ's outreach_settings: targeting (the trades we sell to, across
- *      the Phoenix metro), the offer line, the postal address READ FROM THE
- *      BUSINESS PROFILE (it refuses to apply without one), the sender, a
- *      12-a-day cap, and a weekday 8 to 11 window.
+ *      the Phoenix metro), the offer line, the postal address when the
+ *      business profile has one (HQ may send without one: the footer then
+ *      carries the unsubscribe line alone), the sender, a 12-a-day cap,
+ *      and a weekday 8 to 11 window.
  *   3. Leaves the MODE at manual. Read the first digests, then flip to auto
  *      from Dashboard, Marketing when the drafts read like something you would
  *      have sent yourself.
@@ -92,12 +93,11 @@ if (!business) throw new Error(`HQ business ${HQ_BUSINESS_ID} not found`);
  * The postal address printed in every footer comes from the business profile,
  * never from a constant in here.
  *
- * CAN-SPAM wants a real, current address for the sender. A plausible-looking
- * one hard-coded in a script is the worst of both worlds: it satisfies the
- * check constraint and the reader's glance while being wrong, and nobody
- * re-reads a one-shot after it has run once. So this refuses to apply until
- * the address exists in Settings, Business profile, where it is maintained
- * alongside everything else customers see.
+ * HQ is allowed to send with none. CAN-SPAM still wants a real address, and
+ * a hard-coded one in this script would be worse than omitting the line: it
+ * would satisfy the glance while being wrong. When the profile has an
+ * address it is copied in. When it does not, the row is marked exempt and
+ * the footer is the unsubscribe line alone.
  */
 const postalAddress = (business as { address?: string | null }).address?.trim() ?? "";
 
@@ -139,21 +139,15 @@ console.log(
 console.log(`Mode after apply: ${mode}`);
 console.log(`Targeting: ${SEARCH_TERMS.length} terms x ${CITIES.length} cities`);
 console.log(
-  `Postal address: ${postalAddress || "MISSING. Set it under Settings, Business profile: this cannot apply without one."}`
+  `Postal address: ${
+    postalAddress ||
+    "none on the business profile. HQ may send anyway; the footer will be the unsubscribe line alone."
+  }`
 );
 
 if (!APPLY) {
   console.log("\nDry run. Re-run with --apply to write.");
   process.exit(0);
-}
-
-if (!postalAddress) {
-  console.error(
-    "\nRefusing to apply: HQ has no address in its business profile, and every " +
-      "marketing email has to carry a real postal address. Set it under " +
-      "Settings, Business profile, then re-run."
-  );
-  process.exit(1);
 }
 
 let installedFlowId = existingFlow?.id ?? null;
@@ -182,7 +176,8 @@ const { error: upsertError } = await db.from("outreach_settings").upsert(
     daily_cap: 12,
     send_window_start_hour: 8,
     send_window_end_hour: 11,
-    postal_address: postalAddress,
+    postal_address: postalAddress || null,
+    postal_address_exempt: true,
     value_prop: VALUE_PROP,
     sender_name: SENDER_NAME,
     updated_at: new Date().toISOString()

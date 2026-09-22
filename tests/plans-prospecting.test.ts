@@ -6,6 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   placesQueriesPerDayForTier,
+  postalAddressRequiredFor,
   postalAddressRequiredForBusiness,
   postalAddressRequiredForTier,
   PROSPECTING_UPGRADE_MESSAGE,
@@ -13,6 +14,7 @@ import {
   prospectingAllowedForTier,
   prospectingTierForBusiness
 } from "@/lib/plans/prospecting";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import { QUERIES_PER_RUN } from "@/lib/outreach/discover";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -96,6 +98,24 @@ describe("the postal-address gate by tier", () => {
         makeDb({ data: { tier: "standard" }, error: null })
       )
     ).toBe(true);
+  });
+
+  it("waives the typed address for HQ even on Standard", () => {
+    // The live HQ row is Standard. The plan waiver would still demand a
+    // typed address, which is the blocker on Dashboard, Marketing.
+    expect(postalAddressRequiredFor(HQ_BUSINESS_ID, "standard")).toBe(false);
+    expect(postalAddressRequiredFor(HQ_BUSINESS_ID, null)).toBe(false);
+    expect(postalAddressRequiredFor("biz-1", "standard")).toBe(true);
+    expect(postalAddressRequiredFor("biz-1", "enterprise")).toBe(false);
+  });
+
+  it("resolves HQ's waiver from the business id, not from a Standard tier", async () => {
+    expect(
+      await postalAddressRequiredForBusiness(
+        HQ_BUSINESS_ID,
+        makeDb({ data: { tier: "standard" }, error: null })
+      )
+    ).toBe(false);
   });
 
   it("reads the tier once, and reports a missing row as no tier", async () => {

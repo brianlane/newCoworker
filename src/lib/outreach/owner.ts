@@ -15,8 +15,8 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import {
+  postalAddressRequiredFor,
   postalAddressRequiredForBusiness,
-  postalAddressRequiredForTier,
   prospectingAllowedForTier,
   prospectingTierForBusiness
 } from "@/lib/plans/prospecting";
@@ -80,8 +80,9 @@ export type ProspectingView = {
   /** False on Starter: panel shows an upgrade card; writes refuse when on. */
   tierAllowed: boolean;
   /**
-   * False on Enterprise: the footer address is optional, so the panel drops
-   * the blocker and explains the fallback instead of demanding a field.
+   * False on Enterprise, and for HQ: the footer address is optional, so the
+   * panel drops the blocker and explains the fallback instead of demanding
+   * a field.
    */
   postalAddressRequired: boolean;
   /**
@@ -120,7 +121,7 @@ async function resolveTierGates(businessId: string, db: SupabaseClient): Promise
     const tier = await prospectingTierForBusiness(businessId, db);
     return {
       tierAllowed: prospectingAllowedForTier(tier),
-      postalAddressRequired: postalAddressRequiredForTier(tier)
+      postalAddressRequired: postalAddressRequiredFor(businessId, tier)
     };
   } catch (error) {
     logger.warn("outreach: tier lookup failed; rendering the panel ungated", {
@@ -275,13 +276,13 @@ export class ProspectingSettingsError extends Error {}
  * constraint violation. Both gates exist on purpose, since the DB is what makes
  * it impossible and this is what makes it understandable.
  *
- * Enterprise is exempt from the typed field (postalAddressRequiredForTier).
- * The exemption is WRITTEN DOWN, in `postal_address_exempt`, rather than
- * implied by the tier: the DB check constraint reads that column, so the
- * schema still refuses a Standard tenant with an empty address, and a later
- * downgrade cannot silently re-open the gate the constraint used to hold. The
- * footer still prints the business profile address when there is one; see
- * resolveTenant in sweep.ts.
+ * Enterprise is exempt from the typed field, and so is HQ
+ * (postalAddressRequiredFor). The exemption is WRITTEN DOWN, in
+ * `postal_address_exempt`, rather than implied by the tier: the DB check
+ * constraint reads that column, so the schema still refuses a Standard
+ * tenant with an empty address, and a later downgrade cannot silently
+ * re-open the gate the constraint used to hold. The footer still prints the
+ * business profile address when there is one; see resolveTenant in sweep.ts.
  */
 export async function saveProspectingSettings(
   businessId: string,
