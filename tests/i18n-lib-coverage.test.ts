@@ -43,6 +43,7 @@ import {
   esAlternates,
   isMirroredMarketingPath,
   isSpanishMarketingPath,
+  SEO_PILLAR_PATHS,
   sitemapPathsFor,
   SPANISH_MARKETING_PREFIXES,
   stripSpanishPrefix
@@ -417,6 +418,19 @@ describe("es SEO route helpers", () => {
   it("the mirrored list carries /blog and /compare (the switcher's private copy dropped them)", () => {
     expect(SPANISH_MARKETING_PREFIXES).toContain("/blog");
     expect(SPANISH_MARKETING_PREFIXES).toContain("/compare");
+  });
+
+  it("mirrors the buyer-intent pillar landings so /es twins land in the sitemap", () => {
+    expect([...SEO_PILLAR_PATHS]).toEqual([
+      "/ai-receptionist",
+      "/ai-answering-service",
+      "/after-hours-answering"
+    ]);
+    for (const path of SEO_PILLAR_PATHS) {
+      expect(SPANISH_MARKETING_PREFIXES).toContain(path);
+      expect(isMirroredMarketingPath(path)).toBe(true);
+      expect(sitemapPathsFor(path)).toEqual([path, `/es${path}`]);
+    }
   });
 
   it("esAlternates self-canonicals the requested locale; English is x-default", () => {
