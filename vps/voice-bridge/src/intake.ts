@@ -5,6 +5,8 @@
  */
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
+  END_CALL_STAY_SILENT,
+  NEVER_NAME_A_TOOL_LINE,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   ONE_VOICE_LINE,
@@ -100,7 +102,7 @@ export function inboundVoicemailScript(businessName: string): string {
 
 export function inboundVoicemailMessageLine(businessName: string, hasEndCall: boolean): string {
   const ending = hasEndCall
-    ? "then call the `end_call` tool to hang up"
+    ? "then call `end_call` and say nothing more"
     : "then end the call by saying nothing more";
   return (
     "If a recording invites you to leave a message, leave EXACTLY this one message, once, and nothing else: " +
@@ -355,8 +357,12 @@ export function intakeSystemInstruction(
   if (hasEndCall) {
     lines.push(
       transfer
-        ? "After you've said your goodbye (when no transfer happened), call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over, and never after a successful transfer, the human conversation continues without you."
-        : "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
+        ? "After you've said your goodbye (when no transfer happened), stop. " +
+            END_CALL_STAY_SILENT +
+            " Only end the call once the conversation is genuinely over, and never after a successful transfer, the human conversation continues without you."
+        : "After you've captured the lead and said your goodbye, stop. " +
+            END_CALL_STAY_SILENT +
+            " Only end the call once the conversation is genuinely over."
     );
   }
   // Punctuation: lockstep copy of the receptionist persona's noEmDashLine
@@ -389,6 +395,7 @@ export function intakeSystemInstruction(
   // personas via call-integrity-lines.ts so the two builders cannot drift.
   lines.push(
     ONE_VOICE_LINE,
+    NEVER_NAME_A_TOOL_LINE,
     RECORDED_SYSTEM_LINE,
     NO_INVENTED_CONTACT_LINE,
     NO_INVENTED_FIGURE_LINE
