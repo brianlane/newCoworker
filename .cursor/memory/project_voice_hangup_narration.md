@@ -19,9 +19,12 @@ now." Two causes, both on every persona:
   paraphrased that into a second line after the goodbye.
 
 The fix lives in `call-integrity-lines.ts`. `PLAIN_ACTION_LINE` is the
-plain sentence for a lookup, booking, text, or transfer. `END_CALL_STAY_SILENT`
-is hangup only: the goodbye turn's only tool call is `end_call`, and the
-ack is `stay_silent`. Do not spread the silence rule onto other tools.
+plain sentence for a lookup, booking, text, or transfer, and it still
+tells the model to speak `startLocal`, `existingStartLocal`, and
+`sendAtLocal`. `END_CALL_STAY_SILENT` is the live-person goodbye only:
+that turn's only tool call is `end_call`, and a recording follows its own
+rule instead of adding a goodbye. The ack is `stay_silent`. Do not spread
+the silence rule onto other tools.
 Do not drop BLOCKING on the phone to fix this, and do not put extended
 thinking on the line: that model rejects blocking and rejects function
 scheduling, and it keeps streaming audio while tools run.

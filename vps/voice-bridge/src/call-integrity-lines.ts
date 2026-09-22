@@ -195,7 +195,7 @@ export const NO_INVENTED_FIGURE_LINE =
  * the action a caller should hear about. Hanging up is not in this list.
  */
 export const PLAIN_ACTION_LINE =
-  "Before you look something up, check the calendar, book, send a text or an email, or connect them to a person, say one short plain sentence a person would say, for example 'Let me pull up openings on Thursday, one moment.' Never read that result aloud.";
+  "Before you look something up, check the calendar, book, send a text or an email, or connect them to a person, say one short plain sentence a person would say, for example 'Let me pull up openings on Thursday, one moment.' Never read a raw result aloud. Do speak a time or day the result tells you to confirm, including startLocal, existingStartLocal, and sendAtLocal.";
 
 /**
  * The goodbye turn has one tool call, `end_call`, and no speech after it.
@@ -207,4 +207,4 @@ export const PLAIN_ACTION_LINE =
  * line is only about finishing the call. The bridge acks with `stay_silent`.
  */
 export const END_CALL_STAY_SILENT =
-  "That goodbye is required, and it is the last thing you say. On that turn the only tool call is `end_call`: do not call any other tool along with it. After the goodbye, call `end_call` and do not speak again. Do not say the word tool, do not say you are hanging up, ending the call, or running a check, and do not say anything the result says. Never call `end_call` before that goodbye has been spoken.";
+  "When a live person is on the line, that goodbye is required, and it is the last thing you say. On that turn the only tool call is `end_call`: do not call any other tool along with it. After the goodbye, call `end_call` and do not speak again. Do not say the word tool, do not say you are hanging up, ending the call, or running a check, and do not say anything the result says. Never call `end_call` before that goodbye has been spoken. If the other party is a recording, this goodbye rule does not apply: follow the recording rule, do not add a goodbye, and do not call `end_call` unless that rule tells you to.";

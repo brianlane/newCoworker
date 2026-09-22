@@ -356,10 +356,10 @@ export function intakeSystemInstruction(
   if (hasEndCall) {
     lines.push(
       transfer
-        ? "After you've said your goodbye (when no transfer happened), stop. " +
+        ? "When a person answered and no transfer happened, say your goodbye and stop. " +
             END_CALL_STAY_SILENT +
             " Only end the call once the conversation is genuinely over, and never after a successful transfer, the human conversation continues without you."
-        : "After you've captured the lead and said your goodbye, stop. " +
+        : "When a person answered and you have captured the lead, say your goodbye and stop. " +
             END_CALL_STAY_SILENT +
             " Only end the call once the conversation is genuinely over."
     );

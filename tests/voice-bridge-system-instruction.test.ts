@@ -230,8 +230,11 @@ describe("customer persona", () => {
   it("explains a lookup in plain language, and limits the goodbye turn to end_call", () => {
     const text = build({ hasVoiceTools: true, hasEndCall: true });
     expect(text).toContain(PLAIN_ACTION_LINE);
+    expect(text).toContain("startLocal");
+    expect(text).toContain("sendAtLocal");
     expect(text).toContain(END_CALL_STAY_SILENT);
     expect(text).toContain("the only tool call is `end_call`");
+    expect(text).toContain("this goodbye rule does not apply");
     expect(text).not.toContain("before calling a tool");
     expect(text).not.toContain("call the `end_call` tool");
     const noHangup = build({ hasVoiceTools: true, hasEndCall: false });

@@ -64,6 +64,8 @@ describe("intakeSystemInstruction", () => {
     // last spoken line (HQ call f76c30c0 named the hangup tool out loud).
     expect(instr).toContain("never after a successful transfer");
     expect(instr).toContain(END_CALL_STAY_SILENT);
+    expect(instr).toContain("When a person answered");
+    expect(instr).toContain("this goodbye rule does not apply");
     expect(instr).toContain("the only tool call is `end_call`");
     // Barge-in guard + no callback-number non-sequitur (first live test).
     expect(instr).toContain("only ONCE");
