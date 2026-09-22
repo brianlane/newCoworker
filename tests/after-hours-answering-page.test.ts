@@ -128,7 +128,9 @@ describe("/after-hours-answering route", () => {
   });
 
   it("is in the sitemap (English plus the /es twin)", () => {
-    expect(readFileSync(SITEMAP, "utf8")).toContain('path: "/after-hours-answering"');
+    expect(readFileSync(SITEMAP, "utf8")).toMatch(
+      /path: "\/after-hours-answering",\s*priority: 0\.8/
+    );
     expect(SPANISH_MARKETING_PREFIXES).toContain("/after-hours-answering");
     expect(sitemapPathsFor("/after-hours-answering")).toEqual([
       "/after-hours-answering",
