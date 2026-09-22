@@ -187,6 +187,7 @@ const PAGE_TITLE_KEYS = [
   "bookingPage.manageMetaTitle",
   "bookingPage.metaTitle",
   "marketing.about.metaTitle",
+  "marketing.aiAnsweringServicePage.metaTitle",
   "marketing.blogPage.metaTitle",
   "marketing.chatgptPage.metaTitle",
   "marketing.compare.answeringService.metaTitle",

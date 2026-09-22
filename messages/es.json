@@ -774,6 +774,101 @@
       "ctaSubtitle": "En vivo en minutos, aprendiendo desde el primer día.",
       "ctaLabel": "Comenzar"
     },
+    "aiAnsweringServicePage": {
+      "metaTitle": "Servicio de contestación con IA para pequeños negocios",
+      "metaDescription": "Un servicio de contestación con IA para pequeños negocios: cobertura fuera de horario, texto de vuelta a llamadas perdidas y reservas en tu calendario real. [REDACTED] es el coworker de IA que contesta en cada canal.",
+      "ogTitle": "Servicio de contestación con IA | [REDACTED]",
+      "ogDescription": "Servicio de contestación con IA 24/7 que agenda el trabajo, no una devolución de llamada. Cobertura fuera de horario y seguimiento a llamadas perdidas en cada canal.",
+      "schemaName": "Servicio de contestación con IA",
+      "schemaServiceType": "Servicio de contestación con IA para pequeños negocios",
+      "heroEyebrow": "Cobertura 24/7",
+      "heroTitle": "El coworker de IA que",
+      "heroHighlight": "contesta cada llamada",
+      "heroSubtitle": "Noches, fines de semana y la llamada que entra mientras estás en un trabajo. Tu coworker contesta, agenda la cita en tu calendario real y da seguimiento por mensaje. Un plan fijo, todos los canales.",
+      "heroCta": "Comenzar",
+      "heroSecondaryCta": "Ver precios",
+      "stat1Value": "24/7",
+      "stat1Label": "Cada llamada y texto contestado: noches, fines de semana, festivos",
+      "stat2Value": "Fuera de horario",
+      "stat2Label": "El mismo coworker a las 2 de la mañana que a las 2 de la tarde, sin cargo extra",
+      "stat3Value": "Agendado",
+      "stat3Label": "Las citas quedan en tu calendario real, no en un recado",
+      "stat4Value": "Cada canal",
+      "stat4Label": "Llamadas, textos, correo y DMs comparten una memoria del cliente",
+      "problemEyebrow": "El costo de fallar",
+      "problemTitle": "Una llamada perdida es un trabajo perdido",
+      "problemSubtitle": "Los clientes casi nunca dejan un segundo mensaje de voz. Llaman al siguiente negocio de la lista.",
+      "problem1": {
+        "title": "La llamada durante un trabajo",
+        "description": "Estás en un techo, en un procedimiento o ya con un cliente. Quien llama espera unos tonos, cuelga y marca a otra persona."
+      },
+      "problem2": {
+        "title": "El buzón que nunca recibe una devolución",
+        "description": "Un mensaje grabado les pide que vuelvan a intentar. La mayoría no lo hace. Quienes sí, ya agendaron con el negocio que contestó."
+      },
+      "problem3": {
+        "title": "El desborde en la hora pico",
+        "description": "Suenan dos líneas a la vez. Una te llega. La otra oye ocupado o queda en espera. Esa segunda llamada también era un trabajo."
+      },
+      "handlesEyebrow": "Qué hace",
+      "handlesTitle": "Tu coworker termina el trabajo",
+      "handlesSubtitle": "No es un recado tomado. Es una conversación que agenda, responde por texto y recuerda al cliente la próxima vez.",
+      "afterHours": {
+        "title": "Cobertura fuera de horario que agenda",
+        "description": "La emergencia de las 9 de la noche y la solicitud del domingo reciben una conversación real. Tu coworker revisa el calendario y agenda, o toma los datos y te escribe con contexto."
+      },
+      "missedCall": {
+        "title": "Texto de vuelta a llamadas perdidas",
+        "description": "Si una transferencia en caliente no te alcanza, quien llamó recibe un texto de inmediato para que el prospecto no se enfríe."
+      },
+      "booking": {
+        "title": "Agenda en tu calendario real",
+        "description": "Disponibilidad en vivo de Google Calendar, Microsoft 365, Calendly y más. La cita queda anotada antes de que cuelgue quien llama."
+      },
+      "followUp": {
+        "title": "Seguimiento que no se olvida",
+        "description": "Textos, recordatorios y una memoria de lo ya dicho. El siguiente mensaje continúa la conversación en lugar de empezar de cero."
+      },
+      "overflow": {
+        "title": "Varias llamadas a la vez",
+        "description": "Tu coworker mantiene varias conversaciones al mismo tiempo, así una mañana ocupada nunca produce señal de ocupado."
+      },
+      "everyChannel": {
+        "title": "Cada canal, un coworker",
+        "description": "Llamadas, SMS, correo, WhatsApp, Messenger y DMs de Instagram comparten una memoria. Un cliente que llamó el martes y escribe el viernes nunca se repite."
+      },
+      "compareEyebrow": "Lado a lado",
+      "compareTitle": "Dónde se detiene un servicio que solo toma recados",
+      "compareBody": "Un centro de llamadas tradicional toma un recado y te deja el resto. Tu coworker contesta con la voz de tu negocio, agenda el horario y da seguimiento por mensaje. Escribimos una comparación honesta, incluida cuándo un recado humano sigue siendo la mejor compra.",
+      "compareLink": "Lee la comparación honesta",
+      "faqEyebrow": "Preguntas",
+      "faqTitle": "Lo que preguntan antes de cambiarse",
+      "faq1": {
+        "q": "¿Agenda la cita o solo toma un recado?",
+        "a": "Agenda. Tu coworker revisa la disponibilidad en vivo en el calendario que ya usas y confirma el horario mientras quien llama sigue en la línea. El texto de seguimiento sale después."
+      },
+      "faq2": {
+        "q": "¿Qué pasa fuera de horario?",
+        "a": "El mismo coworker contesta a las 2 de la mañana que a las 2 de la tarde. Quien llama fuera de horario recibe una conversación, una reserva cuando el calendario lo permite, o un horario al día siguiente con confirmación por texto. No hay cargo extra por horario extendido."
+      },
+      "faq3": {
+        "q": "¿Y si quien llama quiere una persona?",
+        "a": "Tu coworker transfiere la llamada en vivo a ti o a un compañero con todo el contexto, para que no se repitan. Si no alcanzas la transferencia, reciben un texto de inmediato."
+      },
+      "faq4": {
+        "q": "¿Se darán cuenta de que no es una persona?",
+        "a": "Algunos sí y otros no. Lo que más importa es si la llamada se resuelve: un coworker que conoce tus precios y agenda el horario vale más que un recado amable que tienes que devolver."
+      },
+      "faq5": {
+        "q": "¿Qué tan rápido puedo estar en vivo?",
+        "a": "De registrarte a la primera llamada contestada es automático. Elige un plan, responde un cuestionario corto y el coworker puede estar en vivo en minutos. Con garantía de devolución de 30 días."
+      },
+      "contactPrompt": "¿Quieres que una persona te ayude a ver si encaja?",
+      "contactLink": "Habla con nosotros",
+      "ctaTitle": "Pon un coworker en la línea esta noche",
+      "ctaSubtitle": "En vivo en minutos, con garantía de devolución de 30 días.",
+      "ctaLabel": "Comenzar"
+    },
     "securityPage": {
       "metaTitle": "Seguridad",
       "metaDescription": "Cómo New Coworker aísla cada negocio en su propio servidor dedicado, cifra dos veces lo que importa y ejecuta la privacidad como código: ventanas de retención, borrado verificado y un borrado real al cancelar.",
