@@ -119,6 +119,11 @@ const DIFFERENTIATOR_LINES = [
 const PAGES: { path: string; label: string; note: string }[] = [
   { path: "/", label: "Home", note: "product overview" },
   { path: "/features", label: "Features", note: "voice, messaging, intelligence, automation, and platform capabilities" },
+  {
+    path: "/ai-receptionist",
+    label: "24/7 AI coworker",
+    note: "intent landing for buyers who want after-hours answering, missed-call follow-up, and booking on a real calendar"
+  },
   { path: "/pricing", label: "Pricing", note: "plans, feature comparison, and billing FAQ" },
   { path: "/integrations", label: "Integrations", note: "Meta lead ads, Zapier, Google, Microsoft, Zoom, Slack, Claude, ChatGPT, API, and webhooks" },
   { path: "/industries", label: "Industries", note: "how the coworker is used per industry" },
