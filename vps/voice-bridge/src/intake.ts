@@ -6,7 +6,6 @@
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
   END_CALL_STAY_SILENT,
-  NEVER_NAME_A_TOOL_LINE,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   ONE_VOICE_LINE,
@@ -395,7 +394,6 @@ export function intakeSystemInstruction(
   // personas via call-integrity-lines.ts so the two builders cannot drift.
   lines.push(
     ONE_VOICE_LINE,
-    NEVER_NAME_A_TOOL_LINE,
     RECORDED_SYSTEM_LINE,
     NO_INVENTED_CONTACT_LINE,
     NO_INVENTED_FIGURE_LINE

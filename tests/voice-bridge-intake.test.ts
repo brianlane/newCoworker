@@ -15,7 +15,6 @@ import {
 } from "../vps/voice-bridge/src/intake";
 import {
   END_CALL_STAY_SILENT,
-  NEVER_NAME_A_TOOL_LINE,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   RECORDED_SYSTEM_LINE
@@ -65,7 +64,7 @@ describe("intakeSystemInstruction", () => {
     // last spoken line (HQ call f76c30c0 named the hangup tool out loud).
     expect(instr).toContain("never after a successful transfer");
     expect(instr).toContain(END_CALL_STAY_SILENT);
-    expect(instr).toContain(NEVER_NAME_A_TOOL_LINE);
+    expect(instr).toContain("the only tool call is `end_call`");
     // Barge-in guard + no callback-number non-sequitur (first live test).
     expect(instr).toContain("only ONCE");
     expect(instr).toContain("NEVER ask for their phone number");

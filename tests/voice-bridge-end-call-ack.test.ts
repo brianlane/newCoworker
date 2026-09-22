@@ -15,5 +15,6 @@ describe("end_call tool ack", () => {
     );
     expect(bridge).toContain('detail: "stay_silent"');
     expect(bridge).not.toContain('detail: "ending call"');
+    expect(bridge).toContain("the only tool call in the goodbye turn");
   });
 });

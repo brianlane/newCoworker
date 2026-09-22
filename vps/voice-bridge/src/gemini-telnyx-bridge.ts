@@ -1689,7 +1689,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     declarations.push({
       name: "end_call",
       description:
-        "Hang up the live phone call. Call this ONLY when the conversation is genuinely over (the caller said goodbye, confirmed they're all set, or there's nothing left to do) and AFTER you have spoken a brief goodbye. Never call it mid-conversation.",
+        "Hang up the live phone call. This is the only tool call in the goodbye turn: do not pair it with any other tool. Call this ONLY when the conversation is genuinely over and AFTER you have spoken a brief goodbye. Never describe this call out loud. Never call it mid-conversation.",
       parameters: {
         type: Type.OBJECT,
         properties: {

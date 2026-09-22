@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   END_CALL_STAY_SILENT,
-  NEVER_NAME_A_TOOL_LINE,
   PLAIN_ACTION_LINE
 } from "../vps/voice-bridge/src/call-integrity-lines";
 import {
@@ -228,13 +227,16 @@ describe("customer persona", () => {
   // HQ call f76c30c0, 2026-09-22. Staff path said "Calling the end call tool
   // now" because the prompt told it to explain before calling a tool and
   // gave no example. The customer path had an example and the same rule.
-  it("tells a customer to speak a plain action and never name a tool", () => {
+  it("explains a lookup in plain language, and limits the goodbye turn to end_call", () => {
     const text = build({ hasVoiceTools: true, hasEndCall: true });
     expect(text).toContain(PLAIN_ACTION_LINE);
-    expect(text).toContain(NEVER_NAME_A_TOOL_LINE);
     expect(text).toContain(END_CALL_STAY_SILENT);
+    expect(text).toContain("the only tool call is `end_call`");
     expect(text).not.toContain("before calling a tool");
     expect(text).not.toContain("call the `end_call` tool");
+    const noHangup = build({ hasVoiceTools: true, hasEndCall: false });
+    expect(noHangup).toContain(PLAIN_ACTION_LINE);
+    expect(noHangup).not.toContain("the only tool call is `end_call`");
   });
 });
 
@@ -252,8 +254,8 @@ describe("staff persona (owner/team caller)", () => {
     });
     expect(text).toContain(PLAIN_ACTION_LINE);
     expect(text).toContain("Let me pull up openings on Thursday");
-    expect(text).toContain(NEVER_NAME_A_TOOL_LINE);
     expect(text).toContain(END_CALL_STAY_SILENT);
+    expect(text).toContain("the only tool call is `end_call`");
     expect(text).not.toContain("before calling a tool");
     expect(text).not.toContain("call the `end_call` tool");
   });

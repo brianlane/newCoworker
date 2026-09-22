@@ -18,12 +18,13 @@ now." Two causes, both on every persona:
 - The bridge acked `end_call` with `detail: "ending call"`. The model
   paraphrased that into a second line after the goodbye.
 
-The fix lives in `call-integrity-lines.ts` (`NEVER_NAME_A_TOOL_LINE`,
-`PLAIN_ACTION_LINE`, `END_CALL_STAY_SILENT`), used by both prompt builders,
-and the ack is `stay_silent`. Do not drop BLOCKING on the phone to fix
-this, and do not put extended thinking on the line: that model rejects
-blocking and rejects function scheduling, and it keeps streaming audio
-while tools run.
+The fix lives in `call-integrity-lines.ts`. `PLAIN_ACTION_LINE` is the
+plain sentence for a lookup, booking, text, or transfer. `END_CALL_STAY_SILENT`
+is hangup only: the goodbye turn's only tool call is `end_call`, and the
+ack is `stay_silent`. Do not spread the silence rule onto other tools.
+Do not drop BLOCKING on the phone to fix this, and do not put extended
+thinking on the line: that model rejects blocking and rejects function
+scheduling, and it keeps streaming audio while tools run.
 
 A prompt-only revert of one sentence will not reproduce the incident.
 The deployed lines and the speakable ack were jointly load-bearing.

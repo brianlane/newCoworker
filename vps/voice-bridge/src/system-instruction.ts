@@ -15,7 +15,6 @@ import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
   END_CALL_STAY_SILENT,
-  NEVER_NAME_A_TOOL_LINE,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   ONE_VOICE_LINE,
@@ -173,9 +172,8 @@ export function systemInstructionForBusiness(
       "Act as their internal assistant: answer questions about the business from your briefing below, help look things up, take a message for someone on the team, or help them schedule. Keep replies concise, natural, and spoken (not bulleted).",
       identityLine,
       groundedActionsLine,
-  ONE_VOICE_LINE,
-  NEVER_NAME_A_TOOL_LINE,
-  RECORDED_SYSTEM_LINE,
+      ONE_VOICE_LINE,
+      RECORDED_SYSTEM_LINE,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   noEmDashLine,
@@ -212,7 +210,6 @@ export function systemInstructionForBusiness(
       // the phrasing, respond to what the caller actually said.
       "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared), reuse it, including when booking an appointment. Address the caller by their FIRST name only, and use it sparingly, most replies need no name at all; never say their full name in normal conversation. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
       ONE_VOICE_LINE,
-      NEVER_NAME_A_TOOL_LINE,
       RECORDED_SYSTEM_LINE,
       NO_INVENTED_CONTACT_LINE,
       NO_INVENTED_FIGURE_LINE,
