@@ -106,7 +106,8 @@
       "forAi": "Para asistentes de IA"
     },
     "home": {
-      "metaDescription": "New Coworker ofrece a tu negocio un empleado de IA 24/7 para contestar llamadas, mensajes, reservar citas y mantener las operaciones.",
+      "metaTitle": "Recepcionista de IA y contestación 24/7",
+      "metaDescription": "Recepcionista de IA 24/7 y servicio de contestación: responde llamadas, mensajes y correos, reserva citas y no duerme.",
       "heroTitle": "Tu empleado de IA que",
       "heroHighlight": "nunca duerme",
       "heroSubtitle": "New Coworker responde llamadas, textos y correos las 24 horas: reserva citas, da seguimiento a clientes potenciales y recuerda a cada cliente. Para todo tipo de negocios.",
@@ -130,8 +131,8 @@
       "ctaTitle": "¿Listo para contratar a tu New Coworker?",
       "ctaSubtitle": "Tu coworker empieza a aprender desde el primer día.",
       "ctaLabel": "Elige tu plan",
-      "ogTitle": "Tu empleado de IA que nunca duerme",
-      "ogDescription": "Contesta llamadas, textos y correos las 24 horas con New Coworker."
+      "ogTitle": "Recepcionista de IA y contestación 24/7",
+      "ogDescription": "Recepcionista de IA 24/7: responde llamadas, mensajes y correos, y reserva citas."
     },
     "pricing": {
       "metaTitle": "Precios",

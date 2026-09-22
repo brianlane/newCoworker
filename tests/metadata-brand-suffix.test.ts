@@ -199,6 +199,7 @@ const PAGE_TITLE_KEYS = [
   "marketing.contactPage.metaTitle",
   "marketing.faqPage.metaTitle",
   "marketing.featuresPage.metaTitle",
+  "marketing.home.metaTitle",
   "marketing.industriesPage.detailMetaTitle",
   "marketing.industriesPage.metaTitle",
   "marketing.integrationsPage.metaTitle",

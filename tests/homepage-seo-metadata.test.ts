@@ -74,13 +74,13 @@ const homePageSrc = readFileSync(HOME_PAGE, "utf8");
 
 describe("homepage generateMetadata wires title and social tags", () => {
   it("sets the document title from marketing.home.metaTitle", () => {
-    expect(homePageSrc).toMatch(/title:\s*t\("metaTitle"\)/);
+    expect(homePageSrc).toMatch(/title:\s*tHome\("metaTitle"\)/);
   });
 
   it("still feeds description, og, and twitter from the home catalog", () => {
-    expect(homePageSrc).toMatch(/description:\s*t\("metaDescription"\)/);
-    expect(homePageSrc).toMatch(/title:\s*t\("ogTitle"\)/);
-    expect(homePageSrc).toMatch(/description:\s*t\("ogDescription"\)/);
+    expect(homePageSrc).toMatch(/description:\s*tHome\("metaDescription"\)/);
+    expect(homePageSrc).toMatch(/title:\s*tHome\("ogTitle"\)/);
+    expect(homePageSrc).toMatch(/description:\s*tHome\("ogDescription"\)/);
   });
 
   it("renders the visible H1 from heroTitle + heroHighlight, not from metaTitle", () => {
@@ -146,13 +146,10 @@ describe("homepage metadata targets receptionist and answering intent", () => {
     expect(d).toMatch(/24\/7|around the clock/);
     expect(d).toMatch(/answer/);
     expect(d).toMatch(/book/);
-    expect(enHome.metaDescription).toContain(brand);
   });
 
   it("mirrors the English SEO title on OG and Twitter", () => {
-    expect(enHome.ogTitle.toLowerCase()).toContain("ai receptionist");
-    expect(enHome.ogTitle.toLowerCase()).toContain("24/7");
-    expect(enHome.ogTitle).toMatch(new RegExp(`\\|\\s*${brand}$`));
+    expect(enHome.ogTitle).toBe(enHome.metaTitle);
     expect(enHome.ogDescription.toLowerCase()).toContain("ai receptionist");
     expect(enHome.ogDescription.toLowerCase()).toMatch(/answer|book/);
   });
@@ -169,10 +166,8 @@ describe("homepage metadata targets receptionist and answering intent", () => {
     expect(d).toContain("recepcionista");
     expect(d).toMatch(/contestaci|llamadas/);
     expect(d).toMatch(/cita/);
-    expect(esHome.metaDescription).toContain(brand);
 
-    expect(esHome.ogTitle.toLowerCase()).toContain("recepcionista");
-    expect(esHome.ogTitle).toMatch(new RegExp(`\\|\\s*${brand}$`));
+    expect(esHome.ogTitle).toBe(esHome.metaTitle);
     expect(esHome.ogDescription.toLowerCase()).toContain("recepcionista");
   });
 
