@@ -2690,7 +2690,9 @@ carries no send step at all, and a test pins that.
 - **The postal-address waiver is Enterprise, plus HQ, and it is recorded
   rather than inferred.** `postalAddressRequiredFor`
   (src/lib/plans/prospecting.ts) exempts Enterprise by plan, and exempts HQ
-  (`HQ_BUSINESS_ID`) by identity even though the live HQ row is Standard.
+  (`HQ_BUSINESS_ID`) by identity as well. HQ's entitlement is Enterprise.
+  The id check stays so a Standard label on that row cannot put the blocker
+  back. The row was created Standard on 2026-07-16. Nothing downgraded it.
   The save path writes that decision into
   `outreach_settings.postal_address_exempt`, which is the column the check
   constraint reads. So the schema still refuses any other Standard tenant

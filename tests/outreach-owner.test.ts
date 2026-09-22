@@ -506,9 +506,9 @@ describe("the Enterprise postal-address waiver", () => {
   });
 
   it("lets HQ switch on with no address on Standard, and drops the panel blocker", async () => {
-    // HQ's live row is Standard, so the Enterprise plan waiver does not cover
-    // it. The exemption is by business id, and it is still written down so
-    // the check constraint can see it.
+    // The id waiver holds even on a Standard label. HQ's entitlement is
+    // Enterprise. The exemption is still written down so the check
+    // constraint can see it.
     prospectingTierSpy.mockResolvedValue("standard");
     await saveProspectingSettings(HQ_ID, input({ postalAddress: "" }), {} as never);
     expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(

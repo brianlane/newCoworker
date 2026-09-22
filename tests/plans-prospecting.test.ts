@@ -8,7 +8,6 @@ import {
   placesQueriesPerDayForTier,
   postalAddressRequiredFor,
   postalAddressRequiredForBusiness,
-  postalAddressRequiredForTier,
   PROSPECTING_UPGRADE_MESSAGE,
   prospectingAllowedForBusiness,
   prospectingAllowedForTier,
@@ -76,13 +75,14 @@ describe("prospecting tier gate", () => {
 
 describe("the postal-address gate by tier", () => {
   it("exempts Enterprise and requires it of everyone else", () => {
-    expect(postalAddressRequiredForTier("enterprise")).toBe(false);
-    expect(postalAddressRequiredForTier("standard")).toBe(true);
-    expect(postalAddressRequiredForTier("starter")).toBe(true);
-    // An unreadable or missing tier is NOT an exemption: guessing exempt
-    // would drop a legally required footer line, so the default is strict.
-    expect(postalAddressRequiredForTier(null)).toBe(true);
-    expect(postalAddressRequiredForTier(undefined)).toBe(true);
+    // A non-HQ id, so this is the plan gate alone. An unreadable or missing
+    // tier is NOT an exemption: guessing exempt would drop a legally required
+    // footer line, so the default is strict.
+    expect(postalAddressRequiredFor("biz-1", "enterprise")).toBe(false);
+    expect(postalAddressRequiredFor("biz-1", "standard")).toBe(true);
+    expect(postalAddressRequiredFor("biz-1", "starter")).toBe(true);
+    expect(postalAddressRequiredFor("biz-1", null)).toBe(true);
+    expect(postalAddressRequiredFor("biz-1", undefined)).toBe(true);
   });
 
   it("resolves the waiver for a business from its tier", async () => {
@@ -101,8 +101,9 @@ describe("the postal-address gate by tier", () => {
   });
 
   it("waives the typed address for HQ even on Standard", () => {
-    // The live HQ row is Standard. The plan waiver would still demand a
-    // typed address, which is the blocker on Dashboard, Marketing.
+    // The id waiver holds on a Standard label. That is the backstop after
+    // the entitlement was set to Enterprise: a Standard label must not
+    // bring the Marketing blocker back.
     expect(postalAddressRequiredFor(HQ_BUSINESS_ID, "standard")).toBe(false);
     expect(postalAddressRequiredFor(HQ_BUSINESS_ID, null)).toBe(false);
     expect(postalAddressRequiredFor("biz-1", "standard")).toBe(true);

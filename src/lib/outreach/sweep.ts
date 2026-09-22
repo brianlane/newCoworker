@@ -270,9 +270,9 @@ async function resolveTenant(
   // the sweep sends anyway is the worst of the available behaviors. It also
   // catches the downgrade: Enterprise to Standard leaves a stale
   // postal_address_exempt behind, and the tier is re-read here, so those sends
-  // stop instead of quietly riding the profile address. HQ is the one
-  // Standard row this does not apply to: postalAddressRequiredFor waives it
-  // by business id, on our own compliance judgement.
+  // stop instead of quietly riding the profile address. HQ is waived by
+  // business id as well (postalAddressRequiredFor), so a Standard label on
+  // that row does not put the blocker back.
   const typedAddress = settings.postal_address?.trim() ?? "";
   const exempt = !postalAddressRequiredFor(settings.business_id, business.tier);
   const postalAddress = typedAddress || (exempt ? (business.address ?? "").trim() : "");

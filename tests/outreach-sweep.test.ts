@@ -627,9 +627,10 @@ describe("phase 2: drafting", () => {
   });
 
   it("drafts for HQ on Standard with no address anywhere, and prints no blank line", async () => {
-    // HQ is Standard in production, so the Enterprise plan waiver does not
-    // cover it. The send path waives the typed address by business id. A
-    // profile address, when there is one, still fills the footer.
+    // The id waiver holds even when the row reads Standard. That is the
+    // backstop: HQ's entitlement is Enterprise, and a Standard label must
+    // not put the postal blocker back. A profile address, when there is
+    // one, still fills the footer.
     const ledger = draftLedger({
       listActiveOutreachSettings: vi.fn(async () => [
         settings({
