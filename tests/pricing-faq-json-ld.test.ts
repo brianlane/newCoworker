@@ -155,6 +155,9 @@ describe("faq JSON-LD helpers", () => {
     expect(stripFaqRichMarkup("<b>White-glove setup</b> covers guided setup.")).toBe(
       "White-glove setup covers guided setup."
     );
+    expect(
+      stripFaqRichMarkup("<link>Tell us you're interested</link> and a specialist will reach out.")
+    ).toBe("Tell us you're interested and a specialist will reach out.");
     expect(stripFaqRichMarkup("No markup here.")).toBe("No markup here.");
   });
 });
