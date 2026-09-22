@@ -23,7 +23,7 @@ export const PRICING_FAQ_KEYS = [
   { q: "faqWhiteGloveQ", a: "faqWhiteGloveA" }
 ] as const;
 
-export type PricingFaqKey =
+type PricingFaqKey =
   (typeof PRICING_FAQ_KEYS)[number]["q"] | (typeof PRICING_FAQ_KEYS)[number]["a"];
 
 /** Interpolations the existing pricing FAQ strings already accept. */
