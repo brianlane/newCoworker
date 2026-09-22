@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { INDUSTRIES } from "@/app/(marketing)/industries/data";
 import { COMPARISONS } from "@/app/(marketing)/compare/data";
 import { GET } from "@/app/sitemap.xml/route";
-import { sitemapPathsFor, SPANISH_MARKETING_PREFIXES } from "@/lib/i18n/es-routes";
-import { parseSitemapUrls } from "@/lib/marketing/indexnow-deploy";
 import {
-  buildSitemap,
-  renderSitemapXml,
-  SEO_PILLAR_PATHS
-} from "@/lib/marketing/sitemap";
+  SEO_PILLAR_PATHS,
+  sitemapPathsFor,
+  SPANISH_MARKETING_PREFIXES
+} from "@/lib/i18n/es-routes";
+import { parseSitemapUrls } from "@/lib/marketing/indexnow-deploy";
+import { buildSitemap, renderSitemapXml } from "@/lib/marketing/sitemap";
 import { SITE_URL, siteUrl } from "@/lib/marketing/site-url";
 
 function locs(entries: Awaited<ReturnType<typeof buildSitemap>>): string[] {

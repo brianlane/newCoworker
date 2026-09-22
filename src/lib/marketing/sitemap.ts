@@ -14,8 +14,6 @@
 import { esAlternates, SEO_PILLAR_PATHS, sitemapPathsFor } from "@/lib/i18n/es-routes";
 import { siteUrl } from "./site-url";
 
-export { SEO_PILLAR_PATHS };
-
 /** Give the blog query this long, then ship the static sitemap without it. */
 const SITEMAP_BLOG_TIMEOUT_MS = 2500;
 
