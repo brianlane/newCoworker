@@ -26,14 +26,16 @@ function* walk(dir: string): Generator<string> {
 
 describe("SITE_URL", () => {
   it("is the host that actually serves the site", () => {
-    // The apex 307s every path to www, so declaring the apex canonical
+    // The apex 308s every path to www, so declaring the apex canonical
     // pointed every canonical tag, og:url, and sitemap entry at a redirect.
     expect(SITE_URL).toBe("https://www.newcoworker.com");
     expect(SITE_URL.endsWith("/")).toBe(false);
   });
 
-  it("builds absolute URLs without doubling the slash on root", () => {
+  it("builds absolute URLs without a trailing slash on root", () => {
+    // Home must match HTML canonical (Next URL.origin) and sitemap loc.
     expect(siteUrl("/")).toBe(SITE_URL);
+    expect(siteUrl("/")).not.toBe(`${SITE_URL}/`);
     expect(siteUrl("/pricing")).toBe(`${SITE_URL}/pricing`);
   });
 

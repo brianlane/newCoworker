@@ -19,10 +19,20 @@
  * sitemap entry, and the robots.txt Sitemap line. Re-run
  * `tsx debug/aeo-crawler-probe.ts` against both hosts afterward. See the
  * README, "Why the above drifted".
+ *
+ * **Homepage has no trailing slash.** `siteUrl("/")` returns SITE_URL as-is.
+ * Concatenating the origin onto `"/"` looks harmless and is the string the
+ * URL spec uses (`new URL(SITE_URL).href`), but Next's metadata resolver
+ * emits `URL.origin` for a home canonical (pathname `/`, `trailingSlash`
+ * unset in next.config, so false). HTML canonical, JSON-LD `url`, and this
+ * helper are therefore the origin with no slash. Sitemap locs and hreflang
+ * must use this helper so they do not advertise a second home URL that only
+ * differs by `/`. `tests/homepage-url-consistency.test.ts` holds them
+ * together.
  */
 export const SITE_URL = "https://www.newcoworker.com";
 
-/** Absolute public URL for a root-relative path. */
+/** Absolute public URL for a root-relative path. Home is SITE_URL, no slash. */
 export function siteUrl(path: string): string {
   return path === "/" ? SITE_URL : `${SITE_URL}${path}`;
 }

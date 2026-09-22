@@ -2,43 +2,7 @@ import type { MetadataRoute } from "next";
 import { INDUSTRIES } from "./(marketing)/industries/data";
 import { COMPARISONS } from "./(marketing)/compare/data";
 import { listPublishedPosts } from "@/lib/blog/db";
-import { esAlternates, sitemapPathsFor } from "@/lib/i18n/es-routes";
-import { SITE_URL } from "@/lib/marketing/site-url";
-
-/**
- * Sitemap entries for one route. A path with a public /es/... mirror emits
- * two URLs (English plus the /es twin), both carrying hreflang alternates so
- * crawlers pair them; the mirror ranks a notch below English. Legal pages
- * and other enOnly paths emit the English URL only: the /es notice exists
- * for humans, but its canonical is English, so advertising it here is what
- * produced the Search Console "alternate page with proper canonical" emails.
- */
-function entriesFor(route: {
-  path: string;
-  priority: number;
-  /** English-only page under a mirrored prefix (prefix matching would
-   *  otherwise claim it): emit one URL, no /es twin, no hreflang pair. */
-  enOnly?: boolean;
-}): MetadataRoute.Sitemap {
-  const base = { changeFrequency: "weekly" as const };
-  const paths = sitemapPathsFor(route.path, route.enOnly);
-  if (paths.length === 1) {
-    return [{ ...base, url: `${SITE_URL}${paths[0]}`, priority: route.priority }];
-  }
-  const { languages } = esAlternates(route.path);
-  const alternates = {
-    languages: { en: `${SITE_URL}${languages.en}`, es: `${SITE_URL}${languages.es}` }
-  };
-  return [
-    { ...base, url: `${SITE_URL}${languages.en}`, priority: route.priority, alternates },
-    {
-      ...base,
-      url: `${SITE_URL}${languages.es}`,
-      priority: Math.max(0.1, Math.round((route.priority - 0.1) * 10) / 10),
-      alternates
-    }
-  ];
-}
+import { sitemapEntriesFor } from "@/lib/marketing/sitemap-entries";
 
 // Rendered per request so published blog posts appear without a redeploy
 // (and the CI build, which has mock Supabase env, never touches the DB).
@@ -102,6 +66,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
 
   return [...staticRoutes, ...industryRoutes, ...compareRoutes, ...blogRoutes].flatMap(
-    entriesFor
+    sitemapEntriesFor
   );
 }
