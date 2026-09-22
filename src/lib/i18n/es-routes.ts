@@ -21,6 +21,7 @@ export const SPANISH_MARKETING_PREFIXES = [
   "/compare",
   "/faq",
   "/about",
+  "/after-hours-answering",
   "/contact",
   "/terms",
   "/privacy",
