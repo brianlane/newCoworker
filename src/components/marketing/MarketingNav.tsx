@@ -2,12 +2,14 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { track } from "@vercel/analytics";
 import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { CtaLink } from "@/components/marketing/CtaLink";
+import type { AppLocale } from "@/i18n/routing";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export type NavLink = { href: string; labelKey: string };
@@ -23,6 +25,7 @@ export const MARKETING_NAV_LINKS: NavLink[] = [
 
 export function MarketingNav() {
   const t = useTranslations("marketing.nav");
+  const locale = useLocale() as AppLocale;
   const [open, setOpen] = useState(false);
   const [authed, setAuthed] = useState(false);
   const headerRef = useRef<HTMLElement | null>(null);
@@ -92,7 +95,7 @@ export function MarketingNav() {
       className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md"
     >
       <nav className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-4">
-        <Link href="/" className="flex items-center gap-3" onClick={() => setOpen(false)}>
+        <Link href={localizedMarketingHref("/", locale)} className="flex items-center gap-3" onClick={() => setOpen(false)}>
           <Image src="/logo.png" alt={t("brand")} width={34} height={34} className="rounded-full" />
           <span className="font-display text-lg font-bold tracking-tight text-parchment">{t("brand")}</span>
         </Link>
@@ -101,7 +104,7 @@ export function MarketingNav() {
           {MARKETING_NAV_LINKS.map((l) => (
             <Link
               key={l.href}
-              href={l.href}
+              href={localizedMarketingHref(l.href, locale)}
               className="text-sm font-medium text-parchment/65 transition-colors hover:text-parchment"
             >
               {t(l.labelKey)}
@@ -112,16 +115,19 @@ export function MarketingNav() {
         <div className="hidden items-center gap-4 md:flex">
           <LanguageSwitcher />
           {authed ? (
-            <CtaLink href="/dashboard" size="md">
+            <CtaLink href={localizedMarketingHref("/dashboard", locale)} size="md">
               {t("dashboard")}
             </CtaLink>
           ) : (
             <>
-              <Link href="/login" className="text-sm text-parchment/60 transition-colors hover:text-parchment">
+              <Link
+                href={localizedMarketingHref("/login", locale)}
+                className="text-sm text-parchment/60 transition-colors hover:text-parchment"
+              >
                 {t("signIn")}
               </Link>
               <CtaLink
-                href="/onboard"
+                href={localizedMarketingHref("/onboard", locale)}
                 size="md"
                 onClick={() => track("cta_get_started", { source: "nav" })}
               >
@@ -153,7 +159,7 @@ export function MarketingNav() {
             {MARKETING_NAV_LINKS.map((l) => (
               <Link
                 key={l.href}
-                href={l.href}
+                href={localizedMarketingHref(l.href, locale)}
                 onClick={() => setOpen(false)}
                 className="rounded-lg px-3 py-2.5 text-sm font-medium text-parchment/75 transition-colors hover:bg-parchment/5 hover:text-parchment"
               >
@@ -162,7 +168,7 @@ export function MarketingNav() {
             ))}
             {authed ? (
               <CtaLink
-                href="/dashboard"
+                href={localizedMarketingHref("/dashboard", locale)}
                 size="md"
                 className="mt-2 block text-center"
                 onClick={() => setOpen(false)}
@@ -172,14 +178,14 @@ export function MarketingNav() {
             ) : (
               <>
                 <Link
-                  href="/login"
+                  href={localizedMarketingHref("/login", locale)}
                   onClick={() => setOpen(false)}
                   className="rounded-lg px-3 py-2.5 text-sm font-medium text-parchment/75 transition-colors hover:bg-parchment/5 hover:text-parchment"
                 >
                   {t("signIn")}
                 </Link>
                 <CtaLink
-                  href="/onboard"
+                  href={localizedMarketingHref("/onboard", locale)}
                   size="md"
                   className="mt-2 block text-center"
                   onClick={() => {
