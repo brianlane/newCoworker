@@ -1,8 +1,17 @@
+import type { MetadataRoute } from "next";
 import { describe, expect, it } from "vitest";
 import { esAlternates } from "@/lib/i18n/es-routes";
 import { sitemapEntriesFor } from "@/lib/marketing/sitemap-entries";
 import { SITE_URL, siteUrl } from "@/lib/marketing/site-url";
 import { buildLlmsTxt } from "@/lib/marketing/llms-content";
+
+function sitemapHreflang(entry: MetadataRoute.Sitemap[number]): { en: string; es: string } {
+  const en = entry.alternates?.languages?.en;
+  const es = entry.alternates?.languages?.es;
+  expect(en).toEqual(expect.any(String));
+  expect(es).toEqual(expect.any(String));
+  return { en: en as string, es: es as string };
+}
 
 /**
  * Homepage public URL policy: no trailing slash.
@@ -46,15 +55,17 @@ describe("homepage URL slash policy", () => {
     expect(html.languages["x-default"]).toBe(SITE_URL);
     expect(html.languages.es).toBe(siteUrl("/es"));
 
+    const enHreflang = sitemapHreflang(en);
+    const esHreflang = sitemapHreflang(es);
     expect(en.url).toBe(html.canonical);
-    expect(en.alternates?.languages.en).toBe(html.languages.en);
-    expect(en.alternates?.languages.es).toBe(html.languages.es);
+    expect(enHreflang.en).toBe(html.languages.en);
+    expect(enHreflang.es).toBe(html.languages.es);
     expect(es.url).toBe(html.languages.es);
-    expect(es.alternates?.languages.en).toBe(html.languages.en);
-    expect(es.alternates?.languages.es).toBe(html.languages.es);
+    expect(esHreflang.en).toBe(html.languages.en);
+    expect(esHreflang.es).toBe(html.languages.es);
 
     expect(en.url.endsWith("/")).toBe(false);
-    expect(en.alternates?.languages.en.endsWith("/")).toBe(false);
+    expect(enHreflang.en.endsWith("/")).toBe(false);
     expect(es.url.endsWith("/")).toBe(false);
     expect(en.url).not.toBe(`${SITE_URL}/`);
   });
@@ -67,8 +78,8 @@ describe("homepage URL slash policy", () => {
     expect(html.canonical).toBe(`${SITE_URL}/es`);
     expect(html.canonical.endsWith("/")).toBe(false);
     expect(es.url).toBe(html.canonical);
-    expect(es.alternates?.languages.es).toBe(html.canonical);
-    expect(es.alternates?.languages.en).toBe(SITE_URL);
+    expect(sitemapHreflang(es).es).toBe(html.canonical);
+    expect(sitemapHreflang(es).en).toBe(SITE_URL);
   });
 
   it("keeps non-home sitemap locs slash-free at the end, same helper", () => {
@@ -76,8 +87,8 @@ describe("homepage URL slash policy", () => {
     expect(en.url).toBe(siteUrl("/pricing"));
     expect(en.url).toBe(`${SITE_URL}/pricing`);
     expect(en.url.endsWith("/")).toBe(false);
-    expect(en.alternates?.languages.en).toBe(siteUrl("/pricing"));
-    expect(en.alternates?.languages.es).toBe(siteUrl("/es/pricing"));
+    expect(sitemapHreflang(en).en).toBe(siteUrl("/pricing"));
+    expect(sitemapHreflang(en).es).toBe(siteUrl("/es/pricing"));
     expect(es.url).toBe(siteUrl("/es/pricing"));
     expect(es.priority).toBe(0.8);
   });
