@@ -164,4 +164,18 @@ describe("marketing chrome on Spanish locale", () => {
       expect(bare).toEqual([]);
     }
   });
+
+  it("homepage compare-plans CTA and plan-card CTAs go through localizedMarketingHref", () => {
+    const home = readFileSync(join(ROOT, "src/app/(marketing)/page.tsx"), "utf8");
+    const planCard = readFileSync(join(ROOT, "src/components/pricing/PlanCard.tsx"), "utf8");
+    const planCards = readFileSync(join(ROOT, "src/components/pricing/PlanCards.tsx"), "utf8");
+    const pricing = readFileSync(join(ROOT, "src/app/(marketing)/pricing/page.tsx"), "utf8");
+    expect(home).toContain("localizedMarketingHref");
+    expect(home).not.toMatch(/<Link\b[^>]*\bhref=["']\/pricing["']/);
+    expect(planCard).toContain("localizedMarketingHref");
+    expect(planCards).toContain("localizedMarketingHref");
+    expect(planCards).not.toMatch(/\bhref=["']\/contact\?topic=white-glove["']/);
+    expect(pricing).toContain("localizedMarketingHref");
+    expect(pricing).not.toMatch(/<Link\b[^>]*\bhref=["']\/contact\?topic=white-glove["']/);
+  });
 });

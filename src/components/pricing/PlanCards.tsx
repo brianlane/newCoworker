@@ -6,6 +6,7 @@ import { track } from "@vercel/analytics";
 import { PLAN_CARD_ROWS, PlanCard } from "@/components/pricing/PlanCard";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import type { AppLocale } from "@/i18n/routing";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import { listWhiteGlovePackages } from "@/lib/plans/white-glove";
 import { listComparisonRows } from "@/lib/plans/comparison";
 import {
@@ -171,7 +172,7 @@ export function PlanCards({
           ))}
         </div>
         <a
-          href="/contact?topic=white-glove"
+          href={localizedMarketingHref("/contact?topic=white-glove", locale)}
           onClick={() => track("white_glove_interest")}
           className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 md:mx-auto md:max-w-sm"
         >
