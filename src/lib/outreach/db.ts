@@ -68,7 +68,10 @@ export type OutreachSettingsRow = {
    * business profile address.
    */
   postal_address: string | null;
-  /** The plan waives the typed footer address (Enterprise). Set from the tier. */
+  /**
+   * The typed footer address is waived (Enterprise, or HQ). Set on every
+   * non-off save from postalAddressRequiredFor, which the send path re-checks.
+   */
   postal_address_exempt: boolean;
   value_prop: string | null;
   sender_name: string | null;

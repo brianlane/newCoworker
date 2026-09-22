@@ -43,6 +43,7 @@ import {
   followupDueWindows,
   followupSubjectFor
 } from "@/lib/outreach/followup";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -623,6 +624,40 @@ describe("phase 2: drafting", () => {
     const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
       .pitch_body as string;
     expect(body).toContain("9 Profile Street, Phoenix AZ");
+  });
+
+  it("drafts for HQ on Standard with no address anywhere, and prints no blank line", async () => {
+    // The id waiver holds even when the row reads Standard. That is the
+    // backstop: HQ's entitlement is Enterprise, and a Standard label must
+    // not put the postal blocker back. A profile address, when there is
+    // one, still fills the footer.
+    const ledger = draftLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({
+          business_id: HQ_BUSINESS_ID,
+          postal_address: null,
+          postal_address_exempt: true
+        })
+      ])
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => ({
+          id: HQ_BUSINESS_ID,
+          name: "Acme",
+          timezone: "America/Phoenix",
+          website_url: null,
+          address: null,
+          tier: "standard"
+        }))
+      })
+    );
+    expect(result.drafted).toBe(1);
+    expect(result.notes).toEqual([]);
+    const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
+      .pitch_body as string;
+    expect(body).toContain("/api/outreach/unsubscribe?");
+    expect(body.trimEnd().split("\n").pop()).toContain("/api/outreach/unsubscribe?");
   });
 
   it("drafts for an exempt tier with no address anywhere, and prints no blank line", async () => {

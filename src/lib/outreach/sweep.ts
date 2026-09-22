@@ -32,7 +32,7 @@ import { randomUUID } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import {
   placesQueriesPerDayForTier,
-  postalAddressRequiredForTier,
+  postalAddressRequiredFor,
   prospectingAllowedForTier
 } from "@/lib/plans/prospecting";
 import { outreachSchedulingLink } from "@/lib/booking-page/prompt-line";
@@ -270,9 +270,11 @@ async function resolveTenant(
   // the sweep sends anyway is the worst of the available behaviors. It also
   // catches the downgrade: Enterprise to Standard leaves a stale
   // postal_address_exempt behind, and the tier is re-read here, so those sends
-  // stop instead of quietly riding the profile address.
+  // stop instead of quietly riding the profile address. HQ is waived by
+  // business id as well (postalAddressRequiredFor), so a Standard label on
+  // that row does not put the blocker back.
   const typedAddress = settings.postal_address?.trim() ?? "";
-  const exempt = !postalAddressRequiredForTier(business.tier);
+  const exempt = !postalAddressRequiredFor(settings.business_id, business.tier);
   const postalAddress = typedAddress || (exempt ? (business.address ?? "").trim() : "");
   if (!postalAddress && !exempt) {
     return { missing: "no postal address configured", blockedBy: "config" };

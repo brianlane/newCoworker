@@ -3233,7 +3233,7 @@
       "skippedOne": "Skipped, and they will not come up again.",
       "unsavedChanges": "You have unsaved changes.",
       "clipped": "Busy list: these count your most recent 1,000 prospects, so they are at-least numbers.",
-      "postalHelpOptional": "Optional on your plan. Leave it blank and we use the address on your business profile; if you have none saved, the footer leaves it out.",
+      "postalHelpOptional": "Optional. Leave it blank and we use the address on your business profile; if you have none saved, the footer leaves it out.",
       "draftFooterHelp": "The sign-off, the unsubscribe link, and the footer address are added underneath automatically, so you never have to type them and cannot delete them by accident.",
       "legacyDraft": "This draft was written before you could edit them. Regenerate it to make it editable.",
       "unsavedDraft": "Unsaved changes. Save the draft before you send it.",

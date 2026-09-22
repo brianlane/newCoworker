@@ -8,7 +8,11 @@
  * deriveMonthlyQuotaWindow).
  *
  * What --apply does (idempotent, in order):
- *   1. Create the HQ business (tier standard, vps_size kvm1) if missing.
+ *   1. Create the HQ business (tier enterprise, vps_size kvm1) if missing.
+ *      The live row was created standard on 2026-07-16 and set to enterprise
+ *      on 2026-09-22. The kvm1 pin stays: this box is shared and is not
+ *      replaced when the entitlement changes. A re-run that finds the
+ *      business does not rewrite tier.
  *   2. Create the synthetic active subscription with period bounds if missing.
  *   3. Seed business_configs from the Residency Pilot webchat vault (same
  *      persona the site webchat uses today) + HQ identity + demo-line memory.
@@ -102,7 +106,7 @@ const { data: routeRow } = await db
 
 console.log("[oneshot] HQ business:", existingBusiness
   ? { exists: true, status: existingBusiness.status, vps: existingBusiness.hostinger_vps_id }
-  : { exists: false, willCreate: { id: HQ_BUSINESS_ID, name: HQ_NAME, tier: "standard", vpsSize: "kvm1" } });
+  : { exists: false, willCreate: { id: HQ_BUSINESS_ID, name: HQ_NAME, tier: "enterprise", vpsSize: "kvm1" } });
 console.log("[oneshot] subscription:", existingSub
   ? { exists: true, status: existingSub.status, periodEnd: existingSub.stripe_current_period_end }
   : { exists: false, willCreate: "synthetic active, period now → +24mo, no stripe id" });
@@ -148,7 +152,7 @@ if (!existingBusiness) {
     id: HQ_BUSINESS_ID,
     name: HQ_NAME,
     ownerEmail: HQ_OWNER_EMAIL,
-    tier: "standard",
+    tier: "enterprise",
     businessType: "other",
     ownerName: "New Coworker Team",
     websiteUrl: "https://www.newcoworker.com",
@@ -170,7 +174,7 @@ if (!existingSub) {
     business_id: HQ_BUSINESS_ID,
     stripe_customer_id: null,
     stripe_subscription_id: null,
-    tier: "standard",
+    tier: "enterprise",
     status: "active",
     billing_period: null,
     stripe_current_period_start: now.toISOString(),
@@ -250,6 +254,9 @@ await upsertTelnyxVoiceRoute({
 console.log("[oneshot] DID moved: settings + voice route now on HQ, flow-test from-number cleared");
 
 // ---------------------------------------------------------------- 6. provision
+// `tier` here is the deploy-profile input, not the entitlement. The row's
+// entitlement is enterprise. vpsSize kvm1 is the pin: this box is shared
+// with JobArms and must not be replaced with the enterprise kvm8 default.
 const { orchestrateProvisioning } = await import("../../src/lib/provisioning/orchestrate.ts");
 
 const result = await orchestrateProvisioning(

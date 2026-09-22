@@ -11,6 +11,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { QUERIES_PER_RUN } from "@/lib/outreach/discover";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 
 export const PROSPECTING_UPGRADE_MESSAGE =
   "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.";
@@ -32,8 +33,30 @@ export function prospectingAllowedForTier(tier: string | null | undefined): bool
  * them and keeps it a hard gate for everyone else, where the DB check
  * constraint still makes it structural.
  */
-export function postalAddressRequiredForTier(tier: string | null | undefined): boolean {
+function postalAddressRequiredForTier(tier: string | null | undefined): boolean {
   return tier !== "enterprise";
+}
+
+/**
+ * The same gate, for one business.
+ *
+ * Enterprise is exempt by plan. HQ is also exempt by identity: the account
+ * was created Standard on 2026-07-16 and the dossier called it Enterprise
+ * without a matching write, so the plan gate kept demanding a typed address.
+ * The entitlement was set to Enterprise on 2026-09-22. The id check stays
+ * so a later Standard label cannot put the Marketing blocker back. Every
+ * other Standard tenant still has to type one. A stale
+ * `postal_address_exempt` on a downgraded customer does not count.
+ *
+ * CAN-SPAM has no such exemption. An exempt sender with no address on file
+ * is sending commercial mail without the physical address the law asks for.
+ */
+export function postalAddressRequiredFor(
+  businessId: string,
+  tier: string | null | undefined
+): boolean {
+  if (businessId === HQ_BUSINESS_ID) return false;
+  return postalAddressRequiredForTier(tier);
 }
 
 /**
@@ -80,5 +103,8 @@ export async function postalAddressRequiredForBusiness(
   businessId: string,
   client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
 ): Promise<boolean> {
-  return postalAddressRequiredForTier(await prospectingTierForBusiness(businessId, client));
+  return postalAddressRequiredFor(
+    businessId,
+    await prospectingTierForBusiness(businessId, client)
+  );
 }

@@ -87,7 +87,7 @@ type View = {
   blockers: string[];
   /** False on Starter: show the upgrade card instead of the controls. */
   tierAllowed: boolean;
-  /** False on Enterprise: the footer address is optional here. */
+  /** False on Enterprise, and for HQ: the footer address is optional here. */
   postalAddressRequired: boolean;
   /** How many more emails may go out today, from the server's own arithmetic. */
   sendAllowanceLeft: number;
