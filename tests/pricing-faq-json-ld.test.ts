@@ -5,7 +5,7 @@ import en from "../messages/en.json";
 import es from "../messages/es.json";
 import { CONTACT_EMAIL } from "@/lib/marketing/contact-email";
 import { faqPageJsonLd, stripFaqRichMarkup } from "@/lib/marketing/faq-json-ld";
-import { PRICING_FAQ_KEYS, pricingFaqEntries } from "@/lib/marketing/pricing-faqs";
+import { PRICING_FAQ_KEYS, pricingFaqEntries, type PricingFaqTranslate } from "@/lib/marketing/pricing-faqs";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
@@ -84,7 +84,7 @@ describe("pricing page FAQPage JSON-LD wiring", () => {
 describe.each(CATALOGS)("pricing FAQPage entries match visible FAQs (%s)", (_locale, copy) => {
   const pairs = catalogFaqPairs(copy);
   const values = pricingVars();
-  const t = (key: string, interpolations = values) => interpolate(copy[key], interpolations);
+  const t: PricingFaqTranslate = (key, interpolations) => interpolate(copy[key], interpolations);
   const entries = pricingFaqEntries(t, values);
   const jsonLd = faqPageJsonLd(entries);
 
@@ -113,9 +113,6 @@ describe.each(CATALOGS)("pricing FAQPage entries match visible FAQs (%s)", (_loc
       expect(entity.acceptedAnswer["@type"]).toBe("Answer");
       expect(entity.acceptedAnswer.text).toBe(stripFaqRichMarkup(interpolate(copy[a], values)));
       expect(entity.acceptedAnswer.text).not.toMatch(/<\/?[a-zA-Z]/);
-      expect(entity.acceptedAnswer.text).toContain(
-        stripFaqRichMarkup(interpolate(copy[a], values)).slice(0, 24)
-      );
     }
   });
 });
