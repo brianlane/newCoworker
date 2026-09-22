@@ -67,7 +67,10 @@ describe("/onboard generateMetadata", () => {
   it("keeps a large Twitter card and does not noindex a sitemap URL", async () => {
     headersMock.mockResolvedValue(pathnameHeaders("/onboard"));
     const meta = await generateMetadata();
-    expect(meta.twitter?.card).toBe("summary_large_image");
+    const twitter = meta.twitter;
+    expect(twitter && "card" in twitter ? twitter.card : undefined).toBe(
+      "summary_large_image"
+    );
     expect(meta.robots).not.toEqual(expect.objectContaining({ index: false }));
     if (typeof meta.robots === "object" && meta.robots) {
       expect(meta.robots.index).not.toBe(false);
