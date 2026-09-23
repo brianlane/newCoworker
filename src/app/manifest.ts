@@ -8,8 +8,8 @@ import type { MetadataRoute } from "next";
  * install failure; Next injects the <link rel="manifest"> itself, which
  * matters because src/app/layout.tsx deliberately has no <head>; and a file
  * under public/ would be served with the wildcard CORS header that
- * next.config.ts exists to override. src/app/sitemap.ts is the in-repo
- * precedent.
+ * next.config.ts exists to override. src/app/robots.txt/route.ts is the
+ * in-repo precedent.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {

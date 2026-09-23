@@ -16,8 +16,8 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
  * English only, matching both pages it lists.
  *
  * Add a doc here when you add one. Nothing enforces that, because a link list
- * has no compiler, but this page and sitemap.ts are the two places a new doc
- * has to reach to be findable at all.
+ * has no compiler, but this page and src/lib/marketing/sitemap.ts are the two
+ * places a new doc has to reach to be findable at all.
  */
 
 export const metadata: Metadata = {

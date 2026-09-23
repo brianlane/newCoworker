@@ -21,11 +21,11 @@ import {
   SPANISH_MARKETING_PREFIXES
 } from "@/lib/i18n/es-routes";
 import { buildLlmsTxt } from "@/lib/marketing/llms-content";
-import { SITE_URL } from "@/lib/marketing/site-url";
+import { buildSitemap } from "@/lib/marketing/sitemap";
+import { SITE_URL, siteUrl } from "@/lib/marketing/site-url";
 
 const ROOT = join(import.meta.dirname, "..");
 const PAGE = join(ROOT, "src/app/(marketing)/ai-receptionist/page.tsx");
-const SITEMAP = join(ROOT, "src/app/sitemap.ts");
 const OG = join(ROOT, "src/app/(marketing)/ai-receptionist/opengraph-image.tsx");
 const TWITTER = join(ROOT, "src/app/(marketing)/ai-receptionist/twitter-image.tsx");
 
@@ -121,13 +121,17 @@ describe("/ai-receptionist route", () => {
     expect(existsSync(TWITTER), "twitter-image.tsx").toBe(true);
   });
 
-  it("is a bilingual sitemap route: /ai-receptionist and /es/ai-receptionist", () => {
+  it("is a bilingual sitemap route: /ai-receptionist and /es/ai-receptionist", async () => {
     expect(SPANISH_MARKETING_PREFIXES).toContain("/ai-receptionist");
     expect(sitemapPathsFor("/ai-receptionist")).toEqual([
       "/ai-receptionist",
       "/es/ai-receptionist"
     ]);
-    expect(readFileSync(SITEMAP, "utf8")).toMatch(/path:\s*"\/ai-receptionist"/);
+    const entries = await buildSitemap();
+    const urls = entries.map((entry) => entry.url);
+    expect(urls).toContain(siteUrl("/ai-receptionist"));
+    expect(urls).toContain(siteUrl("/es/ai-receptionist"));
+    expect(entries.find((entry) => entry.url === siteUrl("/ai-receptionist"))?.priority).toBe(0.9);
   });
 });
 

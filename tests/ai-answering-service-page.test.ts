@@ -17,12 +17,12 @@ import {
   sitemapPathsFor
 } from "@/lib/i18n/es-routes";
 import { buildLlmsTxt } from "@/lib/marketing/llms-content";
-import { SITE_URL } from "@/lib/marketing/site-url";
+import { buildSitemap } from "@/lib/marketing/sitemap";
+import { SITE_URL, siteUrl } from "@/lib/marketing/site-url";
 
 const ROOT = join(import.meta.dirname, "..");
 const PAGE = join(ROOT, "src/app/(marketing)/ai-answering-service/page.tsx");
 const OG = join(ROOT, "src/app/(marketing)/ai-answering-service/opengraph-image.tsx");
-const SITEMAP = join(ROOT, "src/app/sitemap.ts");
 const PATH = "/ai-answering-service";
 
 const BANNED_VISIBLE = /\bassistants?\b|\breceptionists?\b|virtual receptionist/i;
@@ -87,8 +87,12 @@ describe("/ai-answering-service route", () => {
     expect(sitemapPathsFor(PATH)).toEqual([PATH, `/es${PATH}`]);
   });
 
-  it("is listed in the sitemap static routes", () => {
-    expect(readFileSync(SITEMAP, "utf8")).toContain(`path: "${PATH}"`);
+  it("is listed in the sitemap static routes", async () => {
+    const entries = await buildSitemap();
+    const urls = entries.map((entry) => entry.url);
+    expect(urls).toContain(siteUrl(PATH));
+    expect(urls).toContain(siteUrl(`/es${PATH}`));
+    expect(entries.find((entry) => entry.url === siteUrl(PATH))?.priority).toBe(0.9);
   });
 });
 

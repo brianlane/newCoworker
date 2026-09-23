@@ -11,19 +11,22 @@ import type { AppLocale } from "@/i18n/routing";
 const ES_PREFIX = "/es";
 
 /** Marketing paths that get a public /es/... mirror. */
+export const SEO_PILLAR_PATHS = [
+  "/ai-receptionist",
+  "/ai-answering-service",
+  "/after-hours-answering"
+] as const;
+
 export const SPANISH_MARKETING_PREFIXES = [
   "/",
   "/blog",
   "/features",
-  "/ai-receptionist",
-  "/ai-answering-service",
   "/pricing",
   "/integrations",
   "/industries",
   "/compare",
   "/faq",
   "/about",
-  "/after-hours-answering",
   "/contact",
   "/terms",
   "/privacy",
@@ -31,9 +34,9 @@ export const SPANISH_MARKETING_PREFIXES = [
   "/login",
   "/onboard",
   "/signup",
-  "/ai-receptionist",
-  "/ai-answering-service",
-  "/after-hours-answering"
+  // Buyer-intent landings. Mirrored so the sitemap can advertise /es twins
+  // the moment the pages exist. Product name stays "AI coworker".
+  ...SEO_PILLAR_PATHS
 ];
 
 /**

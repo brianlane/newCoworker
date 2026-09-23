@@ -5,7 +5,7 @@ import { listPublishedPosts } from "@/lib/blog/db";
 
 // Rendered per request so newly published posts appear without a redeploy,
 // and so the CI build (mock Supabase env) never touches the DB, same
-// rationale as src/app/sitemap.ts.
+// rationale as src/app/sitemap.xml/route.ts.
 export const dynamic = "force-dynamic";
 
 // The English catalog is read directly rather than through next-intl: this is
