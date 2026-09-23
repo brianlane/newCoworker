@@ -778,6 +778,101 @@
       "ctaSubtitle": "Live in minutes, learning from day one.",
       "ctaLabel": "Get Started"
     },
+    "aiAnsweringServicePage": {
+      "metaTitle": "AI answering service for small business",
+      "metaDescription": "An AI answering service for small business: after-hours coverage, missed-call text-back, and appointment booking on your real calendar. [REDACTED] is the AI coworker that answers every channel.",
+      "ogTitle": "AI answering service | [REDACTED]",
+      "ogDescription": "24/7 AI answering service that books the job, not a callback. After-hours coverage and missed-call follow-up on every channel.",
+      "schemaName": "AI answering service",
+      "schemaServiceType": "AI answering service for small business",
+      "heroEyebrow": "24/7 coverage",
+      "heroTitle": "The AI coworker that",
+      "heroHighlight": "answers every call",
+      "heroSubtitle": "Nights, weekends, and the call that comes in while you are on a job. Your coworker picks up, books the appointment on your real calendar, and follows up by text. One flat plan, every channel.",
+      "heroCta": "Get started",
+      "heroSecondaryCta": "See pricing",
+      "stat1Value": "24/7",
+      "stat1Label": "Every call and text answered: nights, weekends, holidays",
+      "stat2Value": "After hours",
+      "stat2Label": "The same coworker at 2am as at 2pm, with no extra fee",
+      "stat3Value": "Booked",
+      "stat3Label": "Appointments land on your real calendar, not in a message pad",
+      "stat4Value": "Every channel",
+      "stat4Label": "Calls, texts, email, and DMs share one memory of the customer",
+      "problemEyebrow": "The cost of a miss",
+      "problemTitle": "A missed call is a missed job",
+      "problemSubtitle": "Customers rarely leave a second voicemail. They call the next business on the list.",
+      "problem1": {
+        "title": "The call during a job",
+        "description": "You are on a roof, in a procedure, or already with a customer. The next caller waits a few rings, hangs up, and dials someone else."
+      },
+      "problem2": {
+        "title": "The voicemail that never gets a callback",
+        "description": "A recorded message asks them to try again. Most will not. The ones who do have already booked with a shop that picked up."
+      },
+      "problem3": {
+        "title": "The busy hour overflow",
+        "description": "Two lines ring at once. One gets you. The other gets a busy signal or a hold queue. That second caller was a job too."
+      },
+      "handlesEyebrow": "What it does",
+      "handlesTitle": "Your coworker finishes the job",
+      "handlesSubtitle": "Not a message taken. A conversation that books, texts back, and remembers the customer next time.",
+      "afterHours": {
+        "title": "After-hours coverage that books",
+        "description": "The 9pm emergency and the Sunday quote request get a real conversation. Your coworker checks the calendar and books, or takes the details and texts you with context."
+      },
+      "missedCall": {
+        "title": "Missed-call text-back",
+        "description": "If a warm transfer does not reach you, the caller gets a text immediately so the lead does not go cold."
+      },
+      "booking": {
+        "title": "Books on your real calendar",
+        "description": "Live availability from Google Calendar, Microsoft 365, Calendly, and more. The appointment is on the books before the caller hangs up."
+      },
+      "followUp": {
+        "title": "Follow-up that does not slip",
+        "description": "Texts, reminders, and a memory of what was already said. The next message continues the conversation instead of starting over."
+      },
+      "overflow": {
+        "title": "Several calls at once",
+        "description": "Your coworker holds multiple conversations at the same time, so a busy morning never produces a busy signal."
+      },
+      "everyChannel": {
+        "title": "Every channel, one coworker",
+        "description": "Calls, SMS, email, WhatsApp, Messenger, and Instagram DMs share one memory. A customer who called Tuesday and texts Friday never repeats themselves."
+      },
+      "compareEyebrow": "Side by side",
+      "compareTitle": "Where a message-taking service stops",
+      "compareBody": "A traditional call center takes a message and hands the rest to you. Your coworker answers in your business's voice, books the slot, and follows up by text. We wrote an honest comparison, including where a human message-taker is still the better buy.",
+      "compareLink": "Read the honest comparison",
+      "faqEyebrow": "Questions",
+      "faqTitle": "What people ask before they switch",
+      "faq1": {
+        "q": "Does it book the appointment, or just take a message?",
+        "a": "It books. Your coworker checks live availability on the calendar you already use and confirms the slot while the caller is still on the line. The follow-up text goes out after."
+      },
+      "faq2": {
+        "q": "What happens after hours?",
+        "a": "The same coworker answers at 2am as at 2pm. After-hours callers get a conversation, a booking when the calendar allows, or a next-day slot with a text confirmation. There is no extra after-hours fee."
+      },
+      "faq3": {
+        "q": "What if the caller wants a person?",
+        "a": "Your coworker transfers the live call to you or a teammate with full context, so the caller does not repeat themselves. If you miss the transfer, they get a text immediately."
+      },
+      "faq4": {
+        "q": "Will callers know it is not a person?",
+        "a": "Some will and some will not. What matters more is whether the call gets resolved: a coworker that knows your prices and books the slot beats a friendly message you have to call back about."
+      },
+      "faq5": {
+        "q": "How fast can I go live?",
+        "a": "Signup to first answered call is automated. Pick a plan, answer a short questionnaire, and the coworker can be live in minutes. Backed by a 30-day money-back guarantee."
+      },
+      "contactPrompt": "Want a human to walk through whether this fits?",
+      "contactLink": "Talk to us",
+      "ctaTitle": "Put a coworker on the line tonight",
+      "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee.",
+      "ctaLabel": "Get Started"
+    },
     "securityPage": {
       "metaTitle": "Security",
       "metaDescription": "How New Coworker isolates every business on its own dedicated server, encrypts what matters twice, and runs privacy as code: retention windows, verified erasure, and a real wipe on cancellation.",

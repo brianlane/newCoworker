@@ -15,6 +15,7 @@ export const SPANISH_MARKETING_PREFIXES = [
   "/",
   "/blog",
   "/features",
+  "/ai-answering-service",
   "/pricing",
   "/integrations",
   "/industries",
