@@ -15,11 +15,12 @@ import {
   sitemapPathsFor
 } from "@/lib/i18n/es-routes";
 import { buildLlmsTxt, SITE_URL } from "@/lib/marketing/llms-content";
+import { buildSitemap } from "@/lib/marketing/sitemap";
+import { siteUrl } from "@/lib/marketing/site-url";
 
 const ROOT = join(__dirname, "..");
 const PAGE = join(ROOT, "src/app/(marketing)/after-hours-answering/page.tsx");
 const OG = join(ROOT, "src/app/(marketing)/after-hours-answering/opengraph-image.tsx");
-const SITEMAP = join(ROOT, "src/app/sitemap.ts");
 const NS = "afterHoursAnsweringPage";
 
 type Catalog = Record<string, unknown>;
@@ -127,9 +128,13 @@ describe("/after-hours-answering route", () => {
     expect(src).toContain('getTranslations("marketing.afterHoursAnsweringPage")');
   });
 
-  it("is in the sitemap (English plus the /es twin)", () => {
-    expect(readFileSync(SITEMAP, "utf8")).toMatch(
-      /path: "\/after-hours-answering",\s*priority: 0\.8/
+  it("is in the sitemap (English plus the /es twin)", async () => {
+    const entries = await buildSitemap();
+    const urls = entries.map((entry) => entry.url);
+    expect(urls).toContain(siteUrl("/after-hours-answering"));
+    expect(urls).toContain(siteUrl("/es/after-hours-answering"));
+    expect(entries.find((entry) => entry.url === siteUrl("/after-hours-answering"))?.priority).toBe(
+      0.9
     );
     expect(SPANISH_MARKETING_PREFIXES).toContain("/after-hours-answering");
     expect(sitemapPathsFor("/after-hours-answering")).toEqual([
