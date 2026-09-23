@@ -13,6 +13,7 @@ import {
 } from "@/components/marketing/sections";
 import { PlanCards } from "@/components/pricing/PlanCards";
 import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { buildComparisonGroups, type ComparisonCell } from "@/lib/plans/comparison";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
@@ -119,7 +120,7 @@ export default async function PricingPage() {
           {t.rich("faqWhiteGloveA", {
             b: (chunks) => <b>{chunks}</b>,
             link: (chunks) => (
-              <Link href="/contact?topic=white-glove" className="text-signal-teal hover:underline">
+              <Link href={localizedMarketingHref("/contact?topic=white-glove", locale)} className="text-signal-teal hover:underline">
                 {chunks}
               </Link>
             )

@@ -100,3 +100,28 @@ export function stripSpanishPrefix(pathname: string): string {
   }
   return pathname;
 }
+
+/**
+ * Prefix a marketing href with /es when the UI locale is Spanish.
+ *
+ * hreflang and the sitemap already advertise the /es twin; the header,
+ * footer, and primary CTAs have to actually point there or a visitor on
+ * /es is sent back to English. Non-mirrored paths (/dashboard, /docs/...)
+ * and non-path hrefs (tel:, mailto:, https://) stay as written. English
+ * stays unprefixed.
+ */
+export function localizedMarketingHref(href: string, locale: AppLocale): string {
+  if (locale !== "es") return href;
+  if (!href.startsWith("/") || href.startsWith("//")) return href;
+
+  const splitAt = href.search(/[?#]/);
+  const pathname = splitAt === -1 ? href : href.slice(0, splitAt);
+  const rest = splitAt === -1 ? "" : href.slice(splitAt);
+
+  if (pathname === ES_PREFIX || pathname.startsWith(`${ES_PREFIX}/`)) {
+    return href;
+  }
+  if (!isMirroredMarketingPath(pathname)) return href;
+  const prefixed = pathname === "/" ? ES_PREFIX : `${ES_PREFIX}${pathname}`;
+  return `${prefixed}${rest}`;
+}

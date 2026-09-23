@@ -33,6 +33,7 @@ import {
 } from "@/components/marketing/sections";
 import type { AppLocale } from "@/i18n/routing";
 import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import { formatPricePerMonthLocalized } from "@/lib/i18n/format";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
@@ -247,7 +248,7 @@ export default async function HomePage() {
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-parchment/55">{t("home.plansTeaser")}</p>
           <Link
-            href="/pricing"
+            href={localizedMarketingHref("/pricing", locale)}
             className="mt-7 inline-block rounded-lg border border-claw-green/40 px-8 py-3 text-sm font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
           >
             {t("home.comparePlans")}
