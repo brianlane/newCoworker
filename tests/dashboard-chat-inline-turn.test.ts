@@ -133,6 +133,20 @@ describe("buildAttachmentParts", () => {
 });
 
 describe("runInlineChatTurn, plain turns", () => {
+  it("corrects an automation write the tool result does not back", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) =>
+      textStep("I updated the automation wording.")
+    );
+    const res = await runInlineChatTurn(
+      baseArgs({ coworkerDid: "+14808061313" }),
+      { chatStep }
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.content).toContain("did not change an automation");
+    expect(res.content).toContain("I updated the automation wording.");
+  });
+
   it("returns the model text and meters the step", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("Hello owner"));
     const res = await runInlineChatTurn(baseArgs(), { chatStep });

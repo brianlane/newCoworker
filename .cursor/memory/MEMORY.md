@@ -1,6 +1,7 @@
 Project memory store. Read the linked file before acting; do not re-derive a known answer.
 
 - [Full test coverage requirement](feedback_testing.md) - npx vitest run --coverage must pass at 100%
+- [TDD for PR work](feedback_tdd_for_pr_work.md) - write the failing test first; an export only a test imports is not a test
 - [Gemini billing + model pins](project_gemini_billing_and_model_pins.md) - env overrides deploy defaults; 3.7-flash 400s on minimal thinking; ~4x metered
 - [Gemini model eval](project_gemini_model_eval.md) - list Google's models, do not pass an id; adopt flagship only at post-intro price; never promo rates
 - [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers

@@ -6,7 +6,7 @@
  * Refuse the enqueue instead.
  */
 
-export const BLANK_MANUAL_EXTRACT_MESSAGE =
+const BLANK_MANUAL_EXTRACT_MESSAGE =
   "Paste a sample message first. This automation starts by reading the message text, and a blank run has nothing to read.";
 
 export function blankManualExtractRefusal(

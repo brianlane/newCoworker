@@ -25,6 +25,7 @@ import {
   type StepCondition,
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
+import { ownerAllowsFlowDelete } from "@/lib/ai-flows/flow-delete-confirm";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
 import { BrowseActionDemoPanel } from "@/components/dashboard/BrowseActionDemoPanel";
 import { BrowseActionPagePicker } from "@/components/dashboard/BrowseActionPagePicker";
@@ -1555,13 +1556,7 @@ export function AiFlowsManager({
   };
 
   const remove = async (id: string, name: string) => {
-    // One click used to delete the automation with no confirm. An owner who
-    // did not mean to (BA Fitness, 2026-09-23) had no moment to stop it.
-    if (
-      !window.confirm(
-        `Delete "${name}"? It stops running and leaves this list. This cannot be undone from here.`
-      )
-    ) {
+    if (!ownerAllowsFlowDelete(name, (message) => window.confirm(message))) {
       return;
     }
     setBusy(true);
