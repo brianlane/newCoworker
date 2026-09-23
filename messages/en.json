@@ -106,7 +106,8 @@
       "forAi": "For AI assistants"
     },
     "home": {
-      "metaDescription": "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, book appointments, and keep operations moving.",
+      "metaTitle": "AI Receptionist for 24/7 Answering",
+      "metaDescription": "24/7 AI receptionist and answering service that answers calls, texts, and emails, books appointments, and keeps operations moving.",
       "heroTitle": "Your AI employee that",
       "heroHighlight": "never sleeps",
       "heroSubtitle": "New Coworker answers calls, texts, and emails around the clock: booking appointments, following up with leads, and remembering every customer. Built for all businesses.",
@@ -130,8 +131,8 @@
       "ctaTitle": "Ready to hire your New Coworker?",
       "ctaSubtitle": "New coworker starts learning from day one.",
       "ctaLabel": "Choose your plan",
-      "ogTitle": "Your AI employee that never sleeps",
-      "ogDescription": "Answer calls, texts, and emails around the clock with New Coworker."
+      "ogTitle": "AI Receptionist for 24/7 Answering",
+      "ogDescription": "24/7 AI receptionist: answer calls, texts, and emails, and book appointments around the clock."
     },
     "pricing": {
       "metaTitle": "Pricing",
@@ -944,6 +945,80 @@
         "sending": "Sending...",
         "send": "Send Message"
       }
+    },
+    "afterHoursAnsweringPage": {
+      "metaTitle": "After-hours answering with an AI coworker",
+      "metaDescription": "After-hours phone answering that books the job, not a voicemail. An AI coworker covers nights, weekends, and overflow, then texts you what happened.",
+      "ogTitle": "After-hours answering",
+      "ogDescription": "After-hours phone answering and booking with an AI coworker that covers nights and weekends.",
+      "jsonLdName": "After-hours phone answering",
+      "jsonLdServiceType": "After-hours answering and appointment booking",
+      "jsonLdDescription": "After-hours phone answering that books the job, not a voicemail. An AI coworker covers nights, weekends, and overflow, then texts you what happened.",
+      "heroEyebrow": "Nights, weekends, and overflow",
+      "heroTitle": "Your AI coworker still works",
+      "heroHighlight": "when you close",
+      "heroSubtitle": "Calls that land after you lock the door still get answered, booked, and followed up. You wake up to jobs on the calendar, not a voicemail pile.",
+      "primaryCta": "Get started",
+      "secondaryCta": "See pricing",
+      "contactCta": "Talk to a human",
+      "problemEyebrow": "The gap",
+      "problemTitle": "Closing time is when the phone still rings",
+      "problemBody": "The businesses that win the next job are the ones that pick up. After you close, that is usually nobody. Your AI coworker stays on the line: it greets the caller, books a real slot, and texts you a summary so morning starts with work, not a callback list.",
+      "handlesEyebrow": "What it covers",
+      "handlesTitle": "The work that used to wait until morning",
+      "nights": {
+        "title": "Nights and weekends stay covered",
+        "description": "The same coworker that answers at 2pm answers at 2am. No extra fee for nights, no queue because the office is empty."
+      },
+      "booking": {
+        "title": "The calendar gets the job",
+        "description": "It checks live availability and books during the call, so the caller is not waiting for you to ring them back tomorrow."
+      },
+      "missed": {
+        "title": "A missed transfer is not a lost job",
+        "description": "If a live handoff does not connect, the caller gets a text right away. The job stays yours."
+      },
+      "overflow": {
+        "title": "Several calls at once",
+        "description": "One person can take one call. Your coworker takes the ones that would have rolled to voicemail."
+      },
+      "followup": {
+        "title": "Follow-up that does not wait until morning",
+        "description": "It texts the caller, routes the lead to the right teammate, and remembers the conversation next time they reach out."
+      },
+      "private": {
+        "title": "On infrastructure that is yours",
+        "description": "Every business runs on its own dedicated server. Customer conversations stay isolated, and they are not used to train models."
+      },
+      "dayEyebrow": "A night on the line",
+      "dayTitle": "What coverage actually looks like",
+      "day1": "You lock up at 6. At 7:40 a homeowner calls about a dead heater. The coworker books Tuesday morning and texts you the address, the symptoms, and the slot.",
+      "day2": "Saturday 9:10. Three calls in four minutes. All answered. Two booked. One asked for you and got a warm transfer to your cell.",
+      "day3": "A crew is on a roof. Overflow calls never hit voicemail. Each caller gets a window for later that week.",
+      "day4": "2:10 am. An urgent leak. The coworker captures the details, flags it urgent, and texts the on-call phone with full context.",
+      "faqEyebrow": "Questions",
+      "faqTitle": "What owners ask before they forward the line",
+      "faq1": {
+        "q": "What happens to a call after we close?",
+        "a": "Your coworker picks up, talks in your business's voice, and either books, takes a message with next steps, or transfers to whoever is on call. You get a summary by text."
+      },
+      "faq2": {
+        "q": "Can it actually put a job on the calendar?",
+        "a": "Yes. It books, reschedules, and cancels on the calendar you already use, or on a public booking page if you do not have one. Morning should start with names on the schedule."
+      },
+      "faq3": {
+        "q": "What if the caller wants a person?",
+        "a": "It transfers a live call to you or a teammate and texts whoever owns the lead. There is no human staff on our side. If you want a person sitting on the line all night, that is a different product, and we say so on the comparison pages."
+      },
+      "faq4": {
+        "q": "How is this different from letting calls go to voicemail?",
+        "a": "Voicemail is a pile. A coworker finishes the job: books the slot, texts the caller, and remembers them next time. Most people who hit voicemail call the next name on the list."
+      },
+      "ctaTitle": "Hire the coworker that stays on after you leave",
+      "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee.",
+      "ctaLabel": "Get started",
+      "contactPrompt": "Want a person to walk through setup, porting, or an Enterprise plan?",
+      "contactLink": "Contact us"
     },
     "industriesPage": {
       "metaTitle": "Industries",

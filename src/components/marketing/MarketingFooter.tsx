@@ -2,8 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { SiteChatWidget } from "@/components/marketing/SiteChatWidget";
+import type { AppLocale } from "@/i18n/routing";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 
 type FooterLink = { href: string; labelKey: string; external?: boolean };
 
@@ -41,6 +43,7 @@ function FooterColumn({
   links: FooterLink[];
   tNav: ReturnType<typeof useTranslations>;
 }) {
+  const locale = useLocale() as AppLocale;
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-parchment/40">{title}</p>
@@ -52,7 +55,10 @@ function FooterColumn({
                 {tNav(l.labelKey)}
               </a>
             ) : (
-              <Link href={l.href} className="text-sm text-parchment/60 transition-colors hover:text-parchment">
+              <Link
+                href={localizedMarketingHref(l.href, locale)}
+                className="text-sm text-parchment/60 transition-colors hover:text-parchment"
+              >
                 {tNav(l.labelKey)}
               </Link>
             )}
@@ -66,6 +72,7 @@ function FooterColumn({
 export function MarketingFooter() {
   const t = useTranslations("marketing.footer");
   const tNav = useTranslations("marketing.nav");
+  const locale = useLocale() as AppLocale;
 
   return (
     <footer className="border-t border-parchment/10">
@@ -87,7 +94,7 @@ export function MarketingFooter() {
             &copy; {new Date().getFullYear()} New Coworker. {t("copyright")}
           </p>
           <a
-            href="/llms.txt"
+            href={localizedMarketingHref("/llms.txt", locale)}
             className="text-xs text-parchment/30 transition-colors hover:text-parchment/60"
           >
             {t("forAi")}

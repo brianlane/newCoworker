@@ -21,6 +21,11 @@ the product, e.g. the voice persona's system instruction ("You are the phone
 receptionist for {business}", which tests assert on) and pricing copy comparing
 cost against "a receptionist or answering service".
 
+Metadata exception: marketing `<title>`, meta description, and OG
+title/description MAY use buyer search terms such as "AI receptionist" and
+"answering service". Visible UI copy (H1, body, buttons, nav) stays AI
+coworker/employee.
+
 # Spelling: "inquiry", never "enquiry"
 
 Write American English everywhere: user-facing copy, SMS/email text, AI
