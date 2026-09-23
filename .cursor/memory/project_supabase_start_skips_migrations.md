@@ -29,4 +29,12 @@ stub inside that transaction to test error-handling paths, since Postgres DDL
 is transactional. `businesses` needs `status` in
 (online/offline/high_load/wiped) and `tier` in (starter/standard/enterprise).
 
+CI's `.github/scripts/supabase-start-retry.sh` may retry `supabase start`
+only when the output is a registry pull failure (`toomanyrequests`,
+`failed to pull docker image`, `failed to display json stream`). The retry
+runs `supabase stop --no-backup` first. A plain `supabase stop` keeps the
+volume (CLI 2.78.1, `NoBackupVolume`), and the next start can exit 0 with
+zero migrations applied. A migration or health-check failure must not be
+retried and must not call stop.
+
 Related: [[project-migration-restamp-empty-file-trap]].

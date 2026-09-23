@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 /**
- * .github/scripts/supabase-start-retry.sh retries `supabase start` when the
- * registry answers 429. Worker Integration died that way twice on
- * 2026-09-23 (toomanyrequests) before any test ran.
+ * .github/scripts/supabase-start-retry.sh retries `supabase start` only when
+ * the registry refuses an image pull. A migration or health-check failure
+ * must exit immediately: `supabase stop` keeps the Docker volume, and the
+ * next `supabase start` then exits 0 without applying migrations.
  */
 
 const SCRIPT = join(__dirname, "..", ".github", "scripts", "supabase-start-retry.sh");
@@ -19,20 +20,31 @@ afterEach(() => {
   }
 });
 
-function fakeSupabase(startExits: number[]): string {
+function fakeSupabase(starts: Array<{ code: number; stdout?: string; stderr?: string }>): string {
   const dir = mkdtempSync(join(tmpdir(), "supabase-start-retry-"));
   sandboxes.push(dir);
   const log = join(dir, "calls.log");
+  starts.forEach((start, index) => {
+    const n = index + 1;
+    writeFileSync(join(dir, `start-${n}.code`), String(start.code));
+    writeFileSync(join(dir, `start-${n}.out`), start.stdout ?? "");
+    writeFileSync(join(dir, `start-${n}.err`), start.stderr ?? "");
+  });
   const bin = join(dir, "supabase");
   writeFileSync(
     bin,
     `#!/usr/bin/env bash
-echo "$1" >> "${log}"
+printf '%s\\n' "$*" >> "${log}"
 if [ "$1" = "start" ]; then
-  n=$(grep -c '^start$' "${log}")
-  code=$(printf '%s\\n' ${startExits.join(" ")} | awk -v n="$n" 'NR==n { print; exit }')
-  if [ -z "$code" ]; then code=1; fi
-  exit "$code"
+  n=$(grep -c '^start' "${log}")
+  codefile="${dir}/start-\${n}.code"
+  if [ -f "$codefile" ]; then
+    cat "${dir}/start-\${n}.out"
+    cat "${dir}/start-\${n}.err" >&2
+    exit "$(cat "$codefile")"
+  fi
+  echo "unexpected start" >&2
+  exit 1
 fi
 exit 0
 `
@@ -53,24 +65,49 @@ function run(dir: string, attempts: string) {
   });
 }
 
+function calls(dir: string): string[] {
+  return readFileSync(join(dir, "calls.log"), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0);
+}
+
 describe("supabase-start-retry", () => {
-  it("retries a registry failure and returns success once start succeeds", () => {
-    const dir = fakeSupabase([1, 1, 0]);
+  it("exits immediately on a migration failure and does not stop or retry", () => {
+    const dir = fakeSupabase([{ code: 1, stderr: "migration failed\n" }]);
     const res = run(dir, "4");
-    expect(res.status).toBe(0);
-    const calls = spawnSync("bash", ["-c", `grep -c '^start$' "${join(dir, "calls.log")}"`], {
-      encoding: "utf8"
-    }).stdout.trim();
-    expect(calls).toBe("3");
+    expect(res.status).toBe(1);
+    expect(res.stdout + res.stderr).toContain("migration failed");
+    expect(calls(dir)).toEqual(["start -x realtime"]);
   });
 
-  it("stops after the attempt budget when start keeps failing", () => {
-    const dir = fakeSupabase([1, 1, 1]);
+  it("retries a registry pull failure only after stop --no-backup", () => {
+    const dir = fakeSupabase([
+      { code: 1, stderr: "failed to pull docker image: ghcr.io/supabase/realtime: toomanyrequests\n" },
+      { code: 0, stdout: "Started supabase local development setup.\n" }
+    ]);
+    const res = run(dir, "4");
+    expect(res.status).toBe(0);
+    expect(calls(dir)).toEqual(["start -x realtime", "stop --no-backup", "start -x realtime"]);
+  });
+
+  it("treats a json-stream pull failure as a registry retry", () => {
+    const dir = fakeSupabase([
+      { code: 1, stderr: "failed to display json stream: toomanyrequests\n" },
+      { code: 0, stdout: "ok\n" }
+    ]);
+    const res = run(dir, "4");
+    expect(res.status).toBe(0);
+    expect(calls(dir)).toEqual(["start -x realtime", "stop --no-backup", "start -x realtime"]);
+  });
+
+  it("stops after the attempt budget when the registry keeps refusing", () => {
+    const dir = fakeSupabase([
+      { code: 1, stderr: "toomanyrequests\n" },
+      { code: 1, stderr: "toomanyrequests\n" },
+      { code: 1, stderr: "toomanyrequests\n" }
+    ]);
     const res = run(dir, "2");
     expect(res.status).toBe(1);
-    const calls = spawnSync("bash", ["-c", `grep -c '^start$' "${join(dir, "calls.log")}"`], {
-      encoding: "utf8"
-    }).stdout.trim();
-    expect(calls).toBe("2");
+    expect(calls(dir)).toEqual(["start -x realtime", "stop --no-backup", "start -x realtime"]);
   });
 });
