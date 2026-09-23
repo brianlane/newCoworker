@@ -187,3 +187,24 @@ export const NO_INVENTED_CONTACT_LINE =
  */
 export const NO_INVENTED_FIGURE_LINE =
   "NEVER invent a money figure. If you present an amount as coming from our records, from a partner or referral service, from an offer, or from the person's own file, that exact amount must be written in your instructions, your briefing, or a script you were given for this call, or the person on this call must have just told it to you. If you were not given the figures, say so plainly and offer to follow up with them: say that you do not have the numbers in front of you, never a guess, never a range you assembled yourself, and never a placeholder that sounds close. This covers only amounts you attribute to a source. Talking about prices in general, quoting rates you were given, and repeating back a number the person just said are all still your job.";
+
+/**
+ * How to talk about a real action other than hanging up. Replaces "explain
+ * before calling a tool", which the model followed by naming the tool on
+ * HQ call f76c30c0. The example is a calendar lookup on purpose: that is
+ * the action a caller should hear about. Hanging up is not in this list.
+ */
+export const PLAIN_ACTION_LINE =
+  "Before you look something up, check the calendar, book, send a text or an email, or connect them to a person, say one short plain sentence a person would say, for example 'Let me pull up openings on Thursday, one moment.' Never read a raw result aloud. Do speak a time or day the result tells you to confirm, including startLocal, existingStartLocal, and sendAtLocal.";
+
+/**
+ * The goodbye turn has one tool call, `end_call`, and no speech after it.
+ *
+ * HQ inbound, 2026-09-22, call f76c30c0. The owner asked the coworker to
+ * hang up. It said "Calling the end call tool now" and then "Final check
+ * complete, hanging up now." Staff and customer share this paragraph, so
+ * a customer is not spared. Other tools still get PLAIN_ACTION_LINE. This
+ * line is only about finishing the call. The bridge acks with `stay_silent`.
+ */
+export const END_CALL_STAY_SILENT =
+  "When a live person is on the line, that goodbye is required, and it is the last thing you say. On that turn the only tool call is `end_call`: do not call any other tool along with it. After the goodbye, call `end_call` and do not speak again. Do not say the word tool, do not say you are hanging up, ending the call, or running a check, and do not say anything the result says. Never call `end_call` before that goodbye has been spoken. If the other party is a recording, this goodbye rule does not apply: follow the recording rule, do not add a goodbye, and do not call `end_call` unless that rule tells you to.";

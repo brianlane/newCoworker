@@ -14,6 +14,7 @@ import {
   TRANSFER_PARTNER_MENU_LINE
 } from "../vps/voice-bridge/src/intake";
 import {
+  END_CALL_STAY_SILENT,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   RECORDED_SYSTEM_LINE
@@ -59,8 +60,13 @@ describe("intakeSystemInstruction", () => {
     expect(instr).not.toContain("Collect these details");
     // ...but capture_lead stays available for notes / a better time.
     expect(instr).toContain("capture_lead");
-    // Never hang up on a successfully transferred call.
+    // Never hang up on a successfully transferred call. The goodbye is the
+    // last spoken line (HQ call f76c30c0 named the hangup tool out loud).
     expect(instr).toContain("never after a successful transfer");
+    expect(instr).toContain(END_CALL_STAY_SILENT);
+    expect(instr).toContain("When a person answered");
+    expect(instr).toContain("this goodbye rule does not apply");
+    expect(instr).toContain("the only tool call is `end_call`");
     // Barge-in guard + no callback-number non-sequitur (first live test).
     expect(instr).toContain("only ONCE");
     expect(instr).toContain("NEVER ask for their phone number");
@@ -801,8 +807,8 @@ describe("intakeSystemInstruction: inbound carrier-voicemail handling", () => {
     expect(inbound).toContain("no details from your briefing");
   });
 
-  it("ends the call via the end_call tool when available, by silence otherwise", () => {
-    expect(inbound).toContain("call the `end_call` tool to hang up");
+  it("ends the call via end_call when available, by silence otherwise", () => {
+    expect(inbound).toContain("then call `end_call` and say nothing more");
     const withoutEndCall = intakeSystemInstruction(
       "Amy Laidlaw",
       undefined,

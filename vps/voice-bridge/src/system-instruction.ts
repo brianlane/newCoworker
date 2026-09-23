@@ -14,9 +14,11 @@
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
+  END_CALL_STAY_SILENT,
   NO_INVENTED_CONTACT_LINE,
   NO_INVENTED_FIGURE_LINE,
   ONE_VOICE_LINE,
+  PLAIN_ACTION_LINE,
   RECORDED_SYSTEM_LINE
 } from "./call-integrity-lines.js";
 import {
@@ -172,11 +174,11 @@ export function systemInstructionForBusiness(
       groundedActionsLine,
       ONE_VOICE_LINE,
       RECORDED_SYSTEM_LINE,
-      NO_INVENTED_CONTACT_LINE,
-      NO_INVENTED_FIGURE_LINE,
-      noEmDashLine,
-      usSpellingLine,
-      currentDateTimeLine(new Date(), businessTimezone)
+  NO_INVENTED_CONTACT_LINE,
+  NO_INVENTED_FIGURE_LINE,
+  noEmDashLine,
+  usSpellingLine,
+  currentDateTimeLine(new Date(), businessTimezone)
     );
   } else {
     base.push(
@@ -254,7 +256,7 @@ export function systemInstructionForBusiness(
         "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller, they are staff, not a customer.",
         "When they hand you work one of their automations covers (most often a new lead: a name, a number, what the person wants, who should handle it), use `run_aiflow`: call it with no arguments to see the automations, then run the matching one and pass along everything they told you. It is the only way to start one from a call, so never promise to run something without it.",
         "If you say you'll pass a message along, call `notify_team` before the call ends, it is your only channel to the rest of the team.",
-        "Always explain what you're about to do in plain language before calling a tool, and never read a tool's raw response aloud."
+        PLAIN_ACTION_LINE
       ].join(" ")
     );
   } else if (hasVoiceTools) {
@@ -283,7 +285,7 @@ export function systemInstructionForBusiness(
         "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers, defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
         "- `customer_set_display_name` once the caller gives you their name. It only fills a BLANK name: if this contact already has a DIFFERENT one saved, the write is refused. Do not read `ok: true` as \"the name was changed\", read the result's `message`, which tells you whether it was stored, was already on file, or was refused, and never claim you updated or corrected a name unless the message says it was stored.",
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly, only for facts that should reach the next conversation unchanged.",
-        "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday, one moment.'). Never read a tool's raw response aloud.",
+        PLAIN_ACTION_LINE,
         // Two honesty rules born from a real call where the assistant promised
         // "let me reach out to Amy or one of the agents ... I'll get back to
         // you" with no tool call behind it, then texted the caller about a
@@ -297,7 +299,9 @@ export function systemInstructionForBusiness(
 
   if (hasEndCall) {
     base.push(
-      "When the conversation is clearly finished, the caller says goodbye, confirms they have everything they need, or there is nothing left to help with, give a brief, warm goodbye out loud and THEN call the `end_call` tool to hang up. Only end the call when it is genuinely over: never hang up mid-conversation, while the caller may still have a question, or before you've said goodbye."
+      "When the conversation is clearly finished, the caller says goodbye, confirms they have everything they need, or there is nothing left to help with, speak one brief warm goodbye out loud in that same turn, such as 'Talk to you later.' The caller has to hear that sentence. " +
+        END_CALL_STAY_SILENT +
+        " Only end the call when it is genuinely over: never hang up mid-conversation, while the caller may still have a question, or before that goodbye has been spoken."
     );
   }
 

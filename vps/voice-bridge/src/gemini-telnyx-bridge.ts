@@ -1689,7 +1689,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     declarations.push({
       name: "end_call",
       description:
-        "Hang up the live phone call. Call this ONLY when the conversation is genuinely over (the caller said goodbye, confirmed they're all set, or there's nothing left to do) and AFTER you have spoken a brief goodbye. Never call it mid-conversation.",
+        "Hang up the live phone call. This is the only tool call in the goodbye turn: do not pair it with any other tool. Call this ONLY when the conversation is genuinely over and AFTER you have spoken a brief goodbye. Never describe this call out loud. Never call it mid-conversation.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -2681,7 +2681,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
         // Acknowledge immediately so the model's turn completes cleanly, then
         // hang up after a short grace so the spoken goodbye finishes playing.
-        sendToolResponse(call.id, name, { ok: true, detail: "ending call" });
+        // The detail is a machine status, not a line to paraphrase. "ending
+        // call" came back out loud as "Final check complete, hanging up now"
+        // on HQ call f76c30c0 (2026-09-22), after the goodbye was already said.
+        sendToolResponse(call.id, name, { ok: true, detail: "stay_silent" });
         // Confirm a delivered voicemail NOW, not behind the playout grace
         // below: the script has been read, so the line is about to go quiet,
         // and a mailbox hangs up on silence. Its own hangup would otherwise

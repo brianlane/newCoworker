@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  END_CALL_STAY_SILENT,
+  PLAIN_ACTION_LINE
+} from "../vps/voice-bridge/src/call-integrity-lines";
+import {
   systemInstructionForBusiness,
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
@@ -219,10 +223,45 @@ describe("customer persona", () => {
     expect(build({ hasEndCall: true })).toContain("`end_call`");
     expect(build({ hasEndCall: false })).not.toContain("`end_call`");
   });
+
+  // HQ call f76c30c0, 2026-09-22. Staff path said "Calling the end call tool
+  // now" because the prompt told it to explain before calling a tool and
+  // gave no example. The customer path had an example and the same rule.
+  it("explains a lookup in plain language, and limits the goodbye turn to end_call", () => {
+    const text = build({ hasVoiceTools: true, hasEndCall: true });
+    expect(text).toContain(PLAIN_ACTION_LINE);
+    expect(text).toContain("startLocal");
+    expect(text).toContain("sendAtLocal");
+    expect(text).toContain(END_CALL_STAY_SILENT);
+    expect(text).toContain("the only tool call is `end_call`");
+    expect(text).toContain("this goodbye rule does not apply");
+    expect(text).not.toContain("before calling a tool");
+    expect(text).not.toContain("call the `end_call` tool");
+    const noHangup = build({ hasVoiceTools: true, hasEndCall: false });
+    expect(noHangup).toContain(PLAIN_ACTION_LINE);
+    expect(noHangup).not.toContain("the only tool call is `end_call`");
+  });
 });
 
 describe("staff persona (owner/team caller)", () => {
   const owner: CallerIdentity = { kind: "owner", name: "Brian" };
+
+  // HQ call f76c30c0, 2026-09-22. The owner was recognized ("Hey Brian")
+  // and the staff prompt told the model to explain before calling a tool,
+  // with no example. It said "Calling the end call tool now."
+  it("speaks a plain action and stays silent after the goodbye", () => {
+    const text = build({
+      callerIdentity: owner,
+      hasVoiceTools: true,
+      hasEndCall: true
+    });
+    expect(text).toContain(PLAIN_ACTION_LINE);
+    expect(text).toContain("Let me pull up openings on Thursday");
+    expect(text).toContain(END_CALL_STAY_SILENT);
+    expect(text).toContain("the only tool call is `end_call`");
+    expect(text).not.toContain("before calling a tool");
+    expect(text).not.toContain("call the `end_call` tool");
+  });
 
   it("drops the customer intake script and greets the caller as a colleague", () => {
     const text = build({ callerIdentity: owner, hasVoiceTools: true });
