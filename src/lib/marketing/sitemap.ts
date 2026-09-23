@@ -11,8 +11,8 @@
  * second URL that also 200s.
  */
 
-import { esAlternates, SEO_PILLAR_PATHS, sitemapPathsFor } from "@/lib/i18n/es-routes";
-import { siteUrl } from "./site-url";
+import { SEO_PILLAR_PATHS } from "@/lib/i18n/es-routes";
+import { sitemapEntriesFor } from "./sitemap-entries";
 
 /** Give the blog query this long, then ship the static sitemap without it. */
 const SITEMAP_BLOG_TIMEOUT_MS = 2500;
@@ -93,25 +93,29 @@ const STATIC_ROUTES: SitemapRoute[] = [
   { path: "/privacy", priority: 0.2, enOnly: true }
 ];
 
-function entriesFor(route: SitemapRoute): SitemapEntry[] {
-  const base = { changeFrequency: "weekly" as const };
-  const paths = sitemapPathsFor(route.path, route.enOnly);
-  if (paths.length === 1) {
-    return [{ ...base, url: siteUrl(paths[0]), priority: route.priority }];
+function languagesRecord(languages: object): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [language, href] of Object.entries(languages)) {
+    if (typeof href === "string" && href.length > 0) out[language] = href;
   }
-  const { languages } = esAlternates(route.path);
-  const alternates = {
-    languages: { en: siteUrl(languages.en), es: siteUrl(languages.es) }
-  };
-  return [
-    { ...base, url: siteUrl(languages.en), priority: route.priority, alternates },
-    {
-      ...base,
-      url: siteUrl(languages.es),
-      priority: Math.round((route.priority - 0.1) * 10) / 10,
-      alternates
+  return out;
+}
+
+function entriesFor(route: SitemapRoute): SitemapEntry[] {
+  // #1889: loc and hreflang go through siteUrl via sitemapEntriesFor, never
+  // SITE_URL concatenated onto "/".
+  return sitemapEntriesFor(route).map((entry) => {
+    const languages = entry.alternates?.languages;
+    const mapped: SitemapEntry = {
+      url: entry.url,
+      changeFrequency: (entry.changeFrequency ?? "weekly") as SitemapChangeFrequency,
+      priority: entry.priority ?? route.priority
+    };
+    if (languages) {
+      mapped.alternates = { languages: languagesRecord(languages) };
     }
-  ];
+    return mapped;
+  });
 }
 
 function staticRouteEntries(): SitemapEntry[] {
