@@ -23,6 +23,13 @@ import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messagin
 import { SMS_MONTHLY_CAP_MX } from "../../../../supabase/functions/_shared/sms_monthly_limits";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
+import { JsonLd } from "@/components/marketing/JsonLd";
+import { faqPageJsonLd } from "@/lib/marketing/faq-json-ld";
+import {
+  PRICING_FAQ_KEYS,
+  pricingFaqEntries,
+  type PricingFaqVars
+} from "@/lib/marketing/pricing-faqs";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.pricing");
@@ -73,65 +80,63 @@ export default async function PricingPage() {
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
 
-  const faq: FaqItem[] = [
-    { question: t("faqBillingQ"), answer: <>{t("faqBillingA")}</> },
-    {
-      question: t("faqTermEndQ"),
-      answer: <>{t("faqTermEndA", { starterRenewal, standardRenewal })}</>
-    },
-    {
-      question: t("faqCarrierFeeQ", { carrierFee }),
-      answer: <>{t("faqCarrierFeeA", { carrierFee })}</>
-    },
-    { question: t("faqGuaranteeQ"), answer: <>{t("faqGuaranteeA")}</> },
-    {
-      question: t("faqCanadaFeeQ", { canadaFeeMonthly }),
-      answer: <>{t("faqCanadaFeeA", { canadaFeeMonthly })}</>
-    },
-    {
-      question: t("faqMexicoFeeQ", { mexicoFeeMonthly }),
-      answer: <>{t("faqMexicoFeeA", { mexicoFeeMonthly, mexicoSmsCap: SMS_MONTHLY_CAP_MX })}</>
-    },
-    { question: t("faqKeepNumberQ"), answer: <>{t("faqKeepNumberA")}</> },
-    {
-      question: t("faqExtraNumbersQ"),
-      answer: (
-        <>
-          {t.rich("faqExtraNumbersA", {
-            contactEmail,
-            email: () => (
-              <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
-                {contactEmail}
-              </a>
-            )
-          })}
-        </>
-      )
-    },
-    { question: t("faqUsageCapsQ"), answer: <>{t("faqUsageCapsA")}</> },
-    {
-      question: t("faqPrioritySupportQ"),
-      answer: <>{t("faqPrioritySupportA", { prioritySupportPrice })}</>
-    },
-    {
-      question: t("faqWhiteGloveQ"),
-      answer: (
-        <>
-          {t.rich("faqWhiteGloveA", {
-            b: (chunks) => <b>{chunks}</b>,
-            link: (chunks) => (
-              <Link href={localizedMarketingHref("/contact?topic=white-glove", locale)} className="text-signal-teal hover:underline">
-                {chunks}
-              </Link>
-            )
-          })}
-        </>
-      )
+  const faqValues: PricingFaqVars = {
+    carrierFee,
+    canadaFeeMonthly,
+    mexicoFeeMonthly,
+    prioritySupportPrice,
+    starterRenewal,
+    standardRenewal,
+    mexicoSmsCap: SMS_MONTHLY_CAP_MX,
+    contactEmail
+  };
+  const entries = pricingFaqEntries((key, interpolations) => t(key, interpolations), faqValues);
+  const faq: FaqItem[] = entries.map((item, index) => {
+    const answerKey = PRICING_FAQ_KEYS[index].a;
+    if (answerKey === "faqExtraNumbersA") {
+      return {
+        question: item.question,
+        answer: (
+          <>
+            {t.rich("faqExtraNumbersA", {
+              contactEmail,
+              email: () => (
+                <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
+                  {contactEmail}
+                </a>
+              )
+            })}
+          </>
+        )
+      };
     }
-  ];
+    if (answerKey === "faqWhiteGloveA") {
+      return {
+        question: item.question,
+        answer: (
+          <>
+            {t.rich("faqWhiteGloveA", {
+              b: (chunks) => <b>{chunks}</b>,
+              link: (chunks) => (
+                <Link
+                  href={localizedMarketingHref("/contact?topic=white-glove", locale)}
+                  className="text-signal-teal hover:underline"
+                >
+                  {chunks}
+                </Link>
+              )
+            })}
+          </>
+        )
+      };
+    }
+    return { question: item.question, answer: <>{item.plainAnswer}</> };
+  });
+  const faqJsonLd = faqPageJsonLd(entries);
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
+      <JsonLd data={faqJsonLd} />
       <MarketingNav />
 
       <PageHero
