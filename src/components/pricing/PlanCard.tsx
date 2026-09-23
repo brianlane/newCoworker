@@ -1,9 +1,11 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { track } from "@vercel/analytics";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import type { AppLocale } from "@/i18n/routing";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import type { TierCard } from "@/lib/plans/tier-display";
 
@@ -73,6 +75,7 @@ export function PlanCard({
   compareCount: number;
 }) {
   const t = useTranslations("marketing.planCards");
+  const locale = useLocale() as AppLocale;
   const isEnterprise = tier.id === "enterprise";
 
   return (
@@ -145,7 +148,10 @@ export function PlanCard({
       {/* 8: CTA, above the bullets so bullet counts cannot move it */}
       <div className="mt-4 self-end">
         <a
-          href={isEnterprise ? "/contact" : `/onboard/questionnaire?tier=${tier.id}&period=${period}`}
+          href={localizedMarketingHref(
+            isEnterprise ? "/contact" : `/onboard/questionnaire?tier=${tier.id}&period=${period}`,
+            locale
+          )}
           onClick={() => track("plan_selected", { tier: tier.id, period })}
           className={[
             // `border` on all three, transparent on the filled ones: only
@@ -190,7 +196,7 @@ export function PlanCard({
 
       {/* 11: the way into the complete list */}
       <a
-        href={compareHref}
+        href={localizedMarketingHref(compareHref, locale)}
         className="mt-5 self-end text-xs font-semibold text-signal-teal transition-colors hover:text-claw-green"
       >
         {t("compareLink", { count: compareCount })}
