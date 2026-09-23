@@ -15,7 +15,7 @@ import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { PRIORITY_SUPPORT_MONTHLY_CENTS } from "@/lib/plans/priority-support";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
-import { SITE_URL } from "./site-url";
+import { SITE_URL, siteUrl } from "./site-url";
 
 export { SITE_URL } from "./site-url";
 
@@ -119,6 +119,7 @@ const DIFFERENTIATOR_LINES = [
 const PAGES: { path: string; label: string; note: string }[] = [
   { path: "/", label: "Home", note: "product overview" },
   { path: "/features", label: "Features", note: "voice, messaging, intelligence, automation, and platform capabilities" },
+  { path: "/ai-answering-service", label: "AI answering service", note: "buyer-intent landing: after-hours coverage, missed-call follow-up, and booking on a real calendar" },
   {
     path: "/ai-receptionist",
     label: "24/7 AI coworker",
@@ -146,12 +147,12 @@ const PAGES: { path: string; label: string; note: string }[] = [
 ];
 
 function pageLines(): string[] {
-  return PAGES.map((p) => `- [${p.label}](${SITE_URL}${p.path}): ${p.note}`);
+  return PAGES.map((p) => `- [${p.label}](${siteUrl(p.path)}): ${p.note}`);
 }
 
 function industryLines(industries: LlmsIndustry[]): string[] {
   return industries.map(
-    (i) => `- [${i.name}](${SITE_URL}/industries/${i.slug}): ${i.teaser}`
+    (i) => `- [${i.name}](${siteUrl(`/industries/${i.slug}`)}): ${i.teaser}`
   );
 }
 

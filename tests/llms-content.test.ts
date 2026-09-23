@@ -34,6 +34,8 @@ describe("llms.txt", () => {
     for (const path of ["/pricing", "/features", "/faq", "/blog", "/onboard"]) {
       expect(txt).toContain(`(${SITE_URL}${path})`);
     }
+    expect(txt).toContain(`[Home](${SITE_URL}):`);
+    expect(txt).not.toContain(`[Home](${SITE_URL}/):`);
     expect(txt).not.toMatch(/\]\(\/[a-z]/);
   });
 
