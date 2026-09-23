@@ -64,21 +64,24 @@ const STEP_KEYS = ["step1", "step2", "step3"] as const;
 const PRIVACY_KEYS = ["dedicated", "isolated", "memory", "security"] as const;
 
 export async function generateMetadata(): Promise<Metadata> {
-  const t = await getTranslations("marketing.home");
+  const tHome = await getTranslations("marketing.home");
   const alternates = await esAlternatesForRequest("/");
   return {
-    description: t("metaDescription"),
+    // Document title is buyer-search copy (AI receptionist / 24/7 answering).
+    // Visible H1 stays the AI employee slogan via heroTitle + heroHighlight.
+    title: tHome("metaTitle"),
+    description: tHome("metaDescription"),
     alternates,
     openGraph: {
-      title: t("ogTitle"),
-      description: t("ogDescription"),
+      title: tHome("ogTitle"),
+      description: tHome("ogDescription"),
       url: alternates.canonical,
       images: ["/opengraph-image"]
     },
     twitter: {
       card: "summary_large_image",
-      title: t("ogTitle"),
-      description: t("ogDescription"),
+      title: tHome("ogTitle"),
+      description: tHome("ogDescription"),
       images: ["/twitter-image"]
     }
   };

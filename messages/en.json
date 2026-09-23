@@ -106,7 +106,8 @@
       "forAi": "For AI assistants"
     },
     "home": {
-      "metaDescription": "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, book appointments, and keep operations moving.",
+      "metaTitle": "AI Receptionist for 24/7 Answering",
+      "metaDescription": "24/7 AI receptionist and answering service that answers calls, texts, and emails, books appointments, and keeps operations moving.",
       "heroTitle": "Your AI employee that",
       "heroHighlight": "never sleeps",
       "heroSubtitle": "New Coworker answers calls, texts, and emails around the clock: booking appointments, following up with leads, and remembering every customer. Built for all businesses.",
@@ -130,8 +131,8 @@
       "ctaTitle": "Ready to hire your New Coworker?",
       "ctaSubtitle": "New coworker starts learning from day one.",
       "ctaLabel": "Choose your plan",
-      "ogTitle": "Your AI employee that never sleeps",
-      "ogDescription": "Answer calls, texts, and emails around the clock with New Coworker."
+      "ogTitle": "AI Receptionist for 24/7 Answering",
+      "ogDescription": "24/7 AI receptionist: answer calls, texts, and emails, and book appointments around the clock."
     },
     "pricing": {
       "metaTitle": "Pricing",
