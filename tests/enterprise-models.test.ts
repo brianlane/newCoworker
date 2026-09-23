@@ -48,6 +48,17 @@ describe("enterpriseModelsSchema", () => {
       enterpriseModelsSchema.safeParse({ geminiLiveModel: "gemini-3.5-live-translate-preview" })
         .success
     ).toBe(false);
+    expect(
+      enterpriseModelsSchema.safeParse({ geminiLiveModel: "gemini-3.5-transcribe-live" }).success
+    ).toBe(false);
+    expect(
+      enterpriseModelsSchema.safeParse({
+        geminiLiveModel: "gemini-3.8-live-extended-thinking"
+      }).success
+    ).toBe(false);
+    expect(
+      enterpriseModelsSchema.safeParse({ geminiLiveModel: "gemini-3.8-live" }).success
+    ).toBe(true);
   });
 
   it("exposes the prebuilt voice allow-list for the picker UI", () => {

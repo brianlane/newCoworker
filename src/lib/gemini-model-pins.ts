@@ -190,7 +190,7 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     id: "gemini-live",
     workers: ["Voice bridge (Gemini Live native audio)"],
     envVar: "GEMINI_LIVE_MODEL",
-    defaultModel: "gemini-3.1-flash-live-preview", // pragma: allowlist secret
+    defaultModel: "gemini-3.8-live", // pragma: allowlist secret
     family: "live",
     acceptsFamilies: ["live"],
     needsOpenAiCompat: false,
@@ -198,11 +198,11 @@ export const GEMINI_MODEL_PINS: readonly GeminiModelPin[] = [
     sources: [
       {
         file: "vps/voice-bridge/src/index.ts",
-        mustContain: 'process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview"' // pragma: allowlist secret
+        mustContain: 'process.env.GEMINI_LIVE_MODEL ?? "gemini-3.8-live"' // pragma: allowlist secret
       },
       {
         file: "vps/scripts/deploy-client.sh",
-        mustContain: "GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}" // pragma: allowlist secret
+        mustContain: "GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.8-live}" // pragma: allowlist secret
       }
     ]
   },

@@ -251,11 +251,20 @@ describe("recommendForPin", () => {
   };
 
   it("waits on a live-family successor and skips a text Flash on the live pin", () => {
-    const rec = recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash-native-audio", ctx);
+    const rec = recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.9-live", ctx);
     expect(rec.verdict).toBe("wait");
+    expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-live", ctx).verdict).toBe(
+      "already"
+    );
+    // Same numeric version as the GA pin: extended-thinking is a different
+    // product (async tools), not a newer voice. Issue #1879.
+    expect(
+      recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-live-extended-thinking", ctx)
+        .verdict
+    ).toBe("skip");
     expect(
       recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.1-flash-native-audio", ctx).verdict
-    ).toBe("wait");
+    ).toBe("skip");
     expect(recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.8-flash", ctx).verdict).toBe(
       "skip"
     );
@@ -265,6 +274,18 @@ describe("recommendForPin", () => {
     expect(
       recommendForPin(pinByIdRequired("gemini-live"), "gemini-3.0-flash-native-audio", ctx).verdict
     ).toBe("skip");
+  });
+
+  it("waits when a GA live id replaces a same-version preview pin", () => {
+    const preview = fakePin({
+      id: "live-preview",
+      defaultModel: "gemini-2.5-flash-live-preview",
+      family: "live",
+      acceptsFamilies: ["live"],
+      autoAdopt: false
+    });
+    expect(recommendForPin(preview, "gemini-2.5-flash-live", ctx).verdict).toBe("wait");
+    expect(recommendForPin(preview, "gemini-2.0-flash-live", ctx).verdict).toBe("skip");
   });
 
   it("does not wait on a same-version live id when the pin is already GA", () => {
@@ -410,11 +431,13 @@ describe("findNewerCandidates / evaluateListedModels", () => {
     ).toEqual(["gemini-3.9-flash"]);
   });
 
-  it("keeps a GA live successor for human review, including same-version preview to GA", () => {
+  it("keeps a newer GA live id for human review and drops the pinned id", () => {
     expect(
       findNewerCandidates(
         [
-          "gemini-3.8-flash-native-audio",
+          "gemini-3.9-live",
+          "gemini-3.8-live",
+          "gemini-3.8-live-extended-thinking",
           "gemini-3.1-flash-native-audio",
           "gemini-3.5-live-translate-preview",
           "gemini-2.5-flash-native-audio-preview-09-2025"
@@ -422,7 +445,7 @@ describe("findNewerCandidates / evaluateListedModels", () => {
         GEMINI_MODEL_PINS,
         PRICES
       )
-    ).toEqual(["gemini-3.1-flash-native-audio", "gemini-3.8-flash-native-audio"]);
+    ).toEqual(["gemini-3.9-live"]);
   });
 
   it("drops transcribe and translate Live SKUs as unstable, not wait candidates", () => {
@@ -433,12 +456,12 @@ describe("findNewerCandidates / evaluateListedModels", () => {
         [
           "gemini-3.5-transcribe-live",
           "gemini-3.5-live-translate",
-          "gemini-3.8-flash-native-audio"
+          "gemini-3.9-live"
         ],
         GEMINI_MODEL_PINS,
         PRICES
       )
-    ).toEqual(["gemini-3.8-flash-native-audio"]);
+    ).toEqual(["gemini-3.9-live"]);
   });
 
   it("surfaces a cheap-pin successor that is newer than webchat but older than the mid pins", () => {
@@ -587,14 +610,14 @@ describe("formatEvalReport", () => {
 
   it("renders wait for a live-family successor, not for a text Flash", () => {
     const report = evaluateListedModels({
-      listedIds: ["gemini-3.8-flash-native-audio"],
+      listedIds: ["gemini-3.9-live"],
       pins: GEMINI_MODEL_PINS,
-      probes: { "gemini-3.8-flash-native-audio": okProbe("gemini-3.8-flash-native-audio") },
+      probes: { "gemini-3.9-live": okProbe("gemini-3.9-live") },
       prices: PRICES,
       generatedAt: "t"
     });
     const text = formatEvalReport(report);
-    expect(text).toContain("## gemini-3.8-flash-native-audio");
+    expect(text).toContain("## gemini-3.9-live");
     expect(text).toContain("### wait");
     expect(text).not.toContain("### adopt");
     expect(reportHasWait(report)).toBe(true);

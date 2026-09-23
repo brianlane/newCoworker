@@ -161,6 +161,11 @@ describe("enterprise_models no longer owns the voice", () => {
     expect(parsed.success === false && parsed.error.issues[0]?.message).toContain(
       "no tools or instructions"
     );
+    expect(
+      enterpriseModelsSchema.safeParse({
+        geminiLiveModel: "gemini-3.8-live-extended-thinking"
+      }).success
+    ).toBe(false);
   });
 
   it("still refuses a non-live model in the voice slot", () => {

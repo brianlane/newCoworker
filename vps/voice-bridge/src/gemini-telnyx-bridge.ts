@@ -43,7 +43,7 @@ import {
 import { createBeepDetector } from "./beep-detector.js";
 import { looksMachineGenerated } from "./machine-phrases.js";
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
-import { buildVoiceToolDeclarations } from "./tool-declarations.js";
+import { buildVoiceToolDeclarations, withBlockingToolBehavior } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
 import { voicemailPlausiblyDelivered } from "./voicemail-timing.js";
 import { inputAudioTranscriptionConfig } from "./asr-language-hints.js";
@@ -1718,9 +1718,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       parameters: { type: Type.OBJECT, properties: {}, required: [] }
     });
   }
+  // Stamp BLOCKING on the way out. Gemini 3.8 Live otherwise keeps
+  // talking while transfer, booking, or hangup is still in flight.
   const toolsForSession =
     declarations.length > 0
-      ? [{ functionDeclarations: declarations as never }]
+      ? [{ functionDeclarations: withBlockingToolBehavior(declarations) as never }]
       : undefined;
 
   // `inputAudioTranscription` / `outputAudioTranscription` keys are documented

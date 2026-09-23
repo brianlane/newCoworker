@@ -27,9 +27,9 @@ import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
 // The voice `voice_task` text model (gemini-3.8-flash) is metered into the
 // SAME shared AI budget as chat/SMS. This TEXT-rate table is used by the SMS/
 // AiFlow cap read + the AiFlow worker's own cost calc; the audio-native Live
-// model (gemini-3.1-flash-live-preview) is priced modality-aware in
-// ai-spend-meter.ts (the only place that sees its audio token split), so its
-// entry here is a defensive text-rate floor only.
+// models (gemini-3.8-live, and the previous preview id) are priced
+// modality-aware in ai-spend-meter.ts (the only place that sees the audio
+// token split), so their entries here are a defensive text-rate floor only.
 export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> = {
   "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
@@ -41,6 +41,10 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
   "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 },
+  // Voice-bridge default since the 3.8 Live cutover. Text floor only;
+  // audio rates live on the platform meter. Same published text rates
+  // as the 3.1 preview ($0.75/$4.50), not the older $0.50/$3.00 floor.
+  "gemini-3.8-live": { in: 0.75, out: 4.5 },
   // Gemini 3.5 Flash (GA May 2026), the voice `voice_task` Rowboat model.
   // Missing here until Jul 2026: an AIFLOW_EXTRACT_MODEL/SMS pin to 3.5-flash
   // would have priced at the old $0.5/$3.0 default, a 3x undercount.

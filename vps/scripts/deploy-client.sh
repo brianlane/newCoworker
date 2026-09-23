@@ -27,7 +27,7 @@
 #   STREAM_URL_SIGNING_SECRET, HMAC secret for media stream URLs (Edge + bridge)
 #   BRIDGE_MEDIA_WSS_ORIGIN, public wss:// origin for the VPS voice bridge
 #   GOOGLE_API_KEY, Gemini API key; blank disables Live on the bridge
-#   GEMINI_LIVE_MODEL, optional; default gemini-3.1-flash-live-preview
+#   GEMINI_LIVE_MODEL, optional; default gemini-3.8-live
 #   VOICE_NAME, optional; prebuilt Gemini Live voice (enterprise
 #                               voice picker). Blank keeps the model default.
 #   GEMINI_ROWBOAT_MODEL, optional; Gemini model used by Rowboat's voice_task
@@ -2344,7 +2344,7 @@ SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY:-}
 BUSINESS_ID=${BUSINESS_ID:-}
 BRIDGE_MEDIA_WSS_ORIGIN=${effective_bridge_media_wss_origin:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
+GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.8-live}
 # Optional prebuilt Gemini Live voice (enterprise voice picker, set from
 # businesses.enterprise_models by the orchestrator). Blank = model default.
 VOICE_NAME=${VOICE_NAME:-}

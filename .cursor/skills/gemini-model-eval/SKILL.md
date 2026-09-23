@@ -79,6 +79,13 @@ because webchat is still on 2.5-flash-lite, then scored wait against
 Live. Those ids are older than the mid/flagship pins and cost more than
 webchat, so they are not candidates.
 
+The phone pin is `gemini-3.8-live` (issue #1879, adopted by hand). A
+`generateContent` 400 on that id means the Live API is WebSocket-only.
+`gemini-3.8-live-extended-thinking` is the same version and the wrong
+product: it needs async tools, and the bridge stamps `behavior: BLOCKING`
+on every declaration. Do not put extended-thinking, transcribe, or
+translate on `GEMINI_LIVE_MODEL`. The next newer live id still waits.
+
 ## Cursor Automation prompt
 
 Paste this as the automation body (weekly is enough):

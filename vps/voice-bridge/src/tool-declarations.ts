@@ -26,6 +26,27 @@ export type VoiceToolDeclaration = {
   parameters: unknown;
 };
 
+/**
+ * Gemini 3.8 Live defaults tool calls to NON_BLOCKING: the model keeps
+ * talking while the tool is still running. The phone bridge is written
+ * the other way (transfer, book, hang up, then tell the model the result).
+ * BLOCKING is the backwards-compatible mode Google documents for that.
+ * The string matches @google/genai Behavior.BLOCKING. This file stays
+ * free of that import so root tests can load the declarations.
+ *
+ * Do not put `behavior` on the objects `buildVoiceToolDeclarations`
+ * returns. The text generateContent stand-in (tests/e2e/voice-tools)
+ * sends those objects to a text model, and Live-only fields do not
+ * belong on that request.
+ */
+export const LIVE_FUNCTION_BEHAVIOR = "BLOCKING" as const;
+
+export function withBlockingToolBehavior<T extends object>(
+  declarations: readonly T[]
+): Array<T & { behavior: typeof LIVE_FUNCTION_BEHAVIOR }> {
+  return declarations.map((decl) => ({ ...decl, behavior: LIVE_FUNCTION_BEHAVIOR }));
+}
+
 export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
   return [
     {

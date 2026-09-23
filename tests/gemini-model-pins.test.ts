@@ -122,7 +122,8 @@ describe("GEMINI_MODEL_PINS", () => {
     const live = pinById("gemini-live");
     expect(live).toBeDefined();
     expect(live?.autoAdopt).toBe(false);
-    expect(live?.defaultModel).not.toBe("gemini-live-audio");
+    expect(live?.defaultModel).toBe("gemini-3.8-live");
+    expect(parseGeminiModelId(live!.defaultModel)?.unstable).toBe(false);
     expect(parseGeminiModelId(live!.defaultModel)?.family).toBe("live");
     for (const source of live!.sources) {
       expect(source.mustContain).toContain(live!.defaultModel);

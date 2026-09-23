@@ -103,7 +103,7 @@ export function EnterpriseModelsEditor({
             className={inputCls}
             value={geminiLiveModel}
             onChange={(e) => setGeminiLiveModel(e.target.value)}
-            placeholder="gemini-3.1-flash-live-preview"
+            placeholder="gemini-3.8-live"
             maxLength={64}
           />
         </label>
