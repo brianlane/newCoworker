@@ -17,6 +17,7 @@ import {
 } from "@/components/marketing/sections";
 import type { AppLocale } from "@/i18n/routing";
 import { esAlternatesForRequest } from "@/lib/i18n/es-metadata";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 import { formatPricePerMonthLocalized } from "@/lib/i18n/format";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { SITE_URL } from "@/lib/marketing/site-url";
@@ -151,7 +152,10 @@ export default async function LandingPage() {
           </CtaLink>
         </div>
         <p className="mt-5 text-sm text-parchment/50">
-          <Link href="/contact" className="text-signal-teal hover:underline">
+          <Link
+            href={localizedMarketingHref("/contact", locale)}
+            className="text-signal-teal hover:underline"
+          >
             {t("contactCta")}
           </Link>
         </p>

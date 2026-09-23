@@ -15,7 +15,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import en from "../messages/en.json";
 import es from "../messages/es.json";
-import { sitemapPathsFor, SPANISH_MARKETING_PREFIXES } from "@/lib/i18n/es-routes";
+import {
+  localizedMarketingHref,
+  sitemapPathsFor,
+  SPANISH_MARKETING_PREFIXES
+} from "@/lib/i18n/es-routes";
 import { buildLlmsTxt } from "@/lib/marketing/llms-content";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
@@ -180,6 +184,23 @@ describe("/ai-receptionist page source", () => {
     expect(src).toContain('href="/contact"');
     expect(src).toMatch(/<CtaBanner/);
     expect(src).toMatch(/ctaHref="\/onboard"/);
+  });
+
+  it("keeps the hero contact href locale-aware so /es/ai-receptionist stays on /es/contact", () => {
+    const src = readFileSync(PAGE, "utf8");
+    const heroStart = src.indexOf("<PageHero");
+    const heroEnd = src.indexOf("</PageHero>");
+    expect(heroStart).toBeGreaterThan(-1);
+    expect(heroEnd).toBeGreaterThan(heroStart);
+    const hero = src.slice(heroStart, heroEnd);
+    expect(hero).not.toMatch(/<Link\b[^>]*\bhref=["']\/contact["']/);
+    const viaCtaLink = /<CtaLink[\s\S]*?href=["']\/contact["']/.test(hero);
+    const viaHelper = /localizedMarketingHref\(\s*["']\/contact["']/.test(hero);
+    expect(viaCtaLink || viaHelper, "hero contact must use CtaLink or localizedMarketingHref").toBe(
+      true
+    );
+    expect(localizedMarketingHref("/contact", "es")).toBe("/es/contact");
+    expect(localizedMarketingHref("/contact", "en")).toBe("/contact");
   });
 
   it("keeps receptionist/assistant literals out of the TSX, including H1/button JSX", () => {
