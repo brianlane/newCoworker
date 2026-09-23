@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { useLocale } from "next-intl";
 import type { ReactNode } from "react";
+import type { AppLocale } from "@/i18n/routing";
+import { localizedMarketingHref } from "@/lib/i18n/es-routes";
 
 /**
  * The one marketing CTA. Filled calls-to-action on the public pages render
@@ -10,6 +13,8 @@ import type { ReactNode } from "react";
  *
  * Deliberately not a client component: marketing pages are static, and the
  * few client callers (the nav) can import it from their own boundary.
+ * Locale is read through next-intl's isomorphic `useLocale` so a Spanish
+ * /es page prefixes mirrored marketing hrefs without a client boundary.
  */
 
 const VARIANT_CLASSES = {
@@ -50,6 +55,8 @@ export function CtaLink({
   className,
   onClick
 }: CtaLinkProps) {
+  const locale = useLocale() as AppLocale;
+  const resolvedHref = localizedMarketingHref(href, locale);
   const classes = [
     "rounded-lg transition-colors",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claw-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-deep-ink",
@@ -62,13 +69,13 @@ export function CtaLink({
 
   if (asAnchor) {
     return (
-      <a href={href} className={classes} onClick={onClick}>
+      <a href={resolvedHref} className={classes} onClick={onClick}>
         {children}
       </a>
     );
   }
   return (
-    <Link href={href} className={classes} onClick={onClick}>
+    <Link href={resolvedHref} className={classes} onClick={onClick}>
       {children}
     </Link>
   );

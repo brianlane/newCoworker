@@ -124,6 +124,11 @@ const PAGES: { path: string; label: string; note: string }[] = [
     label: "24/7 AI coworker",
     note: "intent landing for buyers who want after-hours answering, missed-call follow-up, and booking on a real calendar"
   },
+  {
+    path: "/after-hours-answering",
+    label: "Nights and weekends",
+    note: "how the AI coworker covers nights, weekends, and overflow, and books while the owner is closed"
+  },
   { path: "/pricing", label: "Pricing", note: "plans, feature comparison, and billing FAQ" },
   { path: "/integrations", label: "Integrations", note: "Meta lead ads, Zapier, Google, Microsoft, Zoom, Slack, Claude, ChatGPT, API, and webhooks" },
   { path: "/industries", label: "Industries", note: "how the coworker is used per industry" },

@@ -106,7 +106,8 @@
       "forAi": "Para asistentes de IA"
     },
     "home": {
-      "metaDescription": "New Coworker ofrece a tu negocio un empleado de IA 24/7 para contestar llamadas, mensajes, reservar citas y mantener las operaciones.",
+      "metaTitle": "Recepcionista de IA y contestación 24/7",
+      "metaDescription": "Recepcionista de IA 24/7 y servicio de contestación: responde llamadas, mensajes y correos, reserva citas y no duerme.",
       "heroTitle": "Tu empleado de IA que",
       "heroHighlight": "nunca duerme",
       "heroSubtitle": "New Coworker responde llamadas, textos y correos las 24 horas: reserva citas, da seguimiento a clientes potenciales y recuerda a cada cliente. Para todo tipo de negocios.",
@@ -130,8 +131,8 @@
       "ctaTitle": "¿Listo para contratar a tu New Coworker?",
       "ctaSubtitle": "Tu coworker empieza a aprender desde el primer día.",
       "ctaLabel": "Elige tu plan",
-      "ogTitle": "Tu empleado de IA que nunca duerme",
-      "ogDescription": "Contesta llamadas, textos y correos las 24 horas con New Coworker."
+      "ogTitle": "Recepcionista de IA y contestación 24/7",
+      "ogDescription": "Recepcionista de IA 24/7: responde llamadas, mensajes y correos, y reserva citas."
     },
     "pricing": {
       "metaTitle": "Precios",
@@ -910,6 +911,80 @@
         "sending": "Enviando...",
         "send": "Enviar mensaje"
       }
+    },
+    "afterHoursAnsweringPage": {
+      "metaTitle": "Atención fuera de horario con un coworker de IA",
+      "metaDescription": "Atención telefónica fuera de horario que reserva el trabajo, no un recado en el buzón. Un coworker de IA cubre noches, fines de semana y desbordes, y te escribe lo que pasó.",
+      "ogTitle": "Atención fuera de horario",
+      "ogDescription": "Atención telefónica fuera de horario y reservas con un coworker de IA que cubre noches y fines de semana.",
+      "jsonLdName": "Atención telefónica fuera de horario",
+      "jsonLdServiceType": "Atención fuera de horario y reserva de citas",
+      "jsonLdDescription": "Atención telefónica fuera de horario que reserva el trabajo, no un recado en el buzón. Un coworker de IA cubre noches, fines de semana y desbordes, y te escribe lo que pasó.",
+      "heroEyebrow": "Noches, fines de semana y desbordes",
+      "heroTitle": "Tu coworker de IA sigue trabajando",
+      "heroHighlight": "cuando cierras",
+      "heroSubtitle": "Las llamadas que llegan después de echar llave se contestan, se reservan y reciben seguimiento. Despiertas con trabajos en el calendario, no con un buzón lleno.",
+      "primaryCta": "Comenzar",
+      "secondaryCta": "Ver precios",
+      "contactCta": "Habla con una persona",
+      "problemEyebrow": "El hueco",
+      "problemTitle": "A la hora de cerrar, el teléfono sigue sonando",
+      "problemBody": "Los negocios que ganan el siguiente trabajo son los que contestan. Cuando cierras, eso suele ser nadie. Tu coworker de IA se queda en la línea: saluda a quien llama, reserva un horario real y te escribe un resumen para que la mañana empiece con trabajo, no con una lista de devoluciones.",
+      "handlesEyebrow": "Qué cubre",
+      "handlesTitle": "El trabajo que antes esperaba a la mañana",
+      "nights": {
+        "title": "Noches y fines de semana cubiertos",
+        "description": "El mismo coworker que contesta a las 2pm contesta a las 2am. Sin cargo extra por la noche, sin cola porque la oficina está vacía."
+      },
+      "booking": {
+        "title": "El calendario se lleva el trabajo",
+        "description": "Consulta la disponibilidad en vivo y reserva durante la llamada, para que quien llama no espere a que le devuelvas la llamada mañana."
+      },
+      "missed": {
+        "title": "Una transferencia perdida no es un trabajo perdido",
+        "description": "Si un pase en vivo no conecta, quien llamó recibe un texto de inmediato. El trabajo se queda contigo."
+      },
+      "overflow": {
+        "title": "Varias llamadas a la vez",
+        "description": "Una persona puede tomar una llamada. Tu coworker toma las que habrían ido al buzón."
+      },
+      "followup": {
+        "title": "Seguimiento que no espera a la mañana",
+        "description": "Escribe a quien llamó, envía el lead al compañero correcto y recuerda la conversación la próxima vez que contacten."
+      },
+      "private": {
+        "title": "En infraestructura que es tuya",
+        "description": "Cada negocio corre en su propio servidor dedicado. Las conversaciones de clientes quedan aisladas y no se usan para entrenar modelos."
+      },
+      "dayEyebrow": "Una noche en la línea",
+      "dayTitle": "Cómo se ve la cobertura de verdad",
+      "day1": "Cierras a las 6. A las 7:40 un vecino llama por un calentador muerto. El coworker reserva el martes por la mañana y te escribe la dirección, los síntomas y el horario.",
+      "day2": "Sábado 9:10. Tres llamadas en cuatro minutos. Todas contestadas. Dos reservadas. Una pidió hablar contigo y pasó en caliente a tu celular.",
+      "day3": "Un equipo está en un techo. Las llamadas de desborde no llegan al buzón. Cada persona obtiene una ventana para más adelante en la semana.",
+      "day4": "2:10 am. Una fuga urgente. El coworker toma los detalles, la marca urgente y escribe al teléfono de guardia con todo el contexto.",
+      "faqEyebrow": "Preguntas",
+      "faqTitle": "Lo que preguntan los dueños antes de desviar la línea",
+      "faq1": {
+        "q": "¿Qué pasa con una llamada cuando ya cerramos?",
+        "a": "Tu coworker contesta, habla con la voz de tu negocio y reserva, toma un recado con los siguientes pasos, o transfiere a quien esté de guardia. Tú recibes un resumen por texto."
+      },
+      "faq2": {
+        "q": "¿De verdad puede poner un trabajo en el calendario?",
+        "a": "Sí. Reserva, reprograma y cancela en el calendario que ya usas, o en una página pública de reservas si no tienes uno. La mañana debería empezar con nombres en la agenda."
+      },
+      "faq3": {
+        "q": "¿Y si quien llama quiere una persona?",
+        "a": "Transfiere la llamada en vivo a ti o a un compañero y escribe a quien sea dueño del lead. No hay personal humano de nuestro lado. Si quieres a alguien sentado en la línea toda la noche, eso es otro producto, y lo decimos en las páginas de comparación."
+      },
+      "faq4": {
+        "q": "¿En qué se diferencia de dejar las llamadas en el buzón?",
+        "a": "El buzón es una pila. Un coworker termina el trabajo: reserva el horario, escribe a quien llamó y lo recuerda la próxima vez. La mayoría de quienes caen en el buzón llaman al siguiente nombre de la lista."
+      },
+      "ctaTitle": "Contrata al coworker que sigue cuando te vas",
+      "ctaSubtitle": "En minutos, con garantía de devolución de 30 días.",
+      "ctaLabel": "Comenzar",
+      "contactPrompt": "¿Quieres que una persona te explique la configuración, la portabilidad o un plan Enterprise?",
+      "contactLink": "Contáctanos"
     },
     "industriesPage": {
       "metaTitle": "Industrias",
