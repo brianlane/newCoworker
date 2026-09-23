@@ -262,9 +262,11 @@ export function renderTemplate(
  * or newlines that would otherwise make an `equals` guard silently miss. A
  * missing / non-scalar var resolves to "" so an absent value never accidentally
  * matches a non-empty needle (and a `notEquals` against a present needle then
- * passes, since "" differs from it). When none of `equals`/`contains`/`notEquals`
- * is set (the schema normally forbids this), the guard is a presence check: pass
- * iff the var is non-empty.
+ * passes, since "" differs from it). `blank` is that empty result: missing,
+ * non-scalar, or whitespace-only. It does not match the sentinel "none".
+ * When none of `equals`/`contains`/`notEquals`/`blank` is set (the schema
+ * normally forbids this), the guard is a presence check: pass iff the var
+ * is non-empty.
  */
 export function evaluateStepCondition(
   cond: StepCondition,
@@ -279,6 +281,9 @@ export function evaluateStepCondition(
         : "";
   const ci = cond.caseInsensitive !== false;
   const hay = ci ? value.toLowerCase() : value;
+  if (cond.blank === true) {
+    return value.length === 0;
+  }
   if (cond.equals !== undefined) {
     return hay === (ci ? cond.equals.toLowerCase() : cond.equals);
   }

@@ -9,7 +9,8 @@
  *   - Install (or converge) "Clinic sheet patient call": webhook source
  *     clinic_google_sheet, 7 minute wait, then an AI call inside 09:00-18:00
  *     clinic time. Dane is Pacific. Every other named clinic is Eastern.
- *     The flow is enabled. It does not create a contact.
+ *     A blank clinic name, or the sentinel "none", notifies the owner and
+ *     does not dial. The flow is enabled. It does not create a contact.
  *   - Relabel bare `phone` memory facts whose number is the coworker DID
  *     or the forwarded business line, so personal / business / coworker
  *     stop collapsing into one predicate.

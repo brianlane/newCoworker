@@ -9,7 +9,8 @@
  * Facebook lead ads use a different source, so this flow does not run on them.
  *
  * Dane Functional Health is Pacific. Eros Vitality and New Jersey Weight
- * Loss Company are Eastern. The 10-Day column filter is Zapier's job, and
+ * Loss Company are Eastern. A blank clinic name, or the sentinel "none",
+ * notifies the owner and does not dial. The 10-Day column filter is Zapier's job, and
  * only on Dane's sheet. This flow does not create a contact: the account's
  * other automation emails every new contact a fitness-goal welcome, which
  * is the wrong note for a clinic patient.
@@ -160,10 +161,25 @@ export function buildBafitnessClinicSheetDefinition(): AiFlowDefinition {
           {
             id: "arm_missing",
             label: "Clinic name missing",
-            condition: { var: "clinic_name", equals: "none" },
+            // extract_text writes "" when the clinic is absent. equals "none"
+            // never matches that, so the Eastern call used to run anyway.
+            condition: { var: "clinic_name", blank: true },
             steps: [
               {
                 id: "s_missing",
+                type: "notify_owner",
+                message:
+                  "A clinic-sheet lead arrived without a clinic name, so no call was placed. Name: {{vars.lead_name}}. Phone: {{vars.lead_phone}}."
+              }
+            ]
+          },
+          {
+            id: "arm_none",
+            label: "Clinic name none",
+            condition: { var: "clinic_name", equals: "none" },
+            steps: [
+              {
+                id: "s_none",
                 type: "notify_owner",
                 message:
                   "A clinic-sheet lead arrived without a clinic name, so no call was placed. Name: {{vars.lead_name}}. Phone: {{vars.lead_phone}}."

@@ -4911,13 +4911,7 @@ function StepFields({
                 />
                 <select
                   className={`${inputClass} w-auto`}
-                  value={
-                    step.ownerDirectWhen.notEquals !== undefined
-                      ? "notEquals"
-                      : step.ownerDirectWhen.contains !== undefined
-                        ? "contains"
-                        : "equals"
-                  }
+                  value={whenOperatorOf(step.ownerDirectWhen)}
                   onChange={(ev) => {
                     const value =
                       step.ownerDirectWhen?.equals ??
@@ -4925,39 +4919,44 @@ function StepFields({
                       step.ownerDirectWhen?.contains ??
                       "";
                     const v = step.ownerDirectWhen?.var ?? "";
-                    const next =
-                      ev.target.value === "notEquals"
-                        ? { var: v, notEquals: value }
-                        : ev.target.value === "contains"
-                          ? { var: v, contains: value }
-                          : { var: v, equals: value };
-                    patchStep(index, { ownerDirectWhen: next });
+                    patchStep(index, {
+                      ownerDirectWhen: whenCondition(
+                        v,
+                        ev.target.value as WhenOperator,
+                        value,
+                        step.ownerDirectWhen?.caseInsensitive
+                      )
+                    });
                   }}
                 >
                   <option value="equals">equals</option>
                   <option value="notEquals">does not equal</option>
                   <option value="contains">contains</option>
+                  <option value="blank">is blank</option>
                 </select>
-                <input
-                  className={`${inputClass} flex-1`}
-                  value={
-                    step.ownerDirectWhen.equals ??
-                    step.ownerDirectWhen.notEquals ??
-                    step.ownerDirectWhen.contains ??
-                    ""
-                  }
-                  placeholder="over_1m"
-                  onChange={(ev) => {
-                    const w = step.ownerDirectWhen!;
-                    const next =
-                      w.notEquals !== undefined
-                        ? { var: w.var, notEquals: ev.target.value }
-                        : w.contains !== undefined
-                          ? { var: w.var, contains: ev.target.value }
-                          : { var: w.var, equals: ev.target.value };
-                    patchStep(index, { ownerDirectWhen: next });
-                  }}
-                />
+                {whenOperatorOf(step.ownerDirectWhen) !== "blank" && (
+                  <input
+                    className={`${inputClass} flex-1`}
+                    value={
+                      step.ownerDirectWhen.equals ??
+                      step.ownerDirectWhen.notEquals ??
+                      step.ownerDirectWhen.contains ??
+                      ""
+                    }
+                    placeholder="over_1m"
+                    onChange={(ev) => {
+                      const w = step.ownerDirectWhen!;
+                      patchStep(index, {
+                        ownerDirectWhen: whenCondition(
+                          w.var,
+                          whenOperatorOf(w),
+                          ev.target.value,
+                          w.caseInsensitive
+                        )
+                      });
+                    }}
+                  />
+                )}
               </div>
               <Field
                 label="Owner SMS when kept (sent instead of any team offer)"
@@ -6929,7 +6928,37 @@ function StepFields({
 }
 
 /** The comparison a `when` guard can use; mirrors whenSchema's mutually-exclusive keys. */
-type WhenOperator = "contains" | "equals" | "notEquals";
+type WhenOperator = "contains" | "equals" | "notEquals" | "blank";
+
+function whenOperatorOf(cond: {
+  equals?: string;
+  notEquals?: string;
+  contains?: string;
+  blank?: boolean;
+}): WhenOperator {
+  if (cond.blank === true) return "blank";
+  if (cond.equals !== undefined) return "equals";
+  if (cond.notEquals !== undefined) return "notEquals";
+  return "contains";
+}
+
+function whenCondition(
+  variable: string,
+  operator: WhenOperator,
+  value: string,
+  caseInsensitive: boolean | undefined
+): StepCondition {
+  const next: StepCondition =
+    operator === "blank"
+      ? { var: variable, blank: true }
+      : operator === "equals"
+        ? { var: variable, equals: value }
+        : operator === "notEquals"
+          ? { var: variable, notEquals: value }
+          : { var: variable, contains: value };
+  if (caseInsensitive !== undefined) next.caseInsensitive = caseInsensitive;
+  return next;
+}
 
 /**
  * Optional "Only run when" guard per step. Lets the author gate a step on a var
@@ -6952,8 +6981,7 @@ function WhenEditor({
   examples: AiFlowExampleCopy;
 }) {
   const when = step.when;
-  const operator: WhenOperator =
-    when?.equals !== undefined ? "equals" : when?.notEquals !== undefined ? "notEquals" : "contains";
+  const operator: WhenOperator = when ? whenOperatorOf(when) : "contains";
   const value = when?.equals ?? when?.notEquals ?? when?.contains ?? "";
 
   const setWhen = (next: StepCondition) => patchStep(index, { when: next });
@@ -6962,17 +6990,10 @@ function WhenEditor({
     const v = over.var ?? when?.var ?? earlierVars[0] ?? "";
     const op = over.operator ?? operator;
     const val = over.value ?? value;
-    const base: StepCondition =
-      op === "equals"
-        ? { var: v, equals: val }
-        : op === "notEquals"
-          ? { var: v, notEquals: val }
-          : { var: v, contains: val };
     // Carry through a non-default caseInsensitive flag set elsewhere (e.g. AI
     // authoring or a hand-edited definition); the editor doesn't surface it, so
     // rebuilding the object would otherwise silently reset it to the default.
-    if (when?.caseInsensitive !== undefined) base.caseInsensitive = when.caseInsensitive;
-    return base;
+    return whenCondition(v, op, val, when?.caseInsensitive);
   };
 
   return (
@@ -7012,13 +7033,16 @@ function WhenEditor({
             <option value="contains">contains</option>
             <option value="equals">equals</option>
             <option value="notEquals">does not equal</option>
+            <option value="blank">is blank</option>
           </select>
-          <input
-            className={`${inputClass} flex-1`}
-            value={value}
-            placeholder={examples.whenValuePlaceholder}
-            onChange={(ev) => setWhen(buildWhen({ value: ev.target.value }))}
-          />
+          {operator !== "blank" && (
+            <input
+              className={`${inputClass} flex-1`}
+              value={value}
+              placeholder={examples.whenValuePlaceholder}
+              onChange={(ev) => setWhen(buildWhen({ value: ev.target.value }))}
+            />
+          )}
         </div>
       )}
     </div>
@@ -7127,25 +7151,13 @@ function ArmConditionEditor({
   onChange: (c: StepCondition) => void;
   examples: AiFlowExampleCopy;
 }) {
-  const operator: WhenOperator =
-    condition.equals !== undefined
-      ? "equals"
-      : condition.notEquals !== undefined
-        ? "notEquals"
-        : "contains";
+  const operator: WhenOperator = whenOperatorOf(condition);
   const value = condition.equals ?? condition.notEquals ?? condition.contains ?? "";
   const build = (over: Partial<{ var: string; operator: WhenOperator; value: string }>) => {
     const v = over.var ?? condition.var;
     const op = over.operator ?? operator;
     const val = over.value ?? value;
-    const next: StepCondition =
-      op === "equals"
-        ? { var: v, equals: val }
-        : op === "notEquals"
-          ? { var: v, notEquals: val }
-          : { var: v, contains: val };
-    if (condition.caseInsensitive !== undefined) next.caseInsensitive = condition.caseInsensitive;
-    return next;
+    return whenCondition(v, op, val, condition.caseInsensitive);
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -7172,13 +7184,16 @@ function ArmConditionEditor({
         <option value="contains">contains</option>
         <option value="equals">equals</option>
         <option value="notEquals">does not equal</option>
+        <option value="blank">is blank</option>
       </select>
-      <input
-        className={`${inputClass} flex-1`}
-        value={value}
-        placeholder={examples.whenValuePlaceholder}
-        onChange={(ev) => onChange(build({ value: ev.target.value }))}
-      />
+      {operator !== "blank" && (
+        <input
+          className={`${inputClass} flex-1`}
+          value={value}
+          placeholder={examples.whenValuePlaceholder}
+          onChange={(ev) => onChange(build({ value: ev.target.value }))}
+        />
+      )}
     </div>
   );
 }

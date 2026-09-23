@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { BRANCH_ELSE_ARM, chooseBranchArm } from "../supabase/functions/_shared/ai_flows/branching";
+import { evaluateStepCondition } from "../supabase/functions/_shared/ai_flows/engine";
 import {
   BAFITNESS_BOOKING_URL,
   BAFITNESS_CALL_DELAY_MINUTES,
@@ -39,5 +41,66 @@ describe("BA Fitness clinic sheet call", () => {
     expect(JSON.stringify(def)).toContain("Quinn");
     expect(JSON.stringify(def)).not.toContain("\u2014");
     expect(JSON.stringify(def).toLowerCase()).not.toContain("enquiry");
+  });
+
+  function taken(clinic: string | undefined) {
+    const branch = def.steps[2];
+    if (branch.type !== "branch") throw new Error("expected a branch step");
+    const armId = chooseBranchArm(branch, {
+      vars: clinic === undefined ? {} : { clinic_name: clinic }
+    });
+    const steps =
+      armId === BRANCH_ELSE_ARM
+        ? branch.else
+        : (branch.branches.find((arm) => arm.id === armId)?.steps ?? []);
+    return { armId, steps };
+  }
+
+  it("notifies and does not dial when the clinic name is blank or none", () => {
+    // extract_text writes "" when the field is absent. equals "none" does not
+    // match that, so the old arm never won and the Eastern call ran instead.
+    for (const clinic of ["", "   ", "none", "None", undefined] as const) {
+      const { steps } = taken(clinic);
+      expect(steps[0], `clinic ${JSON.stringify(clinic)}`).toMatchObject({ type: "notify_owner" });
+      expect(steps.some((step) => step.type === "place_ai_call")).toBe(false);
+    }
+  });
+
+  it("dials Dane on Pacific time and another named clinic on Eastern time", () => {
+    const dane = taken("Dane Functional Health");
+    expect(dane.steps[0]).toMatchObject({
+      type: "place_ai_call",
+      callWindow: { timezone: "America/Los_Angeles" }
+    });
+    const eros = taken("Eros Vitality");
+    expect(eros.armId).toBe(BRANCH_ELSE_ARM);
+    expect(eros.steps[0]).toMatchObject({
+      type: "place_ai_call",
+      callWindow: { timezone: "America/New_York" }
+    });
+    const jersey = taken("New Jersey Weight Loss Company");
+    expect(jersey.armId).toBe(BRANCH_ELSE_ARM);
+    expect(jersey.steps[0]).toMatchObject({
+      type: "place_ai_call",
+      callWindow: { timezone: "America/New_York" }
+    });
+  });
+});
+
+describe("evaluateStepCondition blank", () => {
+  it("matches only a missing or whitespace-only value", () => {
+    expect(evaluateStepCondition({ var: "clinic_name", blank: true }, { vars: { clinic_name: "" } })).toBe(
+      true
+    );
+    expect(
+      evaluateStepCondition({ var: "clinic_name", blank: true }, { vars: { clinic_name: "   " } })
+    ).toBe(true);
+    expect(evaluateStepCondition({ var: "clinic_name", blank: true }, { vars: {} })).toBe(true);
+    expect(
+      evaluateStepCondition({ var: "clinic_name", blank: true }, { vars: { clinic_name: "none" } })
+    ).toBe(false);
+    expect(
+      evaluateStepCondition({ var: "clinic_name", blank: true }, { vars: { clinic_name: "Eros Vitality" } })
+    ).toBe(false);
   });
 });

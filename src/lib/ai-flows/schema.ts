@@ -713,9 +713,11 @@ const browseActionItemSchema = z
 /**
  * Optional per-step guard. The step only runs when the condition holds against a
  * var produced by an EARLIER step; otherwise the worker skips it. Exactly one of
- * `equals`/`contains`/`notEquals` must be set, so two gated steps give simple
+ * `equals`/`contains`/`notEquals`/`blank` must be set, so two gated steps give simple
  * branching (e.g. a buyer vs. seller `send_sms`, or `equals none` vs.
- * `notEquals none` for an exhaustive either/or). MUST be part of the schema so
+ * `notEquals none` for an exhaustive either/or). `blank` is the missing-value
+ * matcher: extract_text writes "" when a field is absent, `equals` cannot be
+ * empty, and "" does not equal the sentinel "none". MUST be part of the schema so
  * the dashboard editor's save round-trips it instead of zod stripping it.
  */
 const whenSchema = z
@@ -724,11 +726,13 @@ const whenSchema = z
     equals: z.string().min(1).max(200).optional(),
     contains: z.string().min(1).max(200).optional(),
     notEquals: z.string().min(1).max(200).optional(),
+    blank: z.literal(true).optional(),
     caseInsensitive: z.boolean().optional()
   })
   .refine(
-    (w) => [w.equals, w.contains, w.notEquals].filter((v) => v !== undefined).length === 1,
-    { message: "set exactly one of equals/contains/notEquals" }
+    (w) =>
+      [w.equals, w.contains, w.notEquals, w.blank].filter((v) => v !== undefined).length === 1,
+    { message: "set exactly one of equals/contains/notEquals/blank" }
   );
 
 /**
