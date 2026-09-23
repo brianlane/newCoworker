@@ -121,6 +121,11 @@ const PAGES: { path: string; label: string; note: string }[] = [
   { path: "/features", label: "Features", note: "voice, messaging, intelligence, automation, and platform capabilities" },
   { path: "/ai-answering-service", label: "AI answering service", note: "buyer-intent landing: after-hours coverage, missed-call follow-up, and booking on a real calendar" },
   {
+    path: "/ai-receptionist",
+    label: "24/7 AI coworker",
+    note: "intent landing for buyers who want after-hours answering, missed-call follow-up, and booking on a real calendar"
+  },
+  {
     path: "/after-hours-answering",
     label: "Nights and weekends",
     note: "how the AI coworker covers nights, weekends, and overflow, and books while the owner is closed"
