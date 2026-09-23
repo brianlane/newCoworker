@@ -78,6 +78,8 @@ function guardedFiles(): string[] {
     // applier beside it is guarded too so its prose cannot drift back.
     "scripts/oneshot/hq-inbox-reply-drafter.ts",
     "scripts/oneshot/hq-inbox-triage-definition.ts",
+    // BA Fitness clinic-sheet call: the spoken script is the step itself.
+    "scripts/oneshot/bafitness-clinic-sheet-definition.ts",
     "scripts/oneshot/setup-hq-inbox-triage-flow.ts",
     ...readdirSync(emailTemplatesDir)
       .filter((f) => f.endsWith(".ts"))

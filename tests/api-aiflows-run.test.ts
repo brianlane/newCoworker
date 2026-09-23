@@ -92,6 +92,24 @@ describe("api/aiflows/[id]/run route", () => {
     );
   });
 
+  it("refuses a blank run when the first step reads message text", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue({
+      id: FLOW,
+      enabled: true,
+      definition: {
+        version: 1,
+        trigger: { channel: "contact_created", conditions: [] },
+        steps: [{ id: "s1", type: "extract_text", fields: [{ name: "lead_name" }] }]
+      }
+    } as never);
+    const res = await POST(req({ businessId: BIZ, input: "   " }), ctx());
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toContain("Paste a sample message");
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
   it("400 for a voice flow (it runs on the real-time call path, not the worker)", async () => {
     vi.mocked(getAiFlow).mockResolvedValue({
       id: FLOW,

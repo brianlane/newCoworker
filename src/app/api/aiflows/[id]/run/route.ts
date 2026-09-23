@@ -15,6 +15,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { enqueueAiFlowRun, getAiFlow } from "@/lib/ai-flows/db";
+import { blankManualExtractRefusal } from "@/lib/ai-flows/manual-run-guard";
 import { manualTriggerScope } from "@/lib/ai-flows/trigger-eval";
 
 const idSchema = z.string().uuid();
@@ -50,6 +51,8 @@ export async function POST(request: Request, { params }: Ctx) {
         "Voice flows run when a call comes in; place a call from the trigger number to test."
       );
     }
+    const blank = blankManualExtractRefusal(flow.definition, body.input);
+    if (blank) return errorResponse("VALIDATION_ERROR", blank);
 
     const run = await enqueueAiFlowRun({
       businessId: body.businessId,

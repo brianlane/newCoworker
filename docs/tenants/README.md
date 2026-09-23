@@ -26,6 +26,7 @@ solved bugs. Dossiers do it for tenant knowledge.
 | Truly Insurance | [truly-insurance.md](truly-insurance.md) | Commercial insurance, Privyr email leads, renewals. **Wiped** 2026-09-08 (grace ended 2026-09-07). Out of the active roster, DID released, no further grace watch |
 | Scar Fairy | [scar-fairy.md](scar-fairy.md) | Standard signup; Jul 29 cutover from mispriced KVM 8 onto Truly's former KVM 2 (`1815606`), then swept onto `1867409` a day later by the term-renewal bug |
 | KIN Integrated Child Health | [kin-integrated-child-health.md](kin-integrated-child-health.md) | White-glove build via James referral, Zapier Meta leads, JaneApp link handoff, Alberta DID swap. Lead follow-up flow LIVE since 2026-08-26 (on by design) |
+| BA Fitness | [ba-fitness.md](ba-fitness.md) | James referral (Brett Allen). Meta ads via Zapier, plus a clinic-sheet call for three partner clinics. Stock ad follow-up is OFF on purpose |
 | New Coworker (HQ) | [new-coworker-hq.md](new-coworker-hq.md) | Our own dogfood tenant. Also the homepage demo line, the site webchat, and every smoke test's default target |
 | HomeLight referral flow | [homelight-flow.md](homelight-flow.md) | Not a tenant: a lead source inside Amy's account, complex enough to own a file |
 

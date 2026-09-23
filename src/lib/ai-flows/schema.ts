@@ -1390,8 +1390,14 @@ const nonBranchStepMembers = [
     type: z.literal("place_ai_call"),
     /** Var holding the callee's phone (same scope rule as wait_for_reply.phoneVar). */
     toVar: varName,
-    /** Greeting/script template the AI opens the call with. */
-    personaTemplate: z.string().min(1).max(2000),
+    /**
+     * Greeting/script template the AI opens the call with.
+     *
+     * 16000, not 2000: a real booking script (objections, privacy, voicemail)
+     * does not fit in a greeting. The voice session is the only place that
+     * script runs, so clipping it here meant the call could not follow it.
+     */
+    personaTemplate: z.string().min(1).max(16000),
     /**
      * What the AI already knows about the person (templated), injected into
      * the call prompt with a never-re-ask rule, so the AI doesn't ask for

@@ -248,7 +248,10 @@ export function mcpBridgeToolsPreamble(opts: { creationToolsDeclared: boolean })
   return `DIRECT BUSINESS TOOLS: you can read and change this business's real data (contacts, text conversations, call transcripts, recent activity, tasks, automations, roster, hours, knowledge, per-channel tool policies). Ground answers in tool reads; when a read tool can answer, call it instead of guessing.
 - Automations, one path each: list_aiflows finds one; get_flow inspects its steps; edit_aiflow applies a plain-English change to a live automation (validated; prefer it for ANY edit); undo_aiflow_edit puts the version before the last edit back, and list_flow_versions says what changed, when, and from which surface;${creationArm} set_flow_enabled turns one on or off; run_aiflow starts one for a contact.
 - Look the contact up with search_contacts BEFORE texting or calling anyone by name. Never invent or guess a phone number or email.
-- Knowledge edits: get_business_knowledge first, then update_business_knowledge targeting ONE section.
+- Knowledge edits: get_business_knowledge first, then update_business_knowledge targeting ONE section. Say you saved knowledge only when that tool returned ok on this turn.
+- edit_aiflow changes a live automation only when its result says applied is true. A staged result, or a confirmationToken, has written nothing: say it is waiting for a yes. Never say it was saved, updated, or applied.
+- set_flow_enabled turns one automation on or off. Never tell the owner you cannot turn an automation on or off. There is no tool that deletes an automation: point them at /dashboard/aiflows, and never say you deleted one.
+- Never tell the owner to call or text a number to test the coworker unless that number is the coworker phone in the CONNECTED INTEGRATIONS line. A number they called personal, or their own cell, is not the test number.
 - OUT OF SCOPE, never attempt with any tool; direct the owner to Settings or support instead: changing any phone number (business line, owner phone), plan or billing changes, buying/porting numbers, connecting or disconnecting integrations, bulk deletions, refunds.`;
 }
 

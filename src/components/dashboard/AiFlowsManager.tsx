@@ -1554,7 +1554,16 @@ export function AiFlowsManager({
     }
   };
 
-  const remove = async (id: string) => {
+  const remove = async (id: string, name: string) => {
+    // One click used to delete the automation with no confirm. An owner who
+    // did not mean to (BA Fitness, 2026-09-23) had no moment to stop it.
+    if (
+      !window.confirm(
+        `Delete "${name}"? It stops running and leaves this list. This cannot be undone from here.`
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     try {
       await fetch(`/api/aiflows/${id}`, {
@@ -3251,7 +3260,7 @@ export function AiFlowsManager({
                 >
                   <Copy className="h-4 w-4 hover:text-signal-teal" />
                 </button>
-                <button onClick={() => remove(row.id)} aria-label="Delete" disabled={busy}>
+                <button onClick={() => remove(row.id, row.name)} aria-label="Delete" disabled={busy}>
                   <Trash2 className="h-4 w-4 hover:text-spark-orange" />
                 </button>
               </div>

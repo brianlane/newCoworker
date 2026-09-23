@@ -69,6 +69,7 @@ import {
   toolStepsForAsk,
   UNKNOWN_ASK
 } from "@/lib/dashboard-chat/ask-classifier";
+import { groundUncommittedClaims, toolTurnFact, type ToolTurnFact } from "@/lib/dashboard-chat/claim-grounding";
 import { logger } from "@/lib/logger";
 import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
@@ -725,6 +726,12 @@ export async function runInlineChatTurn(
      */
     extraTools?: InlineExtraTools | null;
     /**
+     * The business DID. When set, a reply that tells the owner to test the
+     * coworker by calling a different number gets a correction. Omitted
+     * skips that check.
+     */
+    coworkerDid?: string | null;
+    /**
      * Model↔tool round-trip bound for this turn (default MAX_TOOL_STEPS).
      * Surfaces declaring bridged read tools pass a higher bound: "find the
      * contact → read their thread → answer" is three tool steps plus the
@@ -824,6 +831,7 @@ export async function runInlineChatTurn(
 
   const drafts: InlineChatDraft[] = [];
   const texts: string[] = [];
+  const toolFacts: ToolTurnFact[] = [];
   // Set the moment a SIDE_EFFECT_TOOLS call CONFIRMS (ok:true), from then
   // on this turn must never resolve ok:false (the worker fallback would
   // rerun the owner's message and duplicate the send/booking). Notes carry
@@ -994,22 +1002,21 @@ export async function runInlineChatTurn(
     contents.push(result.modelContent);
     const responses: Array<{ name: string; response: unknown }> = [];
     for (const call of result.functionCalls) {
-      responses.push({
-        name: call.name,
-        response: await executeToolCall(
-          args.businessId,
-          call,
-          drafts,
-          compileFlow,
-          lookupKnowledge,
-          runActionTool,
-          declaredActionTools,
-          sideEffects,
-          extraTools,
-          declaredExtraNames,
-          flowChanges
-        )
-      });
+      const response = await executeToolCall(
+        args.businessId,
+        call,
+        drafts,
+        compileFlow,
+        lookupKnowledge,
+        runActionTool,
+        declaredActionTools,
+        sideEffects,
+        extraTools,
+        declaredExtraNames,
+        flowChanges
+      );
+      toolFacts.push(toolTurnFact(call.name, response));
+      responses.push({ name: call.name, response });
     }
     contents.push(buildFunctionResponseContent(responses));
     // The post-tool step produces the user-facing wrap-up; interim text
@@ -1041,5 +1048,11 @@ export async function runInlineChatTurn(
     }
     fallback = parts.join("\n\n");
   }
+  fallback = groundUncommittedClaims(fallback, {
+    facts: toolFacts,
+    draftCount: drafts.length,
+    coworkerDid: args.coworkerDid ?? null,
+    canToggleFlows: declaredExtraNames.has("set_flow_enabled")
+  });
   return { ok: true, content: fallback, drafts };
 }
