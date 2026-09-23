@@ -28,7 +28,10 @@ export const SPANISH_MARKETING_PREFIXES = [
   "/security",
   "/login",
   "/onboard",
-  "/signup"
+  "/signup",
+  "/ai-receptionist",
+  "/ai-answering-service",
+  "/after-hours-answering"
 ];
 
 /**
