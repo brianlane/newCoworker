@@ -93,29 +93,10 @@ const STATIC_ROUTES: SitemapRoute[] = [
   { path: "/privacy", priority: 0.2, enOnly: true }
 ];
 
-function languagesRecord(languages: object): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [language, href] of Object.entries(languages)) {
-    if (typeof href === "string" && href.length > 0) out[language] = href;
-  }
-  return out;
-}
-
 function entriesFor(route: SitemapRoute): SitemapEntry[] {
   // #1889: loc and hreflang go through siteUrl via sitemapEntriesFor, never
   // SITE_URL concatenated onto "/".
-  return sitemapEntriesFor(route).map((entry) => {
-    const languages = entry.alternates?.languages;
-    const mapped: SitemapEntry = {
-      url: entry.url,
-      changeFrequency: (entry.changeFrequency ?? "weekly") as SitemapChangeFrequency,
-      priority: entry.priority ?? route.priority
-    };
-    if (languages) {
-      mapped.alternates = { languages: languagesRecord(languages) };
-    }
-    return mapped;
-  });
+  return sitemapEntriesFor(route) as SitemapEntry[];
 }
 
 function staticRouteEntries(): SitemapEntry[] {
