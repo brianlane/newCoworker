@@ -805,9 +805,9 @@
     },
     "about": {
       "metaTitle": "About",
-      "metaDescription": "New Coworker builds privacy-first digital employees for businesses: autonomous AI coworkers that run on dedicated infrastructure and act like a real extension of your team.",
+      "metaDescription": "{brand} is an AI coworker that contacts inbound leads for businesses, especially Meta leads, then answers, books, and follows up. Each business runs on its own dedicated server.",
       "ogTitle": "About | New Coworker",
-      "ogDescription": "Privacy-first digital employees for businesses, on infrastructure dedicated to each customer.",
+      "ogDescription": "An AI coworker that contacts inbound leads, especially Meta leads, then answers, books, and follows up on a dedicated server.",
       "heroEyebrow": "About",
       "heroTitle": "Every business deserves a",
       "heroHighlight": "great first hire",
@@ -815,6 +815,109 @@
       "storyP1": "The hardest part of running a business isn't the craft. It's the chaos around it. The call that comes in during a job. The lead that goes cold overnight. The follow-up that slips because the day ran long. Owners lose real revenue to work that is important but impossible to be present for.",
       "storyP2": "Big companies solve this with staff. We think every business deserves the same, without the payroll. New Coworker gives every business a digital employee that answers calls with human-level conversation, texts and emails customers, books appointments, qualifies leads, and follows up relentlessly, twenty-four hours a day.",
       "storyP3": "And because a coworker knows things a vendor never should, we made privacy the foundation: your business is strictly isolated from every other, business stays your business, and your coworker's memory works for you alone.",
+      "valuePropEyebrow": "In one sentence",
+      "valuePropHeading": "What {brand} is",
+      "valueProp": "{brand} is an AI coworker that contacts inbound leads for businesses, especially Meta leads, so the first reply goes out by phone, text, or email before the lead moves on.",
+      "doesEyebrow": "The product",
+      "doesTitle": "What {brand} does",
+      "doesSubtitle": "Concrete work, from the first reply through the follow-up.",
+      "contacts": {
+        "title": "Contacts inbound leads",
+        "description": "It reaches a new lead by text, phone, or email and files them as a contact. Facebook and Instagram lead ads connect on Standard and up, and those leads are contacted within seconds."
+      },
+      "answers": {
+        "title": "Answers calls and messages",
+        "description": "The same AI coworker picks up the phone and replies to SMS and email, including nights and weekends. On Standard and up it also answers WhatsApp, Messenger, and Instagram."
+      },
+      "books": {
+        "title": "Books the appointment",
+        "description": "It checks live availability and puts the appointment on the calendar the business already uses, or on a booking page {brand} hosts."
+      },
+      "follows": {
+        "title": "Follows up until a person takes over",
+        "description": "After the first reply, it keeps the conversation going and hands it to a person on the team when the caller asks or the situation needs one."
+      },
+      "remembers": {
+        "title": "Remembers each customer",
+        "description": "Calls, texts, and emails share one memory of that person, so the next message continues the conversation instead of starting over."
+      },
+      "dedicated": {
+        "title": "Runs on a dedicated server",
+        "description": "Each business's AI coworker runs on its own server, with its own credentials. Customer conversations are not used to train AI models."
+      },
+      "icpEyebrow": "Who it is for",
+      "icpTitle": "Businesses that want help contacting inbound leads",
+      "icpSubtitle": "The fit is the job, not one industry: help contacting people who already raised their hand, especially from Meta ads.",
+      "icp1": "A business running Meta lead ads on Facebook or Instagram that wants each new lead contacted before that person tries the next option.",
+      "icp2": "A team that misses calls while they are with a customer and still wants that caller contacted right away.",
+      "icp3": "An owner who wants one AI coworker to text, call, and email a new lead, then hand the conversation to a person when it needs one.",
+      "icp4": "A business that already has inbound demand and needs the first reply, the booking, and the follow-up handled.",
+      "factsEyebrow": "At a glance",
+      "factsTitle": "Key facts",
+      "facts": {
+        "product": {
+          "term": "Product",
+          "detail": "{brand}"
+        },
+        "category": {
+          "term": "Category",
+          "detail": "AI coworker platform"
+        },
+        "does": {
+          "term": "What it does",
+          "detail": "Contacts inbound leads, answers calls and messages, books appointments, and follows up"
+        },
+        "who": {
+          "term": "Who it is for",
+          "detail": "Businesses that want help contacting inbound leads, especially Meta leads"
+        },
+        "sources": {
+          "term": "Lead sources",
+          "detail": "Inbound calls, texts, email, and web forms on every plan. Meta lead ads on Facebook and Instagram on Standard and up."
+        },
+        "channels": {
+          "term": "Channels",
+          "detail": "Phone, SMS, and email on every plan. WhatsApp, Messenger, and Instagram on Standard and up."
+        },
+        "runs": {
+          "term": "Where it runs",
+          "detail": "A dedicated private server for each business"
+        },
+        "data": {
+          "term": "Customer data",
+          "detail": "Not used to train AI models. Isolated per business, and the business can export it."
+        },
+        "start": {
+          "term": "How to start",
+          "detail": "Self-serve signup. A dedicated phone number is included, and the coworker can be live in minutes."
+        }
+      },
+      "faqEyebrow": "Questions",
+      "faqTitle": "About {brand}",
+      "faq1": {
+        "q": "What is {brand}?",
+        "a": "{brand} is an AI coworker platform. It contacts inbound leads for a business, especially Meta leads, then answers, books, and follows up by phone, text, and email."
+      },
+      "faq2": {
+        "q": "Who is {brand} for?",
+        "a": "Businesses that want help contacting inbound leads. The clearest fit is a team whose Meta ads, calls, or form fills arrive faster than a person can reply. It is not limited to one industry."
+      },
+      "faq3": {
+        "q": "What happens when a Meta lead comes in?",
+        "a": "On Standard and up, Facebook and Instagram lead ads flow to the AI coworker. The lead is contacted within seconds, filed as a contact, and the team gets a summary. A teammate can claim the lead from the alert."
+      },
+      "faq4": {
+        "q": "Does the AI coworker replace the people on the team?",
+        "a": "No. It handles the first reply, the booking, and the follow-up. When a caller asks for a person, or the conversation needs one, it hands the conversation to the team with the context already captured."
+      },
+      "faq5": {
+        "q": "Is customer data used to train AI models?",
+        "a": "No. Customer conversations are not used to train AI models. The coworker's memory belongs to that business and is used only to serve its customers. Each business runs on its own dedicated server."
+      },
+      "faq6": {
+        "q": "How does a business get started?",
+        "a": "Signup is self-serve. The business name, what it sells, its hours, and its website are enough to begin. A dedicated phone number is included, so the existing line does not have to change to try it. Plans include a 30-day money-back guarantee."
+      },
       "principlesEyebrow": "What we believe",
       "principlesTitle": "The principles behind the product",
       "privacy": {

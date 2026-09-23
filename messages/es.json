@@ -805,9 +805,9 @@
     },
     "about": {
       "metaTitle": "Nosotros",
-      "metaDescription": "New Coworker construye empleados digitales con privacidad primero para negocios: coworkers de IA autónomos que corren en infraestructura dedicada y actúan como una extensión real de tu equipo.",
+      "metaDescription": "{brand} es un coworker de IA que contacta leads entrantes para negocios, sobre todo leads de Meta, y luego contesta, agenda y da seguimiento. Cada negocio corre en su propio servidor dedicado.",
       "ogTitle": "Nosotros | New Coworker",
-      "ogDescription": "Empleados digitales con privacidad primero para negocios, en infraestructura dedicada a cada cliente.",
+      "ogDescription": "Un coworker de IA que contacta leads entrantes, sobre todo leads de Meta, y luego contesta, agenda y da seguimiento en un servidor dedicado.",
       "heroEyebrow": "Nosotros",
       "heroTitle": "Todo negocio merece una",
       "heroHighlight": "gran primera contratación",
@@ -815,6 +815,109 @@
       "storyP1": "Lo más difícil de dirigir un negocio no es el oficio. Es el caos alrededor. La llamada que entra durante un trabajo. El lead que se enfría de la noche a la mañana. El seguimiento que se escapa porque el día se alargó. Los dueños pierden ingresos reales por trabajo importante en el que es imposible estar presente.",
       "storyP2": "Las grandes empresas lo resuelven con personal. Creemos que todo negocio merece lo mismo, sin la nómina. New Coworker le da a cada negocio un empleado digital que contesta llamadas con conversación natural, escribe textos y correos a clientes, reserva citas, califica leads y da seguimiento sin descanso, las veinticuatro horas.",
       "storyP3": "Y como un coworker sabe cosas que un proveedor nunca debería, hicimos de la privacidad el cimiento: tu negocio está estrictamente aislado de todos los demás, tu información sigue siendo tuya, y la memoria de tu coworker trabaja solo para ti.",
+      "valuePropEyebrow": "En una frase",
+      "valuePropHeading": "Qué es {brand}",
+      "valueProp": "{brand} es un coworker de IA que contacta leads entrantes para negocios, sobre todo leads de Meta, para que la primera respuesta salga por teléfono, texto o correo antes de que el lead se vaya con otro.",
+      "doesEyebrow": "El producto",
+      "doesTitle": "Qué hace {brand}",
+      "doesSubtitle": "Trabajo concreto, desde la primera respuesta hasta el seguimiento.",
+      "contacts": {
+        "title": "Contacta leads entrantes",
+        "description": "Llega a un lead nuevo por texto, teléfono o correo y lo archiva como contacto. Los anuncios de leads de Facebook e Instagram se conectan en Standard en adelante, y esos leads se contactan en segundos."
+      },
+      "answers": {
+        "title": "Contesta llamadas y mensajes",
+        "description": "El mismo coworker de IA atiende el teléfono y responde SMS y correo, también de noche y en fines de semana. En Standard en adelante también contesta WhatsApp, Messenger e Instagram."
+      },
+      "books": {
+        "title": "Agenda la cita",
+        "description": "Revisa la disponibilidad en vivo y deja la cita en el calendario que el negocio ya usa, o en una página de reservas que {brand} hospeda."
+      },
+      "follows": {
+        "title": "Da seguimiento hasta que una persona toma el control",
+        "description": "Después de la primera respuesta, mantiene la conversación y la pasa a una persona del equipo cuando quien llama lo pide o la situación lo necesita."
+      },
+      "remembers": {
+        "title": "Recuerda a cada cliente",
+        "description": "Llamadas, textos y correos comparten una memoria de esa persona, así el siguiente mensaje continúa la conversación en lugar de empezar de cero."
+      },
+      "dedicated": {
+        "title": "Corre en un servidor dedicado",
+        "description": "El coworker de IA de cada negocio corre en su propio servidor, con sus propias credenciales. Las conversaciones de clientes no se usan para entrenar modelos de IA."
+      },
+      "icpEyebrow": "Para quién es",
+      "icpTitle": "Negocios que quieren ayuda para contactar leads entrantes",
+      "icpSubtitle": "El encaje es el trabajo, no una sola industria: ayuda para contactar a quien ya levantó la mano, sobre todo desde anuncios de Meta.",
+      "icp1": "Un negocio que corre anuncios de leads de Meta en Facebook o Instagram y quiere que cada lead nuevo sea contactado antes de que esa persona pruebe la siguiente opción.",
+      "icp2": "Un equipo que pierde llamadas mientras está con un cliente y aun así quiere que esa persona sea contactada de inmediato.",
+      "icp3": "Un dueño que quiere un coworker de IA que escriba, llame y envíe correo a un lead nuevo, y luego pase la conversación a una persona cuando haga falta.",
+      "icp4": "Un negocio que ya tiene demanda entrante y necesita la primera respuesta, la reserva y el seguimiento resueltos.",
+      "factsEyebrow": "De un vistazo",
+      "factsTitle": "Datos clave",
+      "facts": {
+        "product": {
+          "term": "Producto",
+          "detail": "{brand}"
+        },
+        "category": {
+          "term": "Categoría",
+          "detail": "Plataforma de coworker de IA"
+        },
+        "does": {
+          "term": "Qué hace",
+          "detail": "Contacta leads entrantes, contesta llamadas y mensajes, agenda citas y da seguimiento"
+        },
+        "who": {
+          "term": "Para quién es",
+          "detail": "Negocios que quieren ayuda para contactar leads entrantes, sobre todo leads de Meta"
+        },
+        "sources": {
+          "term": "Origen de los leads",
+          "detail": "Llamadas entrantes, textos, correo y formularios web en cada plan. Anuncios de leads de Meta en Facebook e Instagram en Standard en adelante."
+        },
+        "channels": {
+          "term": "Canales",
+          "detail": "Teléfono, SMS y correo en cada plan. WhatsApp, Messenger e Instagram en Standard en adelante."
+        },
+        "runs": {
+          "term": "Dónde corre",
+          "detail": "Un servidor privado dedicado para cada negocio"
+        },
+        "data": {
+          "term": "Datos de clientes",
+          "detail": "No se usan para entrenar modelos de IA. Están aislados por negocio y el negocio puede exportarlos."
+        },
+        "start": {
+          "term": "Cómo empezar",
+          "detail": "Registro por cuenta propia. Incluye un número de teléfono dedicado, y el coworker puede estar en vivo en minutos."
+        }
+      },
+      "faqEyebrow": "Preguntas",
+      "faqTitle": "Sobre {brand}",
+      "faq1": {
+        "q": "¿Qué es {brand}?",
+        "a": "{brand} es una plataforma de coworker de IA. Contacta leads entrantes para un negocio, sobre todo leads de Meta, y luego contesta, agenda y da seguimiento por teléfono, texto y correo."
+      },
+      "faq2": {
+        "q": "¿Para quién es {brand}?",
+        "a": "Para negocios que quieren ayuda para contactar leads entrantes. El encaje más claro es un equipo cuyos anuncios de Meta, llamadas o formularios llegan más rápido de lo que una persona puede responder. No está limitado a una sola industria."
+      },
+      "faq3": {
+        "q": "¿Qué pasa cuando entra un lead de Meta?",
+        "a": "En Standard en adelante, los anuncios de leads de Facebook e Instagram llegan al coworker de IA. El lead se contacta en segundos, queda archivado como contacto y el equipo recibe un resumen. Un compañero puede reclamar el lead desde la alerta."
+      },
+      "faq4": {
+        "q": "¿El coworker de IA reemplaza a las personas del equipo?",
+        "a": "No. Se encarga de la primera respuesta, la reserva y el seguimiento. Cuando quien llama pide una persona, o la conversación la necesita, pasa la conversación al equipo con el contexto ya capturado."
+      },
+      "faq5": {
+        "q": "¿Los datos de clientes se usan para entrenar modelos de IA?",
+        "a": "No. Las conversaciones de clientes no se usan para entrenar modelos de IA. La memoria del coworker pertenece a ese negocio y solo se usa para atender a sus clientes. Cada negocio corre en su propio servidor dedicado."
+      },
+      "faq6": {
+        "q": "¿Cómo empieza un negocio?",
+        "a": "El registro es por cuenta propia. Bastan el nombre del negocio, qué vende, su horario y su sitio web. Se incluye un número de teléfono dedicado, así que no hace falta cambiar la línea actual para probarlo. Los planes incluyen una garantía de devolución de 30 días."
+      },
       "principlesEyebrow": "En qué creemos",
       "principlesTitle": "Los principios detrás del producto",
       "privacy": {
