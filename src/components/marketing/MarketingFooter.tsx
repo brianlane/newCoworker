@@ -15,6 +15,11 @@ const PRODUCT_LINKS: FooterLink[] = [
   { href: "/integrations", labelKey: "integrations" },
   { href: "/industries", labelKey: "industries" },
   { href: "/compare", labelKey: "compare" },
+  // SEO pillar landings. Visible labels stay coworker-voiced; the slugs
+  // match how buyers search. Pages may land in a parallel PR.
+  { href: "/ai-receptionist", labelKey: "callAnswering" },
+  { href: "/ai-answering-service", labelKey: "allDayAnswering" },
+  { href: "/after-hours-answering", labelKey: "afterHoursAnswering" },
   { href: "/docs/api", labelKey: "developers" },
   { href: "/docs/push-notifications", labelKey: "mobileApp" },
   { href: "/onboard", labelKey: "getStarted" },
