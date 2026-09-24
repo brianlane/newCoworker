@@ -347,7 +347,7 @@ describe("loadFleetCostBreakdown", () => {
     expect(data.breakdown.usagePackCents).toBe(0);
     vi.mocked(loadMoneyGaps).mockRejectedValueOnce("gaps string");
     const again = await loadFleetCostBreakdown(NOW);
-    expect(again.breakdown.software.vercelCents).toBe(0);
+    expect(again.breakdown.software.vercelCents).toBe(2_166);
   });
 
   it("defaults `now` to the current time", async () => {

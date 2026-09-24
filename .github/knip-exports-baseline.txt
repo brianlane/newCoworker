@@ -90,15 +90,11 @@ src/lib/admin/margin.ts :: RevenueSource
 src/lib/admin/margin.ts :: stripeMonthlyFeeCents
 src/lib/admin/money-gap-load.ts :: MoneyGapDb
 src/lib/admin/money-gap-load.ts :: MoneyGapQuery
-src/lib/admin/money-gap-load.ts :: countFleetEmailsThisMonth
-src/lib/admin/money-gap-load.ts :: loadSoftwareCosts
 src/lib/admin/money-gap-load.ts :: loadUsagePackGrants
 src/lib/admin/money-gap-load.ts :: priceLoadedGrants
 src/lib/admin/money-gap-load.ts :: utcMonthWindow
 src/lib/admin/mrr-exposure.ts :: stampRefundExposure
 src/lib/admin/revenue.ts :: wasSubscriptionActiveAt
-src/lib/admin/software-costs.ts :: RESEND_FREE_MONTHLY_EMAILS
-src/lib/admin/software-costs.ts :: RESEND_OVERAGE_CENTS_PER_THOUSAND
 src/lib/admin/usage-pack-revenue.ts :: isRecurringMembershipGrant
 src/lib/admin/usage-pack-revenue.ts :: priceOneTimeGrant
 src/lib/admin/user-engagement.ts :: AUTH_USERS_PAGE_CAP

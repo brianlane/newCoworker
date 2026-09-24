@@ -329,11 +329,8 @@ export default async function AdminCostsPage({
           })}
         </div>
         <p className="text-xs text-parchment/30 mt-3">
-          Vercel is this month&apos;s bill from the Vercel API. Resend is emails sent this month
-          (free through 3,000, then $0.90 per 1,000)
-          {breakdown.software.resendCents === 0 ? ", none past the free quota" : ""}. Zoom is
-          PLATFORM_COST_ZOOM_MONTHLY_CENTS. Cursor is PLATFORM_COST_CURSOR_MONTHLY_CENTS plus
-          on-demand spend when CURSOR_ADMIN_API_KEY is set.
+          Vercel ($21.66), Resend ($20), Zoom ($16.99), and Cursor ($200) are the monthly card
+          receipts. Each repeats every month.
           {breakdown.usagePackCents > 0
             ? ` Revenue here includes ${money(breakdown.usagePackCents)} of one-time usage packs this month.`
             : ""}
