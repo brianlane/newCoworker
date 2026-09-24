@@ -3584,6 +3584,7 @@ function StepFields({
           continueMeaning="The page just is not ready yet, so a later step can try again."
         />
         <ForceWhenTextEditor
+          key={step.id}
           value={step.forceWhenText}
           onChange={(forceWhenText) => patchStep(index, { forceWhenText })}
         />
