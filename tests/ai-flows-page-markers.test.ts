@@ -195,6 +195,25 @@ describe("applyForceWhenText", () => {
     expect(result.applied).toEqual([]);
   });
 
+  it("returns the values unchanged when no rules are configured", () => {
+    const result = applyForceWhenText(["Call me to claim referral"], undefined, { claim_state: "kept" });
+    expect(result.values.claim_state).toBe("kept");
+    expect(result.applied).toEqual([]);
+  });
+
+  it("lets a later matching rule overwrite an earlier one", () => {
+    const result = applyForceWhenText(
+      ["Call me to claim referral and We're calling you"],
+      [
+        { contains: "Call me to claim referral", set: { claim_state: "first" } },
+        { contains: "We're calling you", set: { claim_state: "second" } }
+      ],
+      { claim_state: "model" }
+    );
+    expect(result.values.claim_state).toBe("second");
+    expect(result.applied).toEqual(["Call me to claim referral", "We're calling you"]);
+  });
+
   it("ignores a blank phrase", () => {
     const result = applyForceWhenText(["Call me to claim referral"], [{ contains: "  ", set: { claim_state: "x" } }], {
       claim_state: "kept"

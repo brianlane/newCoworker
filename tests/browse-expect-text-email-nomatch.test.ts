@@ -123,6 +123,49 @@ describe("browse_action.expectText planner", () => {
   });
 });
 
+describe("browse_extract.forceWhenText planner", () => {
+  const base = {
+    id: "claim_verify",
+    type: "browse_extract",
+    urlVar: "lead_url",
+    fields: [{ name: "claim_state", description: "state" }]
+  } as unknown as FlowStep;
+
+  it("forwards trimmed rules and drops a blank phrase", () => {
+    const plan = planStep(
+      {
+        ...base,
+        forceWhenText: [
+          { contains: "  Call me to claim referral  ", set: { claim_state: "NOT CONFIRMED, claim by hand now" } },
+          { contains: "   ", set: { claim_state: "ignored" } }
+        ]
+      } as unknown as FlowStep,
+      { vars: { lead_url: "https://hmlt.co/x" } }
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect((plan.action as { forceWhenText?: unknown }).forceWhenText).toEqual([
+      { contains: "Call me to claim referral", set: { claim_state: "NOT CONFIRMED, claim by hand now" } }
+    ]);
+  });
+
+  it("omits the field when the step has no rules", () => {
+    const plan = planStep(base, { vars: { lead_url: "https://hmlt.co/x" } });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect("forceWhenText" in (plan.action as Record<string, unknown>)).toBe(false);
+  });
+
+  it("omits the field when the rule list is empty", () => {
+    const plan = planStep({ ...base, forceWhenText: [] } as unknown as FlowStep, {
+      vars: { lead_url: "https://hmlt.co/x" }
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect("forceWhenText" in (plan.action as Record<string, unknown>)).toBe(false);
+  });
+});
+
 describe("waitForExpectedText (render service)", () => {
   function stubPage(behavior: "appears" | "never") {
     const calls: Array<{ needle: unknown; timeout: number | undefined }> = [];
