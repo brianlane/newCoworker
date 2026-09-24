@@ -7468,6 +7468,22 @@ function parseForceWhenText(text: string): ForceWhenTextRule[] | undefined {
   return rules.length > 0 ? rules.slice(0, 4) : undefined;
 }
 
+function sameForceRules(
+  a: ForceWhenTextRule[] | undefined,
+  b: ForceWhenTextRule[] | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((rule, i) => {
+    const other = b[i];
+    if (!other || rule.contains !== other.contains) return false;
+    const keys = Object.keys(rule.set);
+    return (
+      keys.length === Object.keys(other.set).length && keys.every((key) => rule.set[key] === other.set[key])
+    );
+  });
+}
+
 function ForceWhenTextEditor({
   value,
   onChange
@@ -7475,12 +7491,26 @@ function ForceWhenTextEditor({
   value: ForceWhenTextRule[] | undefined;
   onChange: (next: ForceWhenTextRule[] | undefined) => void;
 }) {
+  // Raw text stays local. Publishing only complete lines, then feeding the
+  // formatted result back into the textarea, snaps away a half-typed rule
+  // (the same trap NoMatchVarsField already documents).
+  const [text, setText] = useState(() => formatForceWhenText(value));
+  const [lastKnown, setLastKnown] = useState(value);
+  if (!sameForceRules(value, lastKnown)) {
+    setLastKnown(value);
+    setText(formatForceWhenText(value));
+  }
   return (
     <Field
       label="Overwrite the read when the page still says"
-      value={formatForceWhenText(value)}
+      value={text}
       textarea
-      onChange={(v) => onChange(parseForceWhenText(v))}
+      onChange={(raw) => {
+        setText(raw);
+        const next = parseForceWhenText(raw);
+        setLastKnown(next);
+        onChange(next);
+      }}
       help="The page wins over the model. One rule per line: phrase | var = value. Example: Call me to claim referral | claim_state = NOT CONFIRMED, claim by hand now"
     />
   );
