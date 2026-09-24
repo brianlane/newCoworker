@@ -121,6 +121,9 @@ export default async function AdminRevenuePage() {
           <p className="text-xs text-parchment/30 mt-1">
             {formatMoney(mrr.subscriptionCents)} subs · {formatMoney(mrr.enterpriseDealCents)}{" "}
             enterprise
+            {breakdown !== null && breakdown.usagePackCents > 0
+              ? ` · ${formatMoney(breakdown.usagePackCents)} usage packs this month`
+              : ""}
           </p>
         </Card>
         <Card>
@@ -238,6 +241,14 @@ export default async function AdminRevenuePage() {
                       <span className="text-sm text-claw-green font-semibold block">
                         {formatMoney(row.cents)}/mo
                       </span>
+                      {(fleetCost?.usagePackCentsByBusiness.get(row.businessId) ?? 0) > 0 && (
+                        <span className="text-xs text-parchment/50 block">
+                          {formatMoney(
+                            fleetCost?.usagePackCentsByBusiness.get(row.businessId) ?? 0
+                          )}{" "}
+                          packs this month
+                        </span>
+                      )}
                       {marginCents !== null && (
                         <span
                           className={`text-xs ${

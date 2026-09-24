@@ -10,6 +10,9 @@ vi.mock("@/lib/db/platform-costs", () => ({
 vi.mock("@/lib/db/vps-inventory", () => ({
   listVpsInventory: vi.fn()
 }));
+vi.mock("@/lib/admin/money-gap-load", () => ({
+  loadMoneyGaps: vi.fn()
+}));
 
 import {
   composeFleetCost,
@@ -19,6 +22,7 @@ import {
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
+import { loadMoneyGaps } from "@/lib/admin/money-gap-load";
 import {
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
   estimateTelnyxTaxCents,
@@ -207,6 +211,10 @@ beforeEach(() => {
     }
   ] as never);
   vi.mocked(listVpsInventory).mockResolvedValue([]);
+  vi.mocked(loadMoneyGaps).mockResolvedValue({
+    usagePacks: { totalCents: 0, byBusiness: new Map() },
+    software: { vercelCents: 0, zoomCents: 0, resendCents: 0, cursorCents: 0 }
+  });
 });
 
 describe("loadFleetCostBreakdown", () => {
@@ -224,6 +232,8 @@ describe("loadFleetCostBreakdown", () => {
     // Stripe fees outside every tenant's modeled line are still real cost.
     expect(data.breakdown.unmodeledStripeFeeCents).toBe(250);
     expect(data.breakdown.revenueCents).toBe(9_900);
+    expect(data.breakdown.usagePackCents).toBe(0);
+    expect(data.breakdown.software.vercelCents).toBe(0);
     expect(data.telnyxTrendRows).toHaveLength(3);
     expect(data.margins).toBe(MARGINS);
   });
@@ -316,6 +326,28 @@ describe("loadFleetCostBreakdown", () => {
     expect(data.hostingerRows).toEqual([]);
     expect(data.telnyxTrendRows).toEqual([]);
     expect(data.inventory).toEqual([]);
+  });
+
+  it("adds this month's usage-pack cash to revenue and software bills to cost", async () => {
+    vi.mocked(loadMoneyGaps).mockResolvedValue({
+      usagePacks: { totalCents: 1_399, byBusiness: new Map([["biz-1", 1_399]]) },
+      software: { vercelCents: 2_000, zoomCents: 1_500, resendCents: 0, cursorCents: 4_000 }
+    });
+    const data = await loadFleetCostBreakdown(NOW);
+    expect(data.usagePackCentsByBusiness.get("biz-1")).toBe(1_399);
+    expect(data.breakdown.revenueCents).toBe(9_900 + 1_399);
+    expect(data.breakdown.usagePackCents).toBe(1_399);
+    expect(data.breakdown.totalCostCents).toBeGreaterThan(2_000 + 1_500 + 4_000);
+    expect(data.breakdown.software.cursorCents).toBe(4_000);
+  });
+
+  it("degrades a thrown money-gap load to zero instead of failing the page", async () => {
+    vi.mocked(loadMoneyGaps).mockRejectedValueOnce(new Error("gaps down"));
+    const data = await loadFleetCostBreakdown(NOW);
+    expect(data.breakdown.usagePackCents).toBe(0);
+    vi.mocked(loadMoneyGaps).mockRejectedValueOnce("gaps string");
+    const again = await loadFleetCostBreakdown(NOW);
+    expect(again.breakdown.software.vercelCents).toBe(0);
   });
 
   it("defaults `now` to the current time", async () => {
