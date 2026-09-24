@@ -161,11 +161,98 @@ export function thinkingLevelFallback(
 }
 
 /**
+ * Attempts for one generateContent call when Gemini answers 429 or 5xx, or
+ * the fetch itself throws. Same budget the AiFlow worker uses for classify
+ * and extract (`GEMINI_MAX_ATTEMPTS` in ai-flow-worker): a brief "high
+ * demand" 503 must not fail the caller on the first try.
+ */
+const GEMINI_TRANSIENT_ATTEMPTS = 3;
+
+/** 429 and 5xx are brief overloads. Any other 4xx is a permanent refusal. */
+function isTransientGeminiStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * True when an agent-run `model_failed` detail is still a brief overload
+ * after the inner retries. The run-agent route turns these into HTTP 503
+ * so the worker re-queues. A 429 from Gemini must become a platform 5xx:
+ * the worker only retries `status >= 500`, and a 429 body would be read as
+ * a permanent failure.
+ */
+export function isTransientGeminiErrorDetail(detail: string | null | undefined): boolean {
+  return typeof detail === "string" && /^gemini_http_(?:429|5\d\d)(?::|$)/.test(detail);
+}
+
+function transientBackoffMs(attempt: number): number {
+  return 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve, reject) => {
+    const fail = () => {
+      const reason = signal.reason;
+      reject(reason instanceof Error ? reason : new DOMException("The operation was aborted.", "AbortError"));
+    };
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      fail();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isCallerAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/**
+ * POST once, retrying only transient failures. Returns the last response
+ * (even when not ok) so the caller's existing non-OK handling still applies.
+ * A permanent 4xx returns immediately. A fetch that still throws on the
+ * final attempt is rethrown. An abort from the caller's signal is rethrown
+ * immediately: retrying it would sleep past the deadline that aborted it.
+ */
+async function requestWithTransientRetry(
+  request: () => Promise<Response>,
+  signal?: AbortSignal
+): Promise<Response> {
+  for (let attempt = 1; attempt <= GEMINI_TRANSIENT_ATTEMPTS; attempt++) {
+    try {
+      const res = await request();
+      if (res.ok || !isTransientGeminiStatus(res.status) || attempt === GEMINI_TRANSIENT_ATTEMPTS) {
+        return res;
+      }
+      await res.text().catch(() => {});
+    } catch (e) {
+      if (attempt === GEMINI_TRANSIENT_ATTEMPTS || isCallerAbort(e, signal)) throw e;
+    }
+    await sleep(transientBackoffMs(attempt), signal);
+  }
+  // The loop returns or throws on every attempt, including the last.
+  throw new Error("gemini_transient_retry_exhausted");
+}
+
+/**
  * One-shot text generation via `models/{model}:generateContent`, returning
  * the candidate text AND the billed token usage so callers can meter spend
  * exactly instead of estimating from characters. A 400 that rejects the
  * requested thinkingLevel is retried once at {@link thinkingLevelFallback}
  * (same model, same abort signal, so caller deadlines still bound it).
+ * A 429 or 5xx, and a fetch that throws, is retried up to three times with
+ * the same backoff classify and extract use. The caller's abort signal is
+ * not a transient failure: it stops the retry immediately, including during
+ * the backoff sleep.
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_empty` when the response parses but has no candidate text
  */
@@ -210,11 +297,18 @@ export async function geminiGenerateTextDetailed(
       })
     });
 
-  let response = await requestOnce(params.thinkingLevel);
+  let response = await requestWithTransientRetry(
+    () => requestOnce(params.thinkingLevel),
+    params.signal
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    if (params.thinkingLevel && isThinkingLevelRejection(response.status, text)) {
-      response = await requestOnce(thinkingLevelFallback(params.thinkingLevel));
+    const requestedLevel = params.thinkingLevel;
+    if (requestedLevel && isThinkingLevelRejection(response.status, text)) {
+      response = await requestWithTransientRetry(
+        () => requestOnce(thinkingLevelFallback(requestedLevel)),
+        params.signal
+      );
     } else {
       throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
     }

@@ -24,8 +24,10 @@
  * Auth is gateway-only (ROWBOAT_GATEWAY_TOKEN / per-tenant token), like the
  * other worker adapters (send-owner-email). Response contract mirrors them:
  * `{ ok, detail?, data? }` with HTTP 200 for "configured wrong" outcomes
- * (the worker maps those to a permanent step failure) and 500 only for
- * transport faults (the worker retries those).
+ * (the worker maps those to a permanent step failure) and 5xx for faults
+ * the worker should re-queue. A Gemini 429 or 5xx that survives the inner
+ * retries in geminiGenerateTextDetailed is one of those: returning it as
+ * HTTP 200 `model_failed` used to dead-letter the run on the first try.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -36,6 +38,7 @@ import {
 } from "@/lib/voice-tools/common";
 import { getBusinessAgent, insertAgentRun, patchAgentRun } from "@/lib/agents/db";
 import { executeAgentRun } from "@/lib/agents/run";
+import { isTransientGeminiErrorDetail } from "@/lib/gemini-generate-content";
 import { saveAgentRunArtifact } from "@/lib/agents/save-artifact";
 import { resolveFlowDocumentSource } from "@/lib/ai-flows/doc-source";
 import { logger } from "@/lib/logger";
@@ -184,7 +187,10 @@ export async function POST(request: Request) {
           detail: result.detail ?? null
         }
       });
-      return voiceToolResponse({ ok: false, detail: result.error });
+      // 503, not the Gemini status. The worker retries only platform
+      // status >= 500. A 429 here would be parsed as a permanent failure.
+      const status = isTransientGeminiErrorDetail(result.detail) ? 503 : 200;
+      return voiceToolResponse({ ok: false, detail: result.error }, status);
     }
 
     // ── Filing (non-fatal) ──────────────────────────────────────────────
