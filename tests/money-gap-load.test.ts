@@ -457,7 +457,13 @@ describe("loadMoneyGaps", () => {
       const built = realFrom(table);
       const select = built.select.bind(built);
       built.select = () => {
-        const queried = select();
+        const queried = select() as {
+          eq: () => typeof queried;
+          not: () => typeof queried;
+          gte: () => {
+            lt: () => Promise<{ data: unknown; error: { message: string } | null; count: number | null }>;
+          };
+        };
         queried.eq = () => queried;
         queried.not = () => queried;
         const gte = queried.gte.bind(queried);
