@@ -62,6 +62,10 @@ beforeEach(() => {
   delete process.env.PLATFORM_COST_RESEND_MONTHLY_CENTS;
   delete process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID;
   delete process.env.STRIPE_VOICE_BONUS_30MIN_CENTS;
+  delete process.env.STRIPE_SMS_BONUS_500_PRICE_ID;
+  delete process.env.STRIPE_SMS_BONUS_500_CENTS;
+  delete process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID;
+  delete process.env.STRIPE_CHAT_CREDIT_5USD_CENTS;
 });
 
 describe("utcMonthWindow", () => {
@@ -123,6 +127,10 @@ describe("priceLoadedGrants", () => {
   it("prices a configured voice pack and ignores an unknown size", () => {
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
     process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
+    process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms";
+    process.env.STRIPE_SMS_BONUS_500_CENTS = "1000";
+    process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID = "price_chat";
+    process.env.STRIPE_CHAT_CREDIT_5USD_CENTS = "500";
     const priced = priceLoadedGrants([
       {
         business_id: "amy",
@@ -406,6 +414,10 @@ describe("loadMoneyGaps", () => {
   it("prices grants and counts mail for both residency modes", async () => {
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
     process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
+    process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms";
+    process.env.STRIPE_SMS_BONUS_500_CENTS = "1000";
+    process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID = "price_chat";
+    process.env.STRIPE_CHAT_CREDIT_5USD_CENTS = "500";
     vi.mocked(getAdminPlatformSetting).mockResolvedValue(null);
     vi.mocked(countMovedRows).mockResolvedValue(3);
     const db = {
