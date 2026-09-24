@@ -97,6 +97,41 @@ export function classifyPageMarkers(
  * opted into continueWhenMissingControl, a "no matching control" error
  * continues the run instead of dead-lettering it.
  */
+/** One page phrase that overwrites extracted vars. The page wins over the model. */
+export type ForceWhenTextRule = {
+  contains: string;
+  set: Record<string, string>;
+};
+
+/**
+ * Overwrite extracted vars when the page still shows a phrase the model is
+ * not allowed to talk past.
+ *
+ * HomeLight, 2026-09-23, Ron G. The claim button "Call me to claim referral"
+ * was still on the page after a swallowed click. The model answered "Call me
+ * again" (an example of a SUCCESSFUL claim in the field prompt), so the retry
+ * that keys on "NOT CONFIRMED" never ran, and the team was told the referral
+ * had been claimed. A substring of the page is not a judgment.
+ *
+ * Rules apply in order. A blank phrase never matches. Later rules overwrite
+ * earlier ones on the same var.
+ */
+export function applyForceWhenText(
+  sources: (string | null | undefined)[],
+  rules: readonly ForceWhenTextRule[] | undefined,
+  values: Record<string, string>
+): { values: Record<string, string>; applied: string[] } {
+  const out = { ...values };
+  const applied: string[] = [];
+  for (const rule of rules ?? []) {
+    const needle = rule.contains.trim();
+    if (!needle || !anySourceContains(sources, needle)) continue;
+    for (const [key, value] of Object.entries(rule.set)) out[key] = value;
+    applied.push(needle);
+  }
+  return { values: out, applied };
+}
+
 export function classifyBrowseActionFailure(
   sources: (string | null | undefined)[],
   error: string,

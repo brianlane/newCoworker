@@ -280,6 +280,11 @@ export type StepAction =
        * both match.
        */
       continueWhenText?: string;
+      /**
+       * Page phrases that overwrite extracted vars after the model answers.
+       * See FlowStep (browse_extract).forceWhenText.
+       */
+      forceWhenText?: Array<{ contains: string; set: Record<string, string> }>;
     }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | {
@@ -948,6 +953,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             : {}),
           ...(step.continueWhenText && step.continueWhenText.trim()
             ? { continueWhenText: step.continueWhenText.trim() }
+            : {}),
+          ...(step.forceWhenText && step.forceWhenText.length > 0
+            ? {
+                forceWhenText: step.forceWhenText
+                  .map((rule) => ({
+                    contains: rule.contains.trim(),
+                    set: rule.set
+                  }))
+                  .filter((rule) => rule.contains.length > 0)
+              }
             : {})
         }
       };

@@ -3583,6 +3583,11 @@ function StepFields({
           continueExample="details pending"
           continueMeaning="The page just is not ready yet, so a later step can try again."
         />
+        <ForceWhenTextEditor
+          key={step.id}
+          value={step.forceWhenText}
+          onChange={(forceWhenText) => patchStep(index, { forceWhenText })}
+        />
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
@@ -7424,6 +7429,90 @@ function NoMatchVarsField({
       }}
       help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
       textarea
+    />
+  );
+}
+
+type ForceWhenTextRule = { contains: string; set: Record<string, string> };
+
+/** One rule per line: `phrase | var = value; var2 = value2`. Blank lines drop. */
+function formatForceWhenText(rules: ForceWhenTextRule[] | undefined): string {
+  if (!rules?.length) return "";
+  return rules
+    .map((rule) => {
+      const sets = Object.entries(rule.set)
+        .map(([key, value]) => `${key} = ${value}`)
+        .join("; ");
+      return `${rule.contains} | ${sets}`;
+    })
+    .join("\n");
+}
+
+function parseForceWhenText(text: string): ForceWhenTextRule[] | undefined {
+  const rules: ForceWhenTextRule[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const pipe = trimmed.indexOf("|");
+    if (pipe < 0) continue;
+    const contains = trimmed.slice(0, pipe).trim();
+    const set: Record<string, string> = {};
+    for (const part of trimmed.slice(pipe + 1).split(";")) {
+      const eq = part.indexOf("=");
+      if (eq < 0) continue;
+      const key = part.slice(0, eq).trim();
+      const value = part.slice(eq + 1).trim();
+      if (key && value) set[key] = value;
+    }
+    if (contains && Object.keys(set).length > 0) rules.push({ contains, set });
+  }
+  return rules.length > 0 ? rules.slice(0, 4) : undefined;
+}
+
+function sameForceRules(
+  a: ForceWhenTextRule[] | undefined,
+  b: ForceWhenTextRule[] | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((rule, i) => {
+    const other = b[i];
+    if (!other || rule.contains !== other.contains) return false;
+    const keys = Object.keys(rule.set);
+    return (
+      keys.length === Object.keys(other.set).length && keys.every((key) => rule.set[key] === other.set[key])
+    );
+  });
+}
+
+function ForceWhenTextEditor({
+  value,
+  onChange
+}: {
+  value: ForceWhenTextRule[] | undefined;
+  onChange: (next: ForceWhenTextRule[] | undefined) => void;
+}) {
+  // Raw text stays local. Publishing only complete lines, then feeding the
+  // formatted result back into the textarea, snaps away a half-typed rule
+  // (the same trap NoMatchVarsField already documents).
+  const [text, setText] = useState(() => formatForceWhenText(value));
+  const [lastKnown, setLastKnown] = useState(value);
+  if (!sameForceRules(value, lastKnown)) {
+    setLastKnown(value);
+    setText(formatForceWhenText(value));
+  }
+  return (
+    <Field
+      label="Overwrite the read when the page still says"
+      value={text}
+      textarea
+      onChange={(raw) => {
+        setText(raw);
+        const next = parseForceWhenText(raw);
+        setLastKnown(next);
+        onChange(next);
+      }}
+      help="The page wins over the model. One rule per line: phrase | var = value. Example: Call me to claim referral | claim_state = NOT CONFIRMED, claim by hand now"
     />
   );
 }

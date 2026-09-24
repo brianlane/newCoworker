@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyForceWhenText,
   classifyBrowseActionFailure,
   classifyPageMarkers,
   isMissingControlError,
@@ -172,5 +173,52 @@ describe("classifyBrowseActionFailure", () => {
         continueWhenMissingControl: true
       })
     ).toBe("end_run");
+  });
+});
+
+describe("applyForceWhenText", () => {
+  const UNCLAIMED = "Call me to claim referral";
+  const NOT_CONFIRMED = "NOT CONFIRMED, claim by hand now";
+  const rule = [{ contains: UNCLAIMED, set: { claim_state: NOT_CONFIRMED } }];
+
+  it("overwrites the model when the unclaimed button is still on the page", () => {
+    const page = `<button>Call me to claim referral</button>`;
+    const result = applyForceWhenText([page], rule, { claim_state: "Call me again" });
+    expect(result.values.claim_state).toBe(NOT_CONFIRMED);
+    expect(result.applied).toEqual([UNCLAIMED]);
+  });
+
+  it("leaves a real success page alone", () => {
+    const page = "We're calling you at Amy's Cell. Call me again";
+    const result = applyForceWhenText([page], rule, { claim_state: "HomeLight is calling our line" });
+    expect(result.values.claim_state).toBe("HomeLight is calling our line");
+    expect(result.applied).toEqual([]);
+  });
+
+  it("returns the values unchanged when no rules are configured", () => {
+    const result = applyForceWhenText(["Call me to claim referral"], undefined, { claim_state: "kept" });
+    expect(result.values.claim_state).toBe("kept");
+    expect(result.applied).toEqual([]);
+  });
+
+  it("lets a later matching rule overwrite an earlier one", () => {
+    const result = applyForceWhenText(
+      ["Call me to claim referral and We're calling you"],
+      [
+        { contains: "Call me to claim referral", set: { claim_state: "first" } },
+        { contains: "We're calling you", set: { claim_state: "second" } }
+      ],
+      { claim_state: "model" }
+    );
+    expect(result.values.claim_state).toBe("second");
+    expect(result.applied).toEqual(["Call me to claim referral", "We're calling you"]);
+  });
+
+  it("ignores a blank phrase", () => {
+    const result = applyForceWhenText(["Call me to claim referral"], [{ contains: "  ", set: { claim_state: "x" } }], {
+      claim_state: "kept"
+    });
+    expect(result.values.claim_state).toBe("kept");
+    expect(result.applied).toEqual([]);
   });
 });

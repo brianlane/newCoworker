@@ -500,3 +500,31 @@ is gone, not late.
 
 See [[homelight-own-claim-overlay]], [[homelight-nocall-contact-delay]].
 
+## homelight-unconfirmed-claim-button-still-there
+
+**The model can call an unclicked claim button a finished claim.** Ron G.
+(Mesa AZ, ~$625K, run `e7c5e9b3`, 2026-09-23). `claim_click` reported
+success. Every later screenshot was the same page: orange button still
+"Call me to claim referral", callback "We will call you at Amy's Cell
+(602) 805-3377" (the AI DID). `claim_verify` answered "Call me again",
+which is an example of a successful claim in the field prompt, not text
+on that page. The retry only fires on `claim_state` containing
+"NOT CONFIRMED", so it never ran. Gabby and Dave were told "HomeLight
+claimed this referral but the seller was not on the call." The card
+extract read the callback DID as `lead_phone`, the self-number scrub
+threw it out, and Amy got "their phone number matched your own business
+number." HomeLight's 90-minute email then said the referral was getting
+cold. The run finished with no seller phone.
+
+**How to apply:** `browse_extract.forceWhenText` overwrites the model
+when the page still contains a phrase. `homelight-unconfirmed-claim.ts`
+puts that on `claim_verify` and `claim_verify2` for "Call me to claim
+referral", forcing `NOT CONFIRMED, claim by hand now`, which is what
+makes the existing retry click run. `offer_gate`'s first arm then texts
+the owner to tap the button and does not wait or say the lead was
+claimed. `lead_phone` is told to answer none when the only number is the
+"We will call you at" line. Merge does not apply it. Do not requeue
+Ron's run. Do not `--click` a live `hmlt.co` URL.
+
+See [[homelight-claim-click-silent-noop]], [[homelight-claim-again-missing-control]].
+

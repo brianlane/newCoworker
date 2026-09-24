@@ -525,6 +525,12 @@ export type FlowStep =
        * markers match.
        */
       continueWhenText?: string;
+      /**
+       * Page text overwrites the model's answer after extraction. Each rule
+       * is a case-insensitive substring of the visible text or raw HTML; on a
+       * match, `set` is written even when the model said something else.
+       */
+      forceWhenText?: Array<{ contains: string; set: Record<string, string> }>;
       when?: StepCondition;
     }
   | {
