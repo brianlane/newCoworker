@@ -37,6 +37,12 @@ import {
   type TelnyxCostDailyRow
 } from "@/lib/db/platform-costs";
 import { listVpsInventory, type VpsInventoryRow } from "@/lib/db/vps-inventory";
+import { loadMoneyGaps } from "@/lib/admin/money-gap-load";
+import {
+  emptySoftwareCosts,
+  softwareCostTotal,
+  type SoftwareCostCents
+} from "@/lib/admin/software-costs";
 
 export type FleetCostBreakdown = {
   revenueCents: number;
@@ -57,6 +63,10 @@ export type FleetCostBreakdown = {
   /** Call control, media streaming, recording, invoice-only, never in MDRs. */
   voiceAdjunctCents: number;
   telnyxTaxCents: number;
+  /** This month's one-time usage-pack cash (top-ups and auto-reload). */
+  usagePackCents: number;
+  /** Vercel, Zoom, Resend, and Cursor. Platform cost, not a tenant line. */
+  software: SoftwareCostCents;
   totalCostCents: number;
   netMarginCents: number;
   /** Net margin as % of revenue; null when there is no revenue. */
@@ -84,6 +94,9 @@ export function composeFleetCost(params: {
    * apart; the rest of the month's spend is taken as messaging.
    */
   monthTelnyxVoiceCents: number;
+  /** One-time pack cash collected this month. Added to revenue, not to MRR. */
+  usagePackCents?: number;
+  software?: SoftwareCostCents;
 }): FleetCostBreakdown {
   const voiceAdjunctCents = Math.round(
     params.monthVoiceMinutes * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
@@ -103,6 +116,9 @@ export function composeFleetCost(params: {
       params.monthTelnyxVoiceCents
   });
 
+  const software = params.software ?? emptySoftwareCosts();
+  const usagePackCents = params.usagePackCents ?? 0;
+  const revenueCents = params.marginTotals.revenueCents + usagePackCents;
   const totalCostCents =
     params.marginTotals.costCents +
     params.unattributedTelnyxCents +
@@ -113,11 +129,12 @@ export function composeFleetCost(params: {
     params.poolHostingCents +
     TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS +
     voiceAdjunctCents +
-    telnyxTaxCents;
-  const netMarginCents = params.marginTotals.revenueCents - totalCostCents;
+    telnyxTaxCents +
+    softwareCostTotal(software);
+  const netMarginCents = revenueCents - totalCostCents;
 
   return {
-    revenueCents: params.marginTotals.revenueCents,
+    revenueCents,
     perTenantCents: params.perTenantCents,
     unattributedTelnyxCents: params.unattributedTelnyxCents,
     unmodeledStripeFeeCents: params.unmodeledStripeFeeCents,
@@ -125,12 +142,12 @@ export function composeFleetCost(params: {
     campaignFeeCents: TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
     voiceAdjunctCents,
     telnyxTaxCents,
+    usagePackCents,
+    software,
     totalCostCents,
     netMarginCents,
     netMarginPct:
-      params.marginTotals.revenueCents > 0
-        ? Math.round((netMarginCents / params.marginTotals.revenueCents) * 1000) / 10
-        : null
+      revenueCents > 0 ? Math.round((netMarginCents / revenueCents) * 1000) / 10 : null
   };
 }
 
@@ -145,6 +162,8 @@ export type FleetCostData = {
   /** The last 90 days of Telnyx cost rows (also feeds the Costs page windows). */
   telnyxTrendRows: TelnyxCostDailyRow[];
   inventory: VpsInventoryRow[];
+  /** This month's one-time pack cash, per business, for the revenue list. */
+  usagePackCentsByBusiness: Map<string, number>;
   breakdown: FleetCostBreakdown;
 };
 
@@ -160,7 +179,7 @@ export type FleetCostData = {
  * load as best effort.
  */
 export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<FleetCostData> {
-  const [margins, hostingerRows, telnyxTrendRows, inventory] = await Promise.all([
+  const [margins, hostingerRows, telnyxTrendRows, inventory, moneyGaps] = await Promise.all([
     loadFleetMargins(now),
     listHostingerVpsCosts().catch((err: unknown) => {
       logger.error("loadFleetCostBreakdown: hostinger snapshot read failed", {
@@ -179,6 +198,15 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
         message: err instanceof Error ? err.message : String(err)
       });
       return [] as VpsInventoryRow[];
+    }),
+    loadMoneyGaps(now).catch((err: unknown) => {
+      logger.error("loadFleetCostBreakdown: money gap load failed", {
+        message: err instanceof Error ? err.message : String(err)
+      });
+      return {
+        usagePacks: { totalCents: 0, byBusiness: new Map<string, number>() },
+        software: emptySoftwareCosts()
+      };
     })
   ]);
 
@@ -205,6 +233,7 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
     hostingerRows,
     telnyxTrendRows,
     inventory,
+    usagePackCentsByBusiness: moneyGaps.usagePacks.byBusiness,
     breakdown: composeFleetCost({
       marginTotals: margins.totals,
       perTenantCents: sumMarginLinesByKey(margins.economics),
@@ -212,7 +241,9 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
       unmodeledStripeFeeCents: margins.unmodeledStripeFeeCents,
       poolHostingCents,
       monthVoiceMinutes,
-      monthTelnyxVoiceCents
+      monthTelnyxVoiceCents,
+      usagePackCents: moneyGaps.usagePacks.totalCents,
+      software: moneyGaps.software
     })
   };
 }

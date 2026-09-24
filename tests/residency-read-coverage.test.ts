@@ -62,6 +62,8 @@ type SiteKey = string;
 const PURGED_READ_CENTRAL_BY_DESIGN: Record<SiteKey, string> = {
   "src/lib/db/fleet-activity.ts::getFleetRecentActivity::email_log":
     "cross-tenant admin sweep: selects business_id as a COLUMN with no business_id filter, so there is no single tenant box to route to. Fanning out across the fleet would mean one tunnel round trip per residency tenant on an internal ops page",
+  "src/lib/admin/money-gap-load.ts::countFleetEmailsThisMonth::email_log":
+    "fleet Resend bill: counts this month's email_log rows for supabase-mode tenants only. vps tenants are counted with countMovedRows on their own box in the same function, so this central read is the half that has no box. One query for every supabase-mode business, filtered by business_id, because fanning those rows out would ask a box for data it does not hold",
   "src/lib/db/fleet-activity.ts::getFleetRecentActivity::sms_outbound_log":
     "cross-tenant admin sweep, same shape as the email_log leg above: no business_id filter, so no single box owns the answer",
   "src/lib/db/fleet-activity.ts::getFleetRecentActivity::voice_call_transcripts":

@@ -237,7 +237,7 @@ export default async function AdminCostsPage({
             {money(netMarginCents)}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
-            on {money(margins.totals.revenueCents)} revenue
+            on {money(breakdown.revenueCents)} revenue
             {netMarginPct !== null && ` · ${netMarginPct}%`}
             {(unattributedMonthCents > 0 || poolBurnMonthlyCents > 0) &&
               " · incl. leak + pool spend"}
@@ -298,7 +298,11 @@ export default async function AdminCostsPage({
               ["Telnyx taxes (est.)", telnyxTaxMonthCents],
               ["Idle pool hosting", poolBurnMonthlyCents],
               ["Telnyx unattributed (leak check)", unattributedMonthCents],
-              ["Stripe outside tenant lines (disputes, account level)", breakdown.unmodeledStripeFeeCents]
+              ["Stripe outside tenant lines (disputes, account level)", breakdown.unmodeledStripeFeeCents],
+              ["Vercel", breakdown.software.vercelCents],
+              ["Zoom", breakdown.software.zoomCents],
+              ["Resend", breakdown.software.resendCents],
+              ["Cursor", breakdown.software.cursorCents]
             ] as const
           ).map(([label, cents]) => {
             const pct = totalCostCents > 0 ? Math.round((cents / totalCostCents) * 100) : 0;
@@ -324,6 +328,16 @@ export default async function AdminCostsPage({
             );
           })}
         </div>
+        <p className="text-xs text-parchment/30 mt-3">
+          Vercel is this month&apos;s bill from the Vercel API. Resend is emails sent this month
+          (free through 3,000, then $0.90 per 1,000)
+          {breakdown.software.resendCents === 0 ? ", none past the free quota" : ""}. Zoom is
+          PLATFORM_COST_ZOOM_MONTHLY_CENTS. Cursor is PLATFORM_COST_CURSOR_MONTHLY_CENTS plus
+          on-demand spend when CURSOR_ADMIN_API_KEY is set.
+          {breakdown.usagePackCents > 0
+            ? ` Revenue here includes ${money(breakdown.usagePackCents)} of one-time usage packs this month.`
+            : ""}
+        </p>
         {unattributedMonthMicros > 0 && (
           <div className="mt-3 space-y-1">
             <p className="text-xs text-spark-orange/80">

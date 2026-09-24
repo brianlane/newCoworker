@@ -170,6 +170,9 @@ export default async function AdminDashboardPage() {
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
           <p className="text-xs text-parchment/50 mt-0.5">
+            {breakdown !== null && breakdown.usagePackCents > 0
+              ? `${formatMoney(breakdown.usagePackCents)} usage packs this month · `
+              : ""}
             {formatMoney(mrr.committedCents)} committed
             {mrr.refundExposedCents > 0
               ? ` · ${formatMoney(mrr.refundExposedCents)} in refund-window`
