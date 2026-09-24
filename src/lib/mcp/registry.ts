@@ -27,6 +27,7 @@ import {
 } from "@/lib/mcp/tooling";
 import { readTools } from "@/lib/mcp/tools/read";
 import { smsTools } from "@/lib/mcp/tools/sms";
+import { placeCallTools } from "@/lib/mcp/tools/place-call";
 import { calendarTools } from "@/lib/mcp/tools/calendar";
 import { contactTools } from "@/lib/mcp/tools/contacts";
 import { employeeTools } from "@/lib/mcp/tools/employees";
@@ -52,6 +53,7 @@ export const allMcpTools: McpToolDef[] = [
   ...searchTools,
   ...readTools,
   ...smsTools,
+  ...placeCallTools,
   ...calendarTools,
   ...contactTools,
   ...employeeTools,

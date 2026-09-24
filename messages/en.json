@@ -1485,6 +1485,14 @@
         "title": "ChatGPT app",
         "description": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and read or update your custom tables, all authenticated as you through OAuth, with permissions matching your dashboard role."
       },
+      "grok": {
+        "title": "Grok connector",
+        "description": "Let Grok text and place calls through your coworker. In Grok, open grok.com/connectors, choose New Connector, then Custom, and paste https://www.newcoworker.com/api/mcp. Sign in as the owner. Grok can then send texts from your business number and ask the coworker to place a call. The coworker speaks on the line."
+      },
+      "muse": {
+        "title": "Muse connector",
+        "description": "Let Muse text through your coworker. Ask Muse to add a custom connector for the New Coworker API: POST https://www.newcoworker.com/api/public/v1/messages with your nck_ API key from Dashboard, Integrations, and a body of to and text. Texts go out from your business number. Muse Code can instead attach https://www.newcoworker.com/api/mcp."
+      },
       "google": {
         "title": "Google Workspace",
         "description": "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks."
@@ -1682,10 +1690,10 @@
       "featureBookBody": "Find open times on your connected calendar and book the appointment, whether that is Google, Microsoft 365, Calendly, Vagaro, Acuity, or CalDAV.",
       "addEyebrow": "Setup",
       "addTitle": "Adding it to ChatGPT",
-      "step1": "In ChatGPT, open Settings, then Connectors, and turn on developer mode under Advanced. A paid ChatGPT plan is required.",
-      "step2": "Add a connector, paste your server URL from Dashboard, Integrations, ChatGPT app, and choose OAuth for authentication.",
-      "step3": "Click Connect, sign in with your New Coworker account, and approve access once.",
-      "addNote": "Your URL is shown on the ChatGPT app card in your dashboard. It is the same account you already sign in with, so there is no key to create or store.",
+      "step1": "In ChatGPT, open the app directory and install New Coworker. A paid ChatGPT plan is required.",
+      "step2": "Click Connect, sign in with your New Coworker account, and approve access once.",
+      "step3": "If you do not see it in the directory, open Settings, Connectors, Advanced, turn on developer mode, add a connector, paste your server URL from Dashboard, Integrations, ChatGPT app, and choose OAuth.",
+      "addNote": "The directory is the normal way to install it. The URL on the ChatGPT app card in your dashboard is the fallback for developer mode. It is the same account you already sign in with, so there is no key to create or store.",
       "accessEyebrow": "Access",
       "accessTitle": "What it can reach",
       "accessIntro": "Everything below runs as the signed-in person and is checked against their team role on each business, exactly as the dashboard is. An owner sees more than a staff member, through ChatGPT just as on the web.",
@@ -2621,9 +2629,9 @@
         "title": "ChatGPT app",
         "blurb": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments, signed in as you and limited to your role.",
         "lastUsed": "ChatGPT last used this app",
-        "step1": "In ChatGPT, open Settings, Connectors, then turn on developer mode under Advanced.",
-        "step2": "Add a connector, paste the URL above, and choose OAuth for authentication.",
-        "step3": "Click Connect. You will sign in with your New Coworker account and approve access once.",
+        "step1": "In ChatGPT, search the app directory for New Coworker and install it.",
+        "step2": "Click Connect. You will sign in with your New Coworker account and approve access once.",
+        "step3": "If you do not see it in the directory, turn on developer mode under Settings, Connectors, Advanced, add a connector, paste the URL above, and choose OAuth.",
         "footer": "Disconnect anytime from ChatGPT's connector settings. Access follows your team role, so a staff login cannot manage automations through ChatGPT either."
       }
     },

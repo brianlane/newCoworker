@@ -105,7 +105,9 @@ export default async function IntegrationsPage() {
       description: t("chatgpt.description"),
       Icon: Bot,
       href: "/integrations/chatgpt"
-    }
+    },
+    { title: t("grok.title"), description: t("grok.description"), Icon: Bot },
+    { title: t("muse.title"), description: t("muse.description"), Icon: Bot }
   ];
 
   return (

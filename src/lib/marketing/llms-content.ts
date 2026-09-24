@@ -97,7 +97,7 @@ const CAPABILITY_LINES = [
     "and Meta Lead Ads through a direct first-party Facebook Page connect in the dashboard (no bridge account needed; " +
     "Zapier or Make.com bridges still work), a public REST API, and webhooks " +
     "(Zapier, Meta lead ads, lead webhooks, the REST API: Standard plan and up), " +
-    "plus a Claude connector (remote MCP) and a ChatGPT app so an owner's assistant can act on the business's behalf.",
+    "plus a Claude connector (remote MCP), a ChatGPT app, a Grok connector, and a Muse setup so an owner's assistant can text, and ask the coworker to place a call, on the business's behalf.",
   "- Custom tables: owners define their own tables and lists, the coworker reads and updates them as it works " +
     "(every AI change can be undone), and they are reachable from Claude and ChatGPT through the connector.",
   "- Owner self-serve: an Ask AI companion on every dashboard page answers from the business's own " +

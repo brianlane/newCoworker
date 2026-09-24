@@ -322,6 +322,12 @@ re-annotated without this file being updated in the same PR.
 - **Open World: False** Reads a task list our own system derives from stored activity. No external service is contacted.
 - **Destructive: False** No task is created, completed or deleted.
 
+### `place_call`
+
+- **Read Only: False** It dials a real phone number from the business's line and starts a live call, so it is not a read path.
+- **Open World: True** The call leaves our system through the telephony provider and rings a person on the public phone network. The coworker speaks. The assistant that asked does not.
+- **Destructive: False** Additive only: it places a new call. It does not delete a contact, a flow, or a previous call record.
+
 ### `send_sms`
 
 - **Read Only: False** It sends a text message from the business's phone number and records the send, so it is not a read path.

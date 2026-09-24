@@ -108,6 +108,7 @@ describe("MCP tool metadata", () => {
     const OPEN_WORLD = [
       "send_sms",
       "send_whatsapp",
+      "place_call",
       "calendar_find_slots",
       "calendar_book_appointment",
       "trigger_flow",

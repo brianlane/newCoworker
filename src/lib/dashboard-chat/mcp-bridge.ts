@@ -181,7 +181,9 @@ export const MCP_BRIDGE_EXCLUDED: Readonly<Record<string, string>> = {
   // pinned to one business and has no Settings gate for this feed; connectors
   // keep the tool.
   list_system_logs:
-    "fleet-wide HQ ops feed; no Settings gate, and a tenant-pinned chat turn must not see other tenants' logs"
+    "fleet-wide HQ ops feed; no Settings gate, and a tenant-pinned chat turn must not see other tenants' logs",
+  place_call:
+    "connector phone tool; the dashboard already places calls from an outbound flow the owner wrote, and a chat turn must not dial from a one-line brief"
 };
 
 /**

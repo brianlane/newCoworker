@@ -305,13 +305,12 @@ Draft, Under Review, Approved, Published, then visible in the directory.
 Changing the MCP snapshot means rescanning the server, submitting a new version
 for review, and publishing the approved one.
 
-**v1.0.0 was approved 2026-09-15.** OpenAI email: the ChatGPT plugin
-(v1.0.0) "has been approved and is ready to publish." App id
-`asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5`. Approval is not a listing. Click
-**Publish** in the OpenAI Platform dashboard (Plugins / ChatGPT plugins). No
-MCP, OAuth, WAF, or sandbox change is required for that click. After Publish,
-the app is searchable by the verbatim name; category placement on the directory
-main pages is not guaranteed (OpenAI "enhanced distribution").
+**v1.0.0 was approved 2026-09-15 and published 2026-09-23.** App id
+`asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5`. Directory:
+https://chatgpt.com/plugins/plugin_asdk_app_6a7eba8aeff08191bb01050c2f6d4ab5.
+The app is searchable by the verbatim name; category placement on the directory
+main pages is not guaranteed (OpenAI "enhanced distribution"). Adding a tool
+still needs a new version scanned, submitted, approved, and published.
 
 ---
 
@@ -326,11 +325,8 @@ v1.0.0's review is complete, so the freeze for that snapshot is lifted. Adding
 or re-annotating a tool still does not appear in the directory until a new
 version is scanned, submitted, approved, and published.
 
-At publish time, flip the dashboard card copy from "paste this URL into
-Developer Mode" to "install from the ChatGPT directory". Before Publish the
-pasted URL is the only install path; after it, most users never see a URL. Do
-not flip that copy while the status is still Approved-but-unpublished: the
-listing would not exist yet. Keep the URL as a fallback for Developer Mode.
+The dashboard card and `/integrations/chatgpt` lead with the directory
+install. The pasted URL stays as the developer-mode fallback.
 
 ---
 
