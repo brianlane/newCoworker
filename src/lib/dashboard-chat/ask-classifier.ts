@@ -318,6 +318,8 @@ export function investigationDirective(c: OwnerAskClassification): string {
     "Then answer from what you FOUND, naming the real automations. Never name an automation you did not see in the list.",
     "If a change is needed, use `edit_aiflow` to stage it and read the summary back for a yes before applying anything.",
     "If you cannot find what produces it, say so plainly and say what you did look at. An honest miss is worth more than a promise.",
-    "Never tell the owner that future messages will include something unless you have actually staged or applied the change that makes it true."
+    "Never tell the owner that future messages will include something unless you have actually staged or applied the change that makes it true.",
+    "edit_aiflow has written nothing until its result says applied is true. A staged result is waiting for a yes. set_flow_enabled can turn an automation on or off; do not say you cannot. There is no delete tool: point them at /dashboard/aiflows.",
+    "Never name a phone number for the owner to call as a test unless it is the coworker phone from this turn's account facts. A number they called personal is not that line."
   ].join(" ");
 }

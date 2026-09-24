@@ -40,7 +40,12 @@ import {
   withSelfNameRetryHint
 } from "../_shared/ai_flows/extracted_contact.ts";
 import { resolveSoloOwner } from "../_shared/solo_owner.ts";
-import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
+import {
+  failurePagesOperator,
+  stepLogLevel,
+  systemLog,
+  type SystemLogLevel
+} from "../_shared/system_log.ts";
 import {
   isPermanentTelnyxSmsFailure,
   telnyxSmsRejectedOperatorCopy
@@ -1201,8 +1206,23 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       throw e;
     }
     if (outcome.kind === "fail") {
-      await recordStep(supabase, run, index, step, "failed", outcome.result, outcome.error);
-      await failRun(supabase, run, outcome.error, scope, approval, routing);
+      const channel = typeof scope.trigger.channel === "string" ? scope.trigger.channel : null;
+      const windowText =
+        typeof scope.trigger.windowText === "string" ? scope.trigger.windowText : null;
+      const page = failurePagesOperator({ error: outcome.error, channel, windowText });
+      const level: SystemLogLevel = page ? "error" : "info";
+      await recordStep(
+        supabase,
+        run,
+        index,
+        step,
+        "failed",
+        outcome.result,
+        outcome.error,
+        true,
+        level
+      );
+      await failRun(supabase, run, outcome.error, scope, approval, routing, level);
       return;
     }
     if (outcome.kind === "pause") {
@@ -11958,7 +11978,8 @@ async function recordStep(
   status: string,
   result?: Record<string, unknown>,
   error?: string,
-  terminal = true
+  terminal = true,
+  logLevel?: SystemLogLevel
 ): Promise<void> {
   const { error: upErr } = await supabase.from("ai_flow_run_steps").upsert(
     {
@@ -11984,7 +12005,9 @@ async function recordStep(
   await systemLog(supabase, {
     businessId: run.business_id,
     source: "aiflow",
-    level: stepLogLevel(status, { terminal, persistFailed: Boolean(upErr) }),
+    level: upErr
+      ? "error"
+      : (logLevel ?? stepLogLevel(status, { terminal, persistFailed: false })),
     event: `ai_flow_step_${status}`,
     message: error ?? `${step.type} step ${status}`,
     payload: {
@@ -12037,7 +12060,8 @@ async function failRun(
   error: string,
   scope?: Scope,
   approval?: Record<string, unknown>,
-  routing?: Record<string, unknown>
+  routing?: Record<string, unknown>,
+  logLevel: SystemLogLevel = "error"
 ): Promise<void> {
   // Best-effort terminal write; if it fails, stale-run reclaim recovers the run.
   try {
@@ -12058,7 +12082,7 @@ async function failRun(
   await systemLog(supabase, {
     businessId: run.business_id,
     source: "aiflow",
-    level: "error",
+    level: logLevel,
     event: "ai_flow_run_failed",
     message: error,
     payload: {
@@ -12072,6 +12096,7 @@ async function failRun(
   // lead-intake run is a lead that arrived and got silence, tell the owner
   // when they've asked to hear about it. Best-effort; scope (when the caller
   // had one) carries fresher vars than the persisted context.
+  if (logLevel !== "error") return;
   const ctx = run.context ?? {};
   await sendAiflowFailureAlert(supabase, {
     businessId: run.business_id,

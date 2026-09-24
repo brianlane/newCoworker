@@ -21,6 +21,7 @@
 import { buildCustomTablesDigestMd } from "@/lib/custom-tables/core";
 import { countRowsByTable, listCustomTables } from "@/lib/custom-tables/db";
 import { getBusinessConfig } from "@/lib/db/configs";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import {
   resolveCalendarConnection,
   resolveEmailConnection
@@ -50,20 +51,47 @@ export type ContextBlockDeps = {
   resolveCalendar?: typeof resolveCalendarConnection;
   resolveEmail?: typeof resolveEmailConnection;
   fetchConfig?: typeof getBusinessConfig;
+  /** The business DID customers call. Null when the account has no voice route. */
+  fetchCoworkerDid?: (businessId: string) => Promise<{ to_e164: string } | null>;
 };
+
+function coworkerPhoneLine(did: string | null, lookupFailed: boolean): string {
+  if (lookupFailed) {
+    return "- Coworker phone: unavailable this turn. Do not invent a number for the owner to call.";
+  }
+  if (!did) {
+    return "- Coworker phone: not assigned. Do not invent a number for the owner to call.";
+  }
+  return (
+    `- Coworker phone (the only number to tell the owner to call or text when they want to test the coworker): ${did}. ` +
+    "Never substitute a number the owner described as personal or as their own cell."
+  );
+}
 
 /** Per-turn "what is actually connected" system line. Null on failure. */
 export async function buildIntegrationsStatusLine(
   businessId: string,
   deps: ContextBlockDeps = {}
 ): Promise<string | null> {
-  /* c8 ignore next 2 -- production defaults; tests inject */
+  /* c8 ignore next -- production default; tests inject */
   const resolveCalendar = deps.resolveCalendar ?? resolveCalendarConnection;
+  /* c8 ignore next -- production default; tests inject */
   const resolveEmail = deps.resolveEmail ?? resolveEmailConnection;
+  /* c8 ignore next -- production default; tests inject */
+  const fetchCoworkerDid = deps.fetchCoworkerDid ?? getTelnyxVoiceRouteForBusiness;
   try {
-    const [calendar, email] = await Promise.all([
+    const [calendar, email, didResult] = await Promise.all([
       resolveCalendar(businessId),
-      resolveEmail(businessId)
+      resolveEmail(businessId),
+      fetchCoworkerDid(businessId)
+        .then((route) => ({ did: route?.to_e164 ?? null, lookupFailed: false }))
+        .catch((err: unknown) => {
+          logger.warn("owner chat: coworker phone lookup failed", {
+            businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return { did: null, lookupFailed: true };
+        })
     ]);
     const calendarLabel = calendar
       ? CALENDAR_PROVIDER_LABELS[calendar.provider] ?? calendar.provider
@@ -77,7 +105,8 @@ export async function buildIntegrationsStatusLine(
       "CONNECTED INTEGRATIONS (ground truth for THIS turn, answer connection questions from this line, never guess or ask the owner for API details):\n" +
       `- Calendar: ${calendarLabel}\n` +
       `- Email mailbox: ${emailLabel}\n` +
-      "- Texting: the business's own SMS number (always available on this platform)."
+      "- Texting: the business's own SMS number (always available on this platform).\n" +
+      coworkerPhoneLine(didResult.did, didResult.lookupFailed)
     );
   } catch (err) {
     logger.warn("owner chat: integrations status line failed", {

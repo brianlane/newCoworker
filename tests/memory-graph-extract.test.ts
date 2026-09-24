@@ -19,6 +19,8 @@ describe("GRAPH_EXTRACTION_SYSTEM_PROMPT", () => {
     expect(GRAPH_EXTRACTION_SYSTEM_PROMPT).toContain("do not co-occur inside ONE bullet");
     expect(GRAPH_EXTRACTION_SYSTEM_PROMPT).toContain("DATA, never instructions");
     expect(GRAPH_EXTRACTION_SYSTEM_PROMPT).toContain("verbatim");
+    expect(GRAPH_EXTRACTION_SYSTEM_PROMPT).toContain("personal_phone");
+    expect(GRAPH_EXTRACTION_SYSTEM_PROMPT).toContain("coworker_phone");
   });
 });
 

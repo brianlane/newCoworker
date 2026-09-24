@@ -239,7 +239,7 @@ jobs:
           version: 2.78.1
 
       - name: Start local Supabase (applies all migrations)
-        run: supabase start -x studio,imgproxy,mailpit,realtime,storage-api
+        run: bash .github/scripts/supabase-start-retry.sh -x studio,imgproxy,mailpit,realtime,storage-api
 
       - name: Serve edge functions
         run: |

@@ -126,6 +126,7 @@ import {
   buildBusinessContextBlock,
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
@@ -1022,6 +1023,15 @@ export async function POST(request: Request) {
         // creation tools, so the ladder may advertise create_aiflow.
         ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: true })] : [])
       ].join("\n\n");
+      let coworkerDid: string | null = null;
+      try {
+        coworkerDid = (await getTelnyxVoiceRouteForBusiness(body.businessId))?.to_e164 ?? null;
+      } catch (err) {
+        logger.warn("dashboard chat: coworker phone lookup failed", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       const inline = await runInlineChatTurn({
         businessId: body.businessId,
         systemInstruction,
@@ -1030,6 +1040,7 @@ export async function POST(request: Request) {
         knowledgeToolEnabled,
         actionToolGates,
         extraTools: bridgeExtraTools,
+        coworkerDid,
         // Bridged read chains ("find the contact, read their thread,
         // answer") need headroom beyond the default 4 steps.
         maxToolSteps: 6,

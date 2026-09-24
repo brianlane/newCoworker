@@ -48,6 +48,27 @@ export function stepLogLevel(
   return "debug";
 }
 
+/**
+ * A blank manual "Run now" fails extract_text because there is no message.
+ * That is the owner clicking Test with an empty box, not an outage anyone
+ * can act on. Record it, but do not put it on the System Errors card
+ * (`level = 'error'`). Every other terminal failure still pages.
+ */
+export function failurePagesOperator(args: {
+  error: string;
+  channel: string | null;
+  windowText: string | null;
+}): boolean {
+  if (
+    args.error === "extract_text: no message text to read" &&
+    args.channel === "manual" &&
+    !(args.windowText ?? "").trim()
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export async function systemLog(
   supabase: InsertSupabase,
   input: SystemLogInput

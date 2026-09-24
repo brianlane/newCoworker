@@ -44,7 +44,8 @@ const TENANT_TOKENS: ReadonlyArray<{ token: string; dossiers: string[] }> = [
   { token: "kin", dossiers: ["kin-integrated-child-health.md"] },
   { token: "scar", dossiers: ["scar-fairy.md"] },
   { token: "fairy", dossiers: ["scar-fairy.md"] },
-  { token: "hq", dossiers: ["new-coworker-hq.md"] }
+  { token: "hq", dossiers: ["new-coworker-hq.md"] },
+  { token: "bafitness", dossiers: ["ba-fitness.md"] }
 ];
 
 /** Split a filename into its hyphen/dot separated words, so "hq" cannot match "chqx". */
@@ -121,7 +122,8 @@ describe("tenant dossiers", () => {
       "+18609926975", // Clever Concierge
       "+19289402447", // Clever Veronica
       "+18332253837", // Clever live transfer
-      "+13056133412" // Clever Jake
+      "+13056133412", // Clever Jake
+      "+14808061313" // BA Fitness (Quinn)
     ]);
     const leaked: string[] = [];
     for (const dossier of readdirSync(DOSSIER_DIR).filter((f) => f.endsWith(".md"))) {

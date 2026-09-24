@@ -137,6 +137,8 @@ describe("investigationDirective", () => {
     expect(d).toContain("do NOT read the business memory");
     expect(d).toContain("Never name an automation you did not see in the list");
     expect(d).toContain("An honest miss is worth more than a promise");
+    expect(d).toContain("set_flow_enabled");
+    expect(d).toContain("applied is true");
   });
 
   it("works without a target, rather than emitting a dangling phrase", () => {

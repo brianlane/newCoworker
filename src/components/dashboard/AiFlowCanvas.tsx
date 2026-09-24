@@ -63,7 +63,8 @@ import {
   X,
   ZoomIn
 } from "lucide-react";
-import type { FlowStep, FlowTrigger, StepCondition } from "@/lib/ai-flows/schema";
+import type { FlowStep, FlowTrigger } from "@/lib/ai-flows/schema";
+import { canvasConditionText } from "@/lib/ai-flows/condition-text";
 import { formatDurationMinutes } from "@/lib/ai-flows/duration";
 import {
   CONDITION_LABELS,
@@ -305,14 +306,6 @@ function stepSubtitle(step: FlowStep): string {
       return `next call → ${target} · for ${formatDurationMinutes(step.windowMinutes ?? 20)}`;
     }
   }
-}
-
-/** "lead_type equals \"buyer\"", the short reading of a when/arm condition. */
-export function canvasConditionText(when: StepCondition): string {
-  const op =
-    when.equals !== undefined ? "=" : when.notEquals !== undefined ? "≠" : "contains";
-  const value = when.equals ?? when.notEquals ?? when.contains ?? "";
-  return `${when.var} ${op} “${value}”`;
 }
 
 function triggerHeadline(trigger: FlowTrigger): string {

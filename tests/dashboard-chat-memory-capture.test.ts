@@ -15,6 +15,7 @@ import type { GeminiGenerateTextParams } from "@/lib/gemini-generate-content";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { BULLETS_MAX_CHARS } from "@/lib/dashboard-chat/memory-append";
+import { OWNER_MEMORY_SYSTEM_PROMPT as WORKER_OWNER_MEMORY_SYSTEM_PROMPT } from "../vps/chat-worker/memory-capture.mjs";
 import {
   OWNER_MEMORY_SYSTEM_PROMPT,
   captureOwnerRuleInline,
@@ -117,6 +118,8 @@ describe("OWNER_MEMORY_SYSTEM_PROMPT contract", () => {
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("suggestions, proposals, drafts, plans");
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("open or undecided items");
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("wrong, changing, or going away");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("drops the role they stated");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toBe(WORKER_OWNER_MEMORY_SYSTEM_PROMPT);
     expect(OWNER_MEMORY_SYSTEM_PROMPT).not.toMatch(/strong save\s*signal/i);
   });
 });

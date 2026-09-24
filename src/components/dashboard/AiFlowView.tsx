@@ -12,6 +12,7 @@ import {
 } from "@/components/dashboard/aiflow-labels";
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { conditionText } from "@/lib/ai-flows/condition-text";
 import { formatDurationMinutes } from "@/lib/ai-flows/duration";
 import { describeWebhookTriggerSource, webhookTriggerBlockedOnStarter } from "@/lib/ai-flows/webhook-sources";
 import { StarterWebhookGateBanner } from "@/components/dashboard/StarterWebhookGateBanner";
@@ -269,14 +270,6 @@ function ConditionsView({ conditions }: { conditions: TriggerCondition[] }) {
       </div>
     </div>
   );
-}
-
-/** "price_band equals \"over_1m\"", the human reading of a StepCondition. */
-function conditionText(when: StepCondition): string {
-  const operator =
-    when.equals !== undefined ? "equals" : when.notEquals !== undefined ? "does not equal" : "contains";
-  const value = when.equals ?? when.notEquals ?? when.contains ?? "";
-  return `${when.var} ${operator} "${value}"`;
 }
 
 function WhenView({ when }: { when: StepCondition }) {

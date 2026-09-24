@@ -191,6 +191,7 @@ describe("OWNER_MEMORY_SYSTEM_PROMPT contract", () => {
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("suggestions, proposals, drafts, plans");
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("open or undecided items");
     expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("wrong, changing, or going away");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("drops the role they stated");
     expect(OWNER_MEMORY_SYSTEM_PROMPT).not.toMatch(/strong save\s*signal/i);
   });
 });

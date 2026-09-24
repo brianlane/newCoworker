@@ -586,6 +586,9 @@ describe("side-effect notes and the preamble", () => {
     expect(withCreation).toContain("OUT OF SCOPE");
     expect(withCreation).toContain("phone number");
     expect(withCreation).toContain("create_aiflow");
+    expect(withCreation).toContain("applied is true");
+    expect(withCreation).toContain("set_flow_enabled turns one automation");
+    expect(withCreation).toContain("coworker phone");
     // Surfaces without the creation tools must not have it advertised
     // (owner-SMS and Slack pass includeCreationTools: false).
     const withoutCreation = mcpBridgeToolsPreamble({ creationToolsDeclared: false });

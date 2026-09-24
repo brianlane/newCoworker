@@ -107,8 +107,13 @@ vi.mock("@/lib/admin/view-as", () => ({
   getViewAsBusinessId: vi.fn(async () => null)
 }));
 
+vi.mock("@/lib/db/telnyx-routes", () => ({
+  getTelnyxVoiceRouteForBusiness: vi.fn(async () => null)
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { getViewAsBusinessId } from "@/lib/admin/view-as";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 
 /** Point the batched gates mock at a uniform enabled state for every key. */
@@ -187,6 +192,7 @@ async function readEnvelope(res: Response): Promise<{
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
   vi.mocked(getAuthUser).mockResolvedValue({
     email: "owner@example.com",
     isAdmin: false
@@ -850,6 +856,25 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
       expect.arrayContaining(["business_knowledge_lookup"])
     );
     expect(inlineArgs.knowledgeToolEnabled).toBe(false);
+    expect(inlineArgs.coworkerDid).toBeNull();
+  });
+
+  it("passes the coworker DID into the inline turn so a test-call claim can be checked", async () => {
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue({
+      to_e164: "+14808061313"
+    } as never);
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "how do I test Quinn" }));
+    expect(res.status).toBe(200);
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.coworkerDid).toBe("+14808061313");
+  });
+
+  it("still answers inline when the coworker phone lookup throws", async () => {
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockRejectedValue(new Error("routes down"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.coworkerDid).toBeNull();
   });
 
   it("forwards an enabled knowledge-tool toggle to the inline turn", async () => {

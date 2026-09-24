@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { stepLogLevel, systemLog } from "../supabase/functions/_shared/system_log";
+import { failurePagesOperator, stepLogLevel, systemLog } from "../supabase/functions/_shared/system_log";
 
 function mockSupabase(insertResult: { error: { message: string } | null }) {
   const insert = vi.fn().mockResolvedValue(insertResult);
@@ -100,5 +100,45 @@ describe("stepLogLevel", () => {
     for (const status of ["running", "done", "skipped"]) {
       expect(stepLogLevel(status, base)).toBe("debug");
     }
+  });
+});
+
+describe("failurePagesOperator", () => {
+  it("does not page a blank manual extract, and still pages a real failure", () => {
+    expect(
+      failurePagesOperator({
+        error: "extract_text: no message text to read",
+        channel: "manual",
+        windowText: "  "
+      })
+    ).toBe(false);
+    expect(
+      failurePagesOperator({
+        error: "extract_text: no message text to read",
+        channel: "manual",
+        windowText: null
+      })
+    ).toBe(false);
+    expect(
+      failurePagesOperator({
+        error: "extract_text: no message text to read",
+        channel: "webhook",
+        windowText: ""
+      })
+    ).toBe(true);
+    expect(
+      failurePagesOperator({
+        error: "extract_text: no message text to read",
+        channel: "manual",
+        windowText: "name: Ada"
+      })
+    ).toBe(true);
+    expect(
+      failurePagesOperator({
+        error: "browse_extract: navigation timeout",
+        channel: "manual",
+        windowText: ""
+      })
+    ).toBe(true);
   });
 });

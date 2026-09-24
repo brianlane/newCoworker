@@ -19,6 +19,10 @@ import {
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
+function noDid() {
+  return vi.fn(async () => null);
+}
+
 describe("buildIntegrationsStatusLine", () => {
   it("labels every calendar provider arm and both mailbox arms", async () => {
     for (const [provider, needle] of [
@@ -31,7 +35,8 @@ describe("buildIntegrationsStatusLine", () => {
     ] as const) {
       const line = await buildIntegrationsStatusLine(BIZ, {
         resolveCalendar: vi.fn(async () => ({ provider })) as never,
-        resolveEmail: vi.fn(async () => ({ provider: "microsoft" })) as never
+        resolveEmail: vi.fn(async () => ({ provider: "microsoft" })) as never,
+        fetchCoworkerDid: noDid()
       });
       expect(line).toContain(needle);
       expect(line).toContain("Microsoft mailbox connected");
@@ -39,17 +44,49 @@ describe("buildIntegrationsStatusLine", () => {
 
     const googleMail = await buildIntegrationsStatusLine(BIZ, {
       resolveCalendar: vi.fn(async () => null) as never,
-      resolveEmail: vi.fn(async () => ({ provider: "google" })) as never
+      resolveEmail: vi.fn(async () => ({ provider: "google" })) as never,
+      fetchCoworkerDid: noDid()
     });
     expect(googleMail).toContain("Calendar: not connected");
     expect(googleMail).toContain("Google mailbox connected");
 
     const nothing = await buildIntegrationsStatusLine(BIZ, {
       resolveCalendar: vi.fn(async () => null) as never,
-      resolveEmail: vi.fn(async () => null) as never
+      resolveEmail: vi.fn(async () => null) as never,
+      fetchCoworkerDid: noDid()
     });
     expect(nothing).toContain("Email mailbox: not connected");
     expect(nothing).toContain("never guess");
+    expect(nothing).toContain("Coworker phone: not assigned");
+  });
+
+  it("names the coworker DID and refuses to invent one when the lookup fails", async () => {
+    const assigned = await buildIntegrationsStatusLine(BIZ, {
+      resolveCalendar: vi.fn(async () => null) as never,
+      resolveEmail: vi.fn(async () => null) as never,
+      fetchCoworkerDid: vi.fn(async () => ({ to_e164: "+14808061313" }))
+    });
+    expect(assigned).toContain("+14808061313");
+    expect(assigned).toContain("Never substitute a number the owner described as personal");
+
+    const down = await buildIntegrationsStatusLine(BIZ, {
+      resolveCalendar: vi.fn(async () => null) as never,
+      resolveEmail: vi.fn(async () => null) as never,
+      fetchCoworkerDid: vi.fn(async () => {
+        throw new Error("routes down");
+      })
+    });
+    expect(down).toContain("Coworker phone: unavailable this turn");
+    expect(down).toContain("Calendar: not connected");
+
+    const blown = await buildIntegrationsStatusLine(BIZ, {
+      resolveCalendar: vi.fn(async () => null) as never,
+      resolveEmail: vi.fn(async () => null) as never,
+      fetchCoworkerDid: vi.fn(async () => {
+        throw "string blast";
+      })
+    });
+    expect(blown).toContain("unavailable this turn");
   });
 
   it("degrades to null when a resolver throws (Error and non-Error)", async () => {
@@ -58,7 +95,8 @@ describe("buildIntegrationsStatusLine", () => {
         resolveCalendar: vi.fn(async () => {
           throw thrown;
         }) as never,
-        resolveEmail: vi.fn(async () => null) as never
+        resolveEmail: vi.fn(async () => null) as never,
+        fetchCoworkerDid: noDid()
       });
       expect(line).toBeNull();
     }
