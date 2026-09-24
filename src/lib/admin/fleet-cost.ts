@@ -40,6 +40,7 @@ import { listVpsInventory, type VpsInventoryRow } from "@/lib/db/vps-inventory";
 import { loadMoneyGaps } from "@/lib/admin/money-gap-load";
 import {
   emptySoftwareCosts,
+  monthlySoftwareCosts,
   softwareCostTotal,
   type SoftwareCostCents
 } from "@/lib/admin/software-costs";
@@ -205,7 +206,7 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
       });
       return {
         usagePacks: { totalCents: 0, byBusiness: new Map<string, number>() },
-        software: emptySoftwareCosts()
+        software: monthlySoftwareCosts()
       };
     })
   ]);
