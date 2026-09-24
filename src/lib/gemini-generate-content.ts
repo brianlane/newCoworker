@@ -161,11 +161,69 @@ export function thinkingLevelFallback(
 }
 
 /**
+ * Attempts for one generateContent call when Gemini answers 429 or 5xx, or
+ * the fetch itself throws. Same budget the AiFlow worker uses for classify
+ * and extract (`GEMINI_MAX_ATTEMPTS` in ai-flow-worker): a brief "high
+ * demand" 503 must not fail the caller on the first try.
+ */
+const GEMINI_TRANSIENT_ATTEMPTS = 3;
+
+/** 429 and 5xx are brief overloads. Any other 4xx is a permanent refusal. */
+export function isTransientGeminiStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * True when an agent-run `model_failed` detail is still a brief overload
+ * after the inner retries. The run-agent route turns these into HTTP 503
+ * so the worker re-queues. A 429 from Gemini must become a platform 5xx:
+ * the worker only retries `status >= 500`, and a 429 body would be read as
+ * a permanent failure.
+ */
+export function isTransientGeminiErrorDetail(detail: string | null | undefined): boolean {
+  return typeof detail === "string" && /^gemini_http_(?:429|5\d\d)(?::|$)/.test(detail);
+}
+
+function transientBackoffMs(attempt: number): number {
+  return 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * POST once, retrying only transient failures. Returns the last response
+ * (even when not ok) so the caller's existing non-OK handling still applies.
+ * A permanent 4xx returns immediately. A fetch that still throws on the
+ * final attempt is rethrown.
+ */
+async function requestWithTransientRetry(request: () => Promise<Response>): Promise<Response> {
+  for (let attempt = 1; attempt <= GEMINI_TRANSIENT_ATTEMPTS; attempt++) {
+    try {
+      const res = await request();
+      if (res.ok || !isTransientGeminiStatus(res.status) || attempt === GEMINI_TRANSIENT_ATTEMPTS) {
+        return res;
+      }
+      await res.text().catch(() => {});
+    } catch (e) {
+      if (attempt === GEMINI_TRANSIENT_ATTEMPTS) throw e;
+    }
+    await sleep(transientBackoffMs(attempt));
+  }
+  // The loop returns or throws on every attempt, including the last.
+  throw new Error("gemini_transient_retry_exhausted");
+}
+
+/**
  * One-shot text generation via `models/{model}:generateContent`, returning
  * the candidate text AND the billed token usage so callers can meter spend
  * exactly instead of estimating from characters. A 400 that rejects the
  * requested thinkingLevel is retried once at {@link thinkingLevelFallback}
  * (same model, same abort signal, so caller deadlines still bound it).
+ * A 429 or 5xx, and a fetch that throws, is retried up to three times with
+ * the same backoff classify and extract use, so one overloaded minute does
+ * not fail every caller of this function.
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_empty` when the response parses but has no candidate text
  */
@@ -210,11 +268,14 @@ export async function geminiGenerateTextDetailed(
       })
     });
 
-  let response = await requestOnce(params.thinkingLevel);
+  let response = await requestWithTransientRetry(() => requestOnce(params.thinkingLevel));
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    if (params.thinkingLevel && isThinkingLevelRejection(response.status, text)) {
-      response = await requestOnce(thinkingLevelFallback(params.thinkingLevel));
+    const requestedLevel = params.thinkingLevel;
+    if (requestedLevel && isThinkingLevelRejection(response.status, text)) {
+      response = await requestWithTransientRetry(() =>
+        requestOnce(thinkingLevelFallback(requestedLevel))
+      );
     } else {
       throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
     }

@@ -334,6 +334,7 @@ describe("geminiGenerateText", () => {
   });
 
   it("uses an empty suffix when response.text rejects on error responses", async () => {
+    vi.useFakeTimers();
     const brokenBody: Partial<Response> = {
       ok: false,
       status: 502,
@@ -341,14 +342,16 @@ describe("geminiGenerateText", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async () => brokenBody as Response));
 
-    await expect(
-      geminiGenerateText({
-        apiKey: "k",
-        model: "m",
-        systemInstruction: "s",
-        userText: "u"
-      })
-    ).rejects.toThrow(/^gemini_http_502:$/);
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    const assertion = expect(pending).rejects.toThrow(/^gemini_http_502:$/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    vi.useRealTimers();
   });
 
   it("throws gemini_http_parse when JSON is invalid", async () => {
@@ -626,42 +629,146 @@ describe("thinking-level rejection retry", () => {
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry non-400 statuses even when the body mentions thinking level", async () => {
-    const fetchStub = vi.fn().mockResolvedValueOnce(errorResponse(500, REJECTION));
+  it("retries a 500 as a transient overload, not as a thinking-level fallback", async () => {
+    vi.useFakeTimers();
+    const fetchStub = vi.fn(async () => errorResponse(500, REJECTION));
     vi.stubGlobal("fetch", fetchStub);
 
-    await expect(
-      geminiGenerateText({
-        apiKey: "k",
-        model: "gemini-3.7-flash",
-        systemInstruction: "s",
-        userText: "u",
-        thinkingLevel: "minimal"
-      })
-    ).rejects.toThrow(/^gemini_http_500:/);
-    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3.7-flash",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "minimal"
+    });
+    const assertion = expect(pending).rejects.toThrow(/^gemini_http_500:/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    const body = JSON.parse(
+      String((fetchStub.mock.calls[2] as unknown as [string, RequestInit])[1].body)
+    );
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
+    vi.useRealTimers();
   });
 
-  it("surfaces the retry's own failure without looping", async () => {
+  it("surfaces the fallback attempt's own failure after its transient retries, without a second thinking fallback", async () => {
+    vi.useFakeTimers();
     const fetchStub = vi
       .fn()
       .mockResolvedValueOnce(errorResponse(400, REJECTION))
-      .mockResolvedValueOnce(errorResponse(503, "overloaded"));
+      .mockImplementation(async () => errorResponse(503, "overloaded"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3.7-flash",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "minimal"
+    });
+    const assertion = expect(pending).rejects.toThrow(/^gemini_http_503:overloaded$/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetchStub).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
+  it("retries a Gemini 503 and returns the text when a later attempt succeeds", async () => {
+    vi.useFakeTimers();
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(503, "overloaded"))
+      .mockResolvedValueOnce(okText("recovered"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3.8-flash",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe("recovered");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("retries a 429 the same way, then throws gemini_http_429 after three attempts", async () => {
+    vi.useFakeTimers();
+    const fetchStub = vi.fn(async () => errorResponse(429, "slow down"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    const assertion = expect(pending).rejects.toThrow(/^gemini_http_429:slow down$/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it("retries a thrown fetch (network blip) and succeeds on the next attempt", async () => {
+    vi.useFakeTimers();
+    const fetchStub = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce(okText("back"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe("back");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("rethrows a fetch error that is still failing on the third attempt", async () => {
+    vi.useFakeTimers();
+    const fetchStub = vi.fn(async () => {
+      throw new Error("socket hang up");
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    const assertion = expect(pending).rejects.toThrow("socket hang up");
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it("does not retry a permanent 4xx", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(errorResponse(400, "bad request"));
     vi.stubGlobal("fetch", fetchStub);
 
     await expect(
       geminiGenerateText({
         apiKey: "k",
-        model: "gemini-3.7-flash",
+        model: "m",
         systemInstruction: "s",
-        userText: "u",
-        thinkingLevel: "minimal"
+        userText: "u"
       })
-    ).rejects.toThrow(/^gemini_http_503:overloaded$/);
-    expect(fetchStub).toHaveBeenCalledTimes(2);
+    ).rejects.toThrow(/^gemini_http_400:bad request$/);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
   it("uses an empty suffix when the retry response body is unreadable", async () => {
+    vi.useFakeTimers();
     const brokenRetry: Partial<Response> = {
       ok: false,
       status: 502,
@@ -670,17 +777,19 @@ describe("thinking-level rejection retry", () => {
     const fetchStub = vi
       .fn()
       .mockResolvedValueOnce(errorResponse(400, REJECTION))
-      .mockResolvedValueOnce(brokenRetry as Response);
+      .mockResolvedValue(brokenRetry as Response);
     vi.stubGlobal("fetch", fetchStub);
 
-    await expect(
-      geminiGenerateText({
-        apiKey: "k",
-        model: "gemini-3.7-flash",
-        systemInstruction: "s",
-        userText: "u",
-        thinkingLevel: "minimal"
-      })
-    ).rejects.toThrow(/^gemini_http_502:$/);
+    const pending = geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3.7-flash",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "minimal"
+    });
+    const assertion = expect(pending).rejects.toThrow(/^gemini_http_502:$/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    vi.useRealTimers();
   });
 });
