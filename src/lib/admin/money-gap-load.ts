@@ -53,8 +53,10 @@ type QueryResult = {
 
 /** Supabase query builder slice this loader uses. Thenable, and chainable. */
 export interface MoneyGapQuery extends Promise<QueryResult> {
+  eq(column: string, value: string): MoneyGapQuery;
   gte(column: string, value: string): MoneyGapQuery;
   lt(column: string, value: string): MoneyGapQuery;
+  not(column: string, operator: string, value: string): MoneyGapQuery;
   in(column: string, values: string[]): Promise<QueryResult>;
 }
 
@@ -143,6 +145,19 @@ export function priceLoadedGrants(rows: UsagePackGrantRow[]): UsagePackRevenue {
 
 type BusinessMode = { id: string; vps: boolean };
 
+/**
+ * email_log rows Resend did not send. Inbound mail, and outbound mail that
+ * left through the owner's Gmail or Outlook mailbox. Everything else on
+ * this table is a Resend send.
+ */
+const NON_RESEND_EMAIL_SOURCES = [
+  "owner_mailbox",
+  "owner_manual",
+  "tenant_mailbox_inbound",
+  "tenant_mailbox_outbound",
+  "email_coworker"
+] as const;
+
 export async function countFleetEmailsThisMonth(params: {
   db: MoneyGapDb;
   businesses: BusinessMode[];
@@ -156,6 +171,8 @@ export async function countFleetEmailsThisMonth(params: {
     const { count, error } = await params.db
       .from("email_log")
       .select("id", { count: "exact", head: true })
+      .eq("direction", "outbound")
+      .not("source", "in", `(${NON_RESEND_EMAIL_SOURCES.join(",")})`)
       .gte("created_at", params.window.startIso)
       .lt("created_at", params.window.endIso)
       .in("business_id", supabaseIds);
@@ -318,6 +335,8 @@ export async function loadMoneyGaps(now: Date = new Date()): Promise<MoneyGaps> 
         countMovedRows(businessId, {
           table: "email_log",
           filters: [
+            { column: "direction", op: "eq", value: "outbound" },
+            { column: "source", op: "in", value: [...NON_RESEND_EMAIL_SOURCES], negate: true },
             { column: "created_at", op: "gte", value: window.startIso },
             { column: "created_at", op: "lt", value: window.endIso }
           ]

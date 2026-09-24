@@ -141,5 +141,10 @@ export function softwareCacheIsFresh(cache: SoftwareCostCache, now: Date, maxAge
   const synced = Date.parse(cache.syncedAt);
   if (!Number.isFinite(synced)) return false;
   const age = now.getTime() - synced;
-  return age >= 0 && age < maxAgeMs;
+  if (age < 0 || age >= maxAgeMs) return false;
+  const syncedAt = new Date(synced);
+  return (
+    syncedAt.getUTCFullYear() === now.getUTCFullYear() &&
+    syncedAt.getUTCMonth() === now.getUTCMonth()
+  );
 }

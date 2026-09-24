@@ -119,5 +119,14 @@ describe("software costs", () => {
     expect(softwareCacheIsFresh({ ...cache, syncedAt: "2026-09-20T00:00:00.000Z" }, now, 1_000)).toBe(
       false
     );
+    // Four hours old, but the UTC month has turned, so last month's bill
+    // must not stand in for this month.
+    expect(
+      softwareCacheIsFresh(
+        { ...cache, syncedAt: "2026-09-30T22:00:00.000Z" },
+        new Date("2026-10-01T02:00:00.000Z"),
+        6 * 60 * 60 * 1000
+      )
+    ).toBe(false);
   });
 });

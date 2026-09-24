@@ -159,26 +159,23 @@ describe("priceLoadedGrants", () => {
 });
 
 describe("countFleetEmailsThisMonth", () => {
+  function emailCountDb(result: {
+    data: null;
+    error: { message: string } | null;
+    count: number | null;
+  }): MoneyGapDb {
+    const query: Record<string, () => unknown> = {};
+    const self = () => query;
+    query.eq = self;
+    query.not = self;
+    query.gte = self;
+    query.lt = self;
+    query.in = async () => result;
+    return { from: () => ({ select: () => query }) } as unknown as MoneyGapDb;
+  }
+
   it("counts central supabase tenants and box tenants, and survives failures", async () => {
-    const db = {
-      from() {
-        return {
-          select() {
-            return {
-              gte() {
-                return {
-                  lt() {
-                    return {
-                      in: async () => ({ data: null, error: null, count: null })
-                    };
-                  }
-                };
-              }
-            };
-          }
-        };
-      }
-    } as unknown as MoneyGapDb;
+    const db = emailCountDb({ data: null, error: null, count: null });
     vi.mocked(countMovedRows)
       .mockResolvedValueOnce(4)
       .mockRejectedValueOnce(new Error("box down"))
@@ -198,25 +195,7 @@ describe("countFleetEmailsThisMonth", () => {
   });
 
   it("logs a central count error and skips the in() call when nobody is central", async () => {
-    const db = {
-      from() {
-        return {
-          select() {
-            return {
-              gte() {
-                return {
-                  lt() {
-                    return {
-                      in: async () => ({ data: null, error: { message: "count failed" }, count: null })
-                    };
-                  }
-                };
-              }
-            };
-          }
-        };
-      }
-    } as unknown as MoneyGapDb;
+    const db = emailCountDb({ data: null, error: { message: "count failed" }, count: null });
     const failed = await countFleetEmailsThisMonth({
       db,
       businesses: [{ id: "central", vps: false }],
@@ -472,13 +451,15 @@ describe("loadMoneyGaps", () => {
         };
       }
     };
-    // email count uses .lt().in(); grant and business reads await .lt().
+    // email count is .eq().not().gte().lt().in(); grant and business reads await .lt().
     const realFrom = db.from.bind(db);
     db.from = (table: string) => {
       const built = realFrom(table);
       const select = built.select.bind(built);
       built.select = () => {
         const queried = select();
+        queried.eq = () => queried;
+        queried.not = () => queried;
         const gte = queried.gte.bind(queried);
         queried.gte = () => {
           const ranged = gte();
