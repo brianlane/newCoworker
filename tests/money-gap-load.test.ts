@@ -30,6 +30,14 @@ import {
   type MoneyGapDb
 } from "@/lib/admin/money-gap-load";
 
+function requestHost(url: unknown): string {
+  try {
+    return new URL(String(url)).hostname;
+  } catch {
+    return "";
+  }
+}
+
 const NOW = new Date("2026-09-23T12:00:00.000Z");
 const WINDOW = utcMonthWindow(NOW);
 
@@ -255,7 +263,7 @@ describe("loadSoftwareCosts", () => {
     process.env.CURSOR_ADMIN_API_KEY = "cur";
     process.env.PLATFORM_COST_RESEND_MONTHLY_CENTS = "2000";
     const fetchMock = vi.fn(async (url: string) => {
-      if (String(url).includes("vercel.com")) {
+      if (requestHost(url) === "api.vercel.com") {
         return {
           ok: true,
           status: 200,
@@ -296,7 +304,7 @@ describe("loadSoftwareCosts", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (String(url).includes("cursor.com")) {
+        if (requestHost(url) === "api.cursor.com") {
           return { ok: false, status: 401, json: async () => ({}), text: async () => "" };
         }
         return { ok: true, status: 200, text: async () => "\n", json: async () => ({}) };
@@ -355,7 +363,7 @@ describe("loadSoftwareCosts", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        throw String(url).includes("cursor.com") ? "cursor down" : new Error("vercel down");
+        throw requestHost(url) === "api.cursor.com" ? "cursor down" : new Error("vercel down");
       })
     );
     const costs = await loadSoftwareCosts(NOW, 0);
@@ -366,7 +374,7 @@ describe("loadSoftwareCosts", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        throw String(url).includes("cursor.com") ? new Error("cursor down") : "vercel down";
+        throw requestHost(url) === "api.cursor.com" ? new Error("cursor down") : "vercel down";
       })
     );
     const again = await loadSoftwareCosts(NOW, 0);
