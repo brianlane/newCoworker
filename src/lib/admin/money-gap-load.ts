@@ -45,35 +45,22 @@ export type MoneyGaps = {
   software: SoftwareCostCents;
 };
 
-type FilterResult = Promise<{
+type QueryResult = {
   data: unknown;
   error: { message: string } | null;
   count: number | null;
-}>;
-
-type GrantQuery = {
-  gte: (column: string, value: string) => { lt: (column: string, value: string) => FilterResult };
 };
 
-type EmailCountQuery = {
-  gte: (
-    column: string,
-    value: string
-  ) => {
-    lt: (
-      column: string,
-      value: string
-    ) => { in: (column: string, values: string[]) => FilterResult };
-  };
-};
+/** Supabase query builder slice this loader uses. Thenable, and chainable. */
+export interface MoneyGapQuery extends Promise<QueryResult> {
+  gte(column: string, value: string): MoneyGapQuery;
+  lt(column: string, value: string): MoneyGapQuery;
+  in(column: string, values: string[]): Promise<QueryResult>;
+}
 
 export type MoneyGapDb = {
   from: (table: string) => {
-    select: (columns: string, options?: { count?: "exact"; head?: boolean }) => GrantQuery &
-      EmailCountQuery & {
-        // businesses list: no date filter, the builder is still thenable in tests
-        then?: undefined;
-      };
+    select: (columns: string, options?: { count?: "exact"; head?: boolean }) => MoneyGapQuery;
   };
 };
 
@@ -103,7 +90,7 @@ function asGrantRows(data: unknown, unitColumn: string): UsagePackGrantRow[] {
 }
 
 async function readGrants(
-  query: FilterResult,
+  query: Promise<QueryResult>,
   unitColumn: string,
   table: string
 ): Promise<UsagePackGrantRow[]> {
