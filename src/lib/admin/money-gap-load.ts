@@ -155,7 +155,15 @@ const NON_RESEND_EMAIL_SOURCES = [
   "owner_manual",
   "tenant_mailbox_inbound",
   "tenant_mailbox_outbound",
-  "email_coworker"
+  "email_coworker",
+  "dashboard_chat",
+  "sms_assistant",
+  "voice_assistant",
+  "slack_assistant",
+  "telegram_assistant",
+  "teams_assistant",
+  "google_chat_assistant",
+  "booking_reminder"
 ] as const;
 
 export async function countFleetEmailsThisMonth(params: {
