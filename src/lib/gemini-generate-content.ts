@@ -188,17 +188,45 @@ function transientBackoffMs(attempt: number): number {
   return 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve, reject) => {
+    const fail = () => {
+      const reason = signal.reason;
+      reject(reason instanceof Error ? reason : new DOMException("The operation was aborted.", "AbortError"));
+    };
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      fail();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isCallerAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  return error instanceof Error && error.name === "AbortError";
 }
 
 /**
  * POST once, retrying only transient failures. Returns the last response
  * (even when not ok) so the caller's existing non-OK handling still applies.
  * A permanent 4xx returns immediately. A fetch that still throws on the
- * final attempt is rethrown.
+ * final attempt is rethrown. An abort from the caller's signal is rethrown
+ * immediately: retrying it would sleep past the deadline that aborted it.
  */
-async function requestWithTransientRetry(request: () => Promise<Response>): Promise<Response> {
+async function requestWithTransientRetry(
+  request: () => Promise<Response>,
+  signal?: AbortSignal
+): Promise<Response> {
   for (let attempt = 1; attempt <= GEMINI_TRANSIENT_ATTEMPTS; attempt++) {
     try {
       const res = await request();
@@ -207,9 +235,9 @@ async function requestWithTransientRetry(request: () => Promise<Response>): Prom
       }
       await res.text().catch(() => {});
     } catch (e) {
-      if (attempt === GEMINI_TRANSIENT_ATTEMPTS) throw e;
+      if (attempt === GEMINI_TRANSIENT_ATTEMPTS || isCallerAbort(e, signal)) throw e;
     }
-    await sleep(transientBackoffMs(attempt));
+    await sleep(transientBackoffMs(attempt), signal);
   }
   // The loop returns or throws on every attempt, including the last.
   throw new Error("gemini_transient_retry_exhausted");
@@ -222,8 +250,9 @@ async function requestWithTransientRetry(request: () => Promise<Response>): Prom
  * requested thinkingLevel is retried once at {@link thinkingLevelFallback}
  * (same model, same abort signal, so caller deadlines still bound it).
  * A 429 or 5xx, and a fetch that throws, is retried up to three times with
- * the same backoff classify and extract use, so one overloaded minute does
- * not fail every caller of this function.
+ * the same backoff classify and extract use. The caller's abort signal is
+ * not a transient failure: it stops the retry immediately, including during
+ * the backoff sleep.
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_empty` when the response parses but has no candidate text
  */
@@ -268,13 +297,17 @@ export async function geminiGenerateTextDetailed(
       })
     });
 
-  let response = await requestWithTransientRetry(() => requestOnce(params.thinkingLevel));
+  let response = await requestWithTransientRetry(
+    () => requestOnce(params.thinkingLevel),
+    params.signal
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     const requestedLevel = params.thinkingLevel;
     if (requestedLevel && isThinkingLevelRejection(response.status, text)) {
-      response = await requestWithTransientRetry(() =>
-        requestOnce(thinkingLevelFallback(requestedLevel))
+      response = await requestWithTransientRetry(
+        () => requestOnce(thinkingLevelFallback(requestedLevel)),
+        params.signal
       );
     } else {
       throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);

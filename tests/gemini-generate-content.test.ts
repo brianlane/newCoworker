@@ -752,6 +752,141 @@ describe("thinking-level rejection retry", () => {
     vi.useRealTimers();
   });
 
+  it("does not retry when the caller already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchStub = vi.fn(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      })
+    ).rejects.toThrow(/aborted/i);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an AbortError while the signal is still open", async () => {
+    const controller = new AbortController();
+    const fetchStub = vi.fn(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes the backoff and retries when the caller signal stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const fetchStub = vi
+        .fn()
+        .mockResolvedValueOnce(errorResponse(503, "overloaded"))
+        .mockResolvedValueOnce(okText("recovered"));
+      vi.stubGlobal("fetch", fetchStub);
+      const pending = geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      });
+      await vi.runAllTimersAsync();
+      await expect(pending).resolves.toBe("recovered");
+      expect(fetchStub).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the backoff sleep when the caller aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const fetchStub = vi.fn(async () => errorResponse(503, "overloaded"));
+      vi.stubGlobal("fetch", fetchStub);
+      const pending = geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(new Error("deadline"));
+      await expect(pending).rejects.toThrow("deadline");
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+
+      const nameless = new AbortController();
+      vi.stubGlobal("fetch", vi.fn(async () => errorResponse(503, "overloaded")));
+      const pendingNameless = geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: nameless.signal
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      nameless.abort();
+      await expect(pendingNameless).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a backoff when the signal aborted during the failed attempt", async () => {
+    const controller = new AbortController();
+    const fetchStub = vi.fn(async () => {
+      controller.abort(new Error("deadline"));
+      return errorResponse(503, "overloaded");
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      })
+    ).rejects.toThrow("deadline");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses AbortError when the signal aborts without an Error reason", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort("stopped");
+        return errorResponse(503, "overloaded");
+      })
+    );
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "m",
+        systemInstruction: "s",
+        userText: "u",
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("does not retry a permanent 4xx", async () => {
     const fetchStub = vi.fn().mockResolvedValue(errorResponse(400, "bad request"));
     vi.stubGlobal("fetch", fetchStub);
