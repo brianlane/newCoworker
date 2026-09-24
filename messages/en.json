@@ -1382,6 +1382,14 @@
         "title": "ChatGPT app",
         "description": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and read or update your custom tables, all authenticated as you through OAuth, with permissions matching your dashboard role."
       },
+      "grok": {
+        "title": "Grok connector",
+        "description": "Let Grok text and place calls through your coworker. In Grok, open grok.com/connectors, choose New Connector, then Custom, and paste https://www.newcoworker.com/api/mcp. Sign in as the owner. Grok can then send texts from your business number and ask the coworker to place a call. The coworker speaks on the line."
+      },
+      "muse": {
+        "title": "Muse connector",
+        "description": "Let Muse text through your coworker. Ask Muse to add a custom connector for the New Coworker API: POST https://www.newcoworker.com/api/public/v1/messages with your nck_ API key from Dashboard, Integrations, and a body of to and text. Texts go out from your business number. Muse Code can instead attach https://www.newcoworker.com/api/mcp."
+      },
       "google": {
         "title": "Google Workspace",
         "description": "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks."

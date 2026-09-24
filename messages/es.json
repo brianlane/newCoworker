@@ -1382,6 +1382,14 @@
         "title": "Aplicación de ChatGPT",
         "description": "Deja que ChatGPT trabaje con tu coworker: consultar contactos, leer mensajes y resúmenes de llamadas, enviar mensajes, agendar citas y leer o actualizar tus tablas a medida, todo autenticado como tú mediante OAuth, con permisos que coinciden con tu rol en el panel."
       },
+      "grok": {
+        "title": "Conector de Grok",
+        "description": "Deja que Grok envíe textos y pida llamadas a través de tu coworker. En Grok, abre grok.com/connectors, elige Nuevo conector y luego Personalizado, y pega https://www.newcoworker.com/api/mcp. Inicia sesión como dueño. Grok puede enviar textos desde tu número de negocio y pedir al coworker que haga una llamada. Quien habla en la línea es el coworker."
+      },
+      "muse": {
+        "title": "Conector de Muse",
+        "description": "Deja que Muse envíe textos a través de tu coworker. Pídele a Muse que cree un conector personalizado para la API de New Coworker: POST https://www.newcoworker.com/api/public/v1/messages con tu clave nck_ de Panel, Integraciones, y un cuerpo con to y text. Los textos salen de tu número de negocio. Muse Code puede conectar https://www.newcoworker.com/api/mcp en su lugar."
+      },
       "google": {
         "title": "Google Workspace",
         "description": "Búsqueda de espacios y reserva de calendario más seguimientos por correo con tu cuenta de Google, conectado en dos clics."

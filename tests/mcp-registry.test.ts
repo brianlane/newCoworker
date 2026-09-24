@@ -66,6 +66,7 @@ describe("allMcpTools", () => {
         "search_contacts",
         "send_sms",
         "send_whatsapp",
+        "place_call",
         "set_flow_enabled",
         "trigger_flow",
         "update_agent",
