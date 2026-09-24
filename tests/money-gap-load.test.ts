@@ -456,12 +456,12 @@ describe("loadMoneyGaps", () => {
     db.from = (table: string) => {
       const built = realFrom(table);
       const select = built.select.bind(built);
-      built.select = () => {
-        const queried = select() as {
-          eq: () => typeof queried;
-          not: () => typeof queried;
+      built.select = (() => {
+        const queried = select() as unknown as {
+          eq: () => unknown;
+          not: () => unknown;
           gte: () => {
-            lt: () => Promise<{ data: unknown; error: { message: string } | null; count: number | null }>;
+            lt: () => Promise<unknown>;
           };
         };
         queried.eq = () => queried;
@@ -470,16 +470,14 @@ describe("loadMoneyGaps", () => {
         queried.gte = () => {
           const ranged = gte();
           const lt = ranged.lt.bind(ranged);
-          ranged.lt = () => {
-            const result = lt();
-            return Object.assign(result, {
+          ranged.lt = () =>
+            Object.assign(lt() as object, {
               in: async () => ({ data: null, error: null, count: 7 })
-            });
-          };
+            }) as unknown as ReturnType<typeof ranged.lt>;
           return ranged;
         };
         return queried;
-      };
+      }) as unknown as typeof select;
       return built;
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
