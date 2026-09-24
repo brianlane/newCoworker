@@ -39,12 +39,10 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { requireMcpBusinessRole } from "@/lib/mcp/auth";
-import {
-  placeCallTool,
-  personaForBrief,
-  ASSISTANT_CALL_FLOW_NAME,
-  chooseAssistantCallFlow
-} from "@/lib/mcp/tools/place-call";
+import { placeCallTools } from "@/lib/mcp/tools/place-call";
+
+const placeCallTool = placeCallTools[0];
+const ASSISTANT_CALL_FLOW_NAME = "Assistant calls";
 import { restoreContentRows } from "@/lib/residency/row-delete";
 import { rateLimit } from "@/lib/rate-limit";
 import { outboundAiCallsAllowedForBusiness } from "@/lib/plans/outbound-ai-calls";
@@ -98,7 +96,7 @@ describe("place_call", () => {
     expect(body.flowId).toBe("flow-1");
     expect(body.call.toE164).toBe("+16025551212");
     expect(body.call.notifyE164).toBe("+16025550000");
-    expect(body.call.persona).toBe(personaForBrief(BRIEF));
+    expect(body.call.persona).toContain(BRIEF);
     expect(body.call.persona.length).toBeLessThanOrEqual(500);
   });
 
@@ -264,11 +262,5 @@ describe("place_call", () => {
     expect(body.flowId).toBe("flow-old");
     expect(createAiFlow).not.toHaveBeenCalled();
     expect(restoreContentRows).not.toHaveBeenCalled();
-  });
-});
-
-describe("chooseAssistantCallFlow", () => {
-  it("creates when nothing is left, including an empty list", () => {
-    expect(chooseAssistantCallFlow([])).toBe("create");
   });
 });

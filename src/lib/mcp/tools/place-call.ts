@@ -31,7 +31,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 const PLACE_CALL_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
 /** Stable flow name. Searched and created with this exact string. */
-export const ASSISTANT_CALL_FLOW_NAME = "Assistant calls";
+const ASSISTANT_CALL_FLOW_NAME = "Assistant calls";
 
 const PERSONA_PREFIX =
   "You are the phone coworker for this business, placing this one call. Purpose: ";
@@ -40,7 +40,7 @@ const PERSONA_SUFFIX =
 
 const BRIEF_MAX = 500 - PERSONA_PREFIX.length - PERSONA_SUFFIX.length;
 
-export function personaForBrief(brief: string): string {
+function personaForBrief(brief: string): string {
   return `${PERSONA_PREFIX}${brief.trim()}${PERSONA_SUFFIX}`;
 }
 
@@ -59,7 +59,7 @@ type AssistantCallFlowRow = {
  * Restore that row instead. When several live rows share the name, use the
  * oldest enabled one so a double-create does not make every later call fail.
  */
-export function chooseAssistantCallFlow(rows: AssistantCallFlowRow[]): {
+function chooseAssistantCallFlow(rows: AssistantCallFlowRow[]): {
   flowId: string;
   restore: boolean;
 } | "create" | "disabled" {
@@ -104,7 +104,7 @@ function originateFailureMessage(reason: string): string {
   return "Could not place the call. Try again.";
 }
 
-export const placeCallTool = defineMcpTool({
+const placeCallTool = defineMcpTool({
   name: "place_call",
   title: "Place a call",
   annotations: TOOL_BEHAVIOR.writeExternal,
