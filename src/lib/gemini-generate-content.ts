@@ -169,7 +169,7 @@ export function thinkingLevelFallback(
 const GEMINI_TRANSIENT_ATTEMPTS = 3;
 
 /** 429 and 5xx are brief overloads. Any other 4xx is a permanent refusal. */
-export function isTransientGeminiStatus(status: number): boolean {
+function isTransientGeminiStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
