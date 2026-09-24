@@ -19,14 +19,19 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 vi.mock("@/lib/ai-flows/db", () => ({
   createAiFlow: vi.fn(async () => ({ id: "flow-new" }))
 }));
+vi.mock("@/lib/residency/row-delete", () => ({
+  restoreContentRows: vi.fn(async () => ({ updated: 1 }))
+}));
 
-const maybeSingle = vi.fn();
+const limit = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
-          eq: () => ({ maybeSingle })
+          eq: () => ({
+            order: () => ({ limit })
+          })
         })
       })
     })
@@ -34,7 +39,13 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { requireMcpBusinessRole } from "@/lib/mcp/auth";
-import { placeCallTool, personaForBrief, ASSISTANT_CALL_FLOW_NAME } from "@/lib/mcp/tools/place-call";
+import {
+  placeCallTool,
+  personaForBrief,
+  ASSISTANT_CALL_FLOW_NAME,
+  chooseAssistantCallFlow
+} from "@/lib/mcp/tools/place-call";
+import { restoreContentRows } from "@/lib/residency/row-delete";
 import { rateLimit } from "@/lib/rate-limit";
 import { outboundAiCallsAllowedForBusiness } from "@/lib/plans/outbound-ai-calls";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
@@ -52,7 +63,10 @@ beforeEach(() => {
   vi.mocked(getNotificationPreferences).mockResolvedValue({
     phone_number: "+16025550000"
   } as Awaited<ReturnType<typeof getNotificationPreferences>>);
-  maybeSingle.mockResolvedValue({ data: { id: "flow-1", enabled: true }, error: null });
+  limit.mockResolvedValue({
+    data: [{ id: "flow-1", enabled: true, deleted_at: null }],
+    error: null
+  });
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
   process.env.INTERNAL_CRON_SECRET = "cron-secret";
   vi.stubGlobal(
@@ -89,7 +103,7 @@ describe("place_call", () => {
   });
 
   it("creates the Assistant calls flow the first time", async () => {
-    maybeSingle.mockResolvedValue({ data: null, error: null });
+    limit.mockResolvedValue({ data: null, error: null });
 
     await runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH);
 
@@ -112,12 +126,15 @@ describe("place_call", () => {
   });
 
   it("refuses a turned-off flow, a missing alert phone, a blocked tier, and a failed dial", async () => {
-    maybeSingle.mockResolvedValue({ data: { id: "flow-1", enabled: false }, error: null });
+    limit.mockResolvedValue({
+      data: [{ id: "flow-1", enabled: false, deleted_at: null }],
+      error: null
+    });
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
       /turned off/i
     );
 
-    maybeSingle.mockResolvedValue({ data: null, error: null });
+    limit.mockResolvedValue({ data: null, error: null });
     vi.mocked(getNotificationPreferences).mockResolvedValue(null);
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
       /alert phone/i
@@ -138,7 +155,10 @@ describe("place_call", () => {
     );
 
     vi.mocked(outboundAiCallsAllowedForBusiness).mockResolvedValue(true);
-    maybeSingle.mockResolvedValue({ data: { id: "flow-1", enabled: true }, error: null });
+    limit.mockResolvedValue({
+      data: [{ id: "flow-1", enabled: true, deleted_at: null }],
+      error: null
+    });
     const refusals: Array<[Record<string, unknown>, RegExp]> = [
       [{ ok: false, reason: "tier_blocked" }, /standard/i],
       [{ ok: false, reason: "quota_exhausted" }, /voice minutes/i],
@@ -155,7 +175,7 @@ describe("place_call", () => {
       vi.mocked(fetch).mockResolvedValue({
         ok: payload.ok === true,
         json: async () => payload
-      } as Response);
+      } as unknown as Response);
       await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
         pattern
       );
@@ -166,7 +186,7 @@ describe("place_call", () => {
       json: async () => {
         throw new Error("not json");
       }
-    } as Response);
+    } as unknown as Response);
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
       /could not place/i
     );
@@ -174,7 +194,7 @@ describe("place_call", () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: async () => ({ ok: true, callControlId: "cc-2" })
-    } as Response);
+    } as unknown as Response);
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).resolves.toMatchObject({
       to: "+16025551212",
       call_control_id: "cc-2"
@@ -194,7 +214,7 @@ describe("place_call", () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
 
     process.env.INTERNAL_CRON_SECRET = "cron-secret";
-    maybeSingle.mockResolvedValue({ data: null, error: { message: "db down" } });
+    limit.mockResolvedValue({ data: null, error: { message: "db down" } });
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
       /look up/i
     );
@@ -203,5 +223,52 @@ describe("place_call", () => {
     await expect(runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH)).rejects.toThrow(
       /rate limit/i
     );
+  });
+
+  it("restores a soft-deleted Assistant calls flow instead of refusing it", async () => {
+    limit.mockResolvedValue({
+      data: [{ id: "flow-deleted", enabled: false, deleted_at: "2026-09-01T00:00:00Z" }],
+      error: null
+    });
+
+    const result = await runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH);
+
+    expect(createAiFlow).not.toHaveBeenCalled();
+    expect(restoreContentRows).toHaveBeenCalledWith(
+      "biz-1",
+      "ai_flows",
+      [{ column: "id", op: "eq", value: "flow-deleted" }],
+      expect.anything(),
+      { enabled: true }
+    );
+    expect(result).toMatchObject({ dialed: true, call_control_id: "cc-1" });
+    const init = vi.mocked(fetch).mock.calls[0]?.[1];
+    const body = JSON.parse(String(init && "body" in init ? init.body : "{}")) as { flowId: string };
+    expect(body.flowId).toBe("flow-deleted");
+  });
+
+  it("uses the oldest enabled flow when the name is duplicated", async () => {
+    limit.mockResolvedValue({
+      data: [
+        { id: "flow-off", enabled: false, deleted_at: null },
+        { id: "flow-old", enabled: true, deleted_at: null },
+        { id: "flow-new-dup", enabled: true, deleted_at: null }
+      ],
+      error: null
+    });
+
+    await runTool(placeCallTool, { to: "+16025551212", brief: BRIEF }, AUTH);
+
+    const init = vi.mocked(fetch).mock.calls[0]?.[1];
+    const body = JSON.parse(String(init && "body" in init ? init.body : "{}")) as { flowId: string };
+    expect(body.flowId).toBe("flow-old");
+    expect(createAiFlow).not.toHaveBeenCalled();
+    expect(restoreContentRows).not.toHaveBeenCalled();
+  });
+});
+
+describe("chooseAssistantCallFlow", () => {
+  it("creates when nothing is left, including an empty list", () => {
+    expect(chooseAssistantCallFlow([])).toBe("create");
   });
 });

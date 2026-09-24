@@ -25,6 +25,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { createAiFlow } from "@/lib/ai-flows/db";
 import { outboundAiCallsAllowedForBusiness, OUTBOUND_AI_CALLS_UPGRADE_MESSAGE } from "@/lib/plans/outbound-ai-calls";
+import { restoreContentRows } from "@/lib/residency/row-delete";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PLACE_CALL_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
@@ -40,6 +42,49 @@ const BRIEF_MAX = 500 - PERSONA_PREFIX.length - PERSONA_SUFFIX.length;
 
 export function personaForBrief(brief: string): string {
   return `${PERSONA_PREFIX}${brief.trim()}${PERSONA_SUFFIX}`;
+}
+
+type AssistantCallFlowRow = {
+  id: string;
+  enabled: boolean;
+  deleted_at: string | null;
+};
+
+/**
+ * Pick the flow this tool dials through.
+ *
+ * Names are not unique, and a delete only stamps deleted_at (and forces
+ * enabled off). A hidden deleted row must not count as "turned off": the
+ * AiFlows list does not show it, so the owner could never turn it back on.
+ * Restore that row instead. When several live rows share the name, use the
+ * oldest enabled one so a double-create does not make every later call fail.
+ */
+export function chooseAssistantCallFlow(rows: AssistantCallFlowRow[]): {
+  flowId: string;
+  restore: boolean;
+} | "create" | "disabled" {
+  const live = rows.filter((row) => !row.deleted_at);
+  const enabled = live.find((row) => row.enabled);
+  if (enabled) return { flowId: enabled.id, restore: false };
+  if (live.length > 0) return "disabled";
+  const deleted = rows.find((row) => row.deleted_at);
+  if (deleted) return { flowId: deleted.id, restore: true };
+  return "create";
+}
+
+async function loadAssistantCallFlows(
+  db: SupabaseClient,
+  businessId: string
+): Promise<AssistantCallFlowRow[]> {
+  const { data, error } = await db
+    .from("ai_flows")
+    .select("id, enabled, deleted_at")
+    .eq("business_id", businessId)
+    .eq("name", ASSISTANT_CALL_FLOW_NAME)
+    .order("created_at", { ascending: true })
+    .limit(10);
+  if (error) throw new McpToolError("Could not look up the call flow. Try again.");
+  return (data ?? []) as AssistantCallFlowRow[];
 }
 
 function originateFailureMessage(reason: string): string {
@@ -109,22 +154,14 @@ export const placeCallTool = defineMcpTool({
     }
 
     const db = await createSupabaseServiceClient();
-    const { data: existing, error: findErr } = await db
-      .from("ai_flows")
-      .select("id, enabled")
-      .eq("business_id", businessId)
-      .eq("name", ASSISTANT_CALL_FLOW_NAME)
-      .maybeSingle();
-    if (findErr) throw new McpToolError("Could not look up the call flow. Try again.");
-
-    let flowId = (existing as { id?: string; enabled?: boolean } | null)?.id ?? "";
-    const enabled = (existing as { enabled?: boolean } | null)?.enabled;
-    if (flowId && enabled !== true) {
+    const choice = chooseAssistantCallFlow(await loadAssistantCallFlows(db, businessId));
+    let flowId = "";
+    if (choice === "disabled") {
       throw new McpToolError(
         `The "${ASSISTANT_CALL_FLOW_NAME}" flow is turned off. Turn it on in AiFlows, then try again.`
       );
     }
-    if (!flowId) {
+    if (choice === "create") {
       const created = await createAiFlow(
         {
           businessId,
@@ -147,6 +184,17 @@ export const placeCallTool = defineMcpTool({
         db
       );
       flowId = created.id;
+    } else if (choice.restore) {
+      await restoreContentRows(
+        businessId,
+        "ai_flows",
+        [{ column: "id", op: "eq", value: choice.flowId }],
+        { client: db },
+        { enabled: true }
+      );
+      flowId = choice.flowId;
+    } else {
+      flowId = choice.flowId;
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
