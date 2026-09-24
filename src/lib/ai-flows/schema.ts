@@ -857,6 +857,26 @@ const nonBranchStepMembers = [
       // skipWhenText is for. skipWhenText is evaluated FIRST and wins when both
       // markers match.
       continueWhenText: z.string().min(1).max(200).optional(),
+      // Page text overwrites the model's answer. A swallowed portal click can
+      // leave the original button on the page while the model reports the
+      // success phrase from its own prompt (HomeLight, Ron G., 2026-09-23:
+      // "Call me to claim referral" still visible, model said "Call me again").
+      // Matched case-insensitively against visible text and raw HTML, after
+      // extraction, so the page wins.
+      forceWhenText: z
+        .array(
+          z.object({
+            contains: z.string().min(1).max(200),
+            set: z
+              .record(varName, z.string().min(1).max(200))
+              .refine((o) => Object.keys(o).length >= 1 && Object.keys(o).length <= 8, {
+                message: "forceWhenText set must carry 1..8 vars"
+              })
+          })
+        )
+        .min(1)
+        .max(4)
+        .optional(),
       when: whenSchema.optional()
     })
     .refine((s) => (s.fields?.length ?? 0) > 0 || (s.extractLinks?.length ?? 0) > 0, {
@@ -3418,6 +3438,9 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "browse_extract") {
       for (const f of step.fields ?? []) vars.add(f.name);
       for (const l of step.extractLinks ?? []) vars.add(l.name);
+      for (const rule of step.forceWhenText ?? []) {
+        for (const key of Object.keys(rule.set)) vars.add(key);
+      }
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "extract_text") {
       for (const f of step.fields) vars.add(f.name);

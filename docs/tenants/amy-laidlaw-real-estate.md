@@ -1638,6 +1638,20 @@ and keeps the run going; this one-shot opts `claim_again` in, writes
 Do not requeue those runs. Do not click Claim on a live `hmlt.co` URL.
 Merge does not apply it: `npx tsx scripts/oneshot/homelight-claim-again-missing.ts --apply`
 after merge. Pinned by `tests/oneshot-homelight-claim-again-missing.test.ts`),
+`homelight-unconfirmed-claim.ts` +
+`homelight-unconfirmed-claim-definition.ts` (Sep 23 2026: Ron G., Mesa AZ,
+~$625K, run `e7c5e9b3`. claim_click reported success. The page still showed
+Call me to claim referral. claim_verify answered Call me again, an example
+of a successful claim in the prompt, so the NOT CONFIRMED retry never ran.
+The team was told the referral had been claimed. HomeLight's 90-minute email
+then said the referral was getting cold. claim_verify and claim_verify2 now
+force claim_state to NOT CONFIRMED while that button is still on the page.
+offer_gate's first arm then texts the owner to tap it, and does not wait or
+say the lead was claimed. lead_phone is told the We will call you at line is
+not the seller. Do not requeue that run. Do not click Claim on a live
+hmlt.co URL. Merge does not apply it:
+`npx tsx scripts/oneshot/homelight-unconfirmed-claim.ts --apply` after merge.
+Pinned by `tests/oneshot-homelight-unconfirmed-claim.test.ts`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

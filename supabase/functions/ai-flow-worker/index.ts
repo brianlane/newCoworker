@@ -153,6 +153,7 @@ import {
   renderErrorKind
 } from "../_shared/ai_flows/browse.ts";
 import {
+  applyForceWhenText,
   classifyBrowseActionFailure,
   classifyPageMarkers,
   MISSING_CONTROL_VAR_VALUE
@@ -3987,6 +3988,16 @@ async function browseStep(
   // Scrub BEFORE the link/screenshot passthroughs join the map, so the
   // actions_taken note only ever names real extraction fields.
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_extract");
+  // The page wins over the model. A phrase still on the page overwrites the
+  // extracted value (a swallowed click that left the original button up).
+  const forced = applyForceWhenText([pageText, page.html], action.forceWhenText, out);
+  if (forced.applied.length > 0) {
+    for (const [key, value] of Object.entries(forced.values)) out[key] = value;
+    appendActionTaken(
+      scope,
+      `page text overrode the extraction because the page still showed ${forced.applied.join("; ")}`
+    );
+  }
   // Capture link hrefs by their visible button text from the page HTML (parsed
   // here in the worker; the render service already returns html). Empty string
   // when no anchor's visible text contains the matchText.
