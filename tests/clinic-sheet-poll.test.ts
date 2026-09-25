@@ -39,6 +39,7 @@ type DbState = {
   baselineInsertError: { code: string } | null;
   baselineReadError: { code: string } | null;
   readyUpdateError: { code: string } | null;
+  updateMatchesNone: boolean;
   phoneUpsertError: { code: string } | null;
   phoneInsertError: { code: string } | null;
   phoneLookupError: { code: string } | null;
@@ -77,27 +78,34 @@ function makeDb(state: DbState) {
               eq() {
                 return {
                   eq() {
-                    if (state.readyUpdateError) return { error: state.readyUpdateError };
-                    state.ready = true;
-                    return { error: null };
+                    return {
+                      select() {
+                        if (state.readyUpdateError) return { error: state.readyUpdateError, data: null };
+                        if (state.updateMatchesNone) return { error: null, data: [] };
+                        state.ready = true;
+                        return { error: null, data: [{ spreadsheet_id: "sheet-1" }] };
+                      }
+                    };
                   }
                 };
               }
             };
           },
           delete() {
-            return {
+            const chain = {
               eq() {
-                return {
-                  eq() {
-                    state.baseline = false;
-                    state.ready = false;
-                    state.deletedBaseline = true;
-                    return { error: null };
-                  }
-                };
+                return chain;
+              },
+              then(resolve: (value: { error: null }) => void) {
+                if (!state.ready) {
+                  state.baseline = false;
+                  state.ready = false;
+                  state.deletedBaseline = true;
+                }
+                resolve({ error: null });
               }
             };
+            return chain;
           }
         };
       }
@@ -145,6 +153,7 @@ function state(partial: Partial<DbState> = {}): DbState {
     baselineInsertError: null,
     baselineReadError: null,
     readyUpdateError: null,
+    updateMatchesNone: false,
     phoneUpsertError: null,
     phoneInsertError: null,
     phoneLookupError: null,
@@ -585,6 +594,23 @@ describe("pollClinicSheets", () => {
     });
     expect(result.enqueued).toBe(1);
     expect(result.failed).toBe(0);
+  });
+
+  it("does not report a baseline when the ready update matches no row", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({ updateMatchesNone: true });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog
+    });
+    expect(result.baselined).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(dbState.deletedBaseline).toBe(true);
   });
 
   it("uses the default database and logger when they are not injected", async () => {

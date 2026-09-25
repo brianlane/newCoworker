@@ -120,14 +120,15 @@ export async function pollClinicSheets(deps: PollDeps = {}): Promise<ClinicSheet
     }
     if (baseline === "new" || baseline === "finish") {
       const stored = await completeBaseline(db, target.spreadsheetId, target.sheetGid, parsed.patients);
-      if (!stored) {
-        if (baseline === "new") {
-          await db
-            .from("clinic_sheet_baselines")
-            .delete()
-            .eq("spreadsheet_id", target.spreadsheetId)
-            .eq("sheet_gid", target.sheetGid);
-        }
+        if (!stored) {
+          if (baseline === "new") {
+            await db
+              .from("clinic_sheet_baselines")
+              .delete()
+              .eq("spreadsheet_id", target.spreadsheetId)
+              .eq("sheet_gid", target.sheetGid)
+              .eq("ready", false);
+          }
         result.failed += 1;
         await logBaselineFailed(log, target);
         continue;
@@ -291,12 +292,13 @@ async function completeBaseline(
 ): Promise<boolean> {
   const stored = await rememberPhones(db, spreadsheetId, patients);
   if (!stored) return false;
-  const { error } = await db
+  const { data, error } = await db
     .from("clinic_sheet_baselines")
     .update({ ready: true })
     .eq("spreadsheet_id", spreadsheetId)
-    .eq("sheet_gid", sheetGid);
-  return !error;
+    .eq("sheet_gid", sheetGid)
+    .select("spreadsheet_id");
+  return !error && Array.isArray(data) && data.length > 0;
 }
 
 async function rememberPhones(
