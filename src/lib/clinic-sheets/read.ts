@@ -7,7 +7,7 @@ import { clinicSheetA1Range } from "@/lib/clinic-sheets/rows";
 
 const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
 
-export type SheetGrid = {
+type SheetGrid = {
   title: string;
   values: string[][];
 };

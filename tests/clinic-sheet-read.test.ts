@@ -9,6 +9,14 @@ const KEY = {
   project_id: "new-coworker"
 };
 
+function isGoogleTokenUrl(raw: string): boolean {
+  try {
+    return new URL(raw).hostname === "oauth2.googleapis.com";
+  } catch {
+    return false;
+  }
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -34,7 +42,7 @@ describe("readClinicSheetTab", () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("oauth2.googleapis.com")) {
+      if (isGoogleTokenUrl(url)) {
         return jsonResponse({ access_token: "tok" });
       }
       if (url.includes("/values/")) {
@@ -108,7 +116,7 @@ describe("readClinicSheetTab", () => {
   it("reports a metadata failure, including a removed share", async () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("oauth2.googleapis.com")) return jsonResponse({ access_token: "tok" });
+      if (isGoogleTokenUrl(url)) return jsonResponse({ access_token: "tok" });
       return new Response("The caller does not have permission", { status: 403 });
     }) as typeof fetch;
     const read = await readClinicSheetTab({
@@ -123,7 +131,7 @@ describe("readClinicSheetTab", () => {
   it("reports a missing gid", async () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("oauth2.googleapis.com")) return jsonResponse({ access_token: "tok" });
+      if (isGoogleTokenUrl(url)) return jsonResponse({ access_token: "tok" });
       return jsonResponse({ sheets: [{ properties: { sheetId: 9, title: "Other" } }] });
     }) as typeof fetch;
     const read = await readClinicSheetTab({
@@ -138,7 +146,7 @@ describe("readClinicSheetTab", () => {
   it("reports a values read failure", async () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("oauth2.googleapis.com")) return jsonResponse({ access_token: "tok" });
+      if (isGoogleTokenUrl(url)) return jsonResponse({ access_token: "tok" });
       if (url.includes("/values/")) return new Response("boom", { status: 500 });
       return jsonResponse({ sheets: [{ properties: { sheetId: 1, title: "Tab" } }] });
     }) as typeof fetch;
@@ -154,7 +162,7 @@ describe("readClinicSheetTab", () => {
   it("treats a sheet with no value rows as an empty grid", async () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("oauth2.googleapis.com")) return jsonResponse({ access_token: "tok" });
+      if (isGoogleTokenUrl(url)) return jsonResponse({ access_token: "tok" });
       if (url.includes("/values/")) return jsonResponse({});
       return jsonResponse({ sheets: [{ properties: { sheetId: 1, title: "Tab" } }] });
     }) as typeof fetch;
