@@ -16,10 +16,32 @@ describe("parseClinicSheetRows", () => {
           firstName: "Ada",
           lastName: "Lovelace",
           phoneE164: "+14805550100",
-          fullName: "Ada Lovelace"
+          fullName: "Ada Lovelace",
+          email: ""
         }
       ]
     });
+  });
+
+  it("uses the Email column and ignores Emailed and a blank or invalid address", () => {
+    const parsed = parseClinicSheetRows(
+      [
+        ["First Name", "Last Name", "Phone", "Emailed", "Email", "Send Welcome Email"],
+        ["Ada", "Lovelace", "4805550100", "yes", "ada@example.com", "yes"],
+        ["Grace", "Hopper", "4805550101", "yes", "", "yes"],
+        ["Mary", "Jackson", "4805550102", "yes", "not-an-email", "yes"],
+        ["Ida", "Wells", "4805550103"]
+      ],
+      { require10Day: false }
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.patients.map((patient) => patient.email)).toEqual([
+      "ada@example.com",
+      "",
+      "",
+      ""
+    ]);
   });
 
   it("accepts First, Last, and Mobile headers", () => {

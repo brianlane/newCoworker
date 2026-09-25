@@ -8,6 +8,11 @@
  * flow with source `clinic_google_sheet`. Facebook lead ads use a different
  * source, so this flow does not run on them.
  *
+ * On a new row: welcome email from the owner's connected mailbox when the
+ * sheet has an email, then the call, then one text if that call did not
+ * reach a live conversation. There is no calendar connection, so a live
+ * conversation is not texted again. The flow does not create a contact.
+ *
  * Dane Functional Health is Pacific. Eros Vitality and New Jersey Weight
  * Loss Company are Eastern. A blank clinic name, or the sentinel "none",
  * notifies the owner and does not dial. The 10-Day column filter is the
@@ -24,6 +29,24 @@ export const BAFITNESS_BOOKING_URL =
   "https://cal.com/coachbrett/intro-to-10-day-wellness-coaching";
 /** Middle of the 5-to-10 minute window he asked for. */
 export const BAFITNESS_CALL_DELAY_MINUTES = 7;
+/**
+ * Outlook mailbox already selected on "GLP-1 Google Sheet Automation".
+ * The address is not stored here.
+ */
+export const BAFITNESS_WELCOME_FROM_CONNECTION_ID = "4c8f27c4-fadf-4d6c-b380-090324a1edb4";
+
+const WELCOME_EMAIL = `Hi {{vars.lead_name.first}},
+
+I'm Coach Brett Douglas. {{vars.clinic_name}} includes 10 days of complimentary weight-loss coaching with me, and I wanted to welcome you personally.
+
+The first step is a short intro phone call. You can book it here:
+${BAFITNESS_BOOKING_URL}
+
+I do not give medical advice or talk about pricing on this note. Medication questions stay with {{vars.clinic_name}}.
+
+Coach Brett Douglas`;
+
+const FOLLOW_UP_SMS = `Hi {{vars.lead_name.first}}, this is Quinn with Coach Brett. I tried to reach you about the complimentary 10-day coaching included with {{vars.clinic_name}}. You can book your intro call here: ${BAFITNESS_BOOKING_URL}`;
 
 const PERSONA = `You are Quinn, calling on behalf of Coach Brett Douglas. This call is only for a new GLP-1 clinic patient who just appeared on that clinic's Google Sheet. Do not use this script for anyone else.
 
@@ -123,6 +146,25 @@ function placeCall(id: string, timezone: string) {
   };
 }
 
+function followUpSms(id: string, outcome: "no_answer" | "not_placed" | "failed") {
+  return {
+    id,
+    type: "send_sms" as const,
+    to: "{{vars.lead_phone}}",
+    body: FOLLOW_UP_SMS,
+    when: { var: "call_outcome" as const, equals: outcome }
+  };
+}
+
+function callThenText(callId: string, timezone: string, prefix: string) {
+  return [
+    placeCall(callId, timezone),
+    followUpSms(`${prefix}_no_answer`, "no_answer"),
+    followUpSms(`${prefix}_not_placed`, "not_placed"),
+    followUpSms(`${prefix}_failed`, "failed")
+  ];
+}
+
 export function buildBafitnessClinicSheetDefinition(): AiFlowDefinition {
   return {
     version: 1,
@@ -139,10 +181,34 @@ export function buildBafitnessClinicSheetDefinition(): AiFlowDefinition {
         fields: [
           { name: "lead_name", description: "The patient's full name" },
           { name: "lead_phone", description: "The patient's phone number" },
+          { name: "lead_email", description: "The patient's email address, if the row has one" },
           {
             name: "clinic_name",
             description:
               "The clinic name: Dane Functional Health, Eros Vitality, or New Jersey Weight Loss Company"
+          }
+        ]
+      },
+      {
+        id: "s_email",
+        type: "branch",
+        question: "Does the sheet row include an email address?",
+        branches: [
+          {
+            id: "arm_no_email",
+            label: "No email",
+            condition: { var: "lead_email", blank: true },
+            steps: []
+          }
+        ],
+        else: [
+          {
+            id: "s_welcome",
+            type: "send_email",
+            to: "{{vars.lead_email}}",
+            subject: "Your 10-day coaching with Coach Brett",
+            body: WELCOME_EMAIL,
+            fromConnectionId: BAFITNESS_WELCOME_FROM_CONNECTION_ID
           }
         ]
       },
@@ -156,7 +222,7 @@ export function buildBafitnessClinicSheetDefinition(): AiFlowDefinition {
             id: "arm_dane",
             label: "Dane Functional Health (Pacific)",
             condition: { var: "clinic_name", contains: "dane", caseInsensitive: true },
-            steps: [placeCall("s_call_pacific", "America/Los_Angeles")]
+            steps: callThenText("s_call_pacific", "America/Los_Angeles", "s_text_pacific")
           },
           {
             id: "arm_missing",
@@ -187,7 +253,7 @@ export function buildBafitnessClinicSheetDefinition(): AiFlowDefinition {
             ]
           }
         ],
-        else: [placeCall("s_call_eastern", "America/New_York")]
+        else: callThenText("s_call_eastern", "America/New_York", "s_text_eastern")
       }
     ]
   };

@@ -6,6 +6,7 @@ import {
   BAFITNESS_BOOKING_URL,
   BAFITNESS_CALL_DELAY_MINUTES,
   BAFITNESS_CLINIC_SOURCE,
+  BAFITNESS_WELCOME_FROM_CONNECTION_ID,
   buildBafitnessClinicSheetDefinition
 } from "../scripts/oneshot/bafitness-clinic-sheet-definition";
 
@@ -18,12 +19,12 @@ describe("BA Fitness clinic sheet call", () => {
       channel: "webhook",
       conditions: [{ type: "from_matches", value: BAFITNESS_CLINIC_SOURCE, caseInsensitive: true }]
     });
-    expect(def.steps[1]).toMatchObject({ type: "sleep", minutes: BAFITNESS_CALL_DELAY_MINUTES });
+    expect(def.steps[2]).toMatchObject({ type: "sleep", minutes: BAFITNESS_CALL_DELAY_MINUTES });
     expect(BAFITNESS_CALL_DELAY_MINUTES).toBe(7);
   });
 
   it("calls Dane on Pacific time and everyone else on Eastern, and does not create a contact", () => {
-    const branch = def.steps[2];
+    const branch = def.steps[3];
     expect(branch.type).toBe("branch");
     if (branch.type !== "branch") return;
     const dane = branch.branches[0].steps[0];
@@ -44,7 +45,7 @@ describe("BA Fitness clinic sheet call", () => {
   });
 
   function taken(clinic: string | undefined) {
-    const branch = def.steps[2];
+    const branch = def.steps[3];
     if (branch.type !== "branch") throw new Error("expected a branch step");
     const armId = chooseBranchArm(branch, {
       vars: clinic === undefined ? {} : { clinic_name: clinic }
@@ -66,12 +67,29 @@ describe("BA Fitness clinic sheet call", () => {
     }
   });
 
-  it("dials Dane on Pacific time and another named clinic on Eastern time", () => {
-    const dane = taken("Dane Functional Health");
-    expect(dane.steps[0]).toMatchObject({
-      type: "place_ai_call",
-      callWindow: { timezone: "America/Los_Angeles" }
+  it("emails from the connected mailbox when an address is present, then texts only if the call never connected", () => {
+    const email = def.steps[1];
+    expect(email.type).toBe("branch");
+    if (email.type !== "branch") return;
+    expect(email.branches[0].steps).toEqual([]);
+    expect(email.else[0]).toMatchObject({
+      type: "send_email",
+      to: "{{vars.lead_email}}",
+      fromConnectionId: BAFITNESS_WELCOME_FROM_CONNECTION_ID
     });
+    const dane = taken("Dane Functional Health");
+    expect(dane.steps.map((step) => step.type)).toEqual([
+      "place_ai_call",
+      "send_sms",
+      "send_sms",
+      "send_sms"
+    ]);
+    expect(dane.steps.slice(1).map((step) => (step.type === "send_sms" ? step.when : null))).toEqual([
+      { var: "call_outcome", equals: "no_answer" },
+      { var: "call_outcome", equals: "not_placed" },
+      { var: "call_outcome", equals: "failed" }
+    ]);
+    expect(JSON.stringify(dane.steps)).toContain(BAFITNESS_BOOKING_URL);
     const eros = taken("Eros Vitality");
     expect(eros.armId).toBe(BRANCH_ELSE_ARM);
     expect(eros.steps[0]).toMatchObject({

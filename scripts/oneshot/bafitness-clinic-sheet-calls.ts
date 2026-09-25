@@ -7,10 +7,12 @@
  *     next Facebook lead would have been texted that line. Enabled is set
  *     false. The definition is left as it is.
  *   - Install (or converge) "Clinic sheet patient call": webhook source
- *     clinic_google_sheet, 7 minute wait, then an AI call inside 09:00-18:00
- *     clinic time. Dane is Pacific. Every other named clinic is Eastern.
- *     A blank clinic name, or the sentinel "none", notifies the owner and
- *     does not dial. The flow is enabled. It does not create a contact.
+ *     clinic_google_sheet. Welcome email when the row has an address, 7
+ *     minute wait, then an AI call inside 09:00-18:00 clinic time, then one
+ *     text if that call did not connect. Dane is Pacific. Every other named
+ *     clinic is Eastern. A blank clinic name, or the sentinel "none",
+ *     notifies the owner and does not dial. The flow is enabled. It does
+ *     not create a contact.
  *   - Relabel bare `phone` memory facts whose number is the coworker DID
  *     or the forwarded business line, so personal / business / coworker
  *     stop collapsing into one predicate.

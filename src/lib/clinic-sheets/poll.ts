@@ -179,6 +179,7 @@ export async function pollClinicSheets(deps: PollDeps = {}): Promise<ClinicSheet
             data: {
               lead_name: patient.fullName,
               lead_phone: patient.phoneE164,
+              lead_email: patient.email,
               clinic_name: target.clinicName,
               first_name: patient.firstName,
               last_name: patient.lastName
