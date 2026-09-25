@@ -35,14 +35,29 @@ const GRID = [
 
 type DbState = {
   baseline: boolean;
+  ready: boolean;
   baselineInsertError: { code: string } | null;
+  baselineReadError: { code: string } | null;
+  readyUpdateError: { code: string } | null;
   phoneUpsertError: { code: string } | null;
   phoneInsertError: { code: string } | null;
+  phoneLookupError: { code: string } | null;
+  lookupIgnoresSeen: boolean;
   seen: Set<string>;
   deletedBaseline: boolean;
 };
 
 function makeDb(state: DbState) {
+  const filters = () => ({
+    eq() {
+      return filters();
+    },
+    maybeSingle() {
+      if (state.baselineReadError) return { data: null, error: state.baselineReadError };
+      if (!state.baseline) return { data: null, error: null };
+      return { data: { ready: state.ready }, error: null };
+    }
+  });
   return {
     from(table: string) {
       if (table === "clinic_sheet_baselines") {
@@ -51,7 +66,24 @@ function makeDb(state: DbState) {
             if (state.baselineInsertError) return { error: state.baselineInsertError };
             if (state.baseline) return { error: { code: "23505" } };
             state.baseline = true;
+            state.ready = false;
             return { error: null };
+          },
+          select() {
+            return filters();
+          },
+          update() {
+            return {
+              eq() {
+                return {
+                  eq() {
+                    if (state.readyUpdateError) return { error: state.readyUpdateError };
+                    state.ready = true;
+                    return { error: null };
+                  }
+                };
+              }
+            };
           },
           delete() {
             return {
@@ -59,6 +91,7 @@ function makeDb(state: DbState) {
                 return {
                   eq() {
                     state.baseline = false;
+                    state.ready = false;
                     state.deletedBaseline = true;
                     return { error: null };
                   }
@@ -71,6 +104,28 @@ function makeDb(state: DbState) {
       return {
         upsert() {
           return { error: state.phoneUpsertError };
+        },
+        select() {
+          return {
+            eq() {
+              return {
+                eq(_column: string, phone: string) {
+                  return {
+                    maybeSingle() {
+                      if (state.phoneLookupError) {
+                        return { data: null, error: state.phoneLookupError };
+                      }
+                      if (state.lookupIgnoresSeen) return { data: null, error: null };
+                      return {
+                        data: state.seen.has(phone) ? { phone_e164: phone } : null,
+                        error: null
+                      };
+                    }
+                  };
+                }
+              };
+            }
+          };
         },
         insert(row: { phone_e164: string }) {
           if (state.phoneInsertError) return { error: state.phoneInsertError };
@@ -86,9 +141,14 @@ function makeDb(state: DbState) {
 function state(partial: Partial<DbState> = {}): DbState {
   return {
     baseline: false,
+    ready: false,
     baselineInsertError: null,
+    baselineReadError: null,
+    readyUpdateError: null,
     phoneUpsertError: null,
     phoneInsertError: null,
+    phoneLookupError: null,
+    lookupIgnoresSeen: false,
     seen: new Set(),
     deletedBaseline: false,
     ...partial
@@ -270,7 +330,7 @@ describe("pollClinicSheets", () => {
       ok: true,
       grid: { title: "Tab", values: GRID }
     });
-    const dbState = state({ baseline: true });
+    const dbState = state({ baseline: true, ready: true });
     const result = await pollClinicSheets({
       keyJson: "key",
       targets: [TARGET],
@@ -288,7 +348,9 @@ describe("pollClinicSheets", () => {
           lead_name: "Ada Lovelace",
           clinic_name: "Eros Vitality"
         })
-      })
+      }),
+      expect.anything(),
+      { origin: "internal" }
     );
 
     vi.mocked(processWebhookFlowEvent).mockClear();
@@ -303,7 +365,48 @@ describe("pollClinicSheets", () => {
     expect(processWebhookFlowEvent).not.toHaveBeenCalled();
   });
 
-  it("does not hand off a patient when the seen-phone write fails", async () => {
+  it("does not mark a phone seen when the handoff throws", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({ baseline: true, ready: true });
+    vi.mocked(processWebhookFlowEvent).mockRejectedValue(new Error("flow down"));
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.enqueued).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(dbState.seen.size).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "clinic_sheet_handoff_failed" })
+    );
+  });
+
+  it("does not call patients while a baseline is still unfinished", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({ baseline: true, ready: false });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.baselined).toBe(1);
+    expect(result.enqueued).toBe(0);
+    expect(dbState.ready).toBe(true);
+    expect(processWebhookFlowEvent).not.toHaveBeenCalled();
+  });
+
+  it("logs when the handoff succeeded but the phone row could not be stored", async () => {
     vi.mocked(readClinicSheetTab).mockResolvedValue({
       ok: true,
       grid: { title: "Tab", values: GRID }
@@ -311,16 +414,177 @@ describe("pollClinicSheets", () => {
     const result = await pollClinicSheets({
       keyJson: "key",
       targets: [TARGET],
-      db: makeDb(state({ baseline: true, phoneInsertError: { code: "XX000" } })) as never,
+      db: makeDb(state({ baseline: true, ready: true, phoneInsertError: { code: "XX000" } })) as never,
       log: recordSystemLog,
       enqueue: processWebhookFlowEvent
     });
     expect(result.enqueued).toBe(0);
     expect(result.failed).toBe(1);
-    expect(processWebhookFlowEvent).not.toHaveBeenCalled();
+    expect(processWebhookFlowEvent).toHaveBeenCalled();
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "clinic_sheet_seen_failed" })
     );
+  });
+
+  it("does not mark a phone seen when the tier gate refuses the handoff", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+      enqueued: 0,
+      flowsEvaluated: 0,
+      flowsMatched: 0,
+      tierBlocked: true
+    });
+    const dbState = state({ baseline: true, ready: true });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.enqueued).toBe(0);
+    expect(dbState.seen.size).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "clinic_sheet_handoff_failed" })
+    );
+  });
+
+  it("fails when an existing baseline row cannot be read", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(state({ baseline: true, baselineReadError: { code: "XX000" } })) as never,
+      log: recordSystemLog
+    });
+    expect(result.failed).toBe(1);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "clinic_sheet_baseline_failed" })
+    );
+  });
+
+  it("drops a new baseline when marking it ready fails", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({ readyUpdateError: { code: "XX000" } });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog
+    });
+    expect(result.baselined).toBe(0);
+    expect(dbState.deletedBaseline).toBe(true);
+  });
+
+  it("logs when it cannot tell whether a phone was already sent", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(
+        state({ baseline: true, ready: true, phoneLookupError: { code: "XX000" } })
+      ) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.failed).toBe(1);
+    expect(processWebhookFlowEvent).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unfinished baseline in place when finishing it fails", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({ baseline: true, ready: false, phoneUpsertError: { code: "XX000" } });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog
+    });
+    expect(result.baselined).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(dbState.deletedBaseline).toBe(false);
+    expect(dbState.baseline).toBe(true);
+  });
+
+  it("does not mark a phone seen when no flow matched", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+      enqueued: 0,
+      flowsEvaluated: 1,
+      flowsMatched: 0
+    });
+    const dbState = state({ baseline: true, ready: true });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.enqueued).toBe(0);
+    expect(dbState.seen.size).toBe(0);
+  });
+
+  it("records a duplicate handoff without counting another call", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+      enqueued: 0,
+      flowsEvaluated: 1,
+      flowsMatched: 1
+    });
+    const dbState = state({ baseline: true, ready: true });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.enqueued).toBe(0);
+    expect(dbState.seen.has("+14805550100")).toBe(true);
+  });
+
+  it("treats a phone insert conflict as already seen", async () => {
+    vi.mocked(readClinicSheetTab).mockResolvedValue({
+      ok: true,
+      grid: { title: "Tab", values: GRID }
+    });
+    const dbState = state({
+      baseline: true,
+      ready: true,
+      lookupIgnoresSeen: true,
+      seen: new Set(["+14805550100"])
+    });
+    const result = await pollClinicSheets({
+      keyJson: "key",
+      targets: [TARGET],
+      db: makeDb(dbState) as never,
+      log: recordSystemLog,
+      enqueue: processWebhookFlowEvent
+    });
+    expect(result.enqueued).toBe(1);
+    expect(result.failed).toBe(0);
   });
 
   it("uses the default database and logger when they are not injected", async () => {

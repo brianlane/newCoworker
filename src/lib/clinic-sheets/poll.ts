@@ -115,41 +115,21 @@ export async function pollClinicSheets(deps: PollDeps = {}): Promise<ClinicSheet
     const baseline = await claimBaseline(db, target);
     if (baseline === "error") {
       result.failed += 1;
-      await log({
-        businessId: CLINIC_SHEETS_BUSINESS_ID,
-        source: "clinic_sheet",
-        level: "error",
-        event: "clinic_sheet_baseline_failed",
-        message: "Clinic sheet baseline could not be recorded",
-        payload: {
-          spreadsheet_id: target.spreadsheetId,
-          sheet_gid: target.sheetGid,
-          clinic_name: target.clinicName
-        }
-      });
+      await logBaselineFailed(log, target);
       continue;
     }
-    if (baseline === "new") {
-      const stored = await rememberPhones(db, target.spreadsheetId, parsed.patients);
+    if (baseline === "new" || baseline === "finish") {
+      const stored = await completeBaseline(db, target.spreadsheetId, target.sheetGid, parsed.patients);
       if (!stored) {
-        await db
-          .from("clinic_sheet_baselines")
-          .delete()
-          .eq("spreadsheet_id", target.spreadsheetId)
-          .eq("sheet_gid", target.sheetGid);
+        if (baseline === "new") {
+          await db
+            .from("clinic_sheet_baselines")
+            .delete()
+            .eq("spreadsheet_id", target.spreadsheetId)
+            .eq("sheet_gid", target.sheetGid);
+        }
         result.failed += 1;
-        await log({
-          businessId: CLINIC_SHEETS_BUSINESS_ID,
-          source: "clinic_sheet",
-          level: "error",
-          event: "clinic_sheet_baseline_failed",
-          message: "Clinic sheet baseline could not be recorded",
-          payload: {
-            spreadsheet_id: target.spreadsheetId,
-            sheet_gid: target.sheetGid,
-            clinic_name: target.clinicName
-          }
-        });
+        await logBaselineFailed(log, target);
         continue;
       }
       result.baselined += 1;
@@ -170,16 +150,15 @@ export async function pollClinicSheets(deps: PollDeps = {}): Promise<ClinicSheet
     }
 
     for (const patient of parsed.patients) {
-      const fresh = await rememberPhone(db, target.spreadsheetId, patient.phoneE164);
-      if (fresh === "seen") continue;
-      if (fresh === "error") {
+      const already = await phoneAlreadySeen(db, target.spreadsheetId, patient.phoneE164);
+      if (already === "error") {
         result.failed += 1;
         await log({
           businessId: CLINIC_SHEETS_BUSINESS_ID,
           source: "clinic_sheet",
           level: "error",
           event: "clinic_sheet_seen_failed",
-          message: "Clinic sheet could not record a new patient, so no call was handed off",
+          message: "Clinic sheet could not check whether a phone was already sent",
           payload: {
             spreadsheet_id: target.spreadsheetId,
             sheet_gid: target.sheetGid,
@@ -188,21 +167,92 @@ export async function pollClinicSheets(deps: PollDeps = {}): Promise<ClinicSheet
         });
         continue;
       }
-      await enqueue(CLINIC_SHEETS_BUSINESS_ID, {
-        source: CLINIC_SHEETS_SOURCE,
-        eventId: `clinic-sheet:${target.spreadsheetId}:${patient.phoneE164}`,
-        data: {
-          lead_name: patient.fullName,
-          lead_phone: patient.phoneE164,
-          clinic_name: target.clinicName,
-          first_name: patient.firstName,
-          last_name: patient.lastName
-        }
-      });
-      result.enqueued += 1;
+      if (already) continue;
+      let handed: Awaited<ReturnType<typeof processWebhookFlowEvent>>;
+      try {
+        handed = await enqueue(
+          CLINIC_SHEETS_BUSINESS_ID,
+          {
+            source: CLINIC_SHEETS_SOURCE,
+            eventId: `clinic-sheet:${target.spreadsheetId}:${patient.phoneE164}`,
+            data: {
+              lead_name: patient.fullName,
+              lead_phone: patient.phoneE164,
+              clinic_name: target.clinicName,
+              first_name: patient.firstName,
+              last_name: patient.lastName
+            }
+          },
+          db,
+          { origin: "internal" }
+        );
+      } catch {
+        result.failed += 1;
+        await logHandoffFailed(log, target);
+        continue;
+      }
+      if (handed.tierBlocked || (handed.enqueued === 0 && handed.flowsMatched === 0)) {
+        result.failed += 1;
+        await logHandoffFailed(log, target);
+        continue;
+      }
+      const fresh = await rememberPhone(db, target.spreadsheetId, patient.phoneE164);
+      if (fresh === "error") {
+        result.failed += 1;
+        await log({
+          businessId: CLINIC_SHEETS_BUSINESS_ID,
+          source: "clinic_sheet",
+          level: "error",
+          event: "clinic_sheet_seen_failed",
+          message: "Clinic sheet handed off a patient but could not record the phone",
+          payload: {
+            spreadsheet_id: target.spreadsheetId,
+            sheet_gid: target.sheetGid,
+            clinic_name: target.clinicName
+          }
+        });
+        continue;
+      }
+      if (handed.enqueued > 0) result.enqueued += 1;
     }
   }
   return result;
+}
+
+function logBaselineFailed(
+  log: typeof recordSystemLog,
+  target: ClinicSheetTarget
+): Promise<void> {
+  return log({
+    businessId: CLINIC_SHEETS_BUSINESS_ID,
+    source: "clinic_sheet",
+    level: "error",
+    event: "clinic_sheet_baseline_failed",
+    message: "Clinic sheet baseline could not be recorded",
+    payload: {
+      spreadsheet_id: target.spreadsheetId,
+      sheet_gid: target.sheetGid,
+      clinic_name: target.clinicName
+    }
+  });
+}
+
+function logHandoffFailed(
+  log: typeof recordSystemLog,
+  target: ClinicSheetTarget
+): Promise<void> {
+  return log({
+    businessId: CLINIC_SHEETS_BUSINESS_ID,
+    source: "clinic_sheet",
+    level: "error",
+    event: "clinic_sheet_handoff_failed",
+    message: "Clinic sheet could not hand a new patient to the call flow, so the phone was not marked seen",
+    payload: {
+      spreadsheet_id: target.spreadsheetId,
+      sheet_gid: target.sheetGid,
+      clinic_name: target.clinicName
+    }
+  });
 }
 
 function readFailureMessage(status: number): string {
@@ -215,14 +265,38 @@ function readFailureMessage(status: number): string {
 async function claimBaseline(
   db: Db,
   target: ClinicSheetTarget
-): Promise<"new" | "existing" | "error"> {
+): Promise<"new" | "finish" | "existing" | "error"> {
   const { error } = await db.from("clinic_sheet_baselines").insert({
     spreadsheet_id: target.spreadsheetId,
-    sheet_gid: target.sheetGid
+    sheet_gid: target.sheetGid,
+    ready: false
   });
   if (!error) return "new";
-  if (error.code === "23505") return "existing";
-  return "error";
+  if (error.code !== "23505") return "error";
+  const { data, error: readError } = await db
+    .from("clinic_sheet_baselines")
+    .select("ready")
+    .eq("spreadsheet_id", target.spreadsheetId)
+    .eq("sheet_gid", target.sheetGid)
+    .maybeSingle();
+  if (readError || !data) return "error";
+  return data.ready ? "existing" : "finish";
+}
+
+async function completeBaseline(
+  db: Db,
+  spreadsheetId: string,
+  sheetGid: number,
+  patients: ClinicSheetPatient[]
+): Promise<boolean> {
+  const stored = await rememberPhones(db, spreadsheetId, patients);
+  if (!stored) return false;
+  const { error } = await db
+    .from("clinic_sheet_baselines")
+    .update({ ready: true })
+    .eq("spreadsheet_id", spreadsheetId)
+    .eq("sheet_gid", sheetGid);
+  return !error;
 }
 
 async function rememberPhones(
@@ -242,6 +316,21 @@ async function rememberPhones(
 }
 
 /** "new" when this phone was not already on the sheet. */
+async function phoneAlreadySeen(
+  db: Db,
+  spreadsheetId: string,
+  phoneE164: string
+): Promise<boolean | "error"> {
+  const { data, error } = await db
+    .from("clinic_sheet_seen_phones")
+    .select("phone_e164")
+    .eq("spreadsheet_id", spreadsheetId)
+    .eq("phone_e164", phoneE164)
+    .maybeSingle();
+  if (error) return "error";
+  return Boolean(data);
+}
+
 async function rememberPhone(
   db: Db,
   spreadsheetId: string,

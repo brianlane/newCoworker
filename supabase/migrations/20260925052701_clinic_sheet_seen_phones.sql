@@ -1,8 +1,10 @@
 -- Clinic sheet reader: the first successful read of a tab is a baseline,
 -- and each phone on a sheet is handed to the call flow once.
 --
--- clinic_sheet_baselines claims the baseline. Inserting the row is the
--- claim, so a second poll cannot also treat the same tab as unseen.
+-- clinic_sheet_baselines claims the baseline. ready stays false until every
+-- phone already on the tab is stored. A second poll that sees ready = false
+-- finishes that baseline and does not call. Only ready = true means later
+-- rows are new patients.
 -- clinic_sheet_seen_phones is the per-sheet phone ledger. A later edit of
 -- a row that was already sent does not place a second call.
 --
@@ -11,6 +13,7 @@
 create table public.clinic_sheet_baselines (
   spreadsheet_id text not null,
   sheet_gid integer not null,
+  ready boolean not null default false,
   baselined_at timestamptz not null default now(),
   primary key (spreadsheet_id, sheet_gid)
 );
