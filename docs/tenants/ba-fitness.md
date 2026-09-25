@@ -42,7 +42,7 @@ Read live: `tsx debug/flow-poll.ts d2d421a8-47ef-4a1d-b8af-7e86a02a95f1`.
 | --- | --- | --- |
 | Lead follow-up (white-glove build) | **off** | Stock webhook SMS ("book a visit"). Created disabled with the account. The owner asked the dashboard chat to delete it on 2026-09-23, then deleted it himself from the AiFlows trash icon at 14:24 UTC. It was restored and enabled the same day before we knew the delete was his. `bafitness-clinic-sheet-calls.ts` turns it back off. Do not enable it: the copy is the stock template, and its customer upsert would also fire the welcome email |
 | GLP-1 Google Sheet Automation | on | Not a sheet watcher. Trigger is `contact_created`. It emails `{{vars.lead_email}}` a welcome from Coach Brett Douglas. `{{vars.lead_name.first}}` is a real first-name suffix, so that greeting is fine. It fires for every new contact, which is why the clinic call flow does not create one |
-| Clinic sheet patient call | **on** | Webhook, source `clinic_google_sheet` only. Waits 7 minutes (his 5 to 10 minute window), then `place_ai_call` from 09:00 to 18:00. Dane matches Pacific (`America/Los_Angeles`). Any other named clinic uses Eastern (`America/New_York`). A blank clinic name (`blank`) or the sentinel `none` notifies the owner and does not dial. extract_text writes "" when the clinic is absent, and that does not equal "none". Outside the window the call defers (`outside: defer`), it does not resolve to `not_placed` |
+| Clinic sheet patient call | **on** | Webhook, source `clinic_google_sheet` only. If the row has an email, sends a clinic welcome from the Outlook mailbox already used by the Google Sheet automation. Waits 7 minutes, then `place_ai_call` from 09:00 to 18:00. Dane matches Pacific (`America/Los_Angeles`). Any other named clinic uses Eastern (`America/New_York`). After the call, one text with the booking link goes out only when the outcome is `no_answer`, `not_placed`, or `failed`. A live conversation is not texted, because there is no calendar connection to see whether they booked. A blank clinic name (`blank`) or the sentinel `none` notifies the owner and does not dial or text. Does not create a contact, so the fitness-goal welcome does not also fire. Outside the window the call defers (`outside: defer`) |
 
 ## The call
 
@@ -78,8 +78,9 @@ actually showed an open slot. Do not connect Acuity unless he asks.
 ## One-shots
 
 - `bafitness-clinic-sheet-calls.ts` disables the stock follow-up, installs
-  the clinic call, and relabels the phone facts. Definition:
+  the clinic call (welcome email, 7 minute wait, call, then a text only if
+  the call did not connect), and relabels the phone facts. Definition:
   `bafitness-clinic-sheet-definition.ts`. Dry-run by default. Applied
-  2026-09-23 from this change, before merge, because the stock SMS was live.
+  2026-09-23, then again 2026-09-25 to add the email and the text.
 - `mint-kin-zapier-key.ts` minted the Zapier key (shared script, not
   BA-specific). The plaintext was shown once and is not stored here.
