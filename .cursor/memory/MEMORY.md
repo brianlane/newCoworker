@@ -6,7 +6,7 @@ Project memory store. Read the linked file before acting; do not re-derive a kno
 - [Gemini model eval](project_gemini_model_eval.md) - list Google's models, do not pass an id; adopt flagship only at post-intro price; never promo rates
 - [Research before asking](feedback_research_before_asking.md) - don't hand me a choice the codebase already answers
 - [PR merge + main deploy mechanics](project_pr_merge_main_deploy_mechanics.md) - waves, thread gate, Bugbot, wedged status, cancel chains; watch push CI by FULL sha; Cloud Agent PRs squash-merge via cursor-automerge.yml, not Dependabot
-- [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - npm audit wrapper + expiring allowlist; a registry 503 is exit 2, not a stale image-size entry
+- [Audit allowlist mechanism](project_audit_allowlist_mechanism.md) - npm audit wrapper + expiring allowlist; image-size rows removed 2026-09-25 (override ^2.0.4); a registry 503 is exit 2
 - [AiFlow phone-named field trap](project_aiflow_phone_field_trap.md) - a gate field named phone_* gets phone-validated and blanked to "none"
 - [Live flow is source of truth](feedback_live_flow_source_of_truth.md) - diff live ai_flows vs builder first; builder can be AHEAD
 - [Migration heal traps](project_migration_heal_traps.md) - restamps ship zero-byte files or rename APPLIED DDL; wc -c first

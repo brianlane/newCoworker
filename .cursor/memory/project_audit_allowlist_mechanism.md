@@ -16,23 +16,30 @@ exception mechanism). Any high+ advisory fails UNLESS listed in
 advisory no longer appears in that tree's audit ALSO fails (stale-entry
 ratchet), so exceptions cannot linger.
 
-**Why:** image-size shipped two high DoS advisories with NO patched release
-(affected <=2.0.2, patched: none, via pptxgenjs), which blocked every PR in
-the repo. The upstream repo was ARCHIVED Jun 3 2026, so no patch will ever
-ship; the parsers are unreachable here (text-only pptx decks). Dependabot
-alerts 54/55 dismissed as not_used 2026-08-07; entries expire 2026-11-07
-(quarterly re-review, exit criteria named in the entry).
+**Why it was added:** image-size shipped two high DoS advisories with no
+patched release (affected <=2.0.2, via pptxgenjs), which blocked every PR.
+The parsers were unreachable here (text-only pptx decks). Dependabot alerts
+54/55 were dismissed as not_used on 2026-08-07.
+
+**Cleared 2026-09-25:** 2.0.3 (and 2.0.4 the same day) patched both
+GHSA-5p2g-fcmc-qvqq and GHSA-w3rx-r6r6-pgpr. Alert 67 reopened the JXL/HEIF
+advisory once GitHub recorded a patched version. The root override is
+`image-size: ^2.0.4` because pptxgenjs 4.0.1 depends on `^1.2.1` and a
+direct dependency cannot move that copy. Both allowlist rows were deleted
+in the same change. Do not re-add them.
 
 **Registry 503 is not a clean tree.** `npm audit --json` still prints JSON
 when the advisory endpoint is in maintenance (`statusCode: 503`, no
 `vulnerabilities` object). Scoring that as zero advisories trips the stale
-ratchet on the image-size entries and fails `audit (.)` / Security Audit
-as if the lockfile changed. The wrapper must retry across most of the 10-minute CI job, then exit 2 when the JSON is not
-an audit report. Observed on PR #1876 (2026-09-19) while npmjs.org was in
-maintenance; PR #1875 was green earlier the same day on the same lockfile.
+ratchet on whatever rows are allowlisted and fails `audit (.)` / Security
+Audit as if the lockfile changed. The wrapper must retry across most of the
+10-minute CI job, then exit 2 when the JSON is not an audit report. Observed
+on PR #1876 (2026-09-19) while npmjs.org was in maintenance; PR #1875 was
+green earlier the same day on the same lockfile.
 
 **How to apply:** When the Security Audit check fails, first try
 `npm audit fix`; only an advisory with no patched release goes in the
-allowlist, scoped to its tree, with a short expiry. When image-size ships a
-patch, bump it and DELETE the entries (the ratchet will demand it anyway).
-Do not delete allowlist entries because a 503 run reported them stale.
+allowlist, scoped to its tree, with a short expiry. When a patched release
+ships, bump the override and delete the allowlist rows in the same PR (the
+stale-entry ratchet fails the run if a row outlives its advisory). Do not
+delete allowlist entries because a 503 run reported them stale.

@@ -231,31 +231,14 @@ if (n < 3) {
   }));
   process.exit(1);
 }
-process.stdout.write(JSON.stringify({
-  vulnerabilities: {
-    "image-size": {
-      severity: "high",
-      via: [
-        {
-          name: "image-size",
-          title: "image-size has a denial of service",
-          severity: "high",
-          url: "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr"
-        },
-        {
-          name: "image-size",
-          title: "image-size has another denial of service",
-          severity: "high",
-          url: "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq"
-        }
-      ]
-    }
-  }
-}));
-process.exit(1);
+process.stdout.write(JSON.stringify({ vulnerabilities: {} }));
+process.exit(0);
 `
     );
     chmodSync(stub, 0o755);
+    // Empty report on purpose. This case is the retry, not allowlist scoring
+    // (evaluateAllowlist covers that). A high finding here would depend on
+    // whatever rows .github/audit-allowlist.json happens to hold.
     const out = execFileSync("node", ["scripts/audit-with-allowlist.mjs", "--omit=dev"], {
       encoding: "utf8",
       env: {
@@ -265,7 +248,7 @@ process.exit(1);
         AUDIT_RETRY_DELAY_MS: "0"
       }
     });
-    expect(out).toContain("audit clean: 2 allowlisted, 0 unlisted high+ advisories");
+    expect(out).toContain("audit clean: 0 allowlisted, 0 unlisted high+ advisories");
     expect(readFileSync(countFile, "utf8")).toBe("3");
   });
 });
