@@ -6,6 +6,8 @@ export type ClinicSheetPatient = {
   /** E.164, the identity used so a later edit of the same phone is not sent again. */
   phoneE164: string;
   fullName: string;
+  /** Empty when the sheet has no Email column or the cell is blank. */
+  email: string;
 };
 
 export type ParsedClinicSheet =
@@ -40,6 +42,7 @@ export function parseClinicSheetRows(
     headers,
     (key) => key.includes("phone") || key === "mobile" || key === "cell"
   );
+  const emailCol = findColumn(headers, (key) => key === "email");
   if (firstCol < 0 || lastCol < 0 || phoneCol < 0) {
     return { ok: false, reason: "missing_name_or_phone_column" };
   }
@@ -55,11 +58,13 @@ export function parseClinicSheetRows(
     if (!normalized.ok || !normalized.value.startsWith("+")) continue;
     if (seen.has(normalized.value)) continue;
     seen.add(normalized.value);
+    const email = emailCol < 0 ? "" : (row[emailCol] ?? "").trim();
     patients.push({
       firstName,
       lastName,
       phoneE164: normalized.value,
-      fullName: `${firstName} ${lastName}`
+      fullName: `${firstName} ${lastName}`,
+      email: email.includes("@") ? email : ""
     });
   }
   return { ok: true, patients };

@@ -355,6 +355,7 @@ describe("pollClinicSheets", () => {
         eventId: "clinic-sheet:sheet-1:+14805550100",
         data: expect.objectContaining({
           lead_name: "Ada Lovelace",
+          lead_email: "",
           clinic_name: "Eros Vitality"
         })
       }),
