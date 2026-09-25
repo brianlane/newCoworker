@@ -4,14 +4,14 @@
  * 10 minutes after the sheet row arrives, only 09:00-18:00 in that clinic's
  * timezone, and use this script only for those sheet patients.
  *
- * The product does not watch Google Sheets. Zapier posts the row to
- * POST /api/public/v1/flow-events with source `clinic_google_sheet`.
- * Facebook lead ads use a different source, so this flow does not run on them.
+ * A reader polls the three clinic tabs and posts a new row to the webhook
+ * flow with source `clinic_google_sheet`. Facebook lead ads use a different
+ * source, so this flow does not run on them.
  *
  * Dane Functional Health is Pacific. Eros Vitality and New Jersey Weight
  * Loss Company are Eastern. A blank clinic name, or the sentinel "none",
- * notifies the owner and does not dial. The 10-Day column filter is Zapier's job, and
- * only on Dane's sheet. This flow does not create a contact: the account's
+ * notifies the owner and does not dial. The 10-Day column filter is the
+ * reader's job, and only on Dane's sheet. This flow does not create a contact: the account's
  * other automation emails every new contact a fitness-goal welcome, which
  * is the wrong note for a clinic patient.
  */

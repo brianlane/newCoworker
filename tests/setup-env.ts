@@ -82,6 +82,8 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   // the audience is checked on every inbound webhook token.
   "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
   "GOOGLE_CHAT_AUDIENCE",
+  // Clinic sheet reader. A sourced .env holds the real robot key.
+  "CLINIC_SHEETS_SA_KEY_JSON",
   // First-party Google Workspace OAuth. Shares one client with Supabase
   // "Log in with Google", so a sourced .env holds the REAL verified client:
   // without stripping, any suite touching the authorize URL or a token
