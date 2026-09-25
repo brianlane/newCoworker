@@ -2,11 +2,13 @@
  * npm audit with a documented, EXPIRING allowlist.
  *
  * Why this exists (2026-08-07): two high advisories were published against
- * image-size (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq) with NO patched
- * release: every version is affected. Raw `npm audit --audit-level=high`
- * offers no exception mechanism, so an unpatchable advisory blocks every PR
- * in the repo until upstream ships, which punishes unrelated work without
- * making anything safer.
+ * image-size (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq) with no patched
+ * release. Raw `npm audit --audit-level=high` offers no exception mechanism,
+ * so an unpatchable advisory blocks every PR in the repo until upstream
+ * ships, which punishes unrelated work without making anything safer.
+ * image-size 2.0.3 (Sep 2026) patched both; the allowlist rows were removed
+ * and the package is pinned via the root override. The mechanism stays for
+ * the next advisory that has no release yet.
  *
  * The allowlist is deliberately hostile to lingering:
  * - every entry carries an `expires` date; past it the advisory fails again,

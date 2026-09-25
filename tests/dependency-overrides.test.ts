@@ -105,4 +105,19 @@ describe("package.json overrides vs direct dependencies", () => {
       `js-yaml@${yaml!.version} is below 4.3.2 (GHSA-2883-xcg3-v3hh / CVE-2026-84375)`
     ).toBe(true);
   });
+
+  it("resolves image-size to the GHSA-5p2g-fcmc-qvqq patched floor", () => {
+    const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8")) as {
+      packages?: Record<string, { version?: string }>;
+    };
+    const imageSize = lock.packages?.["node_modules/image-size"];
+    expect(imageSize, "image-size must be in the root lockfile").toBeTruthy();
+    const [maj, min, pat] = (imageSize!.version ?? "0.0.0").split(".").map(Number);
+    const atLeast203 =
+      maj > 2 || (maj === 2 && (min > 0 || (min === 0 && pat >= 3)));
+    expect(
+      atLeast203,
+      `image-size@${imageSize!.version} is below 2.0.3 (GHSA-5p2g-fcmc-qvqq / CVE-2025-71329 and GHSA-w3rx-r6r6-pgpr). pptxgenjs stays on ^1.2.1, so the root override is what keeps this copy patched.`
+    ).toBe(true);
+  });
 });
