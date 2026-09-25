@@ -588,7 +588,10 @@ serve(async (req: Request): Promise<Response> => {
     kickTriggerPoll("/api/internal/email-coworker-poll"),
     // Booking reminders (email a day out, text a couple of hours out).
     // Cheap when no appointment is inside a reminder window.
-    kickTriggerPoll("/api/internal/booking-reminder-sweep")
+    kickTriggerPoll("/api/internal/booking-reminder-sweep"),
+    // Clinic Google Sheets (BA Fitness). Cheap when the key is set and the
+    // three tabs have not changed. A failed read is logged by the route.
+    kickTriggerPoll("/api/internal/clinic-sheet-poll")
   ]);
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {

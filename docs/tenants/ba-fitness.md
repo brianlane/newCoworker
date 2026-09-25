@@ -22,12 +22,17 @@ Two paths, and they must stay apart.
    partnership forms ("GLP1 Clinics - Qualified v4") and a patient form
    ("KYP - GLP1 Patients - Manual"). A Zapier post does not create a contact
    by itself. It only starts an enabled webhook flow.
-2. **Clinic Google Sheets.** The product does not watch a spreadsheet.
-   Zapier has to post a new row with source `clinic_google_sheet` (not
-   `facebook_lead_ads`). Fields the call flow reads: full name, phone, and
-   clinic name. Dane Functional Health is the only sheet that should filter
-   column G to "10-Day". Eros Vitality and New Jersey Weight Loss Company
-   send every new patient row.
+2. **Clinic Google Sheets.** A reader on our side polls three tabs with the
+   `clinic-sheets` service account. It does not use Zapier or the API key.
+   The first successful read of each tab marks every patient already on it
+   as seen and does not call. A later row is posted into the call flow with
+   source `clinic_google_sheet`. The row needs a first name, a last name,
+   and a phone number. The clinic name is added from which sheet it came
+   from. Dane Functional Health sends the row only when column G is exactly
+   `10-Day`. The same phone on the same sheet is sent once. Renaming a tab
+   does not break the read (the tab is the gid). A new spreadsheet, or a
+   renamed name or phone column, does. A failed read, including the robot
+   being removed from the share, is a system log.
 
 ## Flows
 
