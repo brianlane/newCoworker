@@ -24,6 +24,7 @@ import {
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { bookAcuityAppointment, findAcuitySlots } from "@/lib/calendar-tools/acuity";
+import { bookCalAppointment, findCalSlots } from "@/lib/calendar-tools/cal";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import {
   bookingAttendeeKey,
@@ -951,6 +952,18 @@ export async function findCalendarSlots(
       });
     }
 
+    if (conn.provider === "cal") {
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      return findCalSlots(businessId, {
+        windowStart,
+        windowEnd,
+        durationMinutes: args.durationMinutes,
+        purpose: args.purpose,
+        serviceId: args.serviceId,
+        timezone
+      });
+    }
+
     if (conn.provider === "calendly") {
       const timezone = await resolveToolTimezone(businessId, args.timezone);
       return findCalendlySlots(businessId, conn, {
@@ -1383,6 +1396,21 @@ async function bookOnProvider(
         });
       }
       return acuityResult;
+    }
+
+    if (conn.provider === "cal") {
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      const calResult = await bookCalAppointment(businessId, { ...args, timezone }, fallbackPhone);
+      const calEventId = (calResult.data as { eventId?: unknown } | undefined)?.eventId;
+      if (calResult.ok && calEventId) {
+        await fireGoalEvent(businessId, bookedLeadIdentity(args, fallbackPhone), {
+          kind: "appointment_booked"
+        });
+        await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
+          dedupeSuffix: String(calEventId)
+        });
+      }
+      return calResult;
     }
 
     if (conn.provider === "calendly") {

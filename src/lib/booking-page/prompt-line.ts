@@ -150,7 +150,7 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
   }
   // Vagaro and Acuity merchants book on their own site, and we do not hold
   // its URL, so there is no link to hand out at all.
-  if (conn?.provider === "vagaro" || conn?.provider === "acuity") return null;
+  if (conn?.provider === "vagaro" || conn?.provider === "acuity" || conn?.provider === "cal") return null;
   // Provision on first need: the same rule as the dashboard's first view,
   // and only reachable for the providers the page supports (the Vagaro,
   // Acuity and Calendly branches above never get here).

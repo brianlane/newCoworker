@@ -29,6 +29,7 @@ import {
   cancelAcuityAppointment,
   rescheduleAcuityAppointment
 } from "@/lib/calendar-tools/acuity";
+import { cancelCalAppointment, rescheduleCalAppointment } from "@/lib/calendar-tools/cal";
 import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
@@ -512,12 +513,11 @@ export async function rescheduleCalendarAppointment(
     if (
       conn.provider === "vagaro" ||
       conn.provider === "acuity" ||
+      conn.provider === "cal" ||
       conn.provider === "caldav"
     ) {
       const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
-      // A switch rather than nested ternaries: this arm gained a third
-      // provider, and the next one should be a one-line addition.
       let moved: CalendarToolResult;
       switch (conn.provider) {
         case "vagaro":
@@ -535,6 +535,9 @@ export async function rescheduleCalendarAppointment(
             args.newStartIso,
             args.newEndIso
           );
+          break;
+        case "cal":
+          moved = await rescheduleCalAppointment(businessId, claim.eventId, args.newStartIso);
           break;
         default:
           moved = await rescheduleCaldavAppointment(
@@ -735,6 +738,7 @@ export async function cancelCalendarAppointment(
     if (
       conn.provider === "vagaro" ||
       conn.provider === "acuity" ||
+      conn.provider === "cal" ||
       conn.provider === "caldav"
     ) {
       const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
@@ -745,14 +749,14 @@ export async function cancelCalendarAppointment(
           canceled = await cancelVagaroAppointment(businessId, claim.eventId);
           break;
         case "acuity":
-          // The ledger's start goes WITH the id: Acuity cancellation cannot
-          // be undone, so the core refuses when the appointment it finds
-          // does not start when the ledger says it should.
           canceled = await cancelAcuityAppointment(
             businessId,
             claim.eventId,
             new Date(claim.startAt).toISOString()
           );
+          break;
+        case "cal":
+          canceled = await cancelCalAppointment(businessId, claim.eventId);
           break;
         default:
           canceled = await cancelCaldavAppointment(businessId, claim.eventId);

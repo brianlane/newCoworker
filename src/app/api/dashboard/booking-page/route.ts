@@ -96,7 +96,13 @@ export async function GET(request: Request) {
     // provider's own page and the dashboard card explains that instead.
     const provider = conn?.provider ?? null;
     let page = existingPage;
-    if (!page && provider !== "vagaro" && provider !== "acuity" && provider !== "calendly") {
+    if (
+      !page &&
+      provider !== "vagaro" &&
+      provider !== "acuity" &&
+      provider !== "cal" &&
+      provider !== "calendly"
+    ) {
       try {
         page = await upsertBookingPage(businessId, { enabled: true });
       } catch (err) {

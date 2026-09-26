@@ -10,6 +10,7 @@ import { WorkspaceConnectionList } from "@/components/dashboard/WorkspaceConnect
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
 import { AcuityIntegrationCard } from "@/components/dashboard/AcuityIntegrationCard";
+import { CalIntegrationCard } from "@/components/dashboard/CalIntegrationCard";
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
@@ -193,6 +194,8 @@ function IntegrationBody({
       return (
         <AcuityIntegrationCard businessId={businessId} initialConnection={ctx.acuityConnection} />
       );
+    case "cal":
+      return <CalIntegrationCard businessId={businessId} initialConnection={ctx.calConnection} />;
     case "calendly":
       return (
         <CalendlyIntegrationCard

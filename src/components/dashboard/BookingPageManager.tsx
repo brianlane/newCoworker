@@ -201,6 +201,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   const unsupportedProvider =
     state.calendarProvider === "vagaro" ||
     state.calendarProvider === "acuity" ||
+    state.calendarProvider === "cal" ||
     state.calendarProvider === "calendly";
   const platformMode = state.calendarProvider === null;
   const page = state.page;
@@ -247,7 +248,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
               ? t("vagaroNote")
               : state.calendarProvider === "acuity"
                 ? t("acuityNote")
-                : t("calendlyNote")}
+                : state.calendarProvider === "cal"
+                  ? t("calNote")
+                  : t("calendlyNote")}
           </p>
           <Link
             href="/dashboard/integrations"

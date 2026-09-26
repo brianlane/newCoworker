@@ -20,6 +20,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 vi.mock("@/lib/db/custom-integrations", () => ({ listCustomIntegrations: vi.fn() }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getPublicVagaroConnection: vi.fn() }));
 vi.mock("@/lib/db/acuity-connections", () => ({ getPublicAcuityConnection: vi.fn() }));
+vi.mock("@/lib/db/cal-connections", () => ({ getPublicCalConnection: vi.fn() }));
 vi.mock("@/lib/db/calendly-connections", () => ({ listPublicCalendlyConnections: vi.fn() }));
 vi.mock("@/lib/db/caldav-connections", () => ({ getPublicCaldavConnection: vi.fn() }));
 vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }));
@@ -47,6 +48,7 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
+import { getPublicCalConnection } from "@/lib/db/cal-connections";
 import { listPublicCalendlyConnections } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
@@ -90,6 +92,8 @@ beforeEach(() => {
   vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
   vi.mocked(listCustomIntegrations).mockResolvedValue([]);
   vi.mocked(getPublicVagaroConnection).mockResolvedValue(null);
+  vi.mocked(getPublicAcuityConnection).mockResolvedValue(null);
+  vi.mocked(getPublicCalConnection).mockResolvedValue(null);
   vi.mocked(listPublicCalendlyConnections).mockResolvedValue([]);
   vi.mocked(getPublicCaldavConnection).mockResolvedValue(null);
   vi.mocked(getPublicMetaConnection).mockResolvedValue(null);

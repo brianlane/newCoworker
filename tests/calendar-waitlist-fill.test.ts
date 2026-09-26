@@ -10,6 +10,7 @@ vi.mock("@/lib/calendar-tools/handlers", () => ({
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/calendar-tools/vagaro", () => ({ findVagaroSlots: vi.fn() }));
 vi.mock("@/lib/calendar-tools/acuity", () => ({ findAcuitySlots: vi.fn() }));
+vi.mock("@/lib/calendar-tools/cal", () => ({ findCalSlots: vi.fn() }));
 vi.mock("@/lib/db/booking-waitlist", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getWaitlistSettings: vi.fn(),
@@ -50,6 +51,7 @@ import { getWorkspaceBusyBlocks } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { findAcuitySlots } from "@/lib/calendar-tools/acuity";
+import { findCalSlots } from "@/lib/calendar-tools/cal";
 import {
   findLiveWaitlistEntriesForAttendee,
   getWaitlistSettings,
@@ -83,6 +85,7 @@ const GOOGLE = { provider: "google", connectionId: "c", providerConfigKey: "g" }
 const CALDAV = { provider: "caldav", connectionId: "d", providerConfigKey: "dk" } as never;
 const VAGARO = { provider: "vagaro", connectionId: "v", providerConfigKey: "vk" } as never;
 const ACUITY = { provider: "acuity", connectionId: "a", providerConfigKey: "acuity" } as never;
+const CAL = { provider: "cal", connectionId: "cal", providerConfigKey: "cal" } as never;
 const CALENDLY = { provider: "calendly", connectionId: "y", providerConfigKey: "yk" } as never;
 
 const mockConn = vi.mocked(resolveCalendarConnection);
@@ -90,6 +93,7 @@ const mockBusy = vi.mocked(getWorkspaceBusyBlocks);
 const mockCaldav = vi.mocked(getCaldavBusyBlocks);
 const mockVagaro = vi.mocked(findVagaroSlots);
 const mockAcuity = vi.mocked(findAcuitySlots);
+const mockCal = vi.mocked(findCalSlots);
 const mockSettings = vi.mocked(getWaitlistSettings);
 const mockList = vi.mocked(listLiveWaitlistEntries);
 const mockExpired = vi.mocked(listExpiredWaitlistOffers);
@@ -280,6 +284,15 @@ describe("verifyFreedSlotOpen", () => {
     // A result carrying no data at all reads as no slots.
     mockVagaro.mockResolvedValue({ ok: false, detail: "vagaro_auth_failed" });
     expect(await verifyFreedSlotOpen(BIZ, VAGARO, SLOT_MS, END_MS)).toBe(false);
+  });
+
+  it("Cal.com: confirms an exact slot from the Cal.com book", async () => {
+    mockCal.mockResolvedValue({
+      ok: true,
+      data: { slots: [{ startIso: new Date(SLOT_MS).toISOString() }] }
+    } as never);
+    expect(await verifyFreedSlotOpen(BIZ, CAL, SLOT_MS, END_MS)).toBe(true);
+    expect(mockCal).toHaveBeenCalled();
   });
 
   it("Acuity: re-reads live availability and only confirms an exact slot match", async () => {

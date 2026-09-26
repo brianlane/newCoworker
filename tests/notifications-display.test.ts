@@ -281,6 +281,12 @@ describe("notifications/display", () => {
       expect(
         notificationLink({
           kind: "connection_needs_reauth",
+          payload: { table: "cal_connections", provider: "Cal.com", connection_id: UUID }
+        })
+      ).toMatchObject({ href: expect.stringContaining("/cal?reconnect=") });
+      expect(
+        notificationLink({
+          kind: "connection_needs_reauth",
           payload: { table: "caldav_connections", provider: "CalDAV", connection_id: UUID }
         })
       ).toMatchObject({ href: expect.stringContaining("/caldav?reconnect=") });

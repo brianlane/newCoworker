@@ -37,6 +37,10 @@ vi.mock("@/lib/calendar-tools/acuity", () => ({
   findAcuitySlots: vi.fn(),
   bookAcuityAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/cal", () => ({
+  findCalSlots: vi.fn(),
+  bookCalAppointment: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/caldav", () => ({
   getCaldavBusyBlocks: vi.fn(),
   bookCaldavAppointment: vi.fn()
@@ -93,6 +97,7 @@ import {
 } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { bookAcuityAppointment, findAcuitySlots } from "@/lib/calendar-tools/acuity";
+import { bookCalAppointment, findCalSlots } from "@/lib/calendar-tools/cal";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import {
   bookingAttendeeKey,
@@ -136,6 +141,11 @@ const ACUITY_CONN = {
   provider: "acuity",
   connectionId: "acuity-row-1",
   providerConfigKey: "acuity"
+} as never;
+const CAL_CONN = {
+  provider: "cal",
+  connectionId: "cal-row-1",
+  providerConfigKey: "cal"
 } as never;
 const CALDAV_CONN = {
   provider: "caldav",
@@ -616,6 +626,15 @@ describe("findCalendarSlots", () => {
     const passed = vi.mocked(findAcuitySlots).mock.calls[0][1];
     expect(passed).toMatchObject({ durationMinutes: 30, timezone: "UTC" });
     expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("delegates a Cal.com connection to findCalSlots with the resolved timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CAL_CONN);
+    const delegated = { ok: true, data: { slots: [], provider: "cal" } };
+    vi.mocked(findCalSlots).mockResolvedValue(delegated as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result).toBe(delegated);
+    expect(vi.mocked(findCalSlots).mock.calls[0][1]).toMatchObject({ durationMinutes: 30, timezone: "UTC" });
   });
 
   it("delegates a Calendly connection to findCalendlySlots with the window and resolved timezone", async () => {
@@ -1939,6 +1958,17 @@ describe("bookCalendarAppointment", () => {
     } as never);
     await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
+  it("delegates a Cal.com connection to bookCalAppointment and fires a goal when booked", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CAL_CONN);
+    vi.mocked(bookCalAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "bk_1", provider: "cal" }
+    } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toMatchObject({ ok: true, data: { eventId: "bk_1" } });
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalled();
   });
 
   it("delegates a Calendly connection to createCalendlyBookingLink", async () => {
