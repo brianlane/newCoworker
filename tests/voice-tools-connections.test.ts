@@ -9,6 +9,9 @@ vi.mock("@/lib/db/vagaro-connections", () => ({
 vi.mock("@/lib/db/acuity-connections", () => ({
   getActiveAcuityConnectionId: vi.fn()
 }));
+vi.mock("@/lib/db/cal-connections", () => ({
+  getActiveCalConnectionId: vi.fn()
+}));
 vi.mock("@/lib/db/calendly-connections", () => ({
   getActiveCalendlyConnectionId: vi.fn(),
   listActiveCalendlyConnections: vi.fn()
@@ -20,6 +23,7 @@ vi.mock("@/lib/db/caldav-connections", () => ({
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
+import { getActiveCalConnectionId } from "@/lib/db/cal-connections";
 import {
   getActiveCalendlyConnectionId,
   listActiveCalendlyConnections
@@ -60,6 +64,7 @@ describe("resolveVoiceConnection", () => {
     vi.clearAllMocks();
     vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveAcuityConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCalConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveCaldavConnectionId).mockResolvedValue(null);
   });
@@ -195,6 +200,23 @@ describe("resolveVoiceConnection", () => {
     });
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
     expect(getActiveAcuityConnectionId).not.toHaveBeenCalled();
+  });
+
+  it("resolveCalendarConnection puts Cal.com ahead of workspace calendars and behind Acuity", async () => {
+    vi.mocked(getActiveCalConnectionId).mockResolvedValue("cal-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "cal",
+      providerConfigKey: "cal",
+      connectionId: "cal-row-1"
+    });
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+
+    vi.mocked(getActiveAcuityConnectionId).mockResolvedValue("acuity-row-1");
+    const acuityWins = await resolveCalendarConnection(businessId);
+    expect(acuityWins?.provider).toBe("acuity");
+    expect(getActiveCalConnectionId).toHaveBeenCalledTimes(1);
   });
 
   it("resolveCalendarConnection puts an active Acuity connection ahead of the workspace calendars", async () => {

@@ -180,6 +180,7 @@ describe("connectionPausedWork", () => {
     expect(connectionPausedWork("Workspace")).toContain("Mail and calendar");
     expect(connectionPausedWork("Zoom")).toContain("Meetings");
     expect(connectionPausedWork("Acuity")).toContain("Calendar follow-ups");
+    expect(connectionPausedWork("Cal.com")).toContain("Calendar follow-ups");
     expect(connectionPausedWork("Vagaro")).toContain("Calendar follow-ups");
     expect(connectionPausedWork("CalDAV")).toContain("Calendar booking");
     expect(connectionPausedWork("Facebook")).toContain("Lead forms");
@@ -194,6 +195,7 @@ describe("connectionPausedWork", () => {
       "Workspace",
       "Zoom",
       "Acuity",
+      "Cal.com",
       "CalDAV",
       "Vagaro",
       "Facebook",
@@ -206,6 +208,7 @@ describe("connectionPausedWork", () => {
       "workspace",
       "zoom",
       "acuity",
+      "cal",
       "caldav",
       "vagaro",
       "facebook",

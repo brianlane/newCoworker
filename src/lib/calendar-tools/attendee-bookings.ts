@@ -506,7 +506,8 @@ export const ATTENDEE_BOOKING_LOOKUPS: Record<
   caldav: { kind: "ledger_only" },
   calendly: { kind: "adapter", listUpcomingForAttendee: calendlyListUpcomingForAttendee },
   vagaro: { kind: "adapter", listUpcomingForAttendee: vagaroListUpcomingForAttendee },
-  acuity: { kind: "adapter", listUpcomingForAttendee: acuityListUpcomingForAttendee }
+  acuity: { kind: "adapter", listUpcomingForAttendee: acuityListUpcomingForAttendee },
+  cal: { kind: "ledger_only" }
 };
 
 /**

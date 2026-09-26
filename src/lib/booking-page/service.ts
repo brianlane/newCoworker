@@ -120,7 +120,8 @@ import { logger } from "@/lib/logger";
 const PROVIDER_OWNS_BOOKING_PAGE = new Set<ResolvedVoiceConnection["provider"]>([
   "vagaro",
   "calendly",
-  "acuity"
+  "acuity",
+  "cal"
 ]);
 
 /** The providers whose free/busy this page can actually read. */

@@ -39,6 +39,7 @@ export type IntegrationSlug =
   | "google_chat"
   | "vagaro"
   | "acuity"
+  | "cal"
   | "calendly"
   | "caldav"
   | "meta"
@@ -138,6 +139,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     category: "Workspace",
     benefit:
       "Let your coworker check real availability and book appointments on your Acuity calendar, and start AiFlows from Acuity appointments.",
+    icon: CalendarCheck
+  },
+  {
+    slug: "cal",
+    name: "Cal.com",
+    category: "Workspace",
+    benefit:
+      "Let your coworker check real availability and book appointments on your Cal.com page, and start AiFlows from Cal.com bookings.",
     icon: CalendarCheck
   },
   {

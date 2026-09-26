@@ -21,6 +21,7 @@ import {
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
+import { getPublicCalConnection } from "@/lib/db/cal-connections";
 import { listPublicCalendlyConnections } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
@@ -53,6 +54,7 @@ export type IntegrationsContext = {
   customIntegrations: Awaited<ReturnType<typeof listCustomIntegrations>>;
   vagaroConnection: Awaited<ReturnType<typeof getPublicVagaroConnection>>;
   acuityConnection: Awaited<ReturnType<typeof getPublicAcuityConnection>>;
+  calConnection: Awaited<ReturnType<typeof getPublicCalConnection>>;
   /** ALL direct Calendly connections, oldest (primary) first. */
   calendlyConnections: Awaited<ReturnType<typeof listPublicCalendlyConnections>>;
   caldavConnection: Awaited<ReturnType<typeof getPublicCaldavConnection>>;
@@ -137,6 +139,7 @@ export async function loadIntegrationsContext(
     customIntegrations: businessId ? await listCustomIntegrations(businessId) : [],
     vagaroConnection: businessId ? await getPublicVagaroConnection(businessId) : null,
     acuityConnection: businessId ? await getPublicAcuityConnection(businessId) : null,
+    calConnection: businessId ? await getPublicCalConnection(businessId) : null,
     calendlyConnections: businessId ? await listPublicCalendlyConnections(businessId) : [],
     caldavConnection: businessId ? await getPublicCaldavConnection(businessId) : null,
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
@@ -312,6 +315,7 @@ export function computeIntegrationStatuses(
     workspace: countStatus(families.other),
     vagaro: connectedOrReconnect(ctx.vagaroConnection, connected, disconnected),
     acuity: connectedOrReconnect(ctx.acuityConnection, connected, disconnected),
+    cal: connectedOrReconnect(ctx.calConnection, connected, disconnected),
     calendly: calendlyTileStatus(ctx.calendlyConnections),
     caldav: connectedOrReconnect(ctx.caldavConnection, connected, disconnected),
     meta: metaStatus,

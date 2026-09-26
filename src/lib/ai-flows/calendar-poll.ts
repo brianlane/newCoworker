@@ -1048,6 +1048,7 @@ export async function pollCalendarTriggers(
         (conn.provider !== "calendly" &&
           conn.provider !== "vagaro" &&
           conn.provider !== "acuity" &&
+          conn.provider !== "cal" &&
           !isWorkspaceCalendarProvider(conn.provider))
       ) {
         // Every Calendly PAT on this business needs reconnect: pause honestly
@@ -1309,6 +1310,10 @@ export async function pollCalendarTriggers(
             throw err;
           }
         }
+      } else if (conn.provider === "cal") {
+        // Bookings arrive on the webhook. Polling Cal.com here would double
+        // fire the same appointment.
+        continue;
       } else {
         const link: WorkspaceLink = {
           connectionId: conn.connectionId,

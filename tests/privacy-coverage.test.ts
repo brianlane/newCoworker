@@ -254,6 +254,7 @@ const EXEMPT: Record<string, string> = {
 
   // Tenant connection/credential material for services the owner linked.
   acuity_connections: "tenant credentials",
+  cal_connections: "tenant OAuth grants (access and refresh tokens, no end-customer data)",
   caldav_connections: "tenant credentials",
   calendly_connections: "tenant credentials",
   integrations: "tenant integration state",

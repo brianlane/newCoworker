@@ -12,6 +12,7 @@ export type ConnectionReauthTable =
   | "workspace_oauth_connections"
   | "zoom_connections"
   | "acuity_connections"
+  | "cal_connections"
   | "caldav_connections"
   | "vagaro_connections"
   | "meta_connections"
@@ -23,6 +24,7 @@ export type ConnectionReauthProviderLabel =
   | "Microsoft 365"
   | "Zoom"
   | "Acuity"
+  | "Cal.com"
   | "CalDAV"
   | "Vagaro"
   | "Facebook"
@@ -77,6 +79,7 @@ export function connectionPausedWorkKey(
   | "workspace"
   | "zoom"
   | "acuity"
+  | "cal"
   | "caldav"
   | "vagaro"
   | "facebook"
@@ -93,6 +96,8 @@ export function connectionPausedWorkKey(
       return "zoom";
     case "Acuity":
       return "acuity";
+    case "Cal.com":
+      return "cal";
     case "CalDAV":
       return "caldav";
     case "Vagaro":
@@ -115,6 +120,7 @@ export function connectionPausedWork(provider: ConnectionReauthProviderLabel): s
     case "Zoom":
       return "Meetings and transcripts for that account are paused";
     case "Acuity":
+    case "Cal.com":
     case "Vagaro":
       return "Calendar follow-ups and booking checks for that account are paused";
     case "CalDAV":
@@ -216,6 +222,7 @@ const STATIC_REAUTH_LABELS: Record<
 > = {
   zoom_connections: { provider: "Zoom", slug: "zoom" },
   acuity_connections: { provider: "Acuity", slug: "acuity" },
+  cal_connections: { provider: "Cal.com", slug: "cal" },
   caldav_connections: { provider: "CalDAV", slug: "caldav" },
   vagaro_connections: { provider: "Vagaro", slug: "vagaro" },
   meta_connections: { provider: "Facebook", slug: "meta" },

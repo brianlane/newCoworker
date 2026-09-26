@@ -465,5 +465,8 @@ describe("outreachSchedulingLink (a cold email names the meeting)", () => {
     // Vagaro: no link is held at all, and no link beats an invented one.
     mockConn.mockResolvedValue({ provider: "vagaro" } as never);
     expect(await outreachSchedulingLink(BIZ, "m-discovery")).toBeNull();
+
+    mockConn.mockResolvedValue({ provider: "cal" } as never);
+    expect(await outreachSchedulingLink(BIZ, "m-discovery")).toBeNull();
   });
 });

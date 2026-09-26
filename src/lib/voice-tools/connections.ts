@@ -1,6 +1,7 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
+import { getActiveCalConnectionId } from "@/lib/db/cal-connections";
 import {
   getActiveCalendlyConnectionId,
   listActiveCalendlyConnections
@@ -53,7 +54,7 @@ export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "google", "ou
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
-  provider: "google" | "microsoft" | "calendly" | "vagaro" | "acuity" | "caldav";
+  provider: "google" | "microsoft" | "calendly" | "vagaro" | "acuity" | "cal" | "caldav";
   providerConfigKey: string;
   connectionId: string;
 };
@@ -190,6 +191,15 @@ export async function resolveCalendarConnection(
   const acuityId = await getActiveAcuityConnectionId(businessId);
   if (acuityId) {
     return { provider: "acuity", providerConfigKey: "acuity", connectionId: acuityId };
+  }
+
+  // Cal.com is the same kind of book as Acuity: a deliberate connect is the
+  // real booking page, so it beats an incidental Outlook or Google calendar.
+  // It sits behind Vagaro and Acuity so a tenant who already books on those
+  // does not silently switch when this ships.
+  const calId = await getActiveCalConnectionId(businessId);
+  if (calId) {
+    return { provider: "cal", providerConfigKey: "cal", connectionId: calId };
   }
 
   const rows = await listWorkspaceOAuthConnections(businessId);

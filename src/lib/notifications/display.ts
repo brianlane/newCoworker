@@ -176,6 +176,8 @@ export function notificationLink(n: NotificationLike): NotificationLink {
         ? "zoom"
         : slugRaw === "acuity_connections"
           ? "acuity"
+          : slugRaw === "cal_connections"
+            ? "cal"
           : slugRaw === "caldav_connections"
             ? "caldav"
             : slugRaw === "vagaro_connections"

@@ -92,6 +92,8 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "GOOGLE_CLIENT_SECRET",
   "ZOOM_CLIENT_ID",
   "ZOOM_CLIENT_SECRET",
+  "CAL_CO_CLIENT_ID",
+  "CAL_CO_CLIENT_SECRET",
   // Webhook HMAC key: without this the webhook suite would run against the
   // real Secret Token for anyone with a sourced .env.
   "ZOOM_SECRET_TOKEN",

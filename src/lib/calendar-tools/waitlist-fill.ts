@@ -42,6 +42,7 @@ import { isLedgerSlotOpen } from "@/lib/calendar-tools/booking-dedupe";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { findAcuitySlots } from "@/lib/calendar-tools/acuity";
+import { findCalSlots } from "@/lib/calendar-tools/cal";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import { cancelWaitlistForAttendee } from "@/lib/calendar-tools/waitlist-resolve";
 import {
@@ -167,12 +168,14 @@ export async function verifyFreedSlotOpen(
     if (conn.provider === "calendly") return true;
     const windowStart = new Date(startMs);
     const windowEnd = new Date(endMs);
-    if (conn.provider === "vagaro" || conn.provider === "acuity") {
+    if (conn.provider === "vagaro" || conn.provider === "acuity" || conn.provider === "cal") {
       const durationMinutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
       const find =
         conn.provider === "vagaro"
           ? (deps.findVagaro ?? findVagaroSlots)
-          : (deps.findAcuity ?? findAcuitySlots);
+          : conn.provider === "cal"
+            ? findCalSlots
+            : (deps.findAcuity ?? findAcuitySlots);
       // The business timezone, NOT a hardcoded UTC. This is load-bearing for
       // Acuity: its availability is keyed by LOCAL CALENDAR DATE, so asking
       // in the wrong zone asks about the wrong day for any merchant outside

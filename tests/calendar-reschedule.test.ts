@@ -31,6 +31,10 @@ vi.mock("@/lib/calendar-tools/acuity", () => ({
   cancelAcuityAppointment: vi.fn(),
   rescheduleAcuityAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/cal", () => ({
+  cancelCalAppointment: vi.fn(),
+  rescheduleCalAppointment: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/caldav", () => ({
   cancelCaldavAppointment: vi.fn(),
   rescheduleCaldavAppointment: vi.fn()
@@ -78,6 +82,7 @@ import {
   cancelAcuityAppointment,
   rescheduleAcuityAppointment
 } from "@/lib/calendar-tools/acuity";
+import { cancelCalAppointment, rescheduleCalAppointment } from "@/lib/calendar-tools/cal";
 import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
@@ -115,6 +120,7 @@ const MS_CONN = {
 const CALENDLY_CONN = { provider: "calendly", connectionId: "c", providerConfigKey: "k" } as never;
 const VAGARO_CONN = { provider: "vagaro", connectionId: "v", providerConfigKey: "vk" } as never;
 const ACUITY_CONN = { provider: "acuity", connectionId: "a", providerConfigKey: "acuity" } as never;
+const CAL_CONN = { provider: "cal", connectionId: "c", providerConfigKey: "cal" } as never;
 const CALDAV_CONN = { provider: "caldav", connectionId: "d", providerConfigKey: "dk" } as never;
 
 const RESCHEDULE_ARGS = {
@@ -291,6 +297,24 @@ describe("rescheduleCalendarAppointment", () => {
       RESCHEDULE_ARGS.newEndIso
     );
     expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalled();
+  });
+
+  it("Cal.com: moves the ledger-resolved appointment", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CAL_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const moved = { ok: true, data: { eventId: "bk_2", provider: "cal" } } as never;
+    vi.mocked(rescheduleCalAppointment).mockResolvedValue(moved);
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toBe(moved);
+    expect(vi.mocked(rescheduleCalAppointment)).toHaveBeenCalledWith(BIZ, "evt-1", RESCHEDULE_ARGS.newStartIso);
+  });
+
+  it("Cal.com: cancels the ledger-resolved appointment", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CAL_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const canceled = { ok: true, data: { eventId: "evt-1", canceled: true } } as never;
+    vi.mocked(cancelCalAppointment).mockResolvedValue(canceled);
+    expect(await cancelCalendarAppointment(BIZ, { attendeePhone: "+15485773546" })).toBe(canceled);
+    expect(vi.mocked(cancelCalAppointment)).toHaveBeenCalledWith(BIZ, "evt-1");
   });
 
   it("Acuity: drops a stale claim when the provider no longer has the appointment", async () => {

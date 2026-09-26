@@ -555,6 +555,20 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
+  it("does not poll Cal.com, because bookings arrive on the webhook", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
+      provider: "cal",
+      providerConfigKey: "cal",
+      connectionId: "cx-cal"
+    } as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
+  });
+
   it("polls Acuity connections through the dedicated fetcher and enqueues due events", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue({
       provider: "acuity",

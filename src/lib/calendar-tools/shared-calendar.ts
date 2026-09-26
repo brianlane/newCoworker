@@ -301,6 +301,7 @@ export async function shareSharedCalendarWithEmployees(businessId: string): Prom
 const PROVIDERS_NEEDING_MIRROR = new Set([
   "vagaro",
   "acuity",
+  "cal",
   "calendly",
   "caldav"
 ]);
