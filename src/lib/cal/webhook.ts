@@ -7,13 +7,13 @@
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { verifyCalWebhookSignature } from "@/lib/cal/client";
 
-export const CAL_WEBHOOK_TRIGGERS = [
+const CAL_WEBHOOK_TRIGGERS = [
   "BOOKING_CREATED",
   "BOOKING_CANCELLED",
   "BOOKING_RESCHEDULED"
 ] as const;
 
-export type CalWebhookPayload = {
+type CalWebhookPayload = {
   triggerEvent: string;
   bookingUid: string | null;
   title: string | null;
@@ -22,7 +22,7 @@ export type CalWebhookPayload = {
   attendeeEmail: string | null;
 };
 
-export function parseCalWebhookPayload(rawBody: string): CalWebhookPayload | null {
+function parseCalWebhookPayload(rawBody: string): CalWebhookPayload | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody);
@@ -47,7 +47,7 @@ export function parseCalWebhookPayload(rawBody: string): CalWebhookPayload | nul
   };
 }
 
-export function calWebhookAccepted(payload: CalWebhookPayload): boolean {
+function calWebhookAccepted(payload: CalWebhookPayload): boolean {
   return (CAL_WEBHOOK_TRIGGERS as readonly string[]).includes(payload.triggerEvent);
 }
 

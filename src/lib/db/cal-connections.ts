@@ -79,7 +79,7 @@ function toDecryptedRow(row: StoredCalConnectionRow): CalConnectionRow {
   return { ...rest, accessToken, refreshToken, webhookSecret };
 }
 
-export function toPublicCalConnection(row: StoredCalConnectionRow): PublicCalConnectionRow {
+function toPublicCalConnection(row: StoredCalConnectionRow): PublicCalConnectionRow {
   const { access_token_encrypted, refresh_token_encrypted, webhook_secret_encrypted, ...rest } =
     withReauthColumnDefaults(row as unknown as Record<string, unknown>) as unknown as StoredCalConnectionRow;
   return {
@@ -130,17 +130,6 @@ export async function upsertCalConnection(
     .select(ALL_COLUMNS)
     .single();
   if (error || !data) throw new Error(`upsertCalConnection: ${error?.message ?? "no row"}`);
-  return toDecryptedRow(data as unknown as StoredCalConnectionRow);
-}
-
-export async function getCalConnectionById(
-  id: string,
-  client?: SupabaseClient
-): Promise<CalConnectionRow | null> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db.from("cal_connections").select(ALL_COLUMNS).eq("id", id).maybeSingle();
-  if (error) throw new Error(`getCalConnectionById: ${error.message}`);
-  if (!data) return null;
   return toDecryptedRow(data as unknown as StoredCalConnectionRow);
 }
 

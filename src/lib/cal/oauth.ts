@@ -8,17 +8,17 @@
  */
 import { createOAuthStateCodec } from "@/lib/oauth/state";
 
-export const CAL_AUTHORIZE_URL = "https://app.cal.com/auth/oauth2/authorize";
-export const CAL_TOKEN_URL = "https://api.cal.com/v2/auth/oauth2/token";
-export const CAL_REQUEST_TIMEOUT_MS = 15_000;
-export const CAL_STATE_TTL_MS = 10 * 60 * 1000;
+const CAL_AUTHORIZE_URL = "https://app.cal.com/auth/oauth2/authorize";
+const CAL_TOKEN_URL = "https://api.cal.com/v2/auth/oauth2/token";
+const CAL_REQUEST_TIMEOUT_MS = 15_000;
+const CAL_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Scopes enabled on the OAuth client. Booking and availability, profile
  * label, webhooks, and the team reads a team event type needs. No credit
  * spend, no profile edits, no org admin.
  */
-export const CAL_OAUTH_SCOPES = [
+const CAL_OAUTH_SCOPES = [
   "EVENT_TYPE_READ",
   "BOOKING_READ",
   "BOOKING_WRITE",
@@ -44,13 +44,13 @@ export class CalOAuthError extends Error {
   }
 }
 
-export type CalOAuthConfig = {
+type CalOAuthConfig = {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
 };
 
-export function getCalOAuthConfig(): CalOAuthConfig {
+function getCalOAuthConfig(): CalOAuthConfig {
   const clientId = process.env.CAL_CO_CLIENT_ID;
   const clientSecret = process.env.CAL_CO_CLIENT_SECRET;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -110,7 +110,7 @@ type TokenBody = {
   error?: string;
 };
 
-export function parseCalTokenResponse(
+function parseCalTokenResponse(
   status: number,
   body: TokenBody | null,
   previousRefreshToken: string | null,

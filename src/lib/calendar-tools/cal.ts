@@ -20,7 +20,7 @@ import { getCalConnectionByBusiness } from "@/lib/db/cal-connections";
 
 const MAX_SLOTS = 3;
 
-export function calBookingEmail(
+function calBookingEmail(
   attendeeEmail: string | null | undefined,
   phone: string | null | undefined
 ): string {

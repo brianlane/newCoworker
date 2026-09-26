@@ -17,13 +17,11 @@ import {
   deactivateCalConnection,
   getActiveCalConnectionId,
   getCalConnectionByBusiness,
-  getCalConnectionById,
   getPublicCalConnection,
   markCalHealthy,
   newCalWebhookToken,
   setCalDefaultEventType,
   setCalWebhook,
-  toPublicCalConnection,
   updateCalTokens,
   upsertCalConnection
 } from "@/lib/db/cal-connections";
@@ -80,12 +78,8 @@ const STORED = {
 };
 
 describe("cal connection store", () => {
-  it("mints a webhook token and hides ciphertext on the public row", () => {
+  it("mints a webhook token", () => {
     expect(newCalWebhookToken()).toMatch(/^[0-9a-f]{48}$/);
-    const pub = toPublicCalConnection(STORED);
-    expect(pub.has_tokens).toBe(true);
-    expect(pub).not.toHaveProperty("access_token_encrypted");
-    expect(toPublicCalConnection({ ...STORED, access_token_encrypted: "" }).has_tokens).toBe(false);
   });
 
   it("upserts and reads a decrypted row", async () => {
@@ -102,10 +96,9 @@ describe("cal connection store", () => {
     );
     expect(row.accessToken).toBe("access");
     expect(row.webhookSecret).toBe("whsec");
-    await expect(getCalConnectionById("cal-1", makeDb(chain({ data: STORED, error: null })))).resolves.toMatchObject({
+    await expect(getCalConnectionByBusiness(BIZ, makeDb(chain({ data: STORED, error: null })))).resolves.toMatchObject({
       id: "cal-1"
     });
-    await expect(getCalConnectionById("missing", makeDb(chain({ data: null, error: null })))).resolves.toBeNull();
     await expect(getCalConnectionByBusiness(BIZ, makeDb(chain({ data: null, error: null })))).resolves.toBeNull();
     await expect(getActiveCalConnectionId(BIZ, makeDb(chain({ data: { id: "cal-1" }, error: null })))).resolves.toBe("cal-1");
     await expect(getActiveCalConnectionId(BIZ, makeDb(chain({ data: null, error: null })))).resolves.toBeNull();
@@ -113,15 +106,15 @@ describe("cal connection store", () => {
       has_tokens: true
     });
     await expect(getPublicCalConnection(BIZ, makeDb(chain({ data: null, error: null })))).resolves.toBeNull();
+    await expect(
+      getPublicCalConnection(BIZ, makeDb(chain({ data: { ...STORED, access_token_encrypted: "" }, error: null })))
+    ).resolves.toMatchObject({ has_tokens: false });
   });
 
   it("fails closed on a bad token envelope and on query errors", async () => {
     await expect(
-      getCalConnectionById("cal-1", makeDb(chain({ data: { ...STORED, access_token_encrypted: "garbage" }, error: null })))
+      getCalConnectionByBusiness(BIZ, makeDb(chain({ data: { ...STORED, access_token_encrypted: "garbage" }, error: null })))
     ).rejects.toThrow(/no stored token pair/);
-    await expect(getCalConnectionById("cal-1", makeDb(chain({ data: null, error: { message: "boom" } })))).rejects.toThrow(
-      /getCalConnectionById: boom/
-    );
     await expect(getCalConnectionByBusiness(BIZ, makeDb(chain({ data: null, error: { message: "boom" } })))).rejects.toThrow(
       /getCalConnectionByBusiness/
     );

@@ -32,10 +32,8 @@ import {
   fetchCalProfile,
   listCalEventTypes,
   listCalSlotStarts,
-  loadCalConnectionForTools,
   rescheduleCalBooking
 } from "@/lib/cal/client";
-import { getCalConnectionById } from "@/lib/db/cal-connections";
 
 const CONN = {
   id: "cal-1",
@@ -157,7 +155,5 @@ describe("Cal.com API client", () => {
       })
     );
     await expect(fetchCalProfile("tok")).resolves.toMatchObject({ id: null });
-    vi.mocked(getCalConnectionById).mockResolvedValue(CONN as never);
-    await expect(loadCalConnectionForTools("cal-1")).resolves.toMatchObject({ id: "cal-1" });
   });
 });

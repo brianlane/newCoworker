@@ -8,19 +8,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CalOAuthError, refreshCalTokens } from "@/lib/cal/oauth";
 import {
-  getCalConnectionById,
   markCalHealthy,
   updateCalTokens,
   type CalConnectionRow
 } from "@/lib/db/cal-connections";
 import { markConnectionNeedsReauth } from "@/lib/connections/reauth";
 
-export const CAL_API_BASE = "https://api.cal.com/v2";
-export const CAL_API_VERSION_SLOTS = "2024-09-04";
-export const CAL_API_VERSION_BOOKINGS = "2024-08-13";
-export const CAL_API_VERSION_EVENT_TYPES = "2024-06-14";
-export const CAL_API_VERSION_ME = "2024-06-14";
-export const CAL_API_VERSION_WEBHOOKS = "2024-06-14";
+const CAL_API_BASE = "https://api.cal.com/v2";
+const CAL_API_VERSION_SLOTS = "2024-09-04";
+const CAL_API_VERSION_BOOKINGS = "2024-08-13";
+const CAL_API_VERSION_EVENT_TYPES = "2024-06-14";
+const CAL_API_VERSION_ME = "2024-06-14";
+const CAL_API_VERSION_WEBHOOKS = "2024-06-14";
 export const CAL_SIGNATURE_HEADER = "x-cal-signature-256";
 
 export class CalApiError extends Error {
@@ -72,7 +71,7 @@ export function selectCalEventType(
   return best;
 }
 
-export function parseCalEventTypes(body: unknown): CalEventType[] {
+function parseCalEventTypes(body: unknown): CalEventType[] {
   const data = asRecord(body).data;
   const list = Array.isArray(data)
     ? data
@@ -97,7 +96,7 @@ export function parseCalEventTypes(body: unknown): CalEventType[] {
   return out;
 }
 
-export function parseCalProfile(body: unknown): CalProfile {
+function parseCalProfile(body: unknown): CalProfile {
   const data = asRecord(asRecord(body).data ?? body);
   const id = data.id;
   return {
@@ -110,7 +109,7 @@ export function parseCalProfile(body: unknown): CalProfile {
 }
 
 /** Slots keyed by local date, each `{ start }` an ISO instant. */
-export function parseCalSlots(body: unknown): string[] {
+function parseCalSlots(body: unknown): string[] {
   const data = asRecord(asRecord(body).data);
   const starts: string[] = [];
   for (const value of Object.values(data)) {
@@ -124,7 +123,7 @@ export function parseCalSlots(body: unknown): string[] {
   return starts;
 }
 
-export function parseCalBookingId(body: unknown): string | null {
+function parseCalBookingId(body: unknown): string | null {
   const data = asRecord(asRecord(body).data ?? body);
   const uid = data.uid ?? data.id;
   return typeof uid === "string" || typeof uid === "number" ? String(uid) : null;
@@ -340,6 +339,3 @@ export async function createCalWebhook(
   return parseCalBookingId(body);
 }
 
-export async function loadCalConnectionForTools(connectionId: string): Promise<CalConnectionRow | null> {
-  return getCalConnectionById(connectionId);
-}
